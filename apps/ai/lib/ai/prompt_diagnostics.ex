@@ -71,7 +71,12 @@ defmodule Ai.PromptDiagnostics do
   - response usage (tokens, including cache read/write when available)
   """
   @spec record_llm_call(Model.t(), Context.t(), StreamOptions.t(), AssistantMessage.t()) :: :ok
-  def record_llm_call(%Model{} = model, %Context{} = ctx, %StreamOptions{} = opts, %AssistantMessage{} = msg) do
+  def record_llm_call(
+        %Model{} = model,
+        %Context{} = ctx,
+        %StreamOptions{} = opts,
+        %AssistantMessage{} = msg
+      ) do
     if enabled?() do
       prompt_stats = stats(ctx)
       usage_stats = usage_stats(msg)
@@ -95,7 +100,12 @@ defmodule Ai.PromptDiagnostics do
   end
 
   @doc "Record a combined prompt+usage snapshot for non-streaming calls."
-  @spec record_complete_call(Model.t(), Context.t(), StreamOptions.t() | map(), AssistantMessage.t()) :: :ok
+  @spec record_complete_call(
+          Model.t(),
+          Context.t(),
+          StreamOptions.t() | map(),
+          AssistantMessage.t()
+        ) :: :ok
   def record_complete_call(%Model{} = model, %Context{} = ctx, opts, %AssistantMessage{} = msg) do
     stream_opts =
       case opts do
@@ -125,7 +135,11 @@ defmodule Ai.PromptDiagnostics do
     }
   end
 
-  defp usage_stats(%AssistantMessage{usage: usage, stop_reason: stop_reason, error_message: error}) do
+  defp usage_stats(%AssistantMessage{
+         usage: usage,
+         stop_reason: stop_reason,
+         error_message: error
+       }) do
     %{
       stop_reason: stop_reason,
       error_message: error,

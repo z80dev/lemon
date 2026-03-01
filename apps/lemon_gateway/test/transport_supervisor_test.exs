@@ -1,5 +1,6 @@
 defmodule LemonGateway.TransportSupervisorTest do
   alias Elixir.LemonGateway, as: LemonGateway
+
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.TransportSupervisor.
 
@@ -204,7 +205,12 @@ defmodule LemonGateway.TransportSupervisorTest do
       enable_telegram: false
     }
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, Map.merge(base_config, config))
+    Application.put_env(
+      :lemon_gateway,
+      Elixir.LemonGateway.Config,
+      Map.merge(base_config, config)
+    )
+
     Application.put_env(:lemon_gateway, :transports, transports)
 
     start_supervised!(TransportRegistry)

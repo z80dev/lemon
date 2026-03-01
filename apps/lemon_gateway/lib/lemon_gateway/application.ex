@@ -25,7 +25,8 @@ defmodule LemonGateway.Application do
         # Voice call infrastructure
         {Registry, keys: :unique, name: LemonGateway.Voice.CallRegistry},
         {Registry, keys: :unique, name: LemonGateway.Voice.DeepgramRegistry},
-        {DynamicSupervisor, name: LemonGateway.Voice.CallSessionSupervisor, strategy: :one_for_one},
+        {DynamicSupervisor,
+         name: LemonGateway.Voice.CallSessionSupervisor, strategy: :one_for_one},
         {DynamicSupervisor, name: LemonGateway.Voice.DeepgramSupervisor, strategy: :one_for_one},
         LemonGateway.RunSupervisor,
         LemonGateway.ThreadWorkerSupervisor,

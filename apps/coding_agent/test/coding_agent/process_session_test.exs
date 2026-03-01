@@ -27,10 +27,12 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "start_link/1" do
     test "starts a process session with echo command", %{process_id: process_id} do
-      assert {:ok, pid} = ProcessSession.start_link(
-        command: "echo hello",
-        process_id: process_id
-      )
+      assert {:ok, pid} =
+               ProcessSession.start_link(
+                 command: "echo hello",
+                 process_id: process_id
+               )
+
       assert Process.alive?(pid)
 
       # Wait for command to complete
@@ -60,10 +62,11 @@ defmodule CodingAgent.ProcessSessionTest do
     end
 
     test "returns process_id for a running session pid", %{process_id: process_id} do
-      {:ok, pid} = ProcessSession.start_link(
-        command: "sleep 5",
-        process_id: process_id
-      )
+      {:ok, pid} =
+        ProcessSession.start_link(
+          command: "sleep 5",
+          process_id: process_id
+        )
 
       assert ProcessSession.get_process_id(pid) == process_id
 
@@ -79,10 +82,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "poll/2" do
     test "returns output from completed process", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo hello_world",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo hello_world",
+          process_id: process_id
+        )
 
       # Wait for process to complete
       Process.sleep(300)
@@ -94,10 +98,11 @@ defmodule CodingAgent.ProcessSessionTest do
     end
 
     test "returns status information", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo done",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo done",
+          process_id: process_id
+        )
 
       Process.sleep(300)
 
@@ -113,10 +118,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "kill/2" do
     test "kills a running process", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "sleep 60",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "sleep 60",
+          process_id: process_id
+        )
 
       # Give it time to start
       Process.sleep(100)
@@ -130,10 +136,11 @@ defmodule CodingAgent.ProcessSessionTest do
     end
 
     test "returns error when process is not running", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo fast",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo fast",
+          process_id: process_id
+        )
 
       # Wait for it to finish
       Process.sleep(300)
@@ -148,10 +155,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "alive?/1" do
     test "returns true for running session", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "sleep 60",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "sleep 60",
+          process_id: process_id
+        )
 
       Process.sleep(50)
       assert ProcessSession.alive?(process_id) == true
@@ -172,10 +180,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "write_stdin/2" do
     test "returns error when process is not running", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo done",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo done",
+          process_id: process_id
+        )
 
       # Wait for process to finish
       Process.sleep(300)
@@ -190,10 +199,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "get_state/1" do
     test "returns the full state map", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "sleep 60",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "sleep 60",
+          process_id: process_id
+        )
 
       Process.sleep(50)
 
@@ -215,10 +225,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "process exit" do
     test "process with exit code 0 is marked completed", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "true",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "true",
+          process_id: process_id
+        )
 
       Process.sleep(300)
 
@@ -228,10 +239,11 @@ defmodule CodingAgent.ProcessSessionTest do
     end
 
     test "process with non-zero exit code is marked error", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "false",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "false",
+          process_id: process_id
+        )
 
       Process.sleep(300)
 
@@ -243,13 +255,14 @@ defmodule CodingAgent.ProcessSessionTest do
     test "on_exit callback is invoked", %{process_id: process_id} do
       test_pid = self()
 
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo callback_test",
-        process_id: process_id,
-        on_exit: fn exit_info ->
-          send(test_pid, {:exit_callback, exit_info})
-        end
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo callback_test",
+          process_id: process_id,
+          on_exit: fn exit_info ->
+            send(test_pid, {:exit_callback, exit_info})
+          end
+        )
 
       assert_receive {:exit_callback, exit_info}, 2000
       assert exit_info.process_id == process_id
@@ -263,10 +276,11 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "log buffer" do
     test "captures multi-line output", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "echo line1 && echo line2 && echo line3",
-        process_id: process_id
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "echo line1 && echo line2 && echo line3",
+          process_id: process_id
+        )
 
       Process.sleep(300)
 
@@ -281,11 +295,12 @@ defmodule CodingAgent.ProcessSessionTest do
       # Generate more than max_log_lines output
       cmd = "for i in $(seq 1 100); do echo \"line $i\"; done"
 
-      {:ok, _pid} = ProcessSession.start_link(
-        command: cmd,
-        process_id: process_id,
-        max_log_lines: 10
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: cmd,
+          process_id: process_id,
+          max_log_lines: 10
+        )
 
       Process.sleep(500)
 
@@ -305,11 +320,12 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "timeout" do
     test "kills process after timeout_ms", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "sleep 60",
-        process_id: process_id,
-        timeout_ms: 200
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "sleep 60",
+          process_id: process_id,
+          timeout_ms: 200
+        )
 
       # Wait for timeout to trigger
       Process.sleep(500)
@@ -325,11 +341,12 @@ defmodule CodingAgent.ProcessSessionTest do
 
   describe "working directory" do
     test "respects cwd option", %{process_id: process_id} do
-      {:ok, _pid} = ProcessSession.start_link(
-        command: "pwd",
-        process_id: process_id,
-        cwd: "/tmp"
-      )
+      {:ok, _pid} =
+        ProcessSession.start_link(
+          command: "pwd",
+          process_id: process_id,
+          cwd: "/tmp"
+        )
 
       Process.sleep(300)
 

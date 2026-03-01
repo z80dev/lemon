@@ -54,7 +54,9 @@ defmodule CodingAgent.Tools.LspFormatterTest do
 
       # When mix is not available, should return unchanged
       result = LspFormatter.format_file(path)
-      assert result == {:ok, :unchanged} or match?({:ok, _}, result) or match?({:error, _}, result)
+
+      assert result == {:ok, :unchanged} or match?({:ok, _}, result) or
+               match?({:error, _}, result)
     end
 
     test "handles missing files gracefully" do

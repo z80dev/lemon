@@ -200,7 +200,14 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - replace single line" do
     test "replaces single line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["BBB"]}]
+
+      edits = [
+        %{
+          op: :replace,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["BBB"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nBBB\nccc"
@@ -209,7 +216,10 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "deletes line with empty lines" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: []}]
+
+      edits = [
+        %{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: []}
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nccc"
@@ -218,7 +228,14 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "detects noop edits" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["bbb"]}]
+
+      edits = [
+        %{
+          op: :replace,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["bbb"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.noop_edits != nil
@@ -227,7 +244,14 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "expands single line to multiple" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["xxx", "yyy", "zzz"]}]
+
+      edits = [
+        %{
+          op: :replace,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["xxx", "yyy", "zzz"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nxxx\nyyy\nzzz\nccc"
@@ -241,6 +265,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - replace range" do
     test "replaces range of lines" do
       content = "aaa\nbbb\nccc\nddd"
+
       edits = [
         %{
           op: :replace,
@@ -256,6 +281,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "expands range to more lines" do
       content = "aaa\nbbb\nccc"
+
       edits = [
         %{
           op: :replace,
@@ -271,6 +297,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "deletes range of lines" do
       content = "aaa\nbbb\nccc\nddd"
+
       edits = [
         %{
           op: :replace,
@@ -292,7 +319,14 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - append operation" do
     test "inserts after a line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :append, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: ["NEW"]}]
+
+      edits = [
+        %{
+          op: :append,
+          pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          lines: ["NEW"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nNEW\nbbb\nccc"
@@ -316,7 +350,14 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "inserts multiple lines after anchor" do
       content = "aaa\nbbb"
-      edits = [%{op: :append, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: ["x", "y", "z"]}]
+
+      edits = [
+        %{
+          op: :append,
+          pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          lines: ["x", "y", "z"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nx\ny\nz\nbbb"
@@ -330,7 +371,14 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - prepend operation" do
     test "inserts before a line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :prepend, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["NEW"]}]
+
+      edits = [
+        %{
+          op: :prepend,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["NEW"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nNEW\nbbb\nccc"
@@ -346,7 +394,14 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "inserts before first line" do
       content = "aaa\nbbb"
-      edits = [%{op: :prepend, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: ["NEW"]}]
+
+      edits = [
+        %{
+          op: :prepend,
+          pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          lines: ["NEW"]
+        }
+      ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "NEW\naaa\nbbb"
@@ -360,9 +415,18 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - multiple edits" do
     test "applies multiple non-overlapping edits" do
       content = "aaa\nbbb\nccc\nddd\neee"
+
       edits = [
-        %{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["BBB"]},
-        %{op: :replace, pos: %{line: 4, hash: Hashline.compute_line_hash(4, "ddd")}, lines: ["DDD"]}
+        %{
+          op: :replace,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["BBB"]
+        },
+        %{
+          op: :replace,
+          pos: %{line: 4, hash: Hashline.compute_line_hash(4, "ddd")},
+          lines: ["DDD"]
+        }
       ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
@@ -412,9 +476,18 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "applies replace + append in one call" do
       content = "aaa\nbbb\nccc"
+
       edits = [
-        %{op: :replace, pos: %{line: 3, hash: Hashline.compute_line_hash(3, "ccc")}, lines: ["CCC"]},
-        %{op: :append, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: ["INSERTED"]}
+        %{
+          op: :replace,
+          pos: %{line: 3, hash: Hashline.compute_line_hash(3, "ccc")},
+          lines: ["CCC"]
+        },
+        %{
+          op: :append,
+          pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          lines: ["INSERTED"]
+        }
       ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
@@ -423,9 +496,18 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "prepend and append at same line produce correct order" do
       content = "aaa\nbbb\nccc"
+
       edits = [
-        %{op: :prepend, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["BEFORE"]},
-        %{op: :append, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["AFTER"]}
+        %{
+          op: :prepend,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["BEFORE"]
+        },
+        %{
+          op: :append,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["AFTER"]
+        }
       ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
@@ -434,9 +516,18 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "prepend with replace at same line" do
       content = "aaa\nbbb\nccc"
+
       edits = [
-        %{op: :prepend, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["BEFORE"]},
-        %{op: :replace, pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, lines: ["BBB"]}
+        %{
+          op: :prepend,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["BEFORE"]
+        },
+        %{
+          op: :replace,
+          pos: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          lines: ["BBB"]
+        }
       ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
@@ -460,6 +551,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "collects all mismatches" do
       content = "aaa\nbbb\nccc\nddd\neee"
+
       edits = [
         %{op: :replace, pos: %{line: 2, hash: "ZZ"}, lines: ["BBB"]},
         %{op: :replace, pos: %{line: 4, hash: "YY"}, lines: ["DDD"]}
@@ -508,7 +600,10 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "rejects append with empty lines" do
       content = "aaa\nbbb"
-      edits = [%{op: :append, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: []}]
+
+      edits = [
+        %{op: :append, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: []}
+      ]
 
       assert_raise ArgumentError, ~r/non-empty/, fn ->
         Hashline.apply_edits(content, edits)
@@ -517,7 +612,10 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "rejects prepend with empty lines" do
       content = "aaa\nbbb"
-      edits = [%{op: :prepend, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: []}]
+
+      edits = [
+        %{op: :prepend, pos: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, lines: []}
+      ]
 
       assert_raise ArgumentError, ~r/non-empty/, fn ->
         Hashline.apply_edits(content, edits)
@@ -558,6 +656,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "handles multiple mismatches" do
       lines = ["aaa", "bbb", "ccc", "ddd", "eee"]
+
       mismatches = [
         %{line: 2, expected: "ZZ", actual: "YY"},
         %{line: 4, expected: "XX", actual: "WW"}
@@ -751,11 +850,13 @@ defmodule CodingAgent.Tools.HashlineTest do
       chunks = for <<chunk::binary-size(chunk_size) <- content>>, do: chunk
       # Add remainder
       remainder_size = rem(byte_size(content), chunk_size)
-      chunks = if remainder_size > 0 do
-        chunks ++ [binary_part(content, byte_size(content) - remainder_size, remainder_size)]
-      else
-        chunks
-      end
+
+      chunks =
+        if remainder_size > 0 do
+          chunks ++ [binary_part(content, byte_size(content) - remainder_size, remainder_size)]
+        else
+          chunks
+        end
 
       result =
         chunks
@@ -815,7 +916,8 @@ defmodule CodingAgent.Tools.HashlineTest do
       assert length(result) > 1
 
       for chunk <- result do
-        assert byte_size(chunk) <= 2048 + 1100  # one line can exceed since first line always goes in
+        # one line can exceed since first line always goes in
+        assert byte_size(chunk) <= 2048 + 1100
       end
     end
   end

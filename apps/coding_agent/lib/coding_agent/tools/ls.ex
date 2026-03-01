@@ -315,7 +315,8 @@ defmodule CodingAgent.Tools.Ls do
                    {Enum.take(sub_entries, take_count) ++ new_entries, combined_count, true}}
                 else
                   # Prepend sub_entries in reverse for O(n) concatenation
-                  {:cont, {Enum.reverse(sub_entries) ++ new_entries, combined_count, sub_truncated}}
+                  {:cont,
+                   {Enum.reverse(sub_entries) ++ new_entries, combined_count, sub_truncated}}
                 end
 
               {:error, _reason} ->

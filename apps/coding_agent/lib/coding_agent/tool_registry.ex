@@ -404,27 +404,28 @@ defmodule CodingAgent.ToolRegistry do
       |> Map.new()
 
     {rev_resolved, _winners, conflicts} =
-      Enum.reduce([wasm_tools, extension_tools], {Enum.reverse(builtin_tools), initial_winners, %{}}, fn tools,
-                                                                                           {resolved_acc,
-                                                                                            winners_acc,
-                                                                                            conflicts_acc} ->
-        Enum.reduce(tools, {resolved_acc, winners_acc, conflicts_acc}, fn {name, tool, source},
-                                                                          {resolved, winners,
-                                                                           conflicts} ->
-          case Map.get(winners, name) do
-            nil ->
-              # Prepend for O(1) instead of O(n) append
-              {[{name, tool, source} | resolved], Map.put(winners, name, source), conflicts}
+      Enum.reduce(
+        [wasm_tools, extension_tools],
+        {Enum.reverse(builtin_tools), initial_winners, %{}},
+        fn tools, {resolved_acc, winners_acc, conflicts_acc} ->
+          Enum.reduce(tools, {resolved_acc, winners_acc, conflicts_acc}, fn {name, tool, source},
+                                                                            {resolved, winners,
+                                                                             conflicts} ->
+            case Map.get(winners, name) do
+              nil ->
+                # Prepend for O(1) instead of O(n) append
+                {[{name, tool, source} | resolved], Map.put(winners, name, source), conflicts}
 
-            winner_source ->
-              if log_conflicts? do
-                log_conflict(name, winner_source, source)
-              end
+              winner_source ->
+                if log_conflicts? do
+                  log_conflict(name, winner_source, source)
+                end
 
-              {resolved, winners, add_conflict(conflicts, name, winner_source, source)}
-          end
-        end)
-      end)
+                {resolved, winners, add_conflict(conflicts, name, winner_source, source)}
+            end
+          end)
+        end
+      )
 
     # Reverse to restore original order
     resolved = Enum.reverse(rev_resolved)

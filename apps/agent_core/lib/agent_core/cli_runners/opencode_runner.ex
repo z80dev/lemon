@@ -137,11 +137,13 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     if reason == "stop" do
       answer = state.last_text || ""
 
-      Introspection.record(:engine_output_observed, %{
-        engine: @engine,
-        ok: true,
-        has_answer: answer != ""
-      },
+      Introspection.record(
+        :engine_output_observed,
+        %{
+          engine: @engine,
+          ok: true,
+          has_answer: answer != ""
+        },
         engine: @engine,
         provenance: :inferred
       )
@@ -180,11 +182,13 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
-    Introspection.record(:engine_subprocess_exited, %{
-      engine: @engine,
-      exit_code: exit_code,
-      ok: false
-    },
+    Introspection.record(
+      :engine_subprocess_exited,
+      %{
+        engine: @engine,
+        exit_code: exit_code,
+        ok: false
+      },
       engine: @engine,
       provenance: :inferred
     )
@@ -352,9 +356,11 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     title = opencode_title(state)
     {event, factory} = EventFactory.started(state.factory, token, title: title)
 
-    Introspection.record(:engine_subprocess_started, %{
-      engine: @engine
-    },
+    Introspection.record(
+      :engine_subprocess_started,
+      %{
+        engine: @engine
+      },
       engine: @engine,
       provenance: :inferred
     )

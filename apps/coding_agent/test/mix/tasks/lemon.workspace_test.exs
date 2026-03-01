@@ -15,7 +15,9 @@ defmodule Mix.Tasks.Lemon.WorkspaceTest do
     original_cwd = File.cwd!()
 
     # Create a temporary directory for testing
-    tmp_dir = Path.join(System.tmp_dir!(), "workspace_task_test_#{:erlang.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "workspace_task_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     on_exit(fn ->
@@ -28,9 +30,10 @@ defmodule Mix.Tasks.Lemon.WorkspaceTest do
 
   describe "run/1" do
     test "init command creates workspace files", %{tmp_dir: tmp_dir} do
-      output = capture_io(fn ->
-        Workspace.run(["init", "--workspace-dir", tmp_dir])
-      end)
+      output =
+        capture_io(fn ->
+          Workspace.run(["init", "--workspace-dir", tmp_dir])
+        end)
 
       assert output =~ "Workspace initialized"
       assert output =~ tmp_dir
@@ -39,28 +42,36 @@ defmodule Mix.Tasks.Lemon.WorkspaceTest do
     test "init without workspace-dir uses default location" do
       # This test just verifies the command runs without error
       # We can't easily test the default location without affecting the real workspace
-      output = capture_io(fn ->
-        # Use a custom workspace dir to avoid affecting real workspace
-        tmp_dir = Path.join(System.tmp_dir!(), "default_workspace_test_#{:erlang.unique_integer([:positive])}")
-        File.mkdir_p!(tmp_dir)
-        Workspace.run(["init", "--workspace-dir", tmp_dir])
-      end)
+      output =
+        capture_io(fn ->
+          # Use a custom workspace dir to avoid affecting real workspace
+          tmp_dir =
+            Path.join(
+              System.tmp_dir!(),
+              "default_workspace_test_#{:erlang.unique_integer([:positive])}"
+            )
+
+          File.mkdir_p!(tmp_dir)
+          Workspace.run(["init", "--workspace-dir", tmp_dir])
+        end)
 
       assert output =~ "Workspace initialized"
     end
 
     test "invalid command shows usage info" do
-      output = capture_io(fn ->
-        Workspace.run(["invalid"])
-      end)
+      output =
+        capture_io(fn ->
+          Workspace.run(["invalid"])
+        end)
 
       assert output =~ "Usage:"
     end
 
     test "empty args shows usage info" do
-      output = capture_io(fn ->
-        Workspace.run([])
-      end)
+      output =
+        capture_io(fn ->
+          Workspace.run([])
+        end)
 
       assert output =~ "Usage:"
     end
@@ -68,17 +79,19 @@ defmodule Mix.Tasks.Lemon.WorkspaceTest do
 
   describe "option parsing" do
     test "handles --workspace-dir option", %{tmp_dir: tmp_dir} do
-      output = capture_io(fn ->
-        Workspace.run(["init", "--workspace-dir", tmp_dir])
-      end)
+      output =
+        capture_io(fn ->
+          Workspace.run(["init", "--workspace-dir", tmp_dir])
+        end)
 
       assert output =~ "Workspace initialized"
     end
 
     test "handles -w alias for --workspace-dir", %{tmp_dir: tmp_dir} do
-      output = capture_io(fn ->
-        Workspace.run(["init", "-w", tmp_dir])
-      end)
+      output =
+        capture_io(fn ->
+          Workspace.run(["init", "-w", tmp_dir])
+        end)
 
       assert output =~ "Workspace initialized"
     end

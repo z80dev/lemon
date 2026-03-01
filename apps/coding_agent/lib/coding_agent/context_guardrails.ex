@@ -99,7 +99,8 @@ defmodule CodingAgent.ContextGuardrails do
     if byte_size(thinking) <= maxb do
       [block]
     else
-      {tr, meta} = truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+      {tr, meta} =
+        truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
 
       Logger.warning("Thinking block truncated: #{inspect(meta)}")
       [%{block | thinking: tr}]

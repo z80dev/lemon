@@ -16,7 +16,10 @@ defmodule LemonGateway.Event do
   # ---------------------------------------------------------------------------
 
   defguard is_started(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :started
-  defguard is_action_event(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :action_event
+
+  defguard is_action_event(ev)
+           when is_map(ev) and :erlang.map_get(:__event__, ev) == :action_event
+
   defguard is_completed(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :completed
 
   # ---------------------------------------------------------------------------

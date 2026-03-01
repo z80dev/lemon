@@ -32,7 +32,10 @@ defmodule LemonGateway.Renderers.BasicTest do
     state = Basic.init(%{engine: __MODULE__.TestEngine})
 
     {state, result} =
-      Basic.apply_event(state, Event.completed(%{engine: "test", ok: true, answer: "ok", resume: token}))
+      Basic.apply_event(
+        state,
+        Event.completed(%{engine: "test", ok: true, answer: "ok", resume: token})
+      )
 
     assert {:render, %{text: text, status: :done}} = result
     assert String.contains?(text, "test resume xyz")

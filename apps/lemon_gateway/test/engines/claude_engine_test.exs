@@ -540,12 +540,13 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "allows optional title and meta fields" do
       resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
 
-      started = Event.started(%{
-        engine: "claude",
-        resume: resume,
-        title: "Claude Session",
-        meta: %{model: "opus"}
-      })
+      started =
+        Event.started(%{
+          engine: "claude",
+          resume: resume,
+          title: "Claude Session",
+          meta: %{model: "opus"}
+        })
 
       assert started.title == "Claude Session"
       assert started.meta.model == "opus"
@@ -564,23 +565,25 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "includes answer and error fields" do
-      completed = Event.completed(%{
-        engine: "claude",
-        ok: false,
-        answer: "partial",
-        error: "timeout"
-      })
+      completed =
+        Event.completed(%{
+          engine: "claude",
+          ok: false,
+          answer: "partial",
+          error: "timeout"
+        })
 
       assert completed.answer == "partial"
       assert completed.error == "timeout"
     end
 
     test "includes usage field" do
-      completed = Event.completed(%{
-        engine: "claude",
-        ok: true,
-        usage: %{input_tokens: 100, output_tokens: 50}
-      })
+      completed =
+        Event.completed(%{
+          engine: "claude",
+          ok: true,
+          usage: %{input_tokens: 100, output_tokens: 50}
+        })
 
       assert completed.usage.input_tokens == 100
     end
@@ -603,14 +606,15 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "allows optional ok, message, and level fields" do
       action = Event.action(%{id: "a1", kind: "tool", title: "Test"})
 
-      ev = Event.action_event(%{
-        engine: "claude",
-        action: action,
-        phase: :completed,
-        ok: true,
-        message: "Done",
-        level: :info
-      })
+      ev =
+        Event.action_event(%{
+          engine: "claude",
+          action: action,
+          phase: :completed,
+          ok: true,
+          message: "Done",
+          level: :info
+        })
 
       assert ev.ok == true
       assert ev.message == "Done"
@@ -631,12 +635,13 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "allows optional detail field" do
-      action = Event.action(%{
-        id: "a1",
-        kind: "tool",
-        title: "Read",
-        detail: %{file_path: "/test.ex"}
-      })
+      action =
+        Event.action(%{
+          id: "a1",
+          kind: "tool",
+          title: "Read",
+          detail: %{file_path: "/test.ex"}
+        })
 
       assert action.detail.file_path == "/test.ex"
     end

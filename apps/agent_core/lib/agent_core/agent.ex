@@ -880,12 +880,14 @@ defmodule AgentCore.Agent do
         _ -> ""
       end
 
-    Introspection.record(:agent_loop_started, %{
-      model: model_id,
-      tool_count: length(new_agent_state.tools),
-      message_count: length(new_agent_state.messages),
-      is_continue: messages == nil
-    },
+    Introspection.record(
+      :agent_loop_started,
+      %{
+        model: model_id,
+        tool_count: length(new_agent_state.tools),
+        message_count: length(new_agent_state.messages),
+        is_continue: messages == nil
+      },
       session_key: state.session_id,
       provenance: :direct
     )
@@ -1077,9 +1079,11 @@ defmodule AgentCore.Agent do
 
   defp handle_agent_event({:turn_end, message, _tool_results}, state) do
     # Emit introspection event for turn observation
-    Introspection.record(:agent_turn_observed, %{
-      has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
-    },
+    Introspection.record(
+      :agent_turn_observed,
+      %{
+        has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
+      },
       session_key: state.session_id,
       provenance: :inferred
     )
@@ -1127,11 +1131,13 @@ defmodule AgentCore.Agent do
     AbortSignal.clear(abort_ref)
 
     # Emit introspection event for loop end
-    Introspection.record(:agent_loop_ended, %{
-      message_count: length(state.agent_state.messages),
-      had_error: state.agent_state.error != nil,
-      was_aborted: match?({:aborted, _}, state.abort_ref)
-    },
+    Introspection.record(
+      :agent_loop_ended,
+      %{
+        message_count: length(state.agent_state.messages),
+        had_error: state.agent_state.error != nil,
+        was_aborted: match?({:aborted, _}, state.abort_ref)
+      },
       session_key: state.session_id,
       provenance: :direct
     )

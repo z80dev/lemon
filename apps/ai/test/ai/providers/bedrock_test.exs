@@ -136,7 +136,11 @@ defmodule Ai.Providers.BedrockStreamTest do
     Map.merge(base, Map.drop(overrides, [:headers, :stream_timeout]))
   end
 
-  defp stream_and_result(model \\ default_model(), context \\ default_context(), opts \\ default_opts()) do
+  defp stream_and_result(
+         model \\ default_model(),
+         context \\ default_context(),
+         opts \\ default_opts()
+       ) do
     {:ok, stream} = Bedrock.stream(model, context, opts)
     result = EventStream.result(stream, 5_000)
     {stream, result}
@@ -200,13 +204,14 @@ defmodule Ai.Providers.BedrockStreamTest do
 
       # Override with headers - these will pass credential check
       # but fail at HTTP level (not a credential error)
-      opts = default_opts(%{
-        headers: %{
-          "aws_access_key_id" => "header-access-key",
-          "aws_secret_access_key" => "header-secret-key"
-        },
-        stream_timeout: 5_000
-      })
+      opts =
+        default_opts(%{
+          headers: %{
+            "aws_access_key_id" => "header-access-key",
+            "aws_secret_access_key" => "header-secret-key"
+          },
+          stream_timeout: 5_000
+        })
 
       {_stream, result} = stream_and_result(default_model(), default_context(), opts)
 
@@ -241,12 +246,13 @@ defmodule Ai.Providers.BedrockStreamTest do
     end
 
     test "accepts credentials from headers when env vars are empty" do
-      opts = default_opts(%{
-        headers: %{
-          "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
-          "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        }
-      })
+      opts =
+        default_opts(%{
+          headers: %{
+            "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+          }
+        })
 
       {_stream, result} = stream_and_result(default_model(), default_context(), opts)
 
@@ -331,13 +337,14 @@ defmodule Ai.Providers.BedrockStreamTest do
     end
 
     test "uses aws_region from opts.headers" do
-      opts = default_opts(%{
-        headers: %{
-          "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
-          "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-          "aws_region" => "eu-west-1"
-        }
-      })
+      opts =
+        default_opts(%{
+          headers: %{
+            "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region" => "eu-west-1"
+          }
+        })
 
       {_stream, {:error, output}} = stream_and_result(default_model(), default_context(), opts)
 

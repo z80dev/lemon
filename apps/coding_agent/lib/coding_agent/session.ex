@@ -552,7 +552,11 @@ defmodule CodingAgent.Session do
     # Derive scope from session lineage. This ensures that sessions loaded from disk
     # keep their main/subagent scope even when start_link opts omit :parent_session.
     session_scope =
-      PromptComposer.resolve_session_scope(opts, parent_session, session_manager.header.parent_session)
+      PromptComposer.resolve_session_scope(
+        opts,
+        parent_session,
+        session_manager.header.parent_session
+      )
 
     # Load settings FIRST so we can use defaults for model and thinking_level
     settings_manager =
@@ -643,11 +647,16 @@ defmodule CodingAgent.Session do
     transform_context = build_transform_context(Keyword.get(opts, :transform_context))
 
     # Start the AgentCore.Agent
-    get_api_key = Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
+    get_api_key =
+      Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
 
     # Build stream options with provider-specific secrets
     stream_options =
-      ModelResolver.build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
+      ModelResolver.build_stream_options(
+        model,
+        settings_manager,
+        Keyword.get(opts, :stream_options)
+      )
 
     # Register main agent in AgentRegistry with key {session_id, :main, 0}
     agent_registry_key = {session_manager.header.id, :main, 0}
@@ -1480,7 +1489,10 @@ defmodule CodingAgent.Session do
     if state.auto_compaction_task_monitor_ref == monitor_ref do
       state =
         state
-        |> CompactionManager.maybe_kill_background_task(state.auto_compaction_task_pid, :auto_compaction_timeout)
+        |> CompactionManager.maybe_kill_background_task(
+          state.auto_compaction_task_pid,
+          :auto_compaction_timeout
+        )
         |> CompactionManager.clear_auto_compaction_state()
 
       if not state.is_streaming do
@@ -1770,15 +1782,24 @@ defmodule CodingAgent.Session do
       case message do
         %Ai.Types.UserMessage{} ->
           # Persist user messages (including steering/follow-up)
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         %Ai.Types.AssistantMessage{} ->
           # Persist assistant messages
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         %Ai.Types.ToolResultMessage{} ->
           # Persist tool results
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         _ ->
           # Other message types, don't persist
@@ -2100,7 +2121,13 @@ defmodule CodingAgent.Session do
 
       case CompactionManager.start_tracked_background_task(
              fn ->
-               result = CompactionManager.auto_compaction_task_result(session_manager, model, compaction_opts)
+               result =
+                 CompactionManager.auto_compaction_task_result(
+                   session_manager,
+                   model,
+                   compaction_opts
+                 )
+
                send(session_pid, {:auto_compaction_result, signature, result})
              end,
              CompactionManager.auto_compaction_task_timeout_ms(),
@@ -2125,5 +2152,4 @@ defmodule CodingAgent.Session do
       state
     end
   end
-
 end

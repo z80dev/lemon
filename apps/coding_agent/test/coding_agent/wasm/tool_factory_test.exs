@@ -13,7 +13,8 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
         %{
           name: "hello_tool",
           description: "Says hello",
-          schema_json: ~s({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
+          schema_json:
+            ~s({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
           path: "/tools/hello.wasm",
           warnings: [],
           capabilities: %{http: false, tool_invoke: false},
@@ -30,6 +31,7 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
       assert agent_tool.description == "Says hello"
       assert agent_tool.label == "WASM: hello_tool"
       assert is_function(agent_tool.execute, 4)
+
       assert agent_tool.parameters == %{
                "type" => "object",
                "properties" => %{"name" => %{"type" => "string"}},

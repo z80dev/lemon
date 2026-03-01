@@ -98,9 +98,14 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp start_runner(runner_module, engine_id, job, opts) do
     resume =
       case job.resume do
-        %GatewayToken{engine: ^engine_id, value: value} -> AgentResumeToken.new(engine_id, value)
-        %AgentResumeToken{engine: ^engine_id, value: value} -> AgentResumeToken.new(engine_id, value)
-        _ -> nil
+        %GatewayToken{engine: ^engine_id, value: value} ->
+          AgentResumeToken.new(engine_id, value)
+
+        %AgentResumeToken{engine: ^engine_id, value: value} ->
+          AgentResumeToken.new(engine_id, value)
+
+        _ ->
+          nil
       end
 
     prompt = job.prompt
@@ -335,9 +340,14 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp to_event_completed(%CompletedEvent{} = ev) do
     resume =
       case ev.resume do
-        %GatewayToken{} = token -> token
-        %AgentResumeToken{engine: engine, value: value} -> %GatewayToken{engine: engine, value: value}
-        _ -> nil
+        %GatewayToken{} = token ->
+          token
+
+        %AgentResumeToken{engine: engine, value: value} ->
+          %GatewayToken{engine: engine, value: value}
+
+        _ ->
+          nil
       end
 
     Event.completed(%{

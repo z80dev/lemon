@@ -1,7 +1,7 @@
 defmodule LemonGateway.Shared do
   @moduledoc """
   Shared utility functions used across LemonGateway modules.
-  
+
   This module centralizes common helper functions to reduce duplication
   and provide consistent behavior for configuration access, data normalization,
   and type conversions across the codebase.

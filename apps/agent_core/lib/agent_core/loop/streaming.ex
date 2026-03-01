@@ -61,13 +61,29 @@ defmodule AgentCore.Loop.Streaming do
         # Call the stream function (support {:ok, stream} or direct stream pid)
         case stream_function.(config.model, llm_context, options) do
           {:ok, response_stream} ->
-            process_stream_events(context, response_stream, stream, config, signal, llm_context, options)
+            process_stream_events(
+              context,
+              response_stream,
+              stream,
+              config,
+              signal,
+              llm_context,
+              options
+            )
 
           {:error, reason} ->
             {:error, reason}
 
           response_stream when is_pid(response_stream) ->
-            process_stream_events(context, response_stream, stream, config, signal, llm_context, options)
+            process_stream_events(
+              context,
+              response_stream,
+              stream,
+              config,
+              signal,
+              llm_context,
+              options
+            )
 
           other ->
             {:error, {:invalid_stream, other}}
@@ -79,7 +95,15 @@ defmodule AgentCore.Loop.Streaming do
     end
   end
 
-  defp process_stream_events(context, response_stream, stream, config, signal, llm_context, options) do
+  defp process_stream_events(
+         context,
+         response_stream,
+         stream,
+         config,
+         signal,
+         llm_context,
+         options
+       ) do
     # Accumulate the partial message
     result =
       Enum.reduce_while(
@@ -107,13 +131,18 @@ defmodule AgentCore.Loop.Streaming do
 
     case result do
       {:done, final_message, ctx} ->
-        _ = Ai.PromptDiagnostics.record_llm_call(config.model, llm_context, options, final_message)
+        _ =
+          Ai.PromptDiagnostics.record_llm_call(config.model, llm_context, options, final_message)
+
         {:ok, final_message, ctx}
 
       {partial, ctx, added} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
         {final_message, final_ctx} = finalize_message(partial, ctx, added, stream)
-        _ = Ai.PromptDiagnostics.record_llm_call(config.model, llm_context, options, final_message)
+
+        _ =
+          Ai.PromptDiagnostics.record_llm_call(config.model, llm_context, options, final_message)
+
         {:ok, final_message, final_ctx}
 
       _ ->

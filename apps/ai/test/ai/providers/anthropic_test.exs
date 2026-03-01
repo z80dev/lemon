@@ -409,12 +409,14 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
       }
 
       context =
-        Context.new(messages: [
-          %UserMessage{content: "Read /foo"},
-          assistant_msg,
-          tool_result,
-          %UserMessage{content: "Thanks"}
-        ])
+        Context.new(
+          messages: [
+            %UserMessage{content: "Read /foo"},
+            assistant_msg,
+            tool_result,
+            %UserMessage{content: "Thanks"}
+          ]
+        )
 
       {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "sk-test"})
 
@@ -489,10 +491,12 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
       end)
 
       context =
-        Context.new(messages: [
-          %UserMessage{content: "   "},
-          %UserMessage{content: "Hello"}
-        ])
+        Context.new(
+          messages: [
+            %UserMessage{content: "   "},
+            %UserMessage{content: "Hello"}
+          ]
+        )
 
       {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "sk-test"})
 
@@ -514,10 +518,12 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
       end)
 
       context =
-        Context.new(messages: [
-          %UserMessage{content: [%TextContent{text: "First"}]},
-          %UserMessage{content: [%TextContent{text: "Second"}]}
-        ])
+        Context.new(
+          messages: [
+            %UserMessage{content: [%TextContent{text: "First"}]},
+            %UserMessage{content: [%TextContent{text: "Second"}]}
+          ]
+        )
 
       {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "sk-test"})
 
@@ -611,7 +617,10 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
 
       assert {:ok, result} = EventStream.result(stream, 2000)
       assert [thinking, text] = result.content
-      assert %ThinkingContent{thinking: "Let me reason...", thinking_signature: "sig123"} = thinking
+
+      assert %ThinkingContent{thinking: "Let me reason...", thinking_signature: "sig123"} =
+               thinking
+
       assert %TextContent{text: "Answer"} = text
     end
 

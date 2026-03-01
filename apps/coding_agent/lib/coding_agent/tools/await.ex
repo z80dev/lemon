@@ -124,9 +124,10 @@ defmodule CodingAgent.Tools.Await do
         current_jobs = refresh_jobs(initial_jobs)
 
         # Check if any job has completed
-        completed = Enum.filter(current_jobs, fn {_id, record} ->
-          record.status in [:completed, :error, :killed]
-        end)
+        completed =
+          Enum.filter(current_jobs, fn {_id, record} ->
+            record.status in [:completed, :error, :killed]
+          end)
 
         if completed != [] do
           # At least one job finished - return results
@@ -200,7 +201,9 @@ defmodule CodingAgent.Tools.Await do
 
   # Return results when at least one job completed
   defp return_results(jobs, initial_count, status) do
-    completed_count = Enum.count(jobs, fn {_id, r} -> r.status in [:completed, :error, :killed] end)
+    completed_count =
+      Enum.count(jobs, fn {_id, r} -> r.status in [:completed, :error, :killed] end)
+
     job_summary = format_job_summary(jobs)
 
     content = """

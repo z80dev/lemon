@@ -219,27 +219,35 @@ defmodule CodingAgent.Tools.HashlineEdit do
 
   defp parse_tag_field(raw, field) do
     case Map.get(raw, field) do
-      nil -> {:error, "Missing required field '#{field}' for #{raw["op"]} edit"}
+      nil ->
+        {:error, "Missing required field '#{field}' for #{raw["op"]} edit"}
+
       ref when is_binary(ref) ->
         try do
           {:ok, Hashline.parse_tag(ref)}
         rescue
           ArgumentError -> {:error, "Invalid tag reference in '#{field}': #{ref}"}
         end
-      _ -> {:error, "Field '#{field}' must be a string"}
+
+      _ ->
+        {:error, "Field '#{field}' must be a string"}
     end
   end
 
   defp parse_optional_tag(raw, field) do
     case Map.get(raw, field) do
-      nil -> nil
+      nil ->
+        nil
+
       ref when is_binary(ref) ->
         try do
           Hashline.parse_tag(ref)
         rescue
           ArgumentError -> nil
         end
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -291,6 +299,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
 
   defp finalize_content(content, "\r\n", bom) do
     restored = content |> String.replace("\r\n", "\n") |> String.replace("\n", "\r\n")
+
     case bom do
       nil -> restored
       b -> b <> restored

@@ -16,7 +16,8 @@ defmodule Ai.ModelCache do
   end
 
   @spec read(term(), non_neg_integer()) ::
-          {:ok, %{models: list(), fresh: boolean(), authoritative: boolean(), updated_at: integer()}}
+          {:ok,
+           %{models: list(), fresh: boolean(), authoritative: boolean(), updated_at: integer()}}
           | :miss
   def read(provider_id, ttl_ms \\ @default_ttl) do
     case :ets.lookup(@table, provider_id) do
@@ -24,7 +25,8 @@ defmodule Ai.ModelCache do
         now = System.monotonic_time(:millisecond)
         fresh = now - updated_at < ttl_ms
 
-        {:ok, %{models: models, fresh: fresh, authoritative: authoritative, updated_at: updated_at}}
+        {:ok,
+         %{models: models, fresh: fresh, authoritative: authoritative, updated_at: updated_at}}
 
       [] ->
         :miss
@@ -56,9 +58,13 @@ defmodule Ai.ModelCache do
     entries = :ets.info(@table, :size)
 
     providers =
-      :ets.foldl(fn {provider_id, _models, _updated_at, _ttl, _auth}, acc ->
-        [provider_id | acc]
-      end, [], @table)
+      :ets.foldl(
+        fn {provider_id, _models, _updated_at, _ttl, _auth}, acc ->
+          [provider_id | acc]
+        end,
+        [],
+        @table
+      )
 
     %{entries: entries, providers: providers}
   end

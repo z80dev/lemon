@@ -533,7 +533,12 @@ defmodule CodingAgent.Coordinator do
     {:done, aborted_results, new_state}
   end
 
-  defp handle_await_message({:system, from, {:terminate, _reason}}, _pending_ids, _results, _state) do
+  defp handle_await_message(
+         {:system, from, {:terminate, _reason}},
+         _pending_ids,
+         _results,
+         _state
+       ) do
     GenServer.reply(from, :ok)
     :exit
   end

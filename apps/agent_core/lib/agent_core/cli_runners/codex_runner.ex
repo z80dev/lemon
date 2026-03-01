@@ -194,10 +194,12 @@ defmodule AgentCore.CliRunners.CodexRunner do
         {event, factory} = EventFactory.started(state.factory, token, title: "Codex")
         state = %{state | factory: factory, found_session: token}
 
-        Introspection.record(:engine_subprocess_started, %{
-          engine: @engine,
-          thread_id: thread_id
-        },
+        Introspection.record(
+          :engine_subprocess_started,
+          %{
+            engine: @engine,
+            thread_id: thread_id
+          },
           engine: @engine,
           provenance: :inferred
         )
@@ -221,13 +223,15 @@ defmodule AgentCore.CliRunners.CodexRunner do
           output_tokens: usage.output_tokens
         }
 
-        Introspection.record(:engine_output_observed, %{
-          engine: @engine,
-          event_kind: :turn_completed,
-          turn_index: state.turn_index,
-          input_tokens: usage.input_tokens,
-          output_tokens: usage.output_tokens
-        },
+        Introspection.record(
+          :engine_output_observed,
+          %{
+            engine: @engine,
+            event_kind: :turn_completed,
+            turn_index: state.turn_index,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens
+          },
           engine: @engine,
           provenance: :inferred
         )
@@ -308,11 +312,13 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
-    Introspection.record(:engine_subprocess_exited, %{
-      engine: @engine,
-      exit_code: exit_code,
-      ok: false
-    },
+    Introspection.record(
+      :engine_subprocess_exited,
+      %{
+        engine: @engine,
+        exit_code: exit_code,
+        ok: false
+      },
       engine: @engine,
       provenance: :inferred
     )

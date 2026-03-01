@@ -6,7 +6,9 @@ defmodule CodingAgent.ProgressTest do
 
   setup do
     session_id = "progress-#{System.unique_integer([:positive, :monotonic])}"
-    cwd = Path.join(System.tmp_dir!(), "progress-#{System.unique_integer([:positive, :monotonic])}")
+
+    cwd =
+      Path.join(System.tmp_dir!(), "progress-#{System.unique_integer([:positive, :monotonic])}")
 
     File.mkdir_p!(cwd)
 
@@ -18,7 +20,10 @@ defmodule CodingAgent.ProgressTest do
     {:ok, session_id: session_id, cwd: cwd}
   end
 
-  test "returns todo-based progress when no requirements file exists", %{session_id: session_id, cwd: cwd} do
+  test "returns todo-based progress when no requirements file exists", %{
+    session_id: session_id,
+    cwd: cwd
+  } do
     TodoStore.put(session_id, [
       %{id: "t1", content: "Done", status: :completed, dependencies: [], priority: :high},
       %{id: "t2", content: "Pending", status: :pending, dependencies: [], priority: :medium}
@@ -34,7 +39,10 @@ defmodule CodingAgent.ProgressTest do
     assert snapshot.next_actions.features == []
   end
 
-  test "combines todo and feature percentages when requirements exist", %{session_id: session_id, cwd: cwd} do
+  test "combines todo and feature percentages when requirements exist", %{
+    session_id: session_id,
+    cwd: cwd
+  } do
     TodoStore.put(session_id, [
       %{id: "t1", content: "Done", status: :completed, dependencies: [], priority: :high},
       %{id: "t2", content: "Done2", status: :completed, dependencies: [], priority: :high},

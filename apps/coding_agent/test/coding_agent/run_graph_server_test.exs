@@ -41,7 +41,11 @@ defmodule CodingAgent.RunGraphServerTest do
       end
 
       # Start with custom name
-      opts = [name: server_name, dets_path: Path.join(System.tmp_dir!(), "test_run_graph_#{:rand.uniform(10000)}.dets")]
+      opts = [
+        name: server_name,
+        dets_path: Path.join(System.tmp_dir!(), "test_run_graph_#{:rand.uniform(10000)}.dets")
+      ]
+
       assert {:ok, pid} = RunGraphServer.start_link(opts)
       assert Process.alive?(pid)
       assert Process.whereis(server_name) == pid
@@ -278,7 +282,7 @@ defmodule CodingAgent.RunGraphServerTest do
       # When not initialized, status field may be set to :not_initialized
       has_status = Map.has_key?(status.info, :status)
       has_size = Map.has_key?(status.info, :size)
-      
+
       if has_status do
         assert status.info.status in [:not_initialized, :closed]
       else

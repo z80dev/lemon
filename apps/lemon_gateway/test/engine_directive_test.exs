@@ -17,7 +17,8 @@ defmodule LemonGateway.EngineDirectiveTest do
     end
 
     test "strips /claude directive with trailing text" do
-      assert EngineDirective.strip("/claude summarize the code") == {"claude", "summarize the code"}
+      assert EngineDirective.strip("/claude summarize the code") ==
+               {"claude", "summarize the code"}
     end
 
     test "strips /opencode directive with trailing text" do

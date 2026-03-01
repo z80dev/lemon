@@ -227,7 +227,9 @@ defmodule LemonGateway.ApplicationTest do
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
 
       {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} -> id == Elixir.LemonGateway.ThreadWorkerSupervisor end)
+        Enum.find(children, fn {id, _, _, _} ->
+          id == Elixir.LemonGateway.ThreadWorkerSupervisor
+        end)
 
       assert type == :supervisor
     end
@@ -237,7 +239,9 @@ defmodule LemonGateway.ApplicationTest do
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
 
-      assert Enum.find(children, fn {id, _, _, _} -> id == Elixir.LemonGateway.TransportSupervisor end) !=
+      assert Enum.find(children, fn {id, _, _, _} ->
+               id == Elixir.LemonGateway.TransportSupervisor
+             end) !=
                nil
     end
 
@@ -667,7 +671,9 @@ defmodule LemonGateway.ApplicationTest do
 
       # DynamicSupervisors should start fresh with no children
       run_children = DynamicSupervisor.which_children(Elixir.LemonGateway.RunSupervisor)
-      thread_children = DynamicSupervisor.which_children(Elixir.LemonGateway.ThreadWorkerSupervisor)
+
+      thread_children =
+        DynamicSupervisor.which_children(Elixir.LemonGateway.ThreadWorkerSupervisor)
 
       assert run_children == []
       assert thread_children == []

@@ -453,7 +453,10 @@ defmodule Ai.ModelsTest do
         assert is_list(model.input), "model missing input: #{inspect(model)}"
         assert %ModelCost{} = model.cost, "model missing cost: #{inspect(model)}"
         assert is_integer(model.context_window), "model missing context_window: #{inspect(model)}"
-        assert model.context_window > 0, "model context_window must be positive: #{inspect(model)}"
+
+        assert model.context_window > 0,
+               "model context_window must be positive: #{inspect(model)}"
+
         assert is_integer(model.max_tokens), "model missing max_tokens: #{inspect(model)}"
         assert model.max_tokens > 0, "model max_tokens must be positive: #{inspect(model)}"
       end

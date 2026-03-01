@@ -301,74 +301,74 @@ defmodule Ai.Models.Google do
       context_window: 1_048_576,
       max_tokens: 65_535
     },
-"gemini-2.5-flash-lite-preview-09-2025" => %Model{
-                       id: "gemini-2.5-flash-lite-preview-09-2025",
-                       name: "Gemini 2.5 Flash Lite Preview 09-25",
-                       api: :google_generative_ai,
-                       provider: :google,
-                       base_url: "https://generativelanguage.googleapis.com/v1beta",
-                       reasoning: true,
-                       input: [:text, :image],
-                       cost: %ModelCost{
-                         input: 0.1,
-                         output: 0.4,
-                         cache_read: 0.025,
-                         cache_write: 0.0
-                       },
-                       context_window: 1_048_576,
-                       max_tokens: 65_536
-                     },
-                     "gemini-2.5-flash-preview-09-2025" => %Model{
-                       id: "gemini-2.5-flash-preview-09-2025",
-                       name: "Gemini 2.5 Flash Preview 09-25",
-                       api: :google_generative_ai,
-                       provider: :google,
-                       base_url: "https://generativelanguage.googleapis.com/v1beta",
-                       reasoning: true,
-                       input: [:text, :image],
-                       cost: %ModelCost{
-                         input: 0.3,
-                         output: 2.5,
-                         cache_read: 0.075,
-                         cache_write: 0.0
-                       },
-                       context_window: 1_048_576,
-                       max_tokens: 65_536
-                     },
-                     "gemini-live-2.5-flash" => %Model{
-                       id: "gemini-live-2.5-flash",
-                       name: "Gemini Live 2.5 Flash",
-                       api: :google_generative_ai,
-                       provider: :google,
-                       base_url: "https://generativelanguage.googleapis.com/v1beta",
-                       reasoning: true,
-                       input: [:text, :image],
-                       cost: %ModelCost{
-                         input: 0.5,
-                         output: 2.0,
-                         cache_read: 0.0,
-                         cache_write: 0.0
-                       },
-                       context_window: 128_000,
-                       max_tokens: 8_000
-                     },
-                     "gemini-live-2.5-flash-preview-native-audio" => %Model{
-                       id: "gemini-live-2.5-flash-preview-native-audio",
-                       name: "Gemini Live 2.5 Flash Preview Native Audio",
-                       api: :google_generative_ai,
-                       provider: :google,
-                       base_url: "https://generativelanguage.googleapis.com/v1beta",
-                       reasoning: true,
-                       input: [:text],
-                       cost: %ModelCost{
-                         input: 0.5,
-                         output: 2.0,
-                         cache_read: 0.0,
-                         cache_write: 0.0
-                       },
-                       context_window: 131_072,
-                       max_tokens: 65_536
-                     }
+    "gemini-2.5-flash-lite-preview-09-2025" => %Model{
+      id: "gemini-2.5-flash-lite-preview-09-2025",
+      name: "Gemini 2.5 Flash Lite Preview 09-25",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 0.1,
+        output: 0.4,
+        cache_read: 0.025,
+        cache_write: 0.0
+      },
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
+    "gemini-2.5-flash-preview-09-2025" => %Model{
+      id: "gemini-2.5-flash-preview-09-2025",
+      name: "Gemini 2.5 Flash Preview 09-25",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 0.3,
+        output: 2.5,
+        cache_read: 0.075,
+        cache_write: 0.0
+      },
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
+    "gemini-live-2.5-flash" => %Model{
+      id: "gemini-live-2.5-flash",
+      name: "Gemini Live 2.5 Flash",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 0.5,
+        output: 2.0,
+        cache_read: 0.0,
+        cache_write: 0.0
+      },
+      context_window: 128_000,
+      max_tokens: 8_000
+    },
+    "gemini-live-2.5-flash-preview-native-audio" => %Model{
+      id: "gemini-live-2.5-flash-preview-native-audio",
+      name: "Gemini Live 2.5 Flash Preview Native Audio",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{
+        input: 0.5,
+        output: 2.0,
+        cache_read: 0.0,
+        cache_write: 0.0
+      },
+      context_window: 131_072,
+      max_tokens: 65_536
+    }
   }
 
   # Models that belong to the :google_antigravity virtual provider.

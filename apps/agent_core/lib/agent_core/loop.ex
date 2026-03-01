@@ -401,7 +401,9 @@ defmodule AgentCore.Loop do
       # Check for follow-up messages
       follow_up_messages = get_follow_up_messages(config) || []
 
-      Logger.debug("AgentCore.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}")
+      Logger.debug(
+        "AgentCore.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}"
+      )
 
       if follow_up_messages != [] do
         # Set as pending so inner loop processes them
@@ -465,7 +467,9 @@ defmodule AgentCore.Loop do
       EventStream.push(stream, {:turn_start})
     end
 
-    Logger.debug("AgentCore.Loop do_inner_loop turn first_turn=#{first_turn} pending=#{length(pending_messages)}")
+    Logger.debug(
+      "AgentCore.Loop do_inner_loop turn first_turn=#{first_turn} pending=#{length(pending_messages)}"
+    )
 
     # Process pending messages (inject before next assistant response)
     {context, new_messages, _cleared_pending} =
