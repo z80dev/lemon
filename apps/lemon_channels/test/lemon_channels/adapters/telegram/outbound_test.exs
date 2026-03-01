@@ -25,6 +25,11 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       {:ok, %{"ok" => true, "result" => %{"message_id" => 654}}}
     end
 
+    def send_video(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_video, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 800}}}
+    end
+
     def send_media_group(_token, chat_id, files, opts) do
       send(self(), {:send_media_group, chat_id, files, opts})
       {:ok, %{"ok" => true, "result" => [%{"message_id" => 700}, %{"message_id" => 701}]}}
@@ -473,6 +478,55 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert_receive {:send_photo_attempt, 2, 123, ^path, second_opts}, 2_000
     assert second_opts[:reply_to_message_id] == 456
     assert second_opts[:caption] == "Retry me"
+  end
+
+  test "file: video paths use send_video when available" do
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
+
+    path =
+      Path.join(System.tmp_dir!(), "outbound-video-#{System.unique_integer([:positive])}.mp4")
+
+    File.write!(path, "mp4data")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{path: path, caption: "Watch this"},
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_video, 123, ^path, opts}
+    assert opts[:caption] == "Watch this"
+    assert opts[:reply_to_message_id] == 456
+    assert opts[:message_thread_id] == 777
+  end
+
+  test "file: video paths fallback to send_document when send_video is unavailable" do
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiDocumentOnly})
+
+    path =
+      Path.join(System.tmp_dir!(), "outbound-video-#{System.unique_integer([:positive])}.mov")
+
+    File.write!(path, "movdata")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: nil},
+        kind: :file,
+        content: %{path: path}
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+    assert_receive {:send_document, 123, ^path, _opts}
   end
 
   defp put_telegram_config(config) when is_map(config) do
