@@ -1,3 +1,54 @@
+### 2026-03-05 - Rate Limit Auto-Resume Feature Completion
+**Work Area**: Feature Implementation / Rate Limit Handling
+
+**Summary**:
+Completed implementation of auto-resume functionality for coding agent runs that hit provider rate limits. Runs now automatically pause when encountering rate limits and resume execution after the reset window expires.
+
+**Components Delivered**:
+
+1. **CodingAgent.RateLimitPause** (`apps/coding_agent/lib/coding_agent/rate_limit_pause.ex`):
+   - ETS-backed pause tracking for rate limit state
+   - Functions: create/4, get/1, resume/1, ready_to_resume?/1, list_pending/1, stats/0
+   - Telemetry events: `[:coding_agent, :rate_limit_pause, :paused|:resumed]`
+   - Configuration support for enabled?, default_retry_after_ms, max_retry_attempts
+
+2. **CodingAgent.ResumeScheduler** (`apps/coding_agent/lib/coding_agent/resume_scheduler.ex`):
+   - GenServer for periodic resume checking (default 30s interval)
+   - Automatic resumption of runs when pause window expires
+   - Configurable check interval and max concurrent resumes
+
+3. **RunGraph Integration** (`apps/coding_agent/lib/coding_agent/run_graph.ex`):
+   - Added `paused_for_limit` state to state machine
+   - Implemented `pause_for_limit/2` and `resume_from_limit/1` functions
+   - Pause history tracking for audit trail
+
+4. **Introspection API** (`apps/lemon_control_plane/lib/lemon_control_plane/methods/rate_limit_pause_*.ex`):
+   - `rate_limit_pause.list` - List pauses for a session
+   - `rate_limit_pause.get` - Get pause details
+   - `rate_limit_pause.stats` - Aggregate statistics
+
+5. **Documentation**:
+   - Comprehensive feature documentation (`docs/rate_limit_auto_resume.md`)
+   - Updated `apps/coding_agent/AGENTS.md` with rate limit feature docs
+
+**Test Coverage**:
+- RateLimitPause tests: 20 tests, 0 failures
+- ResumeScheduler tests: 11 tests, 0 failures
+- API method tests: 14 tests, 0 failures
+- Integration tests: 24 tests, 0 failures
+- **Total: 69 tests, 0 failures**
+
+**Planning Artifacts**:
+- Review: `planning/reviews/RVW-PLN-20260303-rate-limit-auto-resume.md`
+- Merge: `planning/merges/MRG-PLN-20260303-rate-limit-auto-resume.md`
+- Plan status updated to `ready_to_land` in INDEX.md
+
+**Commits**:
+- `37106cc0` - docs: Add review and merge artifacts for PLN-20260303-rate-limit-auto-resume
+- `566e077f` - feat(games): Add enabled configuration flag for games platform
+
+---
+
 ### 2026-03-02 - Tool Call Name Normalization
 **Work Area**: Reliability Hardening / Tool Dispatch
 
