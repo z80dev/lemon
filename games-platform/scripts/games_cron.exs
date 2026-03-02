@@ -106,7 +106,11 @@ LobbySeeder Results:
   Created: #{result.created}
   Advanced: #{result.advanced}
   Active house matches: #{result.active_house}
-""")
+
+========================================
+Done!
+========================================
+  """)
 
   # Check web endpoint
   endpoint_pid = :rpc.call(node_name, Process, :whereis, [LemonWeb.Endpoint])
@@ -124,13 +128,6 @@ LobbySeeder Results:
       IO.puts("Web UI: NOT accessible on port 4080")
       IO.puts("  To start: Ensure the endpoint is started with server: true")
   end
-
-  IO.puts("""
-
-========================================
-Done!
-========================================
-  """)
 
 else
   IO.puts("""

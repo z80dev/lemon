@@ -1,5 +1,39 @@
 # JANITOR.md - Implementation Agent Work Log
 
+## 2026-03-03
+
+### Rate Limit Auto-Resume - M1-M2 Complete
+**Plan:** PLN-20260303-rate-limit-auto-resume  
+**Status:** `in_progress` (M1-M2 complete)  
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume`
+
+Implemented core `RateLimitPause` module for tracking and managing rate limit pauses with auto-resume capability.
+
+**Changes:**
+- `apps/coding_agent/lib/coding_agent/rate_limit_pause.ex` (new)
+  - ETS-backed pause tracking with concurrent access
+  - `create/4` - Creates pause with retry-after timing
+  - `ready_to_resume?/1` - Checks if pause window elapsed
+  - `resume/1` - Marks pause resumed with telemetry
+  - `list_pending/1`, `list_all/1` - Session-scoped queries
+  - `stats/0` - Aggregate statistics by provider
+  - `cleanup_expired/1` - Removes old pause records
+
+- `apps/coding_agent/test/coding_agent/rate_limit_pause_test.exs` (new)
+  - 20 comprehensive tests
+  - All tests pass
+
+**Telemetry Events:**
+- `[:coding_agent, :rate_limit_pause, :paused]`
+- `[:coding_agent, :rate_limit_pause, :resumed]`
+
+**Next Steps:**
+- M3: Integrate with RunGraph for pause/resume state transitions
+- M4: Add resume scheduling via cron/timer
+- M5: User notifications and configuration
+
+---
+
 ## 2026-03-02
 
 ### Tool Call Name Normalization - Landed
