@@ -1,5 +1,40 @@
 # JANITOR.md - Implementation Agent Work Log
 
+## 2026-03-05
+
+### X API Get My Tweets Tool
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
+
+Implemented `get_my_tweets` skill tool for agents to review their own X/Twitter posts.
+
+**Changes:**
+- `apps/lemon_skills/lib/lemon_skills/tools/get_my_tweets.ex` (new)
+  - Tool for fetching recent tweets with engagement metrics
+  - Supports pagination, exclude replies/retweets filters
+  - Formats tweets with likes, retweets, replies, impressions
+
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api/client.ex`
+  - Added `get_my_tweets/1` for OAuth2 flow
+
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api/oauth1_client.ex`
+  - Added `get_my_tweets/1` for OAuth1 flow
+
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api/gateway_methods.ex`
+  - Added `get_my_tweets/1` gateway method
+
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api.ex`
+  - Registered `x_api.get_my_tweets` in gateway methods list
+
+- `apps/lemon_skills/test/lemon_skills/tools/get_my_tweets_test.exs` (new)
+  - 4 comprehensive tests for the tool
+
+- `bin/lemon`
+  - Fixed bash array syntax for older bash versions (unquoted array expansion)
+
+**Commit:** `3c8f9819` - feat(x_api): add get_my_tweets tool for reviewing own tweets
+
+---
+
 ## 2026-03-04
 
 ### Defensive Hardening and Logging Improvements
