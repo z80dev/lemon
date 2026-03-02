@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Discord.Inbound
   alias LemonChannels.BindingResolver
   alias LemonCore.ChatScope
-  alias LemonCore.{InboundMessage, RouterBridge, SessionKey}
+  alias LemonCore.{InboundMessage, RouterBridge, Secrets, SessionKey}
   alias Nostrum.Api.ApplicationCommand
   alias Nostrum.Api.Interaction
 
@@ -66,7 +66,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
-    token = cfg_get(config, :bot_token) || System.get_env("DISCORD_BOT_TOKEN")
+    token = cfg_get(config, :bot_token) || resolve_token()
 
     if is_binary(token) and String.trim(token) != "" do
       case ensure_nostrum_started(token) do
@@ -510,6 +510,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp map_get(_, _), do: nil
+
+  defp resolve_token do
+    # Try secrets store first, then fall back to environment variable
+    Secrets.fetch_value("DISCORD_BOT_TOKEN") || System.get_env("DISCORD_BOT_TOKEN")
+  end
 
   defmodule Consumer do
     @moduledoc false
