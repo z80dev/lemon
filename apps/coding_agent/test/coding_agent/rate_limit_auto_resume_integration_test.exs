@@ -73,7 +73,7 @@ defmodule CodingAgent.RateLimitAutoResumeIntegrationTest do
       # Step 6: Resume the pause
       assert {:ok, resumed} = RateLimitPause.resume(pause.id)
       assert resumed.status == :resumed
-      assert resumed.resumed_at != nil
+      assert resumed.resumed_at
 
       # Step 7: Resume the run
       assert :ok = RunGraph.resume_from_limit(run_id)
@@ -129,17 +129,17 @@ defmodule CodingAgent.RateLimitAutoResumeIntegrationTest do
       Process.sleep(10)
       assert RateLimitPause.ready_to_resume?(pause.id)
 
-      # Trigger scheduler check - it should resume the pause
+      # Trigger scheduler check using the pid directly
       # Note: RunGraph.resume_from_limit won't find the run since find_paused_run
       # is not fully implemented, but the pause should be marked resumed
-      {:ok, resumed_count} = ResumeScheduler.check_and_resume()
+      {:ok, resumed_count} = GenServer.call(scheduler, :check_and_resume)
       assert resumed_count >= 0
 
       # Verify the pause was resumed
       assert {:ok, %{status: :resumed}} = RateLimitPause.get(pause.id)
 
       # Verify stats were updated
-      stats = ResumeScheduler.stats()
+      stats = GenServer.call(scheduler, :stats)
       assert stats.checks_performed >= 1
 
       GenServer.stop(scheduler)
@@ -164,10 +164,10 @@ defmodule CodingAgent.RateLimitAutoResumeIntegrationTest do
       Process.sleep(10)
 
       # Trigger check - should process up to max_concurrent_resumes
-      {:ok, _resumed_count} = ResumeScheduler.check_and_resume()
+      {:ok, _resumed_count} = GenServer.call(scheduler, :check_and_resume)
 
       # Check stats - should show limited resumes
-      stats = ResumeScheduler.stats()
+      stats = GenServer.call(scheduler, :stats)
       assert stats.checks_performed == 1
       # Note: actual resumed count depends on implementation details
 
@@ -342,9 +342,9 @@ defmodule CodingAgent.RateLimitAutoResumeIntegrationTest do
       session_id = "session_#{System.unique_integer([:positive])}"
 
       # Create multiple pauses for same session (simulating multiple rate limits)
-      {:ok, pause1} = RateLimitPause.create(session_id, :anthropic, 60_000)
+      {:ok, _pause1} = RateLimitPause.create(session_id, :anthropic, 60_000)
       {:ok, pause2} = RateLimitPause.create(session_id, :anthropic, 30_000)
-      {:ok, pause3} = RateLimitPause.create(session_id, :openai, 45_000)
+      {:ok, _pause3} = RateLimitPause.create(session_id, :openai, 45_000)
 
       # All should be listed
       pending = RateLimitPause.list_pending(session_id)

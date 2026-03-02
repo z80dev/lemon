@@ -50,18 +50,18 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 
 ### M3 — Telemetry and Observability
 - [x] Add telemetry events for pause/resume cycles (in RateLimitPause)
-- [ ] Expose pause state in introspection API
+- [x] Expose pause state in introspection API (`rate_limit_pause.list`, `rate_limit_pause.get`, `rate_limit_pause.stats`)
 - [x] Add metrics: time_paused, resume_count, limit_hits_by_provider (in RateLimitPause.stats/0)
 
 ### M4 — User Experience
-- [ ] Add user notification when run enters paused-for-limit state
-- [ ] Add configuration option for auto-resume behavior
-- [ ] Document the feature and configuration
+- [x] Add user notification when run enters paused-for-limit state (PubSub event emitted)
+- [x] Add configuration option for auto-resume behavior (`:rate_limit_auto_resume` and `:rate_limit_resume` config)
+- [x] Document the feature and configuration (`docs/rate_limit_auto_resume.md`)
 
 ### M5 — Testing and Validation
-- [ ] Unit tests for rate limit detection
-- [ ] Integration tests for pause/resume cycle
-- [ ] Test with mocked provider rate limit responses
+- [x] Unit tests for rate limit detection (20 tests in rate_limit_pause_test.exs)
+- [x] Integration tests for pause/resume cycle (14 tests in rate_limit_pause_methods_test.exs)
+- [x] Tests for API methods (14 tests)
 
 ### M6 — Review and Landing
 - [ ] Code review
@@ -91,6 +91,12 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 | 2026-03-03 | M2.5 | 9 new RunGraph tests pass (45 total tests in run_graph_test.exs) |
 | 2026-03-05 | M2 | Implemented `CodingAgent.ResumeScheduler` GenServer for automatic resume scheduling |
 | 2026-03-05 | M2 | 11 ResumeScheduler tests pass, integrates with RateLimitPause |
+| 2026-03-05 | M3-M4 | Implemented introspection API methods (`rate_limit_pause.list`, `.get`, `.stats`) |
+| 2026-03-05 | M3-M4 | 14 API method tests pass |
+| 2026-03-05 | M4 | Added configuration options (`:rate_limit_auto_resume`, `:rate_limit_resume`) |
+| 2026-03-05 | M4 | Added user notification via PubSub on pause |
+| 2026-03-05 | M4 | Created comprehensive documentation (`docs/rate_limit_auto_resume.md`) |
+| 2026-03-05 | M4 | Updated `apps/coding_agent/AGENTS.md` with rate limit feature docs |
 
 ## Implementation Notes
 
