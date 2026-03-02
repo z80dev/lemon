@@ -64,19 +64,21 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
     redirect_uri = opts[:redirect_uri] || raise "redirect_uri is required"
     state = opts[:state] || generate_state()
     code_challenge = opts[:code_challenge]
+    code_challenge_method = opts[:code_challenge_method] || "S256"
 
     params = %{
       "response_type" => "code",
       "client_id" => client_id,
       "redirect_uri" => redirect_uri,
       "scope" => Enum.join(@scopes, " "),
-      "state" => state,
-      "code_challenge_method" => "plain"
+      "state" => state
     }
 
     # Add PKCE if provided
     params = if code_challenge do
-      Map.put(params, "code_challenge", code_challenge)
+      params
+      |> Map.put("code_challenge", code_challenge)
+      |> Map.put("code_challenge_method", code_challenge_method)
     else
       params
     end
