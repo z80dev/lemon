@@ -147,6 +147,84 @@ defmodule LemonChannels.Adapters.XAPI.GatewayMethods do
   def reply_to_tweet(_), do: {:error, "Missing required parameters: tweet_id and text"}
 
   @doc """
+  Get recent tweets by the authenticated user.
+
+  ## Parameters
+    - limit: Maximum number of tweets to fetch (default: 10, max: 100)
+    - exclude_replies: Boolean, exclude reply tweets (default: false)
+    - exclude_retweets: Boolean, exclude retweets (default: false)
+
+  ## Returns
+    - {:ok, [%{id: id, text: text, created_at: time, metrics: map}]}
+  """
+  def get_my_tweets(params \\ %{}) do
+    limit = normalize_mentions_limit(params["limit"])
+
+    opts = [
+      limit: limit,
+      exclude_replies: params["exclude_replies"] == true,
+      exclude_retweets: params["exclude_retweets"] == true,
+      pagination_token: params["pagination_token"]
+    ]
+
+    case Client.get_my_tweets(opts) do
+      {:ok, %{"data" => tweets, "meta" => meta}} when is_list(tweets) ->
+        formatted =
+          Enum.map(tweets, fn t ->
+            metrics = t["public_metrics"] || %{}
+
+            %{
+              id: t["id"],
+              text: t["text"],
+              created_at: t["created_at"],
+              metrics: %{
+                likes: metrics["like_count"] || 0,
+                retweets: metrics["retweet_count"] || 0,
+                replies: metrics["reply_count"] || 0,
+                impressions: metrics["impression_count"] || 0
+              }
+            }
+          end)
+
+        result = %{tweets: formatted, count: length(formatted)}
+
+        result =
+          case meta["next_token"] do
+            nil -> result
+            token -> Map.put(result, :next_token, token)
+          end
+
+        {:ok, result}
+
+      {:ok, %{"data" => tweets}} when is_list(tweets) ->
+        formatted =
+          Enum.map(tweets, fn t ->
+            metrics = t["public_metrics"] || %{}
+
+            %{
+              id: t["id"],
+              text: t["text"],
+              created_at: t["created_at"],
+              metrics: %{
+                likes: metrics["like_count"] || 0,
+                retweets: metrics["retweet_count"] || 0,
+                replies: metrics["reply_count"] || 0,
+                impressions: metrics["impression_count"] || 0
+              }
+            }
+          end)
+
+        {:ok, %{tweets: formatted, count: length(formatted)}}
+
+      {:ok, %{"meta" => %{"result_count" => 0}}} ->
+        {:ok, %{tweets: [], count: 0}}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  @doc """
   Delete a tweet.
 
   ## Parameters

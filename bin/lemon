@@ -179,7 +179,7 @@ if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>
       return
     fi
 
-    for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
+    for existing in ${KEYCHAIN_CANDIDATES[@]+"${KEYCHAIN_CANDIDATES[@]}"}; do
       if [[ "$existing" == "$candidate" ]]; then
         return
       fi
@@ -196,7 +196,7 @@ if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>
 
   append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
 
-  for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
+  for keychain_path in ${KEYCHAIN_CANDIDATES[@]+"${KEYCHAIN_CANDIDATES[@]}"}; do
     if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
       if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
         export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"

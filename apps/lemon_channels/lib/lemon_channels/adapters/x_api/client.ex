@@ -138,6 +138,23 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   @doc """
+  Get recent tweets by the authenticated user (or a specified user).
+  """
+  def get_my_tweets(opts \\ []) do
+    case LemonChannels.Adapters.XAPI.auth_method() do
+      :oauth1 ->
+        LemonChannels.Adapters.XAPI.OAuth1Client.get_my_tweets(opts)
+
+      :oauth2 ->
+        with {:ok, token} <- get_access_token(),
+             {:ok, user_id} <- resolve_mentions_user_id(token, opts),
+             {:ok, tweets} <- do_get_my_tweets(user_id, token, opts) do
+          {:ok, tweets}
+        end
+    end
+  end
+
+  @doc """
   Delete a tweet.
   """
   def delete_tweet(tweet_id) do
@@ -415,6 +432,44 @@ defmodule LemonChannels.Adapters.XAPI.Client do
     ]
 
     case request(:get, "#{@api_base}/users/#{user_id}/mentions", token, params: params) do
+      {:ok, %{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_get_my_tweets(user_id, token, opts) do
+    params = [
+      max_results: clamp_mentions_limit(opts[:limit]),
+      "tweet.fields": "created_at,public_metrics,conversation_id",
+      expansions: "referenced_tweets.id"
+    ]
+
+    params =
+      if opts[:exclude_replies],
+        do: Keyword.put(params, :exclude, "replies"),
+        else: params
+
+    params =
+      if opts[:exclude_retweets],
+        do: Keyword.update(params, :exclude, "retweets", &(&1 <> ",retweets")),
+        else: params
+
+    params =
+      case opts[:pagination_token] do
+        token when is_binary(token) and token != "" ->
+          Keyword.put(params, :pagination_token, token)
+
+        _ ->
+          params
+      end
+
+    case request(:get, "#{@api_base}/users/#{user_id}/tweets", token, params: params) do
       {:ok, %{status: 200, body: body}} ->
         {:ok, body}
 

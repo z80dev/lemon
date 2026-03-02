@@ -129,6 +129,11 @@ defmodule LemonChannels.Adapters.XAPI do
         name: "x_api.reply_to_tweet",
         scopes: [:agent],
         handler: __MODULE__.GatewayMethods
+      },
+      %{
+        name: "x_api.get_my_tweets",
+        scopes: [:agent],
+        handler: __MODULE__.GatewayMethods
       }
     ]
   end
