@@ -139,14 +139,15 @@ defmodule CodingAgent.RunGraph do
     # Special case: paused_for_limit -> running is allowed (same order level)
     RunGraphServer.atomic_update(run_id, fn record ->
       if record.status == :paused_for_limit do
+        pause_data = Map.get(record, :pause_data, %{})
+        existing_history = Map.get(record, :pause_history, [])
+
         record
         |> Map.put(:status, :running)
         |> Map.put(:resumed_at, System.system_time(:second))
-        |> Map.update(:pause_history, [], fn history ->
-          [Map.get(record, :pause_data, %{}) | history]
-        end)
-        |> Map.delete(:pause_data)
-        |> Map.delete(:paused_at)
+        |> Map.put(:pause_history, [pause_data | existing_history])
+        |> Map.put(:pause_data, nil)
+        |> Map.put(:paused_at, nil)
       else
         record
       end
@@ -285,6 +286,8 @@ defmodule CodingAgent.RunGraph do
       # running <-> paused_for_limit is allowed bidirectionally
       {from_status, to_status} == {:running, :paused_for_limit} -> true
       {from_status, to_status} == {:paused_for_limit, :running} -> true
+      # Can only enter paused_for_limit from running
+      to_status == :paused_for_limit -> false
       # Same order level (but not the special cases above) - not allowed
       from_order == to_order -> false
       # Different order - must be forward
