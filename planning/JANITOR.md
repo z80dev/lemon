@@ -1,5 +1,43 @@
 # JANITOR.md - Implementation Agent Work Log
 
+## 2026-03-04
+
+### Defensive Hardening and Logging Improvements
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
+
+Committed defensive hardening improvements across lemon_core to prevent atom exhaustion and improve error visibility.
+
+**Changes:**
+- `apps/lemon_core/lib/lemon_core/config.ex`
+  - Use `String.to_existing_atom/1` in `atomize_keys/1` with string fallback
+  - Prevents atom exhaustion from untrusted user input
+
+- `apps/lemon_core/lib/lemon_core/config/helpers.ex`
+  - `get_env_atom/2` now uses `to_existing_atom` with string fallback
+
+- `apps/lemon_core/lib/lemon_core/config/validator.ex`
+  - `validate_log_level/3` and `validate_theme/3` use `to_existing_atom`
+  - Returns proper validation errors for invalid values
+
+- `apps/lemon_core/lib/lemon_core/config/providers.ex`
+  - Added Logger warnings for secret resolution failures
+  - Better visibility into auth issues
+
+- `apps/lemon_core/lib/lemon_core/gateway_config.ex`
+  - Added Logger warnings for config loading failures
+
+- `apps/lemon_core/lib/lemon_core/store.ex`
+  - Added Logger warnings for resume token parsing failures
+
+**Cleanup:**
+- Deleted debug scripts: `debug_*.exs`, `tmp_*.exs`, `test_voice_components.exs`
+- Deleted Python test files: `ping5.py`, `content/*.py`, `telethon_ping/*.py`
+- Updated `.gitignore` to prevent future debug file commits
+
+**Commit:** `e802d7a8` - feat: defensive hardening and logging improvements
+
+---
+
 ## 2026-03-03
 
 ### Rate Limit Auto-Resume - M2.5 RunGraph Integration Complete
@@ -145,8 +183,8 @@ Implemented support for `provider/model` format (slash separator) in addition to
 - `openai/gpt-4o` (OpenRouter-style)
 
 **Provider Normalization:**
-- Lowercase: `"OpenAI"` → `:openai`
-- Dash to underscore: `"openai-codex"` → `:openai_codex`
+- Lowercase: `"OpenAI"` -> `:openai`
+- Dash to underscore: `"openai-codex"` -> `:openai_codex`
 
 ---
 
@@ -539,6 +577,39 @@ Normalized Debt Phase 10 planning metadata/artifacts to current workflow semanti
 
 ## 2026-02-25 (cron close-out)
 
+### Planning System Batch Close-out
+**Plans:** 8 plans moved from `ready_to_land` to `landed`
+
+Closed out planning bookkeeping for plans that were historically implemented but still showed `ready_to_land` status.
+
+**Plans Updated:**
+| Plan | Landed Revision | Key Deliverables |
+|---|---|---|
+| PLN-20260223-macos-keychain-secrets-audit | `93fd362d` | Secrets flow matrix, fallback precedence tests, auth helper hardening |
+| PLN-20260224-deterministic-ci-test-hardening | `99d95b28` | AsyncHelpers, flake-detection CI job, 33 sleep sites removed |
+| PLN-20260222-debt-phase-10-monolith-footprint-reduction | `3b102fdc` | Config/doc drift cleanup, Ai.Models decomposition blueprint |
+| PLN-20260222-debt-phase-05-m2-submodule-extraction | `7c7de1c5` | Extracted 15 provider modules from 11K line models.ex |
+| PLN-20260222-debt-phase-13-client-ci-parity-governance | `e548cedd` | Client vitest configs, dependency governance, ESLint parity |
+| PLN-20260224-inspiration-ideas-implementation | `c7d2c70c` | Chinese overflow patterns, grep grouped output, auto-reasoning gate |
+| PLN-20260224-long-running-agent-harnesses | `75f434c7` | Idle watchdog, keepalive, checkpointing, progress tracking |
+| PLN-20260224-runtime-hot-reload | `6bb85309` | Lemon.Reload, /reload command, extension lifecycle |
+
+**Changes:**
+- `planning/INDEX.md`
+  - Cleared Active Plans table (was showing stale `ready_to_land` entries)
+  - Cleared Ready to Land table (all plans now landed)
+  - Added 8 new entries to Recently Landed table with revisions and notes
+- `planning/merges/*.md` (8 files)
+  - Updated frontmatter: `landed_at: 2026-02-28`, added `landed_revision`
+
+**Validation:**
+- All referenced commits exist on main ✅
+- `git log --oneline main | grep <commit>` verified for each plan ✅
+
+---
+
+## 2026-02-25 (cron close-out)
+
 ### Debt Phase 5 M2 planning-system alignment
 **Plan:** `PLN-20260222-debt-phase-05-m2-submodule-extraction`  
 **Status:** `ready_to_land`
@@ -557,7 +628,7 @@ Completed a planning close-out pass for a historically implemented phase-5 miles
   - `planning/merges/MRG-PLN-20260222-debt-phase-05-m2-submodule-extraction.md`
 - Updated planning index:
   - Added active-plan row (`ready_to_land`)
-  - Added `Ready to Land` row with merge-doc link
+  - Added `Ready to Land` table row with merge-doc link
 
 **Validation:**
 - `mix compile --no-optional-deps`
@@ -728,6 +799,7 @@ Completed review and moved the agent games platform to ready_to_land status.
 | Criterion | Status |
 |-----------|--------|
 | External agent can play full RPS match | ✅ |
+| External agent can play full Connect4 match | ✅ |
 | External agent can play full Connect4 match | ✅ |
 | Public web user can watch live | ✅ |
 | Match replay produces identical state | ✅ |
