@@ -1035,10 +1035,14 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
   defp maybe_index_resume(account_id, chat_id, thread_id, message_id, resume) do
     resume = normalize_resume_token(resume)
 
-    if resume_token_like?(resume) and Code.ensure_loaded?(LemonCore.Store) and
-         function_exported?(LemonCore.Store, :put, 3) do
-      key = {account_id || "default", chat_id, thread_id, message_id}
-      LemonCore.Store.put(:telegram_msg_resume, key, resume)
+    if resume_token_like?(resume) do
+      LemonChannels.ChannelState.put_resume(
+        account_id || "default",
+        chat_id,
+        thread_id,
+        message_id,
+        resume
+      )
     else
       :ok
     end

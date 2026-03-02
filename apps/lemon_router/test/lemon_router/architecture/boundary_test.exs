@@ -49,7 +49,7 @@ defmodule LemonRouter.Architecture.BoundaryTest do
   # If new code adds violations, the test will fail — that is the point.
 
   @known_module_violation_count 19
-  @known_state_key_violation_count 5
+  @known_state_key_violation_count 0
 
   describe "forbidden LemonChannels module references" do
     test "no new violations beyond the known baseline" do
