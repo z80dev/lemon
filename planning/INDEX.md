@@ -32,7 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — |
+| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `in_progress` | `janitor` | `feature/pln-20260303-rate-limit-auto-resume` | `pending` | — | 2026-03-03 |
 
 ## Ready for Review
 

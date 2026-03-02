@@ -3,11 +3,11 @@ id: PLN-20260224-pi-model-resolver-slash-support
 title: Add Slash Separator Support for Provider/Model Format
 owner: janitor
 reviewer: codex
-status: in_progress
+status: landed
 workspace: feature/pln-20260224-pi-model-resolver
-change_id: pending
+change_id: 5c7098c1
 created: 2026-02-24
-updated: 2026-02-24
+updated: 2026-03-03
 ---
 
 ## Goal
