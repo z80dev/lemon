@@ -253,7 +253,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     }},
                    1_000
 
-    assert String.contains?(text, "Tool calls:")
+    assert String.contains?(text, "working")
   end
 
   test "finalize_run does not create status output when there are no tool actions" do

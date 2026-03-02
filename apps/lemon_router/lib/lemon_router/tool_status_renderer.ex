@@ -1,9 +1,14 @@
 defmodule LemonRouter.ToolStatusRenderer do
   @moduledoc """
-  Renders the "Tool calls" status text for user-facing transports.
+  Renders the tool-status text for user-facing transports.
 
-  This is used by `LemonRouter.ToolStatusCoalescer` to build the editable status
-  message shown in transports like Telegram.
+  Produces takopi-style output with Unicode symbols, elapsed time, and step counts:
+
+      working · claude · 2m 30s · step 5
+
+      ▸ read: `lib/foo.ex`
+      ✓ grep: pattern
+      ✗ `npm test` (exit 1)
 
   Channel-specific formatting (action limits, extra metadata) is delegated to
   `LemonRouter.ChannelAdapter`.
@@ -11,12 +16,23 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   alias LemonRouter.ChannelAdapter
 
+  @doc """
+  Render with default opts (no elapsed/engine/action_count).
+  """
   @spec render(String.t() | nil, map(), [String.t()]) :: String.t()
-  def render(_channel_id, _actions, []) do
-    "Tool calls:\n- (none yet)"
+  def render(channel_id, actions, order) do
+    render(channel_id, actions, order, %{})
   end
 
-  def render(channel_id, actions, order) when is_map(actions) and is_list(order) do
+  @doc """
+  Render with opts map supporting `:elapsed_ms`, `:engine`, `:action_count`.
+  """
+  @spec render(String.t() | nil, map(), [String.t()], map()) :: String.t()
+  def render(_channel_id, _actions, [], _opts) do
+    "working"
+  end
+
+  def render(channel_id, actions, order, opts) when is_map(actions) and is_list(order) do
     adapter = ChannelAdapter.for(channel_id)
     {display_order, omitted_count} = adapter.limit_order(order)
 
@@ -32,13 +48,65 @@ defmodule LemonRouter.ToolStatusRenderer do
     lines =
       case omitted_count do
         n when is_integer(n) and n > 0 ->
-          ["- (#{n} #{tool_word(n)} omitted)" | lines]
+          ["(#{n} #{tool_word(n)} omitted)" | lines]
 
         _ ->
           lines
       end
 
-    Enum.join(["Tool calls:" | lines], "\n")
+    header = build_header(opts)
+
+    Enum.join([header | lines], "\n")
+  end
+
+  defp build_header(opts) do
+    elapsed_ms = Map.get(opts, :elapsed_ms)
+    engine = Map.get(opts, :engine)
+    action_count = Map.get(opts, :action_count)
+
+    parts = ["working"]
+
+    parts =
+      if is_binary(engine) and engine != "" do
+        parts ++ [engine]
+      else
+        parts
+      end
+
+    parts =
+      if is_integer(elapsed_ms) and elapsed_ms > 0 do
+        parts ++ [format_elapsed(elapsed_ms)]
+      else
+        parts
+      end
+
+    parts =
+      if is_integer(action_count) and action_count > 0 do
+        parts ++ ["step #{action_count}"]
+      else
+        parts
+      end
+
+    Enum.join(parts, " \u00b7 ")
+  end
+
+  defp format_elapsed(ms) when is_integer(ms) and ms >= 0 do
+    total_seconds = div(ms, 1000)
+
+    cond do
+      total_seconds < 60 ->
+        "#{total_seconds}s"
+
+      true ->
+        minutes = div(total_seconds, 60)
+        seconds = rem(total_seconds, 60)
+
+        if seconds == 0 do
+          "#{minutes}m"
+        else
+          "#{minutes}m #{seconds}s"
+        end
+    end
   end
 
   defp tool_word(1), do: "tool"
@@ -50,26 +118,31 @@ defmodule LemonRouter.ToolStatusRenderer do
 
     case action[:phase] || action["phase"] do
       :started ->
-        "- [running] " <> title <> (extra || "")
+        "\u25b8 " <> title <> (extra || "")
 
       :updated ->
-        "- [running] " <> title <> (extra || "")
+        "\u25b8 " <> title <> (extra || "")
 
       :completed ->
-        label = if (action[:ok] || action["ok"]) == true, do: "ok", else: "err"
-        preview = extract_result_preview(action[:detail] || action["detail"])
+        ok? = (action[:ok] || action["ok"]) == true
+        symbol = if ok?, do: "\u2713", else: "\u2717"
 
-        base = "- [#{label}] " <> title <> (extra || "")
-
-        if preview in [nil, ""] do
-          base
+        if ok? do
+          symbol <> " " <> title <> (extra || "")
         else
-          prev = truncate_one_line(preview, 140)
-          base <> " -> " <> prev
+          preview = extract_result_preview(action[:detail] || action["detail"])
+          base = symbol <> " " <> title <> (extra || "")
+
+          if preview in [nil, ""] do
+            base
+          else
+            prev = truncate_one_line(preview, 140)
+            base <> " -> " <> prev
+          end
         end
 
       other ->
-        "- [#{other}] " <> title <> (extra || "")
+        "\u25b8 " <> "[#{other}] " <> title <> (extra || "")
     end
   end
 

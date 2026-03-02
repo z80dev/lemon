@@ -34,7 +34,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :seq,
     :finalized,
     :status_create_ref,
-    :deferred_text
+    :deferred_text,
+    :run_started_at,
+    :engine
   ]
 
   def start_link(opts) do
@@ -149,7 +151,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
       seq: 0,
       finalized: false,
       status_create_ref: nil,
-      deferred_text: nil
+      deferred_text: nil,
+      run_started_at: nil,
+      engine: nil
     }
 
     {:ok, state}
@@ -175,7 +179,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
             finalized: false,
             meta: compact_meta(meta),
             status_create_ref: nil,
-            deferred_text: nil
+            deferred_text: nil,
+            run_started_at: now,
+            engine: nil
         }
       else
         %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
@@ -192,11 +198,18 @@ defmodule LemonRouter.ToolStatusCoalescer do
           {:ok, id, action_data} ->
             {actions, order} = upsert_action(state.actions, state.order, id, action_data)
 
+            engine =
+              state.engine ||
+                (is_binary(action_data[:caller_engine]) && action_data[:caller_engine]) ||
+                nil
+
             state = %{
               state
               | actions: actions,
                 order: order,
-                first_event_ts: state.first_event_ts || now
+                first_event_ts: state.first_event_ts || now,
+                run_started_at: state.run_started_at || now,
+                engine: engine
             }
 
             maybe_flush(state, now)
@@ -228,7 +241,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
               seq: 0,
               finalized: false,
               status_create_ref: nil,
-              deferred_text: nil
+              deferred_text: nil,
+              run_started_at: nil,
+              engine: nil
           }
 
         state.run_id != run_id ->
@@ -246,7 +261,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
               finalized: false,
               meta: compact_meta(meta),
               status_create_ref: nil,
-              deferred_text: nil
+              deferred_text: nil,
+              run_started_at: nil,
+              engine: nil
           }
 
         true ->
@@ -320,9 +337,15 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp do_flush(state) do
     cancel_timer(state.flush_timer)
 
+    opts = %{
+      elapsed_ms: elapsed_since(state.run_started_at),
+      engine: state.engine,
+      action_count: length(state.order)
+    }
+
     text =
       state.channel_id
-      |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order)
+      |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order, opts)
       |> maybe_prefix_running(state)
 
     state =
@@ -488,6 +511,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
     else
       {actions, order}
     end
+  end
+
+  defp elapsed_since(nil), do: nil
+
+  defp elapsed_since(started_at) when is_integer(started_at) do
+    System.system_time(:millisecond) - started_at
   end
 
   defp cancel_timer(nil), do: :ok
