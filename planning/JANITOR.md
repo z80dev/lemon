@@ -1,6 +1,34 @@
 # JANITOR.md - Implementation Agent Work Log
 
 ## 2026-03-05
+### Rate Limit Auto-Resume - M2 Resume Scheduling Complete
+**Plan:** PLN-20260303-rate-limit-auto-resume
+**Status:** `in_progress` (M1-M2 complete, M2.5 complete, M3-M6 remaining)
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
+
+Implemented ResumeScheduler GenServer for automatic resumption of rate-limited runs.
+
+**Changes:**
+- `apps/coding_agent/lib/coding_agent/resume_scheduler.ex` (new)
+  - GenServer that polls for pauses ready to resume
+  - Configurable check interval (default: 30s) and max concurrent resumes (default: 5)
+  - Integrates with RateLimitPause and RunGraph
+  - Telemetry for resume operations
+
+- `apps/coding_agent/test/coding_agent/resume_scheduler_test.exs` (new)
+  - 11 comprehensive tests covering all functionality
+  - Tests for stats, check_and_resume, resume_pause, telemetry
+
+**Features:**
+- Periodic polling for pauses ready to resume
+- Automatic resumption via RunGraph.resume_from_limit/1
+- Statistics tracking (checks_performed, runs_resumed)
+- Graceful handling of run lookup failures
+
+**Commit:** `7f5def4d` - feat(rate_limit): add ResumeScheduler for automatic run resumption
+
+---
+
 
 ### X API Get My Tweets Tool
 **Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
