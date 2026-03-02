@@ -186,8 +186,8 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           })
 
           # Telegram-specific: reset resume state and mark Telegram pending compaction.
-          reset_telegram_resume_state(state.session_key)
-          mark_telegram_pending_compaction(state.session_key, :overflow)
+          LemonChannels.ChannelState.reset_resume_state(state.session_key)
+          LemonChannels.ChannelState.mark_pending_compaction(state.session_key, :overflow)
         end
 
       _ ->
@@ -256,7 +256,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
         })
 
         # Telegram-specific compaction marker (preserves existing behavior)
-        mark_telegram_pending_compaction(
+        LemonChannels.ChannelState.mark_pending_compaction(
           state.session_key,
           :near_limit,
           compaction_details
@@ -547,131 +547,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp compaction_trigger_ratio_or(_value, default), do: default
 
-  defp compaction_marker_details(details) when is_map(details) do
-    Enum.reduce(details, %{}, fn
-      {_key, nil}, acc ->
-        acc
-
-      {key, value}, acc when is_atom(key) or is_binary(key) ->
-        Map.put(acc, key, value)
-
-      _, acc ->
-        acc
-    end)
-  end
-
-  defp compaction_marker_details(_), do: %{}
-
-  defp reset_telegram_resume_state(session_key) when is_binary(session_key) do
-    with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
-           ChannelContext.parse_session_key(session_key) do
-      account_id = normalize_telegram_account_id(parsed)
-
-      chat_id = ChannelContext.parse_int(parsed.peer_id)
-      thread_id = ChannelContext.parse_int(parsed.thread_id)
-
-      _ = safe_delete_chat_state(session_key)
-
-      if is_integer(chat_id) do
-        _ = safe_delete_selected_resume(account_id, chat_id, thread_id)
-        _ = safe_clear_thread_index(:telegram_msg_session, account_id, chat_id, thread_id)
-        _ = safe_clear_thread_index(:telegram_msg_resume, account_id, chat_id, thread_id)
-      end
-
-      Logger.warning(
-        "Reset Telegram resume state after context_length_exceeded for session_key=#{inspect(session_key)}"
-      )
-    else
-      _ -> :ok
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp reset_telegram_resume_state(_), do: :ok
-
-  defp mark_telegram_pending_compaction(session_key, reason) when is_binary(session_key) do
-    mark_telegram_pending_compaction(session_key, reason, %{})
-  end
-
-  defp mark_telegram_pending_compaction(_session_key, _reason), do: :ok
-
-  defp mark_telegram_pending_compaction(session_key, reason, details)
-       when is_binary(session_key) and is_map(details) do
-    with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
-           ChannelContext.parse_session_key(session_key) do
-      account_id = normalize_telegram_account_id(parsed)
-
-      chat_id = ChannelContext.parse_int(parsed.peer_id)
-      thread_id = ChannelContext.parse_int(parsed.thread_id)
-
-      if is_integer(chat_id) and Code.ensure_loaded?(LemonCore.Store) and
-           function_exported?(LemonCore.Store, :put, 3) do
-        payload =
-          %{
-            reason: to_string(reason || "unknown"),
-            session_key: session_key,
-            set_at_ms: System.system_time(:millisecond)
-          }
-          |> Map.merge(compaction_marker_details(details))
-
-        LemonCore.Store.put(
-          :telegram_pending_compaction,
-          {account_id, chat_id, thread_id},
-          payload
-        )
-      end
-    else
-      _ -> :ok
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp mark_telegram_pending_compaction(_session_key, _reason, _details), do: :ok
-
-  defp normalize_telegram_account_id(parsed) do
-    case parsed.account_id do
-      account when is_binary(account) and account != "" -> account
-      _ -> "default"
-    end
-  end
-
   defp safe_delete_chat_state(key), do: LemonCore.Store.delete_chat_state(key)
-
-  defp safe_delete_selected_resume(account_id, chat_id, thread_id)
-       when is_binary(account_id) and is_integer(chat_id) do
-    LemonCore.Store.delete(:telegram_selected_resume, {account_id, chat_id, thread_id})
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_delete_selected_resume(_account_id, _chat_id, _thread_id), do: :ok
-
-  defp safe_clear_thread_index(table, account_id, chat_id, thread_id)
-       when is_atom(table) and is_binary(account_id) and is_integer(chat_id) do
-    LemonCore.Store.list(table)
-    |> Enum.each(fn
-      {{acc, cid, tid, _msg_id} = key, _value}
-      when acc == account_id and cid == chat_id and tid == thread_id ->
-        _ = LemonCore.Store.delete(table, key)
-
-      _ ->
-        :ok
-    end)
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_clear_thread_index(_table, _account_id, _chat_id, _thread_id), do: :ok
 
   # ---- Shared utility helpers ----
 

@@ -423,7 +423,7 @@ defmodule LemonRouter.AgentDirectory do
   end
 
   defp known_telegram_targets do
-    LemonCore.Store.list(:telegram_known_targets)
+    LemonChannels.ChannelState.list_known_targets()
     |> Enum.map(&known_telegram_target_entry/1)
     |> Enum.reject(&is_nil/1)
   rescue
