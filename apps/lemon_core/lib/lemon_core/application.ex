@@ -8,6 +8,7 @@ defmodule LemonCore.Application do
   - Phoenix.PubSub - PubSub for inter-process communication
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - LemonCore.OrphanReaper - Kills orphaned processes in agent workspace dirs
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
   - LemonCore.Browser.LocalServer - Local browser automation server
@@ -45,6 +46,7 @@ defmodule LemonCore.Application do
       {Phoenix.PubSub, name: LemonCore.PubSub},
       {LemonCore.ConfigCache, config_cache_opts},
       LemonCore.Store,
+      LemonCore.OrphanReaper,
       LemonCore.ConfigReloader,
       LemonCore.ConfigReloader.Watcher,
       LemonCore.Browser.LocalServer
