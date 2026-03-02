@@ -79,6 +79,8 @@ defmodule LemonWeb.GamesLobbyLive do
 
   defp label_game("connect4"), do: "Connect4"
   defp label_game("rock_paper_scissors"), do: "Rock Paper Scissors"
+  defp label_game("tic_tac_toe"), do: "Tic-Tac-Toe"
+  defp label_game("battleship"), do: "Battleship"
   defp label_game(other), do: other
 
   defp player_name(match, slot) when is_binary(slot) do

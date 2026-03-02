@@ -9,6 +9,9 @@ primary_region = "iad"
   PHX_HOST = "games.zeebot.xyz"
   PORT = "8080"
   DATABASE_PATH = "/data/games.db"
+  PHX_SERVER = "true"
+  LEMON_WEB_PORT = "8080"
+  # LEMON_WEB_SECRET_KEY_BASE - set via: fly secrets set LEMON_WEB_SECRET_KEY_BASE=<generated_key>
 
 [http_service]
   internal_port = 8080
