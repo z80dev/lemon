@@ -789,19 +789,23 @@ defmodule CodingAgent.Coordinator do
           # Stop asynchronously, but keep bookkeeping until the :DOWN confirms
           # the process is actually gone.
           _ =
-            start_background_task(fn ->
-              try do
-                Session.abort(pid)
-              rescue
-                _ -> :ok
-              end
+            LemonCore.BackgroundTask.start(
+              fn ->
+                try do
+                  Session.abort(pid)
+                rescue
+                  _ -> :ok
+                end
 
-              try do
-                stop_session(pid)
-              rescue
-                _ -> :ok
-              end
-            end)
+                try do
+                  stop_session(pid)
+                rescue
+                  _ -> :ok
+                end
+              end,
+              supervisor: @task_supervisor,
+              allow_unsupervised: true
+            )
 
           new_subagents =
             Map.put(state.active_subagents, id, %{subagent_state | status: :stopping})
@@ -855,23 +859,4 @@ defmodule CodingAgent.Coordinator do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
-  defp start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to start supervised coordinator task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
-  end
 end

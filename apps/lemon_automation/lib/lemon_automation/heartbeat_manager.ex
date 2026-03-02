@@ -602,23 +602,10 @@ defmodule LemonAutomation.HeartbeatManager do
   end
 
   defp start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "[HeartbeatManager] Failed to start supervised task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
+    LemonCore.BackgroundTask.start(fun,
+      supervisor: @task_supervisor,
+      allow_unsupervised: true
+    )
   end
 
   # Wait for run completion via LemonCore.Bus events
