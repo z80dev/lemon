@@ -430,7 +430,52 @@ defmodule AgentCore.Loop.ToolCalls do
   end
 
   defp find_tool(tools, name) do
-    Enum.find(tools, fn tool -> tool.name == name end)
+    normalized_name = normalize_tool_name(name)
+
+    Enum.find(tools, fn tool ->
+      normalized_tool_name = normalize_tool_name(tool.name)
+
+      if normalized_tool_name == normalized_name do
+        # Emit telemetry if normalization was needed (name != tool.name after normalization)
+        if tool.name != name do
+          LemonCore.Telemetry.emit(
+            [:agent_core, :tool_call, :name_normalized],
+            %{system_time: System.system_time()},
+            %{
+              original_name: name,
+              matched_tool_name: tool.name
+            }
+          )
+        end
+
+        true
+      else
+        false
+      end
+    end)
+  end
+
+  @doc """
+  Normalizes a tool name by trimming whitespace and handling Unicode whitespace.
+
+  Provider formatting drift can cause tool names to include accidental padding
+  or non-canonical casing. This normalization ensures robust matching.
+  """
+  @spec normalize_tool_name(String.t()) :: String.t()
+  def normalize_tool_name(name) when is_binary(name) do
+    name
+    |> String.trim()
+    |> normalize_unicode_whitespace()
+  end
+
+  # Replace common Unicode whitespace characters with ASCII space, then trim
+  defp normalize_unicode_whitespace(name) do
+    # Unicode whitespace characters to normalize
+    # \s in Elixir regex covers: space, tab, newline, carriage return, form feed
+    # Plus explicit Unicode: non-breaking space, en/em space, etc.
+    name
+    |> String.replace(~r/[\s\x{00A0}\x{2000}\x{2001}\x{2002}\x{2003}\x{2004}\x{2005}\x{2006}\x{2007}\x{2008}\x{2009}\x{200A}\x{202F}\x{205F}\x{3000}]+/u, " ")
+    |> String.trim()
   end
 
   defp error_to_result(reason) when is_binary(reason) do

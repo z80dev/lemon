@@ -231,4 +231,121 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert Enum.all?(results, &(&1.is_error == true))
     assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
   end
+
+  test "finds tool with whitespace-padded name via normalization" do
+    tool = %AgentTool{
+      name: "read_file",
+      description: "Reads a file",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "File",
+      execute: fn _id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "file content"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    # Tool call with leading/trailing whitespace
+    tool_call = Mocks.tool_call("  read_file  ", %{}, id: "call_whitespace")
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert length(results) == 1
+    [tool_result_message] = results
+    assert tool_result_message.is_error == false
+
+    assert Enum.any?(tool_result_message.content, fn
+             %TextContent{text: "file content"} -> true
+             _ -> false
+           end)
+  end
+
+  test "finds tool with internal whitespace via normalization" do
+    # Tool with internal space in name
+    tool = %AgentTool{
+      name: "write file",
+      description: "Writes a file",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "File",
+      execute: fn _id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "written"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    # Tool call with tabs instead of spaces - should normalize to match
+    tool_call = Mocks.tool_call("write\t\t\tfile", %{}, id: "call_internal_ws")
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert length(results) == 1
+    [tool_result_message] = results
+    assert tool_result_message.is_error == false
+  end
+
+  test "returns error for tool not found after normalization" do
+    tool = %AgentTool{
+      name: "existing_tool",
+      description: "An existing tool",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Test",
+      execute: fn _id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "ok"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    # Tool call that won't match even after normalization
+    tool_call = Mocks.tool_call("nonexistent_tool", %{}, id: "call_not_found")
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert length(results) == 1
+    [tool_result_message] = results
+    assert tool_result_message.is_error == true
+
+    assert Enum.any?(tool_result_message.content, fn
+             %TextContent{text: text} -> String.contains?(text, "not found")
+             _ -> false
+           end)
+  end
+
+  test "normalize_tool_name/1 trims whitespace and normalizes Unicode" do
+    # Basic trimming
+    assert ToolCalls.normalize_tool_name("  read_file  ") == "read_file"
+    assert ToolCalls.normalize_tool_name("\t\nread_file\r\n") == "read_file"
+
+    # Internal whitespace normalization
+    assert ToolCalls.normalize_tool_name("read\t\tfile") == "read file"
+    assert ToolCalls.normalize_tool_name("read   file") == "read file"
+
+    # Unicode whitespace (non-breaking space)
+    assert ToolCalls.normalize_tool_name("read\x{00A0}file") == "read file"
+
+    # Already normalized passes through
+    assert ToolCalls.normalize_tool_name("read_file") == "read_file"
+  end
 end
