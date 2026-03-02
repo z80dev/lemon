@@ -59,6 +59,12 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert :ai in known_apps
       assert :agent_core in known_apps
     end
+
+    test "lemon_mcp is recognized in the allowed_direct_deps policy" do
+      deps = ArchitectureCheck.allowed_direct_deps()
+      assert Map.has_key?(deps, :lemon_mcp)
+      assert Enum.sort(deps[:lemon_mcp]) == [:agent_core, :coding_agent]
+    end
   end
 
   describe "dependency violation detection" do
