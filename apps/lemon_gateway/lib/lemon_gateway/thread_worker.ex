@@ -59,7 +59,9 @@ defmodule LemonGateway.ThreadWorker do
        last_followup_at: nil,
        # Track pending steer jobs sent to the run but not yet confirmed/rejected
        # Maps run_pid -> list of {job, fallback_mode} tuples
-       pending_steers: %{}
+       pending_steers: %{},
+       # Track run start retry state: nil or {job, slot_ref, attempt}
+       run_start_retry: nil
      })}
   end
 
@@ -117,37 +119,14 @@ defmodule LemonGateway.ThreadWorker do
             )
 
             # Start the run with error handling
-            case start_run_safe(job, slot_ref, state.thread_key) do
-              {:ok, run_pid} ->
-                mon_ref = Process.monitor(run_pid)
+            state = %{
+              state
+              | jobs: jobs,
+                slot_pending: false,
+                slot_requested_at: nil
+            }
 
-                {:noreply,
-                 %{
-                   state
-                   | jobs: jobs,
-                     current_run: run_pid,
-                     current_slot_ref: slot_ref,
-                     run_mon_ref: mon_ref,
-                     slot_pending: false,
-                     slot_requested_at: nil
-                 }}
-
-              {:error, reason} ->
-                Logger.error(
-                  "ThreadWorker: failed to start run for job #{inspect(job.run_id)}, " <>
-                    "reason=#{inspect(reason)}"
-                )
-
-                # Release the slot since we couldn't start the run
-                safe_release_slot(slot_ref)
-
-                # Re-enqueue the job for retry (at front of queue)
-                state = %{state | jobs: :queue.in_r(job, state.jobs)}
-
-                # Clear slot pending and try again
-                state = %{state | slot_pending: false, slot_requested_at: nil}
-                {:noreply, maybe_request_slot(state)}
-            end
+            attempt_run_start(job, slot_ref, state, 1)
 
           {:empty, _} ->
             # Queue became empty between check and pop
@@ -234,6 +213,19 @@ defmodule LemonGateway.ThreadWorker do
 
     schedule_slot_timeout_check()
     {:noreply, state}
+  end
+
+  # Handle retry of a run start that previously failed transiently
+  def handle_info({:retry_run_start, job, slot_ref, attempt}, state) do
+    # Only process if this retry matches the current pending retry
+    case state.run_start_retry do
+      {^job, ^slot_ref, ^attempt} ->
+        attempt_run_start(job, slot_ref, %{state | run_start_retry: nil}, attempt)
+
+      _ ->
+        # Stale retry (e.g., worker state changed), ignore
+        {:noreply, state}
+    end
   end
 
   # Handle steer acceptance from Run - remove from pending steers
@@ -604,39 +596,59 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
-  # Safely start a run with error handling and retries
-  defp start_run_safe(job, slot_ref, thread_key, attempt \\ 1) do
+  # Attempt to start a run, scheduling a non-blocking retry via send_after on transient failure.
+  # Returns {:noreply, state} for use directly from handle_info callbacks.
+  defp attempt_run_start(job, slot_ref, state, attempt) do
+    case start_run_once(job, slot_ref, state.thread_key) do
+      {:ok, run_pid} ->
+        mon_ref = Process.monitor(run_pid)
+
+        {:noreply,
+         %{
+           state
+           | current_run: run_pid,
+             current_slot_ref: slot_ref,
+             run_mon_ref: mon_ref,
+             run_start_retry: nil
+         }}
+
+      {:error, reason} when attempt < @max_run_start_attempts ->
+        Logger.warning(
+          "ThreadWorker: run start attempt #{attempt} failed, scheduling retry: #{inspect(reason)}"
+        )
+
+        delay_ms = 100 * attempt
+        Process.send_after(self(), {:retry_run_start, job, slot_ref, attempt + 1}, delay_ms)
+
+        {:noreply, %{state | run_start_retry: {job, slot_ref, attempt + 1}}}
+
+      {:error, reason} ->
+        Logger.error(
+          "ThreadWorker: failed to start run for job #{inspect(job.run_id)} after " <>
+            "#{attempt} attempts, reason=#{inspect(reason)}"
+        )
+
+        # Release the slot since we couldn't start the run
+        safe_release_slot(slot_ref)
+
+        # Re-enqueue the job (at front of queue)
+        state = %{state | jobs: :queue.in_r(job, state.jobs), run_start_retry: nil}
+        {:noreply, maybe_request_slot(state)}
+    end
+  end
+
+  # Single attempt to start a run (no retries, no sleep).
+  defp start_run_once(job, slot_ref, thread_key) do
     try do
-      case LemonGateway.RunSupervisor.start_run(%{
-             job: job,
-             slot_ref: slot_ref,
-             thread_key: thread_key,
-             worker_pid: self()
-           }) do
-        {:ok, run_pid} ->
-          {:ok, run_pid}
-
-        {:error, reason} = err ->
-          if attempt < @max_run_start_attempts do
-            Logger.warning(
-              "ThreadWorker: run start attempt #{attempt} failed, retrying: #{inspect(reason)}"
-            )
-
-            Process.sleep(100 * attempt)
-            start_run_safe(job, slot_ref, thread_key, attempt + 1)
-          else
-            err
-          end
-      end
+      LemonGateway.RunSupervisor.start_run(%{
+        job: job,
+        slot_ref: slot_ref,
+        thread_key: thread_key,
+        worker_pid: self()
+      })
     catch
       :exit, {:noproc, _} ->
-        if attempt < @max_run_start_attempts do
-          Logger.warning("ThreadWorker: RunSupervisor not available, retrying (#{attempt})")
-          Process.sleep(100 * attempt)
-          start_run_safe(job, slot_ref, thread_key, attempt + 1)
-        else
-          {:error, :run_supervisor_unavailable}
-        end
+        {:error, :run_supervisor_unavailable}
 
       :exit, reason ->
         {:error, {:run_start_exit, reason}}
