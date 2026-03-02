@@ -2,6 +2,38 @@
 
 ## 2026-03-03
 
+### Rate Limit Auto-Resume - M2.5 RunGraph Integration Complete
+**Plan:** PLN-20260303-rate-limit-auto-resume
+**Status:** `in_progress` (M1-M2.5 complete, M3-M6 remaining)
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
+
+Implemented RunGraph integration for pause/resume state transitions.
+
+**Changes:**
+- `apps/coding_agent/lib/coding_agent/run_graph.ex`
+  - Added `paused_for_limit` state to `@state_order` (order 1, same as running)
+  - Added `pause_for_limit/2` - Transitions run to paused_for_limit state
+  - Added `resume_from_limit/1` - Resumes run from pause, tracks pause_history
+  - Updated `valid_transition?/2` to allow running <-> paused_for_limit bidirectionally
+  - Ensured `paused_for_limit` is NOT a terminal status (runs can await on it)
+  - Added `normalize_status/1` clause for `"paused_for_limit"` string
+
+**Tests:**
+- 9 new tests in `run_graph_test.exs` (45 total, all passing)
+  - pause_for_limit/2: pauses running run, rejects invalid transitions
+  - resume_from_limit/1: resumes paused run, no-op if not paused
+  - paused_for_limit in await: not terminal, completes after resume
+  - lifecycle: full queued -> running -> paused -> running -> completed
+
+**Commits:**
+- `af376bf3` - feat(coding_agent): add pause_for_limit and resume_from_limit to RunGraph
+- `d9f05b6d` - docs(planning): update PLN-20260303-rate-limit-auto-resume with M2.5 progress
+- `7fadf5bb` - docs(planning): update INDEX.md with current workspace branch
+
+---
+
+## 2026-03-03
+
 ### Rate Limit Auto-Resume - M1-M2 Complete
 **Plan:** PLN-20260303-rate-limit-auto-resume
 **Status:** `in_progress` (M1-M2 complete)
