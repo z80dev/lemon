@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-03-04
+Last updated: 2026-03-06
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -34,6 +34,8 @@ These entries were already completed before the `planning/` workflow was created
 |---|---|---|---|---|---|---|---|
 | [PLN-20260223-secrets-store-preferred](plans/PLN-20260223-secrets-store-preferred.md) | Encrypted Secrets Store as Preferred Secret Access Path | `in_progress` | `janitor` | `feature/pln-20260223-secrets-store-preferred` | `pending` | ROADMAP.md "Now" | 2026-03-02 |
 | [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `in_progress` | `janitor` | `feature/pln-20260302-secrets-store-preferred-path` | `pending` | ROADMAP.md | 2026-03-02 |
+| [PLN-20260306-rate-limit-self-healing](plans/PLN-20260306-rate-limit-self-healing.md) | Rate-Limit Session Self-Healing | `planned` | `janitor` | `feature/pln-20260306-rate-limit-self-healing` | `pending` | — | 2026-03-06 |
+| [PLN-20260306-channel-capability-negotiation](plans/PLN-20260306-channel-capability-negotiation.md) | Channel Capability Negotiation (Attachments, Rich Blocks, Streaming) | `planned` | `janitor` | `feature/pln-20260306-channel-capability-negotiation` | `pending` | — | 2026-03-06 |
 
 ## Ready for Review
 
