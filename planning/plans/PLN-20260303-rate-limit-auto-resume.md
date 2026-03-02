@@ -7,7 +7,7 @@ status: in_progress
 workspace: feature/pln-20260303-rate-limit-auto-resume
 change_id: pending
 created: 2026-03-03
-updated: 2026-03-03
+updated: 2026-03-05
 ---
 
 ## Goal
@@ -38,7 +38,7 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 - [x] Add `paused_for_limit` run state to RunGraph
 - [x] Implement pause transition with checkpoint creation
 - [x] Implement resume trigger after reset window
-- [ ] Add resume scheduling via cron or internal timer
+- [x] Add resume scheduling via cron or internal timer
 
 ### M2.5 — RunGraph Integration (M3 from original plan)
 - [x] Add `pause_for_limit/2` to RunGraph for pausing runs
@@ -89,6 +89,8 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 | 2026-03-03 | M2.5 | Updated state machine to allow running <-> paused_for_limit transitions |
 | 2026-03-03 | M2.5 | Added pause_history tracking for audit trail |
 | 2026-03-03 | M2.5 | 9 new RunGraph tests pass (45 total tests in run_graph_test.exs) |
+| 2026-03-05 | M2 | Implemented `CodingAgent.ResumeScheduler` GenServer for automatic resume scheduling |
+| 2026-03-05 | M2 | 11 ResumeScheduler tests pass, integrates with RateLimitPause |
 
 ## Implementation Notes
 
