@@ -10,7 +10,7 @@ defmodule LemonChannels.Cwd do
   end
 
   defp configured_default_cwd do
-    LemonChannels.GatewayConfig.get(:default_cwd)
+    LemonCore.GatewayConfig.get(:default_cwd)
   rescue
     _ -> nil
   end

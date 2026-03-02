@@ -341,7 +341,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
         %{channel_id: channel_id} when is_binary(channel_id) and channel_id != "" ->
           try do
             channel_atom = String.to_existing_atom(channel_id)
-            LemonChannels.GatewayConfig.get(channel_atom, %{}) || %{}
+            LemonCore.GatewayConfig.get(channel_atom, %{}) || %{}
           rescue
             _ -> %{}
           end

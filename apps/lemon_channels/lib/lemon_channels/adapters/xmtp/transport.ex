@@ -6,7 +6,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Xmtp.{Bridge, PortServer}
-  alias LemonChannels.{BindingResolver, GatewayConfig}
+  alias LemonChannels.BindingResolver
+  alias LemonCore.GatewayConfig
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge, SessionKey}

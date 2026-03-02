@@ -21,7 +21,8 @@ defmodule LemonChannels.BindingResolver do
   `LemonCore` types and delegates to `LemonCore.BindingResolver`.
   """
 
-  alias LemonChannels.{Binding, GatewayConfig}
+  alias LemonChannels.Binding
+  alias LemonCore.GatewayConfig
   alias LemonCore.ChatScope
   alias LemonCore.BindingResolver, as: CoreResolver
 

@@ -37,7 +37,7 @@ defmodule LemonChannels.Application do
 
   defp register_and_start_adapters do
     # Register Telegram adapter if configured
-    if LemonChannels.GatewayConfig.get(:enable_telegram, false) == true do
+    if LemonCore.GatewayConfig.get(:enable_telegram, false) == true do
       case register_and_start_adapter(LemonChannels.Adapters.Telegram) do
         :ok ->
           Logger.info("Telegram adapter registered and started")
@@ -61,7 +61,7 @@ defmodule LemonChannels.Application do
     end
 
     # Register XMTP adapter if configured
-    if LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true do
+    if LemonCore.GatewayConfig.get(:enable_xmtp, false) == true do
       case register_and_start_adapter(LemonChannels.Adapters.Xmtp) do
         :ok ->
           Logger.info("XMTP adapter registered and started")
@@ -72,7 +72,7 @@ defmodule LemonChannels.Application do
     end
 
     # Register Discord adapter if configured
-    if LemonChannels.GatewayConfig.get(:enable_discord, false) == true do
+    if LemonCore.GatewayConfig.get(:enable_discord, false) == true do
       case register_and_start_adapter(LemonChannels.Adapters.Discord) do
         :ok ->
           Logger.info("Discord adapter registered and started")
@@ -118,12 +118,12 @@ defmodule LemonChannels.Application do
 
     enabled? =
       case adapter_id do
-        "telegram" -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
-        :telegram -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
-        "discord" -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
-        :discord -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
-        "xmtp" -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
-        :xmtp -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
+        "telegram" -> LemonCore.GatewayConfig.get(:enable_telegram, false) == true
+        :telegram -> LemonCore.GatewayConfig.get(:enable_telegram, false) == true
+        "discord" -> LemonCore.GatewayConfig.get(:enable_discord, false) == true
+        :discord -> LemonCore.GatewayConfig.get(:enable_discord, false) == true
+        "xmtp" -> LemonCore.GatewayConfig.get(:enable_xmtp, false) == true
+        :xmtp -> LemonCore.GatewayConfig.get(:enable_xmtp, false) == true
         _ -> true
       end
 

@@ -58,7 +58,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   @impl true
   def init(opts) do
-    base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:discord, %{}) || %{}
 
     config =
       base

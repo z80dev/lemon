@@ -664,7 +664,7 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
   @impl true
   def auto_send_config do
-    telegram_cfg = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
+    telegram_cfg = LemonCore.GatewayConfig.get(:telegram, %{}) || %{}
     telegram_cfg = normalize_map(telegram_cfg)
 
     files_cfg = fetch(telegram_cfg, :files)
@@ -695,7 +695,7 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
   @impl true
   def files_max_download_bytes do
-    telegram_cfg = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
+    telegram_cfg = LemonCore.GatewayConfig.get(:telegram, %{}) || %{}
     telegram_cfg = normalize_map(telegram_cfg)
     files_cfg = fetch(telegram_cfg, :files) |> normalize_map()
 
@@ -927,7 +927,7 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
   # ---- Resume token helpers ----
 
   defp show_resume_line? do
-    case LemonChannels.GatewayConfig.get(:telegram, %{}) do
+    case LemonCore.GatewayConfig.get(:telegram, %{}) do
       %{} = cfg -> cfg[:show_resume_line] || cfg["show_resume_line"] || false
       _ -> false
     end

@@ -651,7 +651,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp telegram_runtime_config do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:telegram, %{}) || %{}
 
     overrides =
       case Application.get_env(:lemon_channels, :telegram) do

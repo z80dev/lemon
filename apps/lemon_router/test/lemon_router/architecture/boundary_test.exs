@@ -27,7 +27,6 @@ defmodule LemonRouter.Architecture.BoundaryTest do
     {~r/LemonChannels\.OutboundPayload/, "LemonChannels.OutboundPayload"},
     {~r/LemonChannels\.Telegram(?:\.\w+)*/, "LemonChannels.Telegram.*"},
     {~r/LemonChannels\.EngineRegistry/, "LemonChannels.EngineRegistry"},
-    {~r/LemonChannels\.GatewayConfig/, "LemonChannels.GatewayConfig"}
   ]
 
   # ── Forbidden state-key patterns ───────────────────────────────────────
@@ -48,7 +47,7 @@ defmodule LemonRouter.Architecture.BoundaryTest do
   # tripwire was added. If cleanup reduces violations, lower this number.
   # If new code adds violations, the test will fail — that is the point.
 
-  @known_module_violation_count 19
+  @known_module_violation_count 15
   @known_state_key_violation_count 0
 
   describe "forbidden LemonChannels module references" do

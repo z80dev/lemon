@@ -1,7 +1,7 @@
-defmodule LemonChannels.GatewayConfigTest do
+defmodule LemonCore.GatewayConfigChannelsTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.GatewayConfig
+  alias LemonCore.GatewayConfig
 
   defmodule MockApi do
   end
