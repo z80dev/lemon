@@ -1044,7 +1044,9 @@ defmodule LemonCore.Store do
       _ -> backend_state
     end
   rescue
-    _ -> backend_state
+    e ->
+      Logger.warning("Store.maybe_index_telegram_message_resume failed: #{inspect(e)}")
+      backend_state
   end
 
   defp maybe_index_telegram_message_resume(_backend, backend_state, _summary), do: backend_state
@@ -1079,7 +1081,9 @@ defmodule LemonCore.Store do
     value = MapHelpers.get_key(resume, :value)
     is_binary(engine) and is_binary(value)
   rescue
-    _ -> false
+    e ->
+      Logger.warning("Store.resume_token_like? failed for resume=#{inspect(resume)}: #{inspect(e)}")
+      false
   end
 
   defp resume_token_like?(_), do: false
@@ -1090,7 +1094,9 @@ defmodule LemonCore.Store do
       parsed -> parsed
     end
   rescue
-    _ -> :error
+    e ->
+      Logger.warning("Store.parse_session_key failed for key=#{inspect(session_key)}: #{inspect(e)}")
+      :error
   end
 
   defp parse_session_key(_), do: :error
@@ -1110,7 +1116,9 @@ defmodule LemonCore.Store do
 
     {normalize_msg_id(chat_id), normalize_msg_id(topic_id)}
   rescue
-    _ -> {nil, nil}
+    e ->
+      Logger.warning("Store.telegram_ids_from_meta failed for meta=#{inspect(meta)}: #{inspect(e)}")
+      {nil, nil}
   end
 
   defp parse_agent_id(nil), do: "default"

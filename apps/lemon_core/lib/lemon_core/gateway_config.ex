@@ -11,6 +11,8 @@ defmodule LemonCore.GatewayConfig do
   4. TOML base from `LemonCore.Config.cached/1`
   """
 
+  require Logger
+
   @doc """
   Load the fully-merged gateway config map.
 
@@ -36,7 +38,9 @@ defmodule LemonCore.GatewayConfig do
     gateway = load()
     fetch(gateway, key, default)
   rescue
-    _ -> default
+    e ->
+      Logger.warning("GatewayConfig.get/2 failed for key #{inspect(key)}: #{inspect(e)}")
+      default
   end
 
   # ---------------------------------------------------------------------------
@@ -58,7 +62,9 @@ defmodule LemonCore.GatewayConfig do
         end
     end
   rescue
-    _ -> %{}
+    e ->
+      Logger.warning("GatewayConfig.base_config/1 failed: #{inspect(e)}")
+      %{}
   end
 
   defp full_replacement_config do

@@ -59,3 +59,10 @@ telethon_ping/test_session.session
 
 # Stress test results
 telethon_ping/stress_test_results_*.json
+
+# Cleanup: transient artifacts
+erl_crash.dump
+*.db3
+*.db3-wal
+*.db3-shm
+EOF

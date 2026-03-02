@@ -839,8 +839,19 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_log_level(errors, value, path) when is_binary(value) do
-    atom_value = String.downcase(value) |> String.to_atom()
-    validate_log_level(errors, atom_value, path)
+    atom_value =
+      try do
+        String.downcase(value) |> String.to_existing_atom()
+      rescue
+        ArgumentError -> nil
+      end
+
+    if atom_value do
+      validate_log_level(errors, atom_value, path)
+    else
+      valid_levels = Enum.join(@valid_log_levels, ", ")
+      ["#{path}: invalid level '#{value}'. Valid: #{valid_levels}" | errors]
+    end
   end
 
   defp validate_log_level(errors, _value, path) do
@@ -873,8 +884,19 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_theme(errors, value, path) when is_binary(value) do
-    atom_value = String.downcase(value) |> String.to_atom()
-    validate_theme(errors, atom_value, path)
+    atom_value =
+      try do
+        String.downcase(value) |> String.to_existing_atom()
+      rescue
+        ArgumentError -> nil
+      end
+
+    if atom_value do
+      validate_theme(errors, atom_value, path)
+    else
+      valid_themes = Enum.join(@valid_themes, ", ")
+      ["#{path}: invalid theme '#{value}'. Valid: #{valid_themes}" | errors]
+    end
   end
 
   defp validate_theme(errors, _value, path) do

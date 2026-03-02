@@ -113,3 +113,6 @@ Created `CodingAgent.RateLimitPause` module:
 - Provider-specific tracking and statistics
 
 **Tests:** 20 tests covering all functionality
+
+| 2026-03-03 | M3-M4 | Committed telegram cancel improvements and claude runner env scrubbing |
+| 2026-03-03 | M3-M4 | Added CLAUDECODE denylist, capped rate limit sleep at 5s, improved cancel UX |

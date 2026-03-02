@@ -172,7 +172,14 @@ defmodule LemonCore.Config.Helpers do
   def get_env_atom(key, default) do
     case get_env(key) do
       nil -> default
-      value -> String.to_atom(Macro.underscore(String.trim(value)))
+      value ->
+        safe_value = Macro.underscore(String.trim(value))
+
+        try do
+          String.to_existing_atom(safe_value)
+        rescue
+          ArgumentError -> safe_value
+        end
     end
   end
 

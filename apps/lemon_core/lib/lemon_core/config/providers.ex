@@ -35,6 +35,8 @@ defmodule LemonCore.Config.Providers do
   `auth_source = "oauth"` to resolve access tokens from `oauth_secret`.
   """
 
+  require Logger
+
   alias LemonCore.Config.Helpers
 
   defstruct [
@@ -193,13 +195,30 @@ defmodule LemonCore.Config.Providers do
     if secrets_available?() do
       try do
         case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
-          {:ok, value, _source} -> value
-          {:error, _reason} -> nil
+          {:ok, value, _source} ->
+            value
+
+          {:error, reason} ->
+            Logger.warning(
+              "Provider config: secret resolution failed for #{inspect(secret_name)}: #{inspect(reason)}"
+            )
+
+            nil
         end
       rescue
-        _ -> nil
+        reason ->
+          Logger.warning(
+            "Provider config: failed to resolve secret #{inspect(secret_name)}: #{inspect(reason)}"
+          )
+
+          nil
       catch
-        :exit, _ -> nil
+        :exit, reason ->
+          Logger.warning(
+            "Provider config: exit while resolving secret #{inspect(secret_name)}: #{inspect(reason)}"
+          )
+
+          nil
       end
     else
       # Fallback to direct environment variable lookup

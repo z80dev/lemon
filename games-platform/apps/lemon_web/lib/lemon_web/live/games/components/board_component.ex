@@ -117,6 +117,133 @@ defmodule LemonWeb.Games.Components.BoardComponent do
     """
   end
 
+  def board(%{game_type: "battleship"} = assigns) do
+    phase = Map.get(assigns.game_state, "phase", "setup")
+    my_grid = Map.get(assigns.game_state, "my_grid", [])
+    opponent_grid = Map.get(assigns.game_state, "opponent_grid", [])
+    my_ships = Map.get(assigns.game_state, "my_ships", [])
+    opponent_ships = Map.get(assigns.game_state, "opponent_ships", [])
+    last_move = Map.get(assigns.game_state, "last_move")
+    winner = Map.get(assigns.game_state, "winner")
+
+    assigns =
+      assigns
+      |> assign(:phase, phase)
+      |> assign(:my_grid, my_grid)
+      |> assign(:opponent_grid, opponent_grid)
+      |> assign(:my_ships, my_ships)
+      |> assign(:opponent_ships, opponent_ships)
+      |> assign(:last_move, last_move)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div id="battleship-board" class="flex flex-col gap-4">
+      <%!-- Phase indicator --%>
+      <div class="flex justify-center">
+        <span class={["rounded-full px-4 py-1 text-xs font-bold uppercase tracking-wide",
+          if(@phase == "setup", do: "bg-amber-100 text-amber-700", else: "bg-rose-100 text-rose-700")]}>
+          <%= if @phase == "setup", do: "⚓ Setup Phase", else: "💥 Battle Phase" %>
+        </span>
+      </div>
+
+      <%!-- Dual grid display --%>
+      <div class="flex flex-col gap-6 lg:flex-row lg:gap-8">
+        <%!-- My Fleet (left) --%>
+        <div class="flex flex-col items-center gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-bold text-slate-700">🚢 My Fleet</span>
+            <span class="text-xs text-slate-500">({{ships_alive(@my_ships)}}/{{length(@my_ships)}})</span>
+          </div>
+          <div class="rounded-xl border-4 border-blue-600 bg-blue-500 p-2 shadow-lg">
+            <%= for {row, row_idx} <- Enum.with_index(@my_grid) do %>
+              <div class="flex gap-0.5 mb-0.5">
+                <%= for {cell, col_idx} <- Enum.with_index(row) do %>
+                  <span class={bs_my_cell_class(cell)} />
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- VS indicator --%>
+        <div class="hidden items-center justify-center lg:flex">
+          <span class="text-2xl font-black text-slate-300">VS</span>
+        </div>
+
+        <%!-- Enemy Waters (right) --%>
+        <div class="flex flex-col items-center gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-bold text-slate-700">🎯 Enemy Waters</span>
+            <span class="text-xs text-slate-500">({{ships_alive(@opponent_ships)}}/{{length(@opponent_ships)}})</span>
+          </div>
+          <div class="rounded-xl border-4 border-rose-600 bg-rose-500 p-2 shadow-lg">
+            <%= for {row, row_idx} <- Enum.with_index(@opponent_grid) do %>
+              <div class="flex gap-0.5 mb-0.5">
+                <%= for {cell, col_idx} <- Enum.with_index(row) do %>
+                  <% is_last = @last_move && @last_move["row"] == row_idx && @last_move["col"] == col_idx %>
+                  <span class={bs_opponent_cell_class(cell, is_last)} />
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Last move indicator --%>
+      <%= if @last_move do %>
+        <div class="flex justify-center">
+          <div class={["rounded-lg px-4 py-2 text-sm font-medium",
+            if(@last_move["result"] == "hit", do: "bg-rose-100 text-rose-700", else: "bg-slate-100 text-slate-600")]}>
+            <%= if @last_move["result"] == "hit" do %>
+              💥 Hit at <%= to_letter(@last_move["col"]) %><%= @last_move["row"] + 1 %>
+              <%= if @last_move["sunk_ship"] do %>
+                <span class="ml-1 font-bold">— Ship Sunk!</span>
+              <% end %>
+            <% else %>
+              💨 Miss at <%= to_letter(@last_move["col"]) %><%= @last_move["row"] + 1 %>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Ship status --%>
+      <div class="grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-3">
+        <div>
+          <p class="mb-1 text-xs font-bold text-slate-500">My Ships</p>
+          <div class="flex flex-wrap gap-1">
+            <%= for ship <- @my_ships do %>
+              <span class={["rounded px-2 py-0.5 text-xs",
+                if(ship_sunk?(ship), do: "bg-rose-100 text-rose-600 line-through", else: "bg-emerald-100 text-emerald-600")]}>
+                <%= ship_emoji(ship.name) %> <%= String.capitalize(ship.name) %>
+              </span>
+            <% end %>
+          </div>
+        </div>
+        <div>
+          <p class="mb-1 text-xs font-bold text-slate-500">Enemy Ships</p>
+          <div class="flex flex-wrap gap-1">
+            <%= for ship <- @opponent_ships do %>
+              <span class={["rounded px-2 py-0.5 text-xs",
+                if(ship.sunk, do: "bg-emerald-100 text-emerald-600", else: "bg-slate-200 text-slate-500")]}>
+                <%= if ship.sunk, do: "💥", else: "❓" %> <%= String.capitalize(ship.name) %>
+              </span>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Winner banner --%>
+      <%= if @winner do %>
+        <div class="flex justify-center">
+          <div class="rounded-full bg-emerald-100 px-6 py-2 text-sm font-bold text-emerald-700">
+            🏆 <%= String.upcase(@winner) %> Wins!
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
   def board(assigns) do
     ~H"""
     <div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center">
@@ -162,4 +289,34 @@ defmodule LemonWeb.Games.Components.BoardComponent do
   defp rps_result_class("p1"), do: "bg-emerald-100 text-emerald-700"
   defp rps_result_class("p2"), do: "bg-emerald-100 text-emerald-700"
   defp rps_result_class(_), do: "bg-slate-100 text-slate-600"
+
+  # Battleship helpers
+  defp bs_my_cell_class(nil), do: "block h-6 w-6 rounded-sm bg-blue-400"
+  defp bs_my_cell_class(%{"ship" => true, "hit" => true}), do: "block h-6 w-6 rounded-sm bg-rose-500 ring-1 ring-rose-600"
+  defp bs_my_cell_class(%{"ship" => true}), do: "block h-6 w-6 rounded-sm bg-slate-600"
+  defp bs_my_cell_class(%{"fired" => true}), do: "block h-6 w-6 rounded-sm bg-blue-300"
+  defp bs_my_cell_class(_), do: "block h-6 w-6 rounded-sm bg-blue-400"
+
+  defp bs_opponent_cell_class(%{"hit" => true}, true), do: "block h-6 w-6 rounded-sm bg-rose-500 ring-2 ring-rose-400 animate-pulse"
+  defp bs_opponent_cell_class(%{"hit" => true}, false), do: "block h-6 w-6 rounded-sm bg-rose-500"
+  defp bs_opponent_cell_class(%{"fired" => true}, true), do: "block h-6 w-6 rounded-sm bg-slate-300 ring-2 ring-slate-400 animate-pulse"
+  defp bs_opponent_cell_class(%{"fired" => true}, false), do: "block h-6 w-6 rounded-sm bg-slate-300"
+  defp bs_opponent_cell_class(_, _), do: "block h-6 w-6 rounded-sm bg-rose-400"
+
+  defp ship_sunk?(%{hits: hits, size: size}), do: hits >= size
+  defp ship_sunk?(%{} = ship), do: Map.get(ship, :sunk, false)
+  defp ship_sunk?(_), do: false
+
+  defp ships_alive(ships) do
+    Enum.count(ships, fn ship -> not ship_sunk?(ship) end)
+  end
+
+  defp ship_emoji("carrier"), do: "🛳️"
+  defp ship_emoji("battleship"), do: "🚢"
+  defp ship_emoji("cruiser"), do: "⛴️"
+  defp ship_emoji("submarine"), do: "🛥️"
+  defp ship_emoji("destroyer"), do: "🚤"
+  defp ship_emoji(_), do: "🚢"
+
+  defp to_letter(col), do: String.at("ABCDEFGHIJ", col)
 end

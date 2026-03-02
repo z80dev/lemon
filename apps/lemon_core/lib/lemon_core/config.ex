@@ -458,14 +458,14 @@ defmodule LemonCore.Config do
     map
     |> stringify_keys()
     |> Enum.reduce(%{}, fn {k, v}, acc ->
-      atom_key =
+      safe_key =
         try do
           String.to_existing_atom(k)
         rescue
-          ArgumentError -> String.to_atom(k)
+          ArgumentError -> k
         end
 
-      Map.put(acc, atom_key, v)
+      Map.put(acc, safe_key, v)
     end)
   end
 
