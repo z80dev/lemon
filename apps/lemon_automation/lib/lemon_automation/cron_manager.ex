@@ -46,7 +46,7 @@ defmodule LemonAutomation.CronManager do
   @vsn 1
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
-  alias LemonCore.{Bus, Event, RunStore, SessionKey, Store}
+  alias LemonCore.{Bus, Event, RunStore, SessionKey}
 
   require Logger
 

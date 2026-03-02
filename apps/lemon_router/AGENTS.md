@@ -18,6 +18,19 @@ LemonRouter is the central routing and orchestration layer in the Lemon umbrella
 - Does not manage agent tool execution (that is `agent_core`)
 - Does not handle session history persistence (that is `coding_agent`)
 
+## OutputIntent Architecture
+
+**Key architectural change**: The router now emits channel-agnostic `%OutputIntent{}` structs instead of building channel-specific `OutboundPayload` structs. The channel layer (`LemonChannels.Dispatcher`) converts these to channel-specific payloads. This eliminates the router's dependency on Telegram-specific data structures.
+
+**What changed:**
+- `RunProcess.Watchdog` emits `%OutputIntent{op: :keepalive_prompt}` via `Dispatcher.dispatch_with_actions/1`
+- `RunProcess.OutputTracker` emits `%OutputIntent{op: :fanout_text}` via `Dispatcher.dispatch/1` (replaced `fanout_payload/4` with `fanout_intent/4`)
+- `ChannelAdapter.Generic` fully rewritten: OutputIntent + Dispatcher instead of OutboundPayload + ChannelsDelivery
+- `RunProcess.CompactionTrigger` delegates channel state to `LemonChannels.ChannelState` (removed ~124 lines of private Telegram helpers)
+- `AgentDirectory` uses `LemonChannels.ChannelState.list_known_targets()` instead of raw Store access
+
+**When modifying output delivery**: Build an `%OutputIntent{}` with the appropriate `op` atom and dispatch through `LemonChannels.Dispatcher`. Do not construct `OutboundPayload` structs directly from within the router (the Telegram adapter is the one remaining exception, and it is being migrated incrementally).
+
 ## Key Files and Purposes
 
 ### Entry Points
@@ -34,13 +47,13 @@ LemonRouter is the central routing and orchestration layer in the Lemon umbrella
 
 - **`lib/lemon_router/run_process.ex`** - Per-run GenServer owning the lifecycle of a single run. Registers in `RunRegistry` (by run_id) and `SessionRegistry` (by session_key). Subscribes to `LemonCore.Bus` for run events (`:run_started`, `:delta`, `:engine_action`, `:run_completed`). Monitors the gateway process and synthesizes failure on unexpected death. Delegates to four submodules:
 
-  - **`lib/lemon_router/run_process/watchdog.ex`** - Idle-run watchdog timer (default 2 hours, configurable via `:run_process_idle_watchdog_timeout_ms`). Resets on any run activity. For Telegram sessions, sends interactive keepalive confirmation with "Keep Waiting" / "Stop Run" inline buttons and a 5-minute confirmation window before forced cancellation.
+  - **`lib/lemon_router/run_process/watchdog.ex`** - Idle-run watchdog timer (default 2 hours, configurable via `:run_process_idle_watchdog_timeout_ms`). Resets on any run activity. Emits `%OutputIntent{op: :keepalive_prompt}` and dispatches via `LemonChannels.Dispatcher.dispatch_with_actions/1` instead of building Telegram-specific `OutboundPayload` structs directly. The channel layer handles rendering channel-specific UI (e.g., Telegram inline buttons). 5-minute confirmation window before forced cancellation.
 
-  - **`lib/lemon_router/run_process/compaction_trigger.ex`** - Detects context overflow from error marker strings in completion events. Preemptively triggers compaction when token usage approaches context window limit (default ratio 0.9). Extracts token usage from completion events; falls back to char-based estimation (~4 chars/token) from job prompt when usage data is missing. On overflow, clears resume state and marks `:pending_compaction` in Store.
+  - **`lib/lemon_router/run_process/compaction_trigger.ex`** - Detects context overflow from error marker strings in completion events. Preemptively triggers compaction when token usage approaches context window limit (default ratio 0.9). Extracts token usage from completion events; falls back to char-based estimation (~4 chars/token) from job prompt when usage data is missing. On overflow, clears resume state and marks `:pending_compaction` in Store. Delegates all channel state operations (previously ~124 lines of private Telegram state helpers) to `LemonChannels.ChannelState` instead of directly accessing `LemonCore.Store` for Telegram state.
 
   - **`lib/lemon_router/run_process/retry_handler.ex`** - Zero-answer auto-retry (max 1 attempt). Only retries `assistant_error` with empty answer text. Does not retry context overflow, user abort, timeout, or interrupt errors. Builds a context-aware retry prompt prefix.
 
-  - **`lib/lemon_router/run_process/output_tracker.ex`** - Central output dispatcher. Ingests deltas to `StreamCoalescer`, emits final output for non-streaming runs, finalizes streams with resume tokens, finalizes tool status, delivers fanout to secondary routes, and tracks generated image paths for auto-send at completion.
+  - **`lib/lemon_router/run_process/output_tracker.ex`** - Central output dispatcher. Ingests deltas to `StreamCoalescer`, emits final output for non-streaming runs, finalizes streams with resume tokens, finalizes tool status, delivers fanout to secondary routes via `%OutputIntent{op: :fanout_text}` + `Dispatcher.dispatch/1` (replaced `fanout_payload/4`), and tracks generated image paths for auto-send at completion.
 
 - **`lib/lemon_router/run_supervisor.ex`** - DynamicSupervisor wrapper for `RunProcess` children with lifecycle logging. Default `max_children: 500`.
 
@@ -73,7 +86,7 @@ LemonRouter is the central routing and orchestration layer in the Lemon umbrella
   - `limit_order/1` - Limit displayed actions
   - `format_action_extra/2` - Additional per-action display metadata
 
-- **`lib/lemon_router/channel_adapter/generic.ex`** - Default adapter. No truncation, no file batching, no reply markup, no stream finalization. Uses `ChannelsDelivery.enqueue/1` for output.
+- **`lib/lemon_router/channel_adapter/generic.ex`** - Default adapter. Fully rewritten to use `OutputIntent` + `LemonChannels.Dispatcher` instead of `OutboundPayload` + `ChannelsDelivery`. No truncation, no file batching, no reply markup, no stream finalization. New helpers: `route_from_parsed/1` (builds route map from parsed session key), `get_output_op_and_body/1` (resolves output intent operation and body), `get_status_op_and_body/2` (resolves status intent operation and body).
 
 - **`lib/lemon_router/channel_adapter/telegram.ex`** - Telegram-specific adapter implementing dual-message model:
   - **Progress message**: Tool status with cancel button inline keyboard
@@ -91,7 +104,7 @@ LemonRouter is the central routing and orchestration layer in the Lemon umbrella
 
 ### Agent Discovery and Endpoints
 
-- **`lib/lemon_router/agent_directory.ex`** - Session/agent discovery phonebook. Merges active sessions from `SessionRegistry` with durable metadata from `LemonCore.Store` (`:sessions_index`). Key functions: `list_sessions/1` (with optional agent_id filter), `latest_session/2`, `latest_route_session/2` (channel_peer sessions only), `list_agents/0`, `list_targets/1`. Route filtering by channel_id, account_id, peer_kind, peer_id, thread_id. Also reads known Telegram targets from `:telegram_known_targets` store.
+- **`lib/lemon_router/agent_directory.ex`** - Session/agent discovery phonebook. Merges active sessions from `SessionRegistry` with durable metadata from `LemonCore.Store` (`:sessions_index`). Key functions: `list_sessions/1` (with optional agent_id filter), `latest_session/2`, `latest_route_session/2` (channel_peer sessions only), `list_agents/0`, `list_targets/1`. Route filtering by channel_id, account_id, peer_kind, peer_id, thread_id. Uses `LemonChannels.ChannelState.list_known_targets()` for target discovery instead of raw Store access to `:telegram_known_targets`.
 
 - **`lib/lemon_router/agent_profiles.ex`** - GenServer loading agent profiles from TOML config (`LemonCore.Config`). Caches profiles in state. Functions: `get/1`, `exists?/1`, `list/0`, `reload/0`. Default profile has engine `"lemon"`.
 
@@ -135,6 +148,7 @@ Edit `LemonRouter.Policy`. The `merge/1` function takes a list of policy sources
 1. Create a new module implementing the `LemonRouter.ChannelAdapter` behaviour (see `channel_adapter.ex` for the full callback list).
 2. Add a clause to `ChannelAdapter.for/1` to dispatch your channel_id pattern to the new adapter.
 3. The adapter controls: stream output format, tool status format, file batching, truncation, reply markup, finalization behavior, and auto-send config.
+4. New adapters should follow the Generic adapter pattern: build `%OutputIntent{}` structs and dispatch via `LemonChannels.Dispatcher` rather than constructing `OutboundPayload` structs directly. Use the Generic adapter's `route_from_parsed/1`, `get_output_op_and_body/1`, and `get_status_op_and_body/2` helpers as reference.
 
 ### Modifying stream coalescing thresholds
 
@@ -295,7 +309,9 @@ LemonRouter.AgentProfiles.reload()
 
 ### lemon_channels (channel integrations)
 
-- **`LemonChannels.Outbox`** - Message delivery queue. `ChannelsDelivery` enqueues outbound messages here.
+- **`LemonChannels.Dispatcher`** - Primary dispatch interface for `OutputIntent` structs. `dispatch/1` for fire-and-forget delivery, `dispatch_with_actions/1` for delivery with action callbacks. Used by `Watchdog`, `OutputTracker`, and `ChannelAdapter.Generic`.
+- **`LemonChannels.ChannelState`** - Channel state management. Used by `CompactionTrigger` (replaced ~124 lines of private Telegram state helpers) and `AgentDirectory` (`list_known_targets/0` replaces raw Store access).
+- **`LemonChannels.Outbox`** - Message delivery queue. `ChannelsDelivery` enqueues outbound messages here (used by Telegram adapter path).
 - **`LemonChannels.EngineRegistry`** - Registry of known engines. Used by `StickyEngine` for validation.
 - **`LemonChannels.Telegram.Truncate`** - Telegram message truncation. Used by the Telegram adapter.
 - **`LemonChannels.GatewayConfig`** - Gateway configuration used during run setup.
@@ -406,7 +422,7 @@ config :lemon_router,
 **Umbrella deps:**
 - `lemon_core` - Core types, SessionKey, Store, Bus, Telemetry, EventBridge, RouterBridge, Introspection
 - `lemon_gateway` - Gateway scheduler, engines, runtime, RunRegistry, Types.Job
-- `lemon_channels` - Channel delivery, Telegram outbox, EngineRegistry, GatewayConfig, Truncate
+- `lemon_channels` - Dispatcher (OutputIntent delivery), ChannelState, Telegram outbox, EngineRegistry, GatewayConfig, Truncate
 - `coding_agent` - Coding agent session management and history
 - `agent_core` - Agent types and tool result structures
 

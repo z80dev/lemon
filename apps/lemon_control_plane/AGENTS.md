@@ -6,7 +6,7 @@ HTTP/WebSocket API server for controlling the Lemon agent system.
 
 - **What**: The external API surface for the entire Lemon agent system. Clients (TUI, web, mobile, browser extensions) communicate through this app via WebSocket JSON-RPC and REST HTTP endpoints.
 - **Where**: `apps/lemon_control_plane/` in the umbrella.
-- **Stack**: Bandit HTTP server, Plug router, WebSock for WebSocket, ETS-backed method registry.
+- **Stack**: Bandit HTTP server, Plug router, WebSock for WebSocket, ETS-backed method registry with compile-time macro-based auto-discovery.
 - **Port**: 4040 in production, 0 (OS-assigned) in test.
 - **Entry point**: `LemonControlPlane.Application` starts the supervision tree.
 
@@ -80,7 +80,8 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
 | `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
 | `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
-| `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
+| `LemonControlPlane.Method` | `lib/lemon_control_plane/method.ex` | Self-describing `Method` macro and behaviour. Modules `use LemonControlPlane.Method` to declare metadata (name, scopes, schema, capabilities). Provides `discover_methods/0` for runtime auto-discovery. |
+| `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Merges auto-discovered macro-based methods with the `@builtin_methods` list at startup. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param schema validation before dispatch; `validate/2` |
@@ -91,19 +92,21 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 
 **Step 1: Create the method module** in `lib/lemon_control_plane/methods/`:
 
+The preferred approach uses the self-describing `Method` macro, which declares all metadata (name, scopes, schema, capabilities) directly on the module:
+
 ```elixir
 defmodule LemonControlPlane.Methods.MyMethod do
   @moduledoc """
   Handler for the my.method control plane method.
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "my.method"
-
-  @impl true
-  def scopes, do: [:read]  # or :write, :admin, :approvals, :pairing, :invoke, :event, :control
+  use LemonControlPlane.Method,
+    name: "my.method",
+    scopes: [:read],
+    schema: %{
+      required: %{"requiredParam" => :string},
+      optional: %{"optionalParam" => :integer}
+    }
 
   @impl true
   def handle(params, ctx) do
@@ -118,6 +121,19 @@ defmodule LemonControlPlane.Methods.MyMethod do
   end
 end
 ```
+
+The macro generates `name/0`, `scopes/0`, `__schema__/0`, and `__capabilities__/0` automatically. Available macro options:
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `:name` | yes | -- | Method name string (e.g., `"my.method"`) |
+| `:scopes` | no | `[]` | Required scope atoms |
+| `:schema` | no | `%{}` | Schema map with `:required`/`:optional` keys |
+| `:capabilities` | no | `[]` | Capability gate atoms (e.g., `[:tts]`) |
+
+Supported schema types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
+
+**Legacy approach** (still supported during incremental migration): modules can implement the `LemonControlPlane.Method` behaviour manually with `name/0`, `scopes/0`, and `handle/2` callbacks instead of using the macro.
 
 **Error return formats** (from the `LemonControlPlane.Method` callback spec):
 ```elixir
@@ -136,27 +152,9 @@ alias LemonControlPlane.Protocol.Errors
 {:error, Errors.internal_error("Something went wrong", details)}
 ```
 
-**Step 2: Register the method** in the `@builtin_methods` list in `LemonControlPlane.Methods.Registry`:
+**Step 2: Registry auto-discovery.** Modules that `use LemonControlPlane.Method` are auto-discovered by the registry at startup via `LemonControlPlane.Method.discover_methods/0`. You do **not** need to manually add them to `@builtin_methods` in the Registry. However, the `@builtin_methods` list still exists as a fallback and takes precedence on name collision, which preserves capability gating during migration. If the method belongs to a capability group (tts, voicewake, updates, device_pairing, wizard), ensure it is listed in `@capability_methods` so it can be disabled via `:lemon_control_plane, :capabilities` application env.
 
-```elixir
-@builtin_methods [
-  # ... existing methods ...
-  LemonControlPlane.Methods.MyMethod,
-]
-```
-
-If the method belongs to a capability group (tts, voicewake, updates, device_pairing, wizard), add it to `@capability_methods` instead. Capability-gated methods can be disabled via the `:lemon_control_plane, :capabilities` application env.
-
-**Step 3: Add a schema** entry to `LemonControlPlane.Protocol.Schemas` (`@schemas` map). Schemas are validated before dispatch; methods without schemas accept any params.
-
-```elixir
-"my.method" => %{
-  required: %{"requiredParam" => :string},
-  optional: %{"optionalParam" => :integer}
-}
-```
-
-Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
+**Step 3: Schema.** When using the macro, declare the schema inline via the `:schema` option (see Step 1). The `Protocol.Schemas.get/1` function checks the static `@schemas` map first, then falls back to auto-discovered `__schema__/0` metadata. You only need to add a static entry to `@schemas` if you are not using the macro.
 
 **Step 4: Write tests** in `test/lemon_control_plane/methods/`.
 
@@ -614,9 +612,9 @@ mix test --grep "name/0 returns correct method name"
 ### Add a New API Method
 
 1. Create module in `lib/lemon_control_plane/methods/my_method.ex`
-2. Implement `LemonControlPlane.Method` behaviour (`name/0`, `scopes/0`, `handle/2`)
-3. Add schema entry to `LemonControlPlane.Protocol.Schemas` `@schemas` map
-4. Add to `@builtin_methods` in `Registry` (or `@capability_methods` if gated)
+2. `use LemonControlPlane.Method, name: "...", scopes: [...], schema: %{...}` (preferred) -- or implement the behaviour manually
+3. The registry auto-discovers macro-based modules; no need to edit `@builtin_methods` unless the method needs capability gating (add to `@capability_methods` in that case)
+4. Schema is declared inline via the macro's `:schema` option; a static `@schemas` entry is only needed for legacy (non-macro) modules
 5. Add tests in `test/lemon_control_plane/methods/`
 
 ### Add a New REST Endpoint (Games API Pattern)
@@ -712,7 +710,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 | Dependency | How Used |
 |------------|----------|
-| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
+| `lemon_core` | Typed stores (`LemonCore.RunStore`, `LemonCore.SessionStore`, `LemonCore.ProgressStore`) for run/session data access; `LemonCore.Store` (token persistence, idempotency); `LemonCore.Bus` (event pub/sub); `LemonCore.Secrets`; `LemonCore.Event`; `LemonCore.Telemetry` |
 | `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
 | `lemon_games` | `LemonGames.Matches.Service` for match CRUD; `LemonGames.Auth` for bearer token validation; `LemonGames.RateLimit` for move rate limiting |

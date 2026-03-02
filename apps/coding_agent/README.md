@@ -30,17 +30,23 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
       +-------------------+       +--------------------+
       | Session (GenServer)|       | SessionSupervisor  |
       | - agent loop       |       | (DynamicSupervisor)|
-      | - events           |       +--------------------+
-      | - steering queue   |
+      | - steering queue   |       +--------------------+
       | - follow-up queue  |
       +---------+----------+
-                |
-    +-----------+-----------+------------------+
+                |  delegates to subsystem modules:
+    +-----------+------+------+------+-----------+
+    |           |      |      |      |           |
+    v           v      v      v      v           v
++--------+ +-------+ +----+ +----+ +-----+ +--------+
+| Branch | | Over- | |Diag| |Evt | |Comp | | Event  |
+| Manager| | flow  | |nost| |Brd | |actMg| | Handler|
+|        | | Recov | |ics | |cast| |r    | |        |
++--------+ +-------+ +----+ +----+ +-----+ +--------+
     |           |           |                  |
     v           v           v                  v
 +--------+ +----------+ +-----------+  +-------------+
 | Tools  | | Session  | | Compaction|  | Budget      |
-| (30+)  | | Manager  | | Manager   |  | Tracker     |
+| (30+)  | | Manager  | | Engine    |  | Tracker     |
 +--------+ | (JSONL)  | +-----------+  +------+------+
            +----------+                       |
                                               v
@@ -82,9 +88,13 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
+| `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence. Delegates to focused subsystem modules below |
+| `CodingAgent.Session.BranchManager` | Branch navigation detection (`branch_switch?/4`), abandoned branch summarization (`maybe_summarize_abandoned_branch/3`), navigation orchestration (`navigate/4`), current branch summarization (`summarize_current_branch/5`) |
+| `CodingAgent.Session.Diagnostics` | Session diagnostics (`build/1`), health checks (`health_check/1`), stats (`stats/1`), plus pure helpers for tool result counting, activity timestamps, and health status determination |
+| `CodingAgent.Session.EventBroadcaster` | Event broadcasting to subscribers (`broadcast/2`), stream completion with terminal lifecycle semantics (`complete_streams/2`) |
+| `CodingAgent.Session.OverflowRecovery` | Context overflow detection and recovery (`maybe_start/5`), post-compaction continuation (`continue_after_compaction/2`), failure finalization (`finalize_failure/4`), background task process monitoring (`handle_task_down/2`) |
+| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling and compaction result application |
 | `CodingAgent.Session.EventHandler` | Translates `AgentCore` events into session state updates, triggers compaction, and fires extension hooks |
-| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
 | `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering base prompt, prompt templates, explicit system prompt, and resource loader instructions |
@@ -174,7 +184,7 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
-| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
+| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` using `Task.async_stream` for demand-driven scheduling (PERF-013) |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
@@ -244,6 +254,8 @@ A session is a `GenServer` process that wraps an `AgentCore.Agent` loop. Each se
 - Event subscription (direct send or backpressure-aware streams)
 - Steering (mid-run interrupts) and follow-up (post-run) queues
 - Auto-compaction and overflow recovery
+
+The Session GenServer remains the single entry point but delegates to focused subsystem modules: `BranchManager` (branch navigation and summarization), `Diagnostics` (health checks and stats), `EventBroadcaster` (subscriber event delivery), `OverflowRecovery` (context overflow detection and compaction retry), plus previously extracted subsystems `CompactionManager`, `EventHandler`, `WasmBridge`, `ModelResolver`, `PromptComposer`, and `MessageSerialization`.
 
 Sessions are started under `SessionSupervisor` (dynamic) and registered in `SessionRegistry` by their UUID.
 

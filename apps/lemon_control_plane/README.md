@@ -51,14 +51,42 @@ The server runs on [Bandit](https://github.com/mtrudel/bandit) with [Plug](https
                                              +----------------+
 ```
 
+### Self-Describing Method Macro
+
+Method modules use a self-describing `Method` macro (`use LemonControlPlane.Method`) that declares all metadata -- name, scopes, schema, and capability gates -- directly on the module. The registry auto-discovers these modules at startup via runtime module scanning (see `LemonControlPlane.Method.discover_methods/0`), eliminating the need to manually maintain the registry list for new methods.
+
+Each method module declares its metadata like so:
+
+```elixir
+use LemonControlPlane.Method,
+  name: "health",
+  scopes: [],
+  schema: %{optional: %{}}
+```
+
+The macro automatically generates `name/0`, `scopes/0`, `__schema__/0`, and `__capabilities__/0` callbacks. Modules that do not yet use the macro can still implement the `LemonControlPlane.Method` behaviour manually -- both styles are supported during the incremental migration. The `@builtin_methods` list in the Registry still acts as a fallback and takes precedence on collision, preserving capability gating.
+
+The `Protocol.Schemas` module also falls back to auto-discovered `__schema__/0` metadata when a method has no entry in the static `@schemas` map.
+
+### Typed Store Access
+
+Several methods access run and session data through typed store modules rather than raw `LemonCore.Store` calls:
+
+| Typed Store | Methods Using It |
+|-------------|-----------------|
+| `LemonCore.RunStore` | `SessionDetail`, `RunGraphGet`, `RunIntrospectionList`, `CronRuns`, `AgentWait`, `SessionsPreview`, `ChatHistory` |
+| `LemonCore.SessionStore` | `SessionsReset` |
+
+These typed stores provide structured APIs (e.g., `RunStore.get/1`, `RunStore.get_history/2`) over the underlying `LemonCore.Store` ETS backend, improving type safety and encapsulating query logic.
+
 ### Request Lifecycle
 
 1. A JSON text frame arrives on the WebSocket connection.
 2. `Protocol.Frames.parse/1` decodes and validates the frame structure.
 3. If the connection has not yet completed the handshake, only `connect` is allowed; all other methods return `HANDSHAKE_REQUIRED`.
 4. For `connect`, `Auth.Authorize.from_params/1` establishes the auth context and a `hello-ok` frame is returned.
-5. For all other methods, `Protocol.Schemas.validate/2` checks required/optional parameter types.
-6. `Methods.Registry.dispatch/3` looks up the handler module in the ETS table.
+5. For all other methods, `Protocol.Schemas.validate/2` checks required/optional parameter types (checking the static `@schemas` map first, then falling back to auto-discovered `__schema__/0` metadata from the Method macro).
+6. `Methods.Registry.dispatch/3` looks up the handler module in the ETS table (populated at startup from both the `@builtin_methods` list and auto-discovered macro-based modules).
 7. `Auth.Authorize.authorize/3` verifies the connection has the required scopes for the method.
 8. The handler's `handle/2` callback executes and returns `{:ok, payload}` or `{:error, ...}`.
 9. `Protocol.Frames.encode_response/2` serializes the result to JSON and pushes it to the client.
@@ -67,7 +95,7 @@ The server runs on [Bandit](https://github.com/mtrudel/bandit) with [Plug](https
 
 ```
 LemonControlPlane.Supervisor (one_for_one)
-  |-- Methods.Registry          (GenServer, ETS-backed method dispatch)
+  |-- Methods.Registry          (GenServer, ETS-backed method dispatch; auto-discovers macro-based methods)
   |-- Presence                  (GenServer, ETS-backed client tracking)
   |-- EventBridge.FanoutSupervisor  (Task.Supervisor for broadcast dispatch)
   |-- EventBridge              (GenServer, Bus -> WebSocket event fanout)
@@ -504,13 +532,18 @@ State-versioned events include a `stateVersion` map for client reconciliation. V
 
 ## Schema Validation
 
-Method parameters are validated against schemas defined in `Protocol.Schemas` before dispatch. Schemas specify:
+Method parameters are validated against schemas before dispatch. Schemas are resolved in two ways:
+
+1. **Static schemas** defined in the `@schemas` map in `Protocol.Schemas`.
+2. **Auto-discovered schemas** from method modules that `use LemonControlPlane.Method` and declare a `:schema` option. The `Schemas.get/1` function checks the static map first, then falls back to the module's `__schema__/0` callback.
+
+Schemas specify:
 
 - **Required fields** with types -- requests missing these fields are rejected.
 - **Optional fields** with types -- provided values are type-checked.
 - **Supported types**: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
-Methods without a schema entry accept any parameters.
+Methods without a schema entry (in either source) accept any parameters.
 
 ## Capability-Gated Methods
 
@@ -561,7 +594,7 @@ In test mode, the port defaults to `0` (OS-assigned) to avoid conflicts.
 
 | App | Relationship |
 |-----|-------------|
-| `lemon_core` | Store, secrets, event bus, idempotency, telemetry |
+| `lemon_core` | Typed stores (`RunStore`, `SessionStore`, `ProgressStore`), secrets, event bus, idempotency, telemetry |
 | `lemon_router` | Run submission (`LemonRouter.submit/1`, `LemonRouter.RunOrchestrator`) |
 | `lemon_channels` | Channel backends, Outbox for `send` method |
 | `lemon_games` | Games platform match service, auth, rate limiting |

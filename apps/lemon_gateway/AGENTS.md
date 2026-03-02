@@ -47,6 +47,7 @@ LemonGateway is the central orchestration layer that connects messaging channels
 |  - Receive {:engine_event, run_ref, event} and {:engine_delta, ...}    |
 |  - Broadcast to LemonCore.Bus("run:<run_id>")                         |
 |  - Store ChatState on completion for auto-resume                       |
+|  - Persist via typed stores (RunStore, SessionStore, ProgressStore)    |
 |  - Release lock + slot on finalize                                     |
 +-------------------------------------+---------------------------------+
                                       |
@@ -75,7 +76,7 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `lib/lemon_gateway.ex` | `LemonGateway` | Public API: `submit/1` delegates to `Runtime.submit/1` |
 | `lib/lemon_gateway/runtime.ex` | `Runtime` | Submit and cancel API: `submit/1`, `cancel_by_run_id/2`, `cancel_by_progress_msg/2` |
 | `lib/lemon_gateway/scheduler.ex` | `Scheduler` | GenServer: auto-resume, thread routing, slot-based concurrency (max_concurrent_runs) |
-| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-session job queue, 5 queue modes, steer support, auto-terminate |
+| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-session job queue, 5 queue modes, steer support, auto-terminate. Uses `Process.send_after` for retry delays instead of `Process.sleep` (PERF-011). |
 | `lib/lemon_gateway/run.ex` | `Run` | GenServer: engine lifecycle, bus event emission, steer/cancel, lock management |
 | `lib/lemon_gateway/engine.ex` | `Engine` | Behaviour: `id/0`, `start_run/3`, `cancel/1`, `supports_steer?/0`, `steer/2`, resume callbacks |
 | `lib/lemon_gateway/types.ex` | `Types`, `Types.Job` | Core types: `Job` struct (run_id, session_key, prompt, engine_id, queue_mode, meta) |
@@ -114,6 +115,22 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `lib/lemon_gateway/thread_worker_supervisor.ex` | `ThreadWorkerSupervisor` | DynamicSupervisor for ThreadWorker processes |
 | `lib/lemon_gateway/transport_registry.ex` | `TransportRegistry` | GenServer: transport ID -> module mapping with enable/disable awareness |
 | `lib/lemon_gateway/transport_supervisor.ex` | `TransportSupervisor` | Supervisor starting all enabled transports |
+
+### Webhook System
+
+The webhook transport (`Transports.Webhook`) delegates to focused submodules:
+
+| File | Module | Notes |
+|------|--------|-------|
+| `lib/lemon_gateway/transports/webhook.ex` | `Transports.Webhook` | Entry point for HTTP webhook transport (sync/async). Delegates to submodules. |
+| `lib/lemon_gateway/transports/webhook/auth.ex` | `Transports.Webhook.Auth` | Webhook authentication and verification |
+| `lib/lemon_gateway/transports/webhook/payload.ex` | `Transports.Webhook.Payload` | Payload parsing and normalization |
+| `lib/lemon_gateway/transports/webhook/routing.ex` | `Transports.Webhook.Routing` | Request routing to appropriate handlers |
+| `lib/lemon_gateway/transports/webhook/callback.ex` | `Transports.Webhook.Callback` | Callback handling |
+| `lib/lemon_gateway/transports/webhook/callback_url.ex` | `Transports.Webhook.CallbackUrl` | Callback URL generation and management |
+| `lib/lemon_gateway/transports/webhook/idempotency.ex` | `Transports.Webhook.Idempotency` | Idempotency key tracking |
+| `lib/lemon_gateway/transports/webhook/response.ex` | `Transports.Webhook.Response` | Response formatting |
+| `lib/lemon_gateway/transports/webhook/helpers.ex` | `Transports.Webhook.Helpers` | Shared webhook utilities |
 
 ### Voice System
 
@@ -452,7 +469,7 @@ assert completed.ok == true
 |-----|----------------------|
 | `agent_core` | `AgentCore.CliRunners.*` (ClaudeRunner, CodexRunner, etc.), `AgentCore.EventStream`, `AgentCore.Types.*` |
 | `coding_agent` | `CodingAgent.CliRunners.LemonRunner` (native engine), `CodingAgent.Session`, `CodingAgent.Config` |
-| `lemon_core` | `LemonCore.Store` (chat state, runs, progress), `LemonCore.Bus` (event broadcast), `LemonCore.Telemetry`, `LemonCore.ResumeToken`, `LemonCore.ChatScope`, `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Secrets`, `LemonCore.GatewayConfig`, `LemonCore.Introspection`, `LemonCore.Event` |
+| `lemon_core` | `LemonCore.RunStore`, `LemonCore.SessionStore`, `LemonCore.ProgressStore` (typed store access for runs, sessions, progress), `LemonCore.Bus` (event broadcast), `LemonCore.Telemetry`, `LemonCore.ResumeToken`, `LemonCore.ChatScope`, `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Secrets`, `LemonCore.GatewayConfig`, `LemonCore.Introspection`, `LemonCore.Event` |
 | `lemon_channels` | Compile-time only (`runtime: false`). Telegram/Discord/XMTP adapters are implemented there but consume gateway bus events. |
 
 ### Dependents (apps that depend on this)
@@ -470,7 +487,7 @@ assert completed.ok == true
 2. **Completion notification**: Set `meta.notify_pid` in the Job to receive `{:lemon_gateway_run_completed, job, completed}` when a run finishes.
 3. **Bus events**: Subscribe to `LemonCore.Bus` topic `"run:<run_id>"` to receive real-time run events.
 4. **Run cancellation**: Call `LemonGateway.Runtime.cancel_by_run_id/2` with the run_id.
-5. **Chat state**: `LemonCore.Store.get_chat_state/1` and `put_chat_state/2` manage auto-resume tokens per session.
+5. **Chat state**: `LemonCore.SessionStore.get_chat_state/1` and `put_chat_state/2` manage auto-resume tokens per session.
 
 ## Common Debugging
 
@@ -556,7 +573,7 @@ Emitted via `LemonCore.Telemetry`:
 - `agent_core` -- CLI runner infrastructure, tool types, event stream
 - `coding_agent` -- Native Lemon engine runner, session management
 - `lemon_channels` -- Telegram/Discord/XMTP adapters (compile-time dep, `runtime: false`)
-- `lemon_core` -- Store, Bus, Telemetry, types, secrets, config loading
+- `lemon_core` -- RunStore, SessionStore, ProgressStore, Bus, Telemetry, types, secrets, config loading
 
 ### External Libraries
 - `jason` -- JSON encoding/decoding

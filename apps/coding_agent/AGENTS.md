@@ -14,7 +14,11 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 ```
 +-----------------------------------------------------------------------------+
 |                           CodingAgent.Session                                |
-|  (Main GenServer - orchestrates agent loop, events, steering, follow-ups)   |
+|  (Main GenServer - orchestrates agent loop, steering, follow-ups)           |
+|  Delegates to focused subsystem modules:                                    |
+|    BranchManager | Diagnostics | EventBroadcaster | OverflowRecovery       |
+|    CompactionManager | EventHandler | WasmBridge | ModelResolver           |
+|    PromptComposer | MessageSerialization                                    |
 +--------------------+--------------------------------------------------------+
                      |
     +----------------+----------------+---------------+----------------+
@@ -47,7 +51,17 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 
 | Module | Purpose |
 |--------|---------|
-| `CodingAgent.Session` | Main GenServer orchestrating the agent loop |
+| `CodingAgent.Session` | Main GenServer orchestrating the agent loop; delegates to subsystem modules below |
+| `CodingAgent.Session.BranchManager` | Branch navigation detection (`branch_switch?/4`), abandoned branch summarization, navigation orchestration, current branch summarization |
+| `CodingAgent.Session.Diagnostics` | Session diagnostics (`build/1`), health checks (`health_check/1`), stats (`stats/1`), tool result counting, activity timestamps, health status determination |
+| `CodingAgent.Session.EventBroadcaster` | Event broadcasting to subscribers (`broadcast/2`), stream completion with terminal lifecycle semantics (`complete_streams/2`) |
+| `CodingAgent.Session.OverflowRecovery` | Context overflow detection and recovery (`maybe_start/5`), post-compaction continuation, failure finalization, background task process monitoring |
+| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling and compaction result application |
+| `CodingAgent.Session.EventHandler` | Translates `AgentCore` events into session state updates, triggers compaction, fires extension hooks |
+| `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
+| `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup with OAuth refresh |
+| `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering base prompt, prompt templates, explicit system prompt, and resource loader instructions |
+| `CodingAgent.Session.WasmBridge` | Bridges WASM sidecar tools into the session tool set |
 | `CodingAgent.SessionManager` | JSONL persistence with tree structure |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
 | `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
@@ -139,6 +153,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |--------|---------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps |
 | `CodingAgent.Coordinator` | Orchestrates concurrent subagent executions |
+| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` using `Task.async_stream` for demand-driven scheduling (PERF-013) |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background exec processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` | ETS store for background process state |
@@ -612,7 +627,11 @@ apps/coding_agent/
 |   |   +-- application.ex                   # OTP application (supervision tree)
 |   |   +-- session.ex                       # Main GenServer orchestrator
 |   |   +-- session/
-|   |   |   +-- compaction_manager.ex        # Auto-compaction state machine
+|   |   |   +-- branch_manager.ex            # Branch navigation and summarization
+|   |   |   +-- diagnostics.ex              # Health checks, stats, diagnostics
+|   |   |   +-- event_broadcaster.ex         # Event broadcasting to subscribers
+|   |   |   +-- overflow_recovery.ex         # Context overflow detection and recovery
+|   |   |   +-- compaction_manager.ex        # Auto-compaction scheduling
 |   |   |   +-- event_handler.ex             # Agent event -> session state
 |   |   |   +-- message_serialization.ex     # Message format conversion
 |   |   |   +-- model_resolver.ex            # Model + API key resolution

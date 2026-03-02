@@ -12,7 +12,6 @@ defmodule LemonGateway.Scheduler do
   alias LemonCore.Introspection
   alias LemonCore.SessionStore
   alias LemonGateway.{ChatState, Config}
-  alias LemonCore.Store
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
 

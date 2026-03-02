@@ -74,7 +74,7 @@ Part of the `lemon` Elixir umbrella project.
 4. On slot grant, the worker starts a **Run** process via `RunSupervisor`. The Run acquires an `EngineLock`, resolves the engine, and calls `Engine.start_run/3`.
 5. The **Engine** executes the AI request (native Elixir session, CLI subprocess, or echo) and streams events (`{:engine_event, run_ref, event}`) and text deltas (`{:engine_delta, run_ref, text}`) back to the Run process.
 6. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Subscribers (router, channels, control-plane) handle channel-specific rendering and delivery.
-7. On completion, the Run stores chat state for auto-resume, releases the engine lock and scheduler slot, and notifies the `ThreadWorker` and any `meta.notify_pid`.
+7. On completion, the Run stores chat state for auto-resume via typed stores (`LemonCore.RunStore`, `LemonCore.SessionStore`, `LemonCore.ProgressStore`), releases the engine lock and scheduler slot, and notifies the `ThreadWorker` and any `meta.notify_pid`.
 
 ## Supported Engines
 
@@ -119,7 +119,7 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | XMTP | `lemon_channels` (external app) | XMTP messaging via Node.js bridge |
 | Email | `Transports.Email` | SMTP inbound webhook + outbound delivery via gen_smtp |
 | Farcaster | `Transports.Farcaster` | Farcaster Frame-based interactions with Hub validation |
-| Webhook | `Transports.Webhook` | Generic HTTP webhook (sync/async modes) |
+| Webhook | `Transports.Webhook` + submodules | Generic HTTP webhook (sync/async modes), split into focused submodules for auth, payload, routing, callbacks, idempotency, and response formatting |
 | Voice | `Transports.Voice` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
@@ -151,7 +151,7 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator with auto-resume and thread routing |
-| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-session job queue with 5 queue modes and steer support |
+| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-session job queue with 5 queue modes and steer support. Uses `Process.send_after` for retry delays (PERF-011). |
 | `LemonGateway.ThreadRegistry` | `thread_registry.ex` | Registry for thread workers (unique key by `thread_key`) |
 | `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: engine lifecycle, bus events, steer/cancel |
@@ -189,7 +189,15 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Transports.Farcaster.CastHandler` | `transports/farcaster/cast_handler.ex` | Cast processing handler |
 | `LemonGateway.Transports.Discord` | `transports/discord.ex` | Discord transport helpers |
 | `LemonGateway.Transports.Voice` | `transports/voice.ex` | Voice call transport |
-| `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
+| `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport entry point (sync/async), delegates to submodules |
+| `LemonGateway.Transports.Webhook.Auth` | `transports/webhook/auth.ex` | Webhook authentication and verification |
+| `LemonGateway.Transports.Webhook.Payload` | `transports/webhook/payload.ex` | Payload parsing and normalization |
+| `LemonGateway.Transports.Webhook.Routing` | `transports/webhook/routing.ex` | Request routing to appropriate handlers |
+| `LemonGateway.Transports.Webhook.Callback` | `transports/webhook/callback.ex` | Callback handling |
+| `LemonGateway.Transports.Webhook.CallbackUrl` | `transports/webhook/callback_url.ex` | Callback URL generation and management |
+| `LemonGateway.Transports.Webhook.Idempotency` | `transports/webhook/idempotency.ex` | Idempotency key tracking |
+| `LemonGateway.Transports.Webhook.Response` | `transports/webhook/response.ex` | Response formatting |
+| `LemonGateway.Transports.Webhook.Helpers` | `transports/webhook/helpers.ex` | Shared webhook utilities |
 
 ### Binding and Rendering
 
@@ -266,7 +274,7 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 ### Completion
 
 - Engines send `{:engine_event, run_ref, completed_event}` when done.
-- The Run process stores chat state for auto-resume, emits `:run_completed` to the bus, finalizes the run in `LemonCore.Store`, releases the engine lock and scheduler slot, and notifies the worker and `meta.notify_pid`.
+- The Run process stores chat state for auto-resume, emits `:run_completed` to the bus, finalizes the run via typed stores (`LemonCore.RunStore`, `LemonCore.SessionStore`, `LemonCore.ProgressStore`), releases the engine lock and scheduler slot, and notifies the worker and `meta.notify_pid`.
 - On context-length overflow errors, the `ChatState` is automatically cleared so the next run starts fresh.
 
 ### Steering
@@ -458,7 +466,7 @@ Custom health checks can be registered via the `:health_checks` application envi
 | `agent_core` | CLI runner infrastructure, tool types (`AgentTool`, `AgentToolResult`), event stream |
 | `coding_agent` | Native Lemon AI engine (`CodingAgent.CliRunners.LemonRunner`, `CodingAgent.Session`) |
 | `lemon_channels` | Telegram, Discord, XMTP adapters (compile-time only dependency, runtime: false) |
-| `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
+| `lemon_core` | Shared primitives: `RunStore`, `SessionStore`, `ProgressStore`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
 
 ### External Libraries
 

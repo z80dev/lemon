@@ -9,11 +9,13 @@ LemonChannels sits between external messaging platforms and the Lemon session en
 1. **Inbound**: Receive messages from platforms, normalize them to `LemonCore.InboundMessage`, and route to `LemonRouter` via `LemonCore.RouterBridge`.
 2. **Outbound**: Accept `OutboundPayload` structs, chunk/dedupe/rate-limit them, and deliver to the target platform with retry.
 
-The app lives at `apps/lemon_channels/` in the umbrella. It depends on `lemon_core` for shared types and delegates config to `LemonCore.GatewayConfig`. It bridges to `lemon_router` at runtime without a compile-time dependency (via `LemonChannels.Runtime` and `LemonCore.RouterBridge`).
+The app lives at `apps/lemon_channels/` in the umbrella. It depends on `lemon_core` for shared types and uses `LemonCore.GatewayConfig` directly for configuration. It bridges to `lemon_router` at runtime without a compile-time dependency (via `LemonChannels.Runtime` and `LemonCore.RouterBridge`).
 
 ### Key Entry Points
 
 - **Top-level API**: `LemonChannels.enqueue/1`, `LemonChannels.get_plugin/1`, `LemonChannels.list_plugins/0`
+- **Dispatcher**: `LemonChannels.Dispatcher` -- bridge between OutputIntent and OutboundPayload
+- **ChannelState**: `LemonChannels.ChannelState` -- abstract API for Telegram-specific persistent state
 - **Outbox**: `LemonChannels.Outbox.enqueue/1` -- the primary way to send outbound messages
 - **Registry**: `LemonChannels.Registry` -- register, lookup, and manage adapter lifecycle
 - **Application**: `LemonChannels.Application` -- supervision tree, `register_and_start_adapter/2`, `stop_adapter/1`
@@ -54,9 +56,17 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Validates engine IDs, parses resume tokens. Default engines: lemon echo codex claude opencode pi kimi. |
-| `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
+| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Bridge between OutputIntent and OutboundPayload. `dispatch/1`, `dispatch_with_actions/1`, `intent_to_payload/1`, `render_prompt_actions/2`. |
+| `lib/lemon_channels/channel_state.ex` | `LemonChannels.ChannelState` | Abstract API for Telegram-specific persistent state: resume, compaction, msg session, known targets. All rescue-guarded. |
+| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Validates engine IDs via `get_engine/1` and `engine_known?/1`. Resume token parsing moved to `LemonCore.ResumeToken`. |
 | `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` |
+
+### Dispatcher and Channel State
+
+| File | Module | What It Does |
+|------|--------|-------------|
+| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Bridges OutputIntent to OutboundPayload. `dispatch/1` converts and delivers; `dispatch_with_actions/1` adds channel-specific action rendering (e.g. Telegram inline keyboards). Also: `intent_to_payload/1`, `intent_to_payload_with_actions/1`, `render_prompt_actions/2`. |
+| `lib/lemon_channels/channel_state.ex` | `LemonChannels.ChannelState` | Abstract API for Telegram-specific persistent state, moved from lemon_router. Covers: compaction (`mark/get/delete_pending_compaction`), resume state (`reset_resume_state`, `put/get_resume`, `put/get/delete_selected_resume`), message session mapping (`put/get_msg_session`), known targets (`list/get/put_known_target`). All functions are rescue-guarded. |
 
 ### Outbox Pipeline
 
@@ -74,8 +84,11 @@ share a group and are never delivered concurrently to prevent reordering.
 | File | What It Does |
 |------|-------------|
 | `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
-| `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | **Largest file (~1200 lines)**. Long-polling GenServer via getUpdates. Command handling, inbound routing, session management. State includes message indices, active runs, picker state. |
+| `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport.Poller. |
+| `adapters/telegram/transport/poller.ex` | Long-polling GenServer via getUpdates. Receives raw updates from Telegram. |
+| `adapters/telegram/transport/update_router.ex` | Routes incoming updates to appropriate handlers based on update type. |
+| `adapters/telegram/transport/reaction_tracker.ex` | Tracks message reactions from Telegram updates. |
+| `adapters/telegram/transport/async_task_runner.ex` | Manages async task execution for transport operations. |
 | `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/3`, `join_messages/1`. No side effects. |
 | `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
@@ -197,8 +210,8 @@ Defined in `LemonChannels.Capabilities`:
 ### Adding a new bot command (Telegram)
 
 1. Add command detection in `adapters/telegram/transport/commands.ex` (pure function, pattern match on message text)
-2. Add command handling in `adapters/telegram/transport.ex` (`handle_info` or the command dispatch section)
-3. If the command needs async work, spawn via `Telegram.AsyncSupervisor`
+2. Add update routing in `adapters/telegram/transport/update_router.ex` to dispatch to the new handler
+3. If the command needs async work, use `adapters/telegram/transport/async_task_runner.ex`
 4. For system messages, use `Telegram.Delivery.enqueue_send/3` (preferred Outbox path) with direct `Telegram.API` fallback
 
 ### Modifying message formatting (Telegram)
@@ -206,6 +219,18 @@ Defined in `LemonChannels.Capabilities`:
 - Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
 - Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities
 - Truncation: `telegram/truncate.ex` -- preserves resume lines at end
+
+### Modifying dispatch behavior (OutputIntent to delivery)
+
+- `dispatcher.ex` converts OutputIntent to OutboundPayload and delivers via Outbox
+- Action rendering (e.g. Telegram inline keyboards) is handled in `render_prompt_actions/2`
+- To add channel-specific output transformations, extend `intent_to_payload_with_actions/1`
+
+### Modifying channel state access
+
+- `channel_state.ex` centralizes all Telegram-specific persistent state (previously in lemon_router)
+- Resume state, compaction tracking, msg session mapping, and known targets
+- All functions are rescue-guarded; failures return safe defaults
 
 ### Adding a new outbound payload kind
 
@@ -229,12 +254,12 @@ Defined in `LemonChannels.Capabilities`:
 ### Changing binding/engine resolution
 
 - `binding_resolver.ex` delegates to `LemonCore.BindingResolver` -- most logic lives in `lemon_core`
-- `engine_registry.ex` for adding/removing known engines or changing resume token format
+- `engine_registry.ex` for adding/removing known engines (resume token format now lives in `LemonCore.ResumeToken`)
 - Resolution priority: resume token > engine hint > binding default > project default > global default
 
 ### Modifying the `/model` picker (Telegram)
 
-- The picker state machine lives in `transport.ex` state
+- The picker state machine lives in the transport state (see `transport/poller.ex` and `transport/update_router.ex`)
 - Provider/model lists auto-detect from runtime config + secrets/env credentials
 - Pagination handled inline with `<< Prev` / `Next >>` keyboard buttons
 - Selection messages are intercepted and not routed as normal inbound prompts
@@ -404,11 +429,11 @@ Bindings from `GatewayConfig.get(:bindings)`. Projects from `GatewayConfig.get(:
 
 ## Engine Registry
 
+`LemonChannels.EngineRegistry` handles engine config lookup only. Resume token parsing (`extract_resume/1`, `format_resume/1`) has been moved to `LemonCore.ResumeToken`.
+
 ```elixir
 LemonChannels.EngineRegistry.engine_known?("claude")  # true
-
-{:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
-  LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
+LemonChannels.EngineRegistry.get_engine("claude")      # engine config map | nil
 ```
 
 Default engines: `lemon echo codex claude opencode pi kimi`. Override via `config :lemon_channels, :engines`.
@@ -453,16 +478,16 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 
 ## GatewayConfig
 
-Merges config from three sources (highest priority first):
+`LemonChannels.GatewayConfig` has been removed. All callers now use `LemonCore.GatewayConfig` directly. It merges config from three sources (highest priority first):
 1. `Application.get_env(:lemon_channels, :telegram | :xmtp)` -- runtime per-adapter overrides
 2. `Application.get_env(:lemon_channels, :gateway)` -- runtime gateway overrides
 3. `LemonCore.Config.cached().gateway` -- TOML-backed base config
 
 ```elixir
-LemonChannels.GatewayConfig.get(:enable_telegram)
-LemonChannels.GatewayConfig.get(:bindings, [])
-LemonChannels.GatewayConfig.get(:default_engine)
-LemonChannels.GatewayConfig.get(:projects, %{})
+LemonCore.GatewayConfig.get(:enable_telegram)
+LemonCore.GatewayConfig.get(:bindings, [])
+LemonCore.GatewayConfig.get(:default_engine)
+LemonCore.GatewayConfig.get(:projects, %{})
 ```
 
 ## Common Tasks
@@ -556,7 +581,7 @@ end
 | App | Relationship |
 |-----|-------------|
 | `lemon_core` | Shared types (`InboundMessage`, `ChatScope`, `Binding`), `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry`, `GatewayConfig`, `BindingResolver` |
-| `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
+| `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). Telegram-specific state access (resume, compaction, known targets) moved from lemon_router to `LemonChannels.ChannelState`. |
 | `agent_core` | Consumes `InboundMessage` for session processing. Sends results back through `OutboundPayload` → Outbox. |
 | `coding_agent` | Session engine that interacts through the router; channels deliver its output. |
 | `lemon_control_plane` | Gateway methods from adapters (e.g., `x_api.post_tweet`) are exposed through the control plane. |

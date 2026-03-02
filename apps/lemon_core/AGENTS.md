@@ -11,7 +11,10 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 - **Session key management** - Canonical session key formats for routing
 - **Idempotency** - Deduplication for at-most-once operations
 - **Execution approvals** - Tool execution gating with scope-based persistence
-- **Quality checks** - Docs catalog and architecture boundary validation
+- **Typed stores** - Domain-specific store wrappers (`RunStore`, `SessionStore`, `ProgressStore`) with telemetry
+- **Background tasks** - Centralized task spawning with telemetry via `BackgroundTask`
+- **Output intents** - Channel-agnostic output intent structs for decoupling router from channel payloads
+- **Quality checks** - Docs catalog and architecture boundary validation (direct deps and namespace refs)
 - **Telemetry** - Consistent event emission across the umbrella
 - **HTTP client** - Thin wrapper around Erlang's `:httpc`
 
@@ -56,6 +59,13 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
+| `LemonCore.ChannelRoute` | Channel-neutral route struct (ARCH-010) |
+| `LemonCore.OutputIntent` | Channel-agnostic output intent struct (op, channel_route, body, metadata). Router emits intents; channels interpret them |
+| `LemonCore.ResumeToken` | Canonical owner of resume extraction, strict detection, and formatting (`extract_resume/1`, `extract_resume/2`, `is_resume_line/1`, `is_resume_line/2`, `format/1`) |
+| `LemonCore.RunStore` | Typed store for run-related state with telemetry. Delegates to `LemonCore.Store` (`append_event/2`, `finalize/2`, `get/1`, `get_history/2`) |
+| `LemonCore.SessionStore` | Typed store for session-related state with telemetry (`put_chat_state/2`, `get_chat_state/1`, `delete_chat_state/1`, `get_session/1`, `list_sessions/0`, `delete_session/1`) |
+| `LemonCore.ProgressStore` | Typed store for progress mappings and compaction markers with telemetry (`put_progress_mapping/3`, `get_run_by_progress/2`, `delete_progress_mapping/2`, `put_pending_compaction/2`, `get_pending_compaction/1`, `delete_pending_compaction/1`) |
+| `LemonCore.BackgroundTask` | Centralized background task spawning with telemetry. Replaces ad-hoc `Task.start`/`Task.Supervisor` calls |
 | `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 

@@ -47,7 +47,7 @@ LemonChannels.Application
 +-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
     +-- Telegram.Supervisor               (if enabled)
     |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
-    |   +-- Telegram.Transport            (GenServer - long-polling)
+    |   +-- Telegram.Transport.Poller     (GenServer - long-polling)
     +-- Discord.Supervisor                (if enabled)
     |   +-- Discord.Transport             (Nostrum consumer)
     +-- XAPI.TokenManager                 (if configured, GenServer)
@@ -160,6 +160,46 @@ LemonChannels.list_plugins()            # Registry.list_plugins/0
 LemonChannels.enqueue(payload)          # Outbox.enqueue/1
 ```
 
+### Dispatcher
+
+`LemonChannels.Dispatcher` bridges the gap between `OutputIntent` (engine output) and `OutboundPayload` (delivery input). It converts intents to payloads and delivers them through the Outbox.
+
+```elixir
+LemonChannels.Dispatcher.dispatch(intent)                  # convert + deliver
+LemonChannels.Dispatcher.dispatch_with_actions(intent)     # same, with channel-specific action rendering (e.g. Telegram inline keyboards)
+LemonChannels.Dispatcher.intent_to_payload(intent)         # convert only
+LemonChannels.Dispatcher.intent_to_payload_with_actions(intent)  # convert with actions
+LemonChannels.Dispatcher.render_prompt_actions(actions, channel_id)  # render actions for a channel
+```
+
+### Channel State
+
+`LemonChannels.ChannelState` provides an abstract API for all Telegram-specific persistent state. State access that previously lived in `lemon_router` has been consolidated here. All functions are rescue-guarded.
+
+```elixir
+# Compaction
+LemonChannels.ChannelState.mark_pending_compaction(account_id, chat_id, thread_id)
+LemonChannels.ChannelState.get_pending_compaction(account_id, chat_id, thread_id)
+LemonChannels.ChannelState.delete_pending_compaction(account_id, chat_id, thread_id)
+
+# Resume state
+LemonChannels.ChannelState.reset_resume_state(session_key)
+LemonChannels.ChannelState.put_resume(account_id, chat_id, thread_id, gen, data)
+LemonChannels.ChannelState.get_resume(account_id, chat_id, thread_id, gen)
+LemonChannels.ChannelState.put_selected_resume(session_key, resume)
+LemonChannels.ChannelState.get_selected_resume(session_key)
+LemonChannels.ChannelState.delete_selected_resume(session_key)
+
+# Message session mapping
+LemonChannels.ChannelState.put_msg_session(key, value)
+LemonChannels.ChannelState.get_msg_session(key)
+
+# Known targets
+LemonChannels.ChannelState.list_known_targets()
+LemonChannels.ChannelState.get_known_target(target_key)
+LemonChannels.ChannelState.put_known_target(target_key, data)
+```
+
 ## Outbox Pipeline
 
 The Outbox (`LemonChannels.Outbox`) is a GenServer-based delivery queue.
@@ -252,8 +292,11 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | Module | Purpose |
 |--------|---------|
 | `Telegram` (plugin) | Plugin behaviour implementation, id/meta/child_spec/deliver |
-| `Telegram.Supervisor` | Starts `AsyncSupervisor` (Task.Supervisor) and `Transport` |
-| `Telegram.Transport` | Long-polling GenServer via `getUpdates`, command handling, inbound routing |
+| `Telegram.Supervisor` | Starts `AsyncSupervisor` (Task.Supervisor) and `Transport.Poller` |
+| `Telegram.Transport.Poller` | Long-polling GenServer via `getUpdates` |
+| `Telegram.Transport.UpdateRouter` | Routes incoming updates to handlers |
+| `Telegram.Transport.ReactionTracker` | Tracks message reactions |
+| `Telegram.Transport.AsyncTaskRunner` | Manages async task execution |
 | `Telegram.Transport.Commands` | Pure functions for command detection, scope keys, message joining |
 | `Telegram.Transport.FileOperations` | `/file put`/`get` commands, auto-put for document uploads, media group file handling |
 | `Telegram.Transport.MediaGroups` | Media group coalescence with debounce timer |
@@ -440,7 +483,7 @@ Enable via gateway config: `enable_xmtp: true`
 3. **Register the adapter** in `LemonChannels.Application.register_and_start_adapters/0`:
 
 ```elixir
-if GatewayConfig.get(:enable_my_channel) do
+if LemonCore.GatewayConfig.get(:enable_my_channel) do
   register_and_start_adapter(LemonChannels.Adapters.MyChannel)
 end
 ```
@@ -453,7 +496,7 @@ end
 
 ### Gateway Config
 
-`LemonChannels.GatewayConfig` is a thin delegation to `LemonCore.GatewayConfig`, which merges config from three sources (highest priority first):
+`LemonCore.GatewayConfig` merges config from three sources (highest priority first):
 
 1. `Application.get_env(:lemon_channels, :telegram | :xmtp)` -- runtime per-adapter overrides
 2. `Application.get_env(:lemon_channels, :gateway)` -- runtime gateway overrides
@@ -490,16 +533,11 @@ Engine resolution priority: resume token > engine hint > binding default > proje
 
 ### Engine Registry
 
-`LemonChannels.EngineRegistry` validates engine IDs and parses resume tokens.
+`LemonChannels.EngineRegistry` validates engine IDs. Resume token parsing (`extract_resume/1`, `format_resume/1`) has been moved to `LemonCore.ResumeToken`.
 
 ```elixir
 LemonChannels.EngineRegistry.engine_known?("claude")  # true
-
-{:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
-  LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
-
-LemonChannels.EngineRegistry.format_resume(%ResumeToken{engine: "claude", value: "abc123"})
-# "claude --resume abc123"
+LemonChannels.EngineRegistry.get_engine("claude")      # engine config map | nil
 ```
 
 Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override via `config :lemon_channels, :engines`.
@@ -553,8 +591,9 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
-| `LemonChannels.EngineRegistry` | Engine ID validation, resume token parsing |
-| `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
+| `LemonChannels.Dispatcher` | Bridge between OutputIntent and OutboundPayload: dispatch, action rendering |
+| `LemonChannels.ChannelState` | Abstract API for Telegram-specific persistent state (resume, compaction, known targets) |
+| `LemonChannels.EngineRegistry` | Engine ID validation (`get_engine/1`, `engine_known?/1`) |
 | `LemonChannels.Runtime` | Bridge to `LemonRouter` (cancel, busy check) |
 | `LemonChannels.Cwd` | Working directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
@@ -573,8 +612,11 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | Module | Purpose |
 |--------|---------|
 | `Adapters.Telegram` | Plugin behaviour implementation |
-| `Adapters.Telegram.Supervisor` | Starts AsyncSupervisor and Transport |
-| `Adapters.Telegram.Transport` | Long-polling GenServer, command handling |
+| `Adapters.Telegram.Supervisor` | Starts AsyncSupervisor and Transport.Poller |
+| `Adapters.Telegram.Transport.Poller` | Long-polling GenServer for Telegram updates |
+| `Adapters.Telegram.Transport.UpdateRouter` | Routes incoming updates to handlers |
+| `Adapters.Telegram.Transport.ReactionTracker` | Tracks message reactions |
+| `Adapters.Telegram.Transport.AsyncTaskRunner` | Manages async task execution |
 | `Adapters.Telegram.Transport.Commands` | Command detection, scope keys |
 | `Adapters.Telegram.Transport.FileOperations` | File put/get, document uploads |
 | `Adapters.Telegram.Transport.MediaGroups` | Media group coalescence |
@@ -685,7 +727,7 @@ end
 ## Important Notes
 
 - The Outbox preserves per-delivery-group FIFO ordering; chunked messages from the same payload share a group and are never delivered concurrently
-- `GatewayConfig` is a thin delegation to `LemonCore.GatewayConfig`; new code should use the core module directly
+- `GatewayConfig` has been removed from `lemon_channels`; all callers now use `LemonCore.GatewayConfig` directly
 - `BindingResolver` delegates to `LemonCore.BindingResolver` after struct conversion
 - `Runtime` uses `LemonCore.RouterBridge` and falls back to direct `LemonRouter.Router` calls; returns `:ok` silently when the router is unavailable
 - Adapter status is derived from live `DynamicSupervisor` children, not stored state

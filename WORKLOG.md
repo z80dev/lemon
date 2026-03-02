@@ -31,15 +31,15 @@ Coordination file for the archfix.md implementation.
 | ARCH-011 | Move delivery semantics into lemon_channels | MERGED | ARCH-010 |
 | ARCH-012 | Move Telegram state out of router | MERGED | ARCH-011 |
 | ARCH-013 | Canonicalize resume-token in lemon_core | MERGED | ARCH-012 |
-| ARCH-014 | Remove thin wrappers | BLOCKED | ARCH-013 |
+| ARCH-014 | Remove thin wrappers | MERGED | ARCH-013 |
 
 ## Wave 3 — Store ownership (depends on ARCH-012)
 
 | Ticket | Description | Status | Depends On |
 |--------|-------------|--------|------------|
 | DATA-010 | Build state-ownership map | MERGED | ARCH-012 |
-| DATA-011 | Extract channel state from generic store | IN_PROGRESS | DATA-010 |
-| DATA-012 | Introduce typed stores | BLOCKED | DATA-011 |
+| DATA-011 | Extract channel state from generic store | MERGED | DATA-010 |
+| DATA-012 | Introduce typed stores | MERGED | DATA-011 |
 
 ## Wave 4 — Module decomposition (depends on Wave 2)
 
@@ -47,7 +47,7 @@ Coordination file for the archfix.md implementation.
 |--------|-------------|--------|------------|
 | MOD-010 | Split Telegram.Transport | MERGED | ARCH-011 |
 | MOD-011 | Split Webhook transport | MERGED | ARCH-011 |
-| MOD-012 | Split CodingAgent.Session | BLOCKED | Wave 2 complete |
+| MOD-012 | Split CodingAgent.Session | MERGED | Wave 2 complete |
 
 ## Skipped
 - CLEAN-010 (lemon_services) — User decision: keep for later use
@@ -68,3 +68,5 @@ Coordination file for the archfix.md implementation.
 | Wave3 | worktree-agent-a1cf5edf | DATA-010 | No |
 
 | — | feature/pln-20260303-rate-limit-auto-resume-m3 | ARCH-013, MOD-010, MOD-011 | No |
+| Wave4 | feature/pln-20260303-rate-limit-auto-resume-m3 | MOD-012 | No |
+| Wave3 | feature/pln-20260303-rate-limit-auto-resume-m3 | DATA-012 | No |
