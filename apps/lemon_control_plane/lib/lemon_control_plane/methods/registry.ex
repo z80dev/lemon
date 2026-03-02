@@ -281,15 +281,36 @@ defmodule LemonControlPlane.Methods.Registry do
     GenServer.call(__MODULE__, {:unregister, method})
   end
 
+  @doc """
+  Returns all method modules discovered via `use LemonControlPlane.Method`,
+  merged with the built-in list (built-in entries take precedence for
+  duplicates so that capability gating is preserved during migration).
+  """
+  @spec all_methods() :: [{String.t(), module()}]
+  def all_methods do
+    builtin_map =
+      enabled_builtin_methods()
+      |> Enum.map(fn mod -> {mod.name(), mod} end)
+      |> Map.new()
+
+    discovered_map =
+      LemonControlPlane.Method.discover_methods()
+      |> Map.new()
+
+    # Merge discovered into builtin — builtin wins on collision
+    Map.merge(discovered_map, builtin_map)
+    |> Enum.to_list()
+  end
+
   ## Server Callbacks
 
   @impl true
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
 
-    # Register built-in methods
-    for module <- enabled_builtin_methods() do
-      :ets.insert(table, {module.name(), module})
+    # Register built-in methods + auto-discovered macro-based methods
+    for {name, module} <- all_methods() do
+      :ets.insert(table, {name, module})
     end
 
     {:ok, %{table: table}}
@@ -359,59 +380,5 @@ defmodule LemonControlPlane.Methods.Registry do
     @capability_methods
     |> Map.keys()
     |> Enum.reject(&MapSet.member?(enabled, &1))
-  end
-end
-
-defmodule LemonControlPlane.Method do
-  @moduledoc """
-  Behaviour for control plane method handlers.
-  """
-
-  @doc """
-  Returns the method name (e.g., "health", "agent", "sessions.list").
-  """
-  @callback name() :: String.t()
-
-  @doc """
-  Returns the required scopes for this method.
-
-  Return an empty list for public methods.
-  """
-  @callback scopes() :: [atom()]
-
-  @doc """
-  Handles the method call.
-
-  ## Parameters
-
-  - `params` - The method parameters from the request (may be nil)
-  - `ctx` - The connection context including:
-    - `auth` - Authentication context
-    - `conn_id` - Connection ID
-    - `conn_pid` - Connection process PID
-
-  ## Return Values
-
-  - `{:ok, payload}` - Success with response payload
-  - `{:error, {code, message}}` - Error with code and message
-  - `{:error, {code, message, details}}` - Error with additional details
-  """
-  @callback handle(params :: map() | nil, ctx :: map()) ::
-              {:ok, term()}
-              | {:error, {atom(), String.t()}}
-              | {:error, {atom(), String.t(), term()}}
-
-  @doc """
-  Extracts a required parameter from the params map.
-
-  Returns `{:ok, value}` if present, or an `{:error, ...}` tuple suitable for
-  returning directly from `handle/2`.
-  """
-  @spec require_param(map(), String.t()) :: {:ok, term()} | {:error, {atom(), String.t(), nil}}
-  def require_param(params, key) do
-    case params[key] do
-      nil -> {:error, {:invalid_request, "#{key} is required", nil}}
-      value -> {:ok, value}
-    end
   end
 end

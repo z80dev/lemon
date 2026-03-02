@@ -5,13 +5,10 @@ defmodule LemonControlPlane.Methods.UsageStatus do
   Returns current usage metrics and quotas.
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "usage.status"
-
-  @impl true
-  def scopes, do: [:read]
+  use LemonControlPlane.Method,
+    name: "usage.status",
+    scopes: [:read],
+    schema: %{optional: %{}}
 
   @impl true
   def handle(_params, _ctx) do

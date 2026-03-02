@@ -15,13 +15,10 @@ defmodule LemonControlPlane.Methods.Health do
       }
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "health"
-
-  @impl true
-  def scopes, do: []
+  use LemonControlPlane.Method,
+    name: "health",
+    scopes: [],
+    schema: %{optional: %{}}
 
   @impl true
   def handle(_params, _ctx) do
