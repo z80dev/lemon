@@ -26,7 +26,7 @@ defmodule LemonWeb.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:lemon_games, in_umbrella: true},
+      {:lemon_games, in_umbrella: true, runtime: false},
       {:lemon_router, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},

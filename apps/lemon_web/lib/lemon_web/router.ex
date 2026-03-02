@@ -27,8 +27,12 @@ defmodule LemonWeb.Router do
     live("/sessions/:session_key", SessionLive, :show)
   end
 
+  pipeline :require_games do
+    plug :ensure_games_started
+  end
+
   scope "/games", LemonWeb.Games do
-    pipe_through :public_browser
+    pipe_through [:public_browser, :require_games]
 
     live "/", LobbyLive, :index
     live "/:match_id", MatchLive, :show
@@ -39,4 +43,16 @@ defmodule LemonWeb.Router do
     get "/healthz", HealthController, :index
   end
 
+  defp ensure_games_started(conn, _opts) do
+    started_apps = Application.started_applications() |> Enum.map(&elem(&1, 0))
+
+    if :lemon_games in started_apps do
+      conn
+    else
+      conn
+      |> put_status(:not_found)
+      |> Phoenix.Controller.text("Not Found")
+      |> halt()
+    end
+  end
 end
