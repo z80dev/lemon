@@ -3,14 +3,18 @@ defmodule LemonRouter.RunProcess.Watchdog do
   Idle-run watchdog timer logic for RunProcess.
 
   Manages scheduling, touching, and cancelling the per-run idle watchdog
-  timer, as well as the interactive keepalive confirmation flow for
-  Telegram sessions.
+  timer, as well as the interactive keepalive confirmation flow.
+
+  Emits channel-agnostic `LemonCore.OutputIntent` keepalive prompts; the
+  channels layer (via `LemonChannels.Dispatcher`) decides how to render
+  them (e.g. Telegram inline keyboard, Discord buttons).
   """
 
   require Logger
 
-  alias LemonChannels.OutboundPayload
-  alias LemonRouter.{ChannelContext, ChannelsDelivery}
+  alias LemonCore.{ChannelRoute, OutputIntent}
+  alias LemonChannels.Dispatcher
+  alias LemonRouter.ChannelContext
 
   @default_run_idle_watchdog_timeout_ms 2 * 60 * 60 * 1000
   @default_run_idle_watchdog_confirm_timeout_ms 5 * 60 * 1000
@@ -95,11 +99,8 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
   @spec maybe_request_watchdog_confirmation(map()) :: {:ok, map()} | :error
   def maybe_request_watchdog_confirmation(state) do
-    with {:ok, payload} <- watchdog_confirmation_payload(state),
-         {:ok, _ref} <-
-           ChannelsDelivery.enqueue(payload,
-             context: %{component: :run_process, phase: :watchdog_keepalive_prompt}
-           ) do
+    with {:ok, intent} <- watchdog_confirmation_intent(state),
+         :ok <- Dispatcher.dispatch_with_actions(intent) do
       timeout_ms =
         state.run_watchdog_confirm_timeout_ms || @default_run_idle_watchdog_confirm_timeout_ms
 
@@ -162,10 +163,10 @@ defmodule LemonRouter.RunProcess.Watchdog do
     :ok
   end
 
-  defp watchdog_confirmation_payload(state) do
+  defp watchdog_confirmation_intent(state) do
     parsed = ChannelContext.parse_session_key(state.session_key)
 
-    with "telegram" <- parsed.channel_id,
+    with channel_id when is_binary(channel_id) and channel_id != "" <- parsed.channel_id,
          peer_kind when peer_kind in [:dm, :group, :channel] <- parsed.peer_kind,
          peer_id when is_binary(peer_id) and peer_id != "" <- parsed.peer_id do
       idle_timeout_ms = state.run_watchdog_timeout_ms || @default_run_idle_watchdog_timeout_ms
@@ -175,36 +176,37 @@ defmodule LemonRouter.RunProcess.Watchdog do
         "Still running, but no output for about #{mins} minutes.\n" <>
           "Keep waiting?"
 
-      reply_markup = %{
-        "inline_keyboard" => [
-          [
-            %{
-              "text" => "Keep Waiting",
-              "callback_data" => @idle_keepalive_continue_callback_prefix <> state.run_id
-            },
-            %{
-              "text" => "Stop Run",
-              "callback_data" => @idle_keepalive_stop_callback_prefix <> state.run_id
-            }
-          ]
-        ]
+      route = %ChannelRoute{
+        channel_id: channel_id,
+        account_id: parsed.account_id || "default",
+        peer_kind: peer_kind,
+        peer_id: peer_id,
+        thread_id: parsed.thread_id
       }
 
-      payload = %OutboundPayload{
-        channel_id: "telegram",
-        account_id: parsed.account_id || "default",
-        peer: %{kind: peer_kind, id: peer_id, thread_id: parsed.thread_id},
-        kind: :text,
-        content: text,
-        idempotency_key: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}",
+      actions = [
+        %{
+          id: @idle_keepalive_continue_callback_prefix <> state.run_id,
+          label: "Keep Waiting"
+        },
+        %{
+          id: @idle_keepalive_stop_callback_prefix <> state.run_id,
+          label: "Stop Run"
+        }
+      ]
+
+      intent = %OutputIntent{
+        route: route,
+        op: :keepalive_prompt,
+        body: %{text: text, actions: actions},
         meta: %{
+          idempotency_key: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}",
           run_id: state.run_id,
-          session_key: state.session_key,
-          reply_markup: reply_markup
+          session_key: state.session_key
         }
       }
 
-      {:ok, payload}
+      {:ok, intent}
     else
       _ -> :error
     end

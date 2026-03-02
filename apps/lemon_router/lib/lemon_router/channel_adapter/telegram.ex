@@ -8,6 +8,28 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
   Manages the dual-message model (progress message + answer message),
   resume token tracking, media group batching, and Telegram API constraints.
+
+  ## ARCH-011 Migration Status
+
+  The following paths still construct `OutboundPayload` directly and should
+  be migrated to use `OutputIntent` + `Dispatcher` in a follow-up:
+
+    * `emit_stream_output` / `emit_telegram_answer_output` - Uses Telegram-specific
+      dual-path (telegram_enqueue vs. generic enqueue) with priority and dedup keys.
+      Complex interaction with ChannelsDelivery.telegram_enqueue makes this risky to
+      migrate without the Telegram outbox also accepting intents.
+
+    * `finalize_stream` - Resume token handling, pending resume tracking, and
+      the answer_create_ref / deferred_answer_text flows are tightly coupled
+      to the Telegram delivery ack model.
+
+    * `emit_tool_status` - Uses telegram_enqueue with Telegram-specific inline
+      keyboards (cancel button). The `tool_status_reply_markup/1` function builds
+      `"inline_keyboard"` JSON that should move to channels-side rendering.
+
+    * `enqueue_auto_send_files` - Builds OutboundPayload for file delivery.
+
+  These paths work correctly today and will be migrated incrementally.
   """
 
   @behaviour LemonRouter.ChannelAdapter
@@ -606,6 +628,9 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
   def batch_files(_), do: []
 
+  # TODO(ARCH-011): This builds Telegram-specific inline_keyboard JSON directly
+  # in the router. Should be migrated to emit OutputIntent prompt_actions and
+  # let LemonChannels.Dispatcher.render_prompt_actions/2 handle the rendering.
   @impl true
   def tool_status_reply_markup(%{finalized: true}) do
     %{"inline_keyboard" => []}

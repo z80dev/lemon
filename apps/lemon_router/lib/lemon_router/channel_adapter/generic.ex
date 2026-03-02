@@ -4,13 +4,18 @@ defmodule LemonRouter.ChannelAdapter.Generic do
 
   Uses the channels outbox for all output, with no truncation,
   no file batching, and no reply markup.
+
+  Emits `LemonCore.OutputIntent` structs and dispatches them via
+  `LemonChannels.Dispatcher` for channel-agnostic delivery.
   """
 
   @behaviour LemonRouter.ChannelAdapter
 
   require Logger
 
-  alias LemonRouter.{ChannelContext, ChannelsDelivery}
+  alias LemonCore.{ChannelRoute, OutputIntent}
+  alias LemonChannels.Dispatcher
+  alias LemonRouter.ChannelContext
 
   @default_max_download_bytes 50 * 1024 * 1024
 
@@ -19,32 +24,24 @@ defmodule LemonRouter.ChannelAdapter.Generic do
   @impl true
   def emit_stream_output(snapshot) do
     parsed = ChannelContext.parse_session_key(snapshot.session_key)
+    route = route_from_parsed(parsed)
 
-    {kind, content} = get_output_kind_and_content(snapshot)
+    {op, body} = get_output_op_and_body(snapshot)
 
-    payload =
-      struct!(LemonChannels.OutboundPayload,
-        channel_id: snapshot.channel_id,
-        account_id: parsed.account_id,
-        peer: %{
-          kind: parsed.peer_kind,
-          id: parsed.peer_id,
-          thread_id: parsed.thread_id
-        },
-        kind: kind,
-        content: content,
+    intent = %OutputIntent{
+      route: route,
+      op: op,
+      body: body,
+      meta: %{
         idempotency_key: "#{snapshot.run_id}:#{snapshot.last_seq}",
-        meta: %{
-          run_id: snapshot.run_id,
-          session_key: snapshot.session_key,
-          seq: snapshot.last_seq
-        }
-      )
+        run_id: snapshot.run_id,
+        session_key: snapshot.session_key,
+        seq: snapshot.last_seq
+      }
+    }
 
-    case ChannelsDelivery.enqueue(payload,
-           context: %{component: :stream_coalescer, phase: :emit_output}
-         ) do
-      {:ok, _ref} -> :ok
+    case Dispatcher.dispatch(intent) do
+      :ok -> :ok
       {:error, :duplicate} -> :ok
       {:error, reason} -> Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
     end
@@ -69,36 +66,27 @@ defmodule LemonRouter.ChannelAdapter.Generic do
         {:ok, %{deferred_text: text}}
 
       true ->
-        {kind, content, notify_pid, notify_ref} =
-          get_status_output_kind_and_content(snapshot, text)
+        route = route_from_parsed(parsed)
+        {op, body, notify_pid, notify_ref} = get_status_op_and_body(snapshot, text)
 
-        payload =
-          struct!(LemonChannels.OutboundPayload,
-            channel_id: snapshot.channel_id,
-            account_id: parsed.account_id,
-            peer: %{
-              kind: parsed.peer_kind,
-              id: parsed.peer_id,
-              thread_id: parsed.thread_id
-            },
-            kind: kind,
-            content: content,
+        intent = %OutputIntent{
+          route: route,
+          op: op,
+          body: body,
+          meta: %{
             reply_to: snapshot.meta[:user_msg_id] || snapshot.meta["user_msg_id"],
             idempotency_key: "#{snapshot.run_id}:status:#{snapshot.seq}",
-            meta: %{
-              run_id: snapshot.run_id,
-              session_key: snapshot.session_key,
-              status_seq: snapshot.seq,
-              reply_markup: nil
-            },
+            run_id: snapshot.run_id,
+            session_key: snapshot.session_key,
+            status_seq: snapshot.seq,
+            reply_markup: nil,
             notify_pid: notify_pid,
             notify_ref: notify_ref
-          )
+          }
+        }
 
-        case ChannelsDelivery.enqueue(payload,
-               context: %{component: :tool_status_coalescer, phase: :status_output}
-             ) do
-          {:ok, _ref} ->
+        case Dispatcher.dispatch(intent) do
+          :ok ->
             if is_reference(notify_ref),
               do: {:ok, %{status_create_ref: notify_ref}},
               else: {:ok, %{}}
@@ -157,33 +145,43 @@ defmodule LemonRouter.ChannelAdapter.Generic do
 
   # ---- Private ----
 
-  defp get_output_kind_and_content(snapshot) do
+  defp route_from_parsed(parsed) do
+    %ChannelRoute{
+      channel_id: parsed.channel_id,
+      account_id: parsed.account_id || "default",
+      peer_kind: parsed.peer_kind,
+      peer_id: parsed.peer_id,
+      thread_id: parsed.thread_id
+    }
+  end
+
+  defp get_output_op_and_body(snapshot) do
     supports_edit = ChannelContext.channel_supports_edit?(snapshot.channel_id)
     answer_msg_id = snapshot.meta[:answer_msg_id] || snapshot.meta["answer_msg_id"]
 
     cond do
       supports_edit and answer_msg_id != nil ->
-        {:edit, %{message_id: answer_msg_id, text: snapshot.full_text}}
+        {:stream_replace, %{message_id: answer_msg_id, text: snapshot.full_text}}
 
       true ->
-        {:text, snapshot.buffer}
+        {:stream_append, %{text: snapshot.buffer}}
     end
   end
 
-  defp get_status_output_kind_and_content(snapshot, text) do
+  defp get_status_op_and_body(snapshot, text) do
     supports_edit = ChannelContext.channel_supports_edit?(snapshot.channel_id)
     status_msg_id = snapshot.meta[:status_msg_id]
 
     cond do
       supports_edit and status_msg_id != nil ->
-        {:edit, %{message_id: status_msg_id, text: text}, nil, nil}
+        {:stream_replace, %{message_id: status_msg_id, text: text}, nil, nil}
 
       true ->
         if supports_edit and is_nil(status_msg_id) do
           ref = make_ref()
-          {:text, text, self(), ref}
+          {:tool_status, %{text: text}, self(), ref}
         else
-          {:text, text, nil, nil}
+          {:tool_status, %{text: text}, nil, nil}
         end
     end
   end

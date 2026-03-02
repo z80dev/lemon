@@ -43,6 +43,20 @@ defmodule LemonChannels.Dispatcher do
   end
 
   @doc """
+  Dispatch a keepalive prompt intent with channel-specific action rendering.
+
+  This is the entry point for intents that carry interactive actions
+  (e.g. the watchdog keepalive prompt with "Keep Waiting" / "Stop Run" buttons).
+  The `body.actions` list is rendered into channel-specific markup
+  (e.g. Telegram inline keyboards) and placed in the payload's meta.
+  """
+  @spec dispatch_with_actions(OutputIntent.t()) :: :ok | {:error, term()}
+  def dispatch_with_actions(%OutputIntent{route: %ChannelRoute{}} = intent) do
+    payload = intent_to_payload_with_actions(intent)
+    deliver(payload)
+  end
+
+  @doc """
   Translates an `OutputIntent` into an `OutboundPayload`.
 
   This is exposed for testing and for callers that need the payload
@@ -68,6 +82,72 @@ defmodule LemonChannels.Dispatcher do
       notify_pid: intent.meta[:notify_pid],
       notify_ref: intent.meta[:notify_ref]
     )
+  end
+
+  @doc """
+  Translates a `:keepalive_prompt` intent into an `OutboundPayload`,
+  rendering channel-specific prompt actions (e.g. inline keyboard for
+  Telegram) from the intent body's `:actions` list.
+
+  Each action in the list should be a map with `:id` and `:label` keys.
+  The `:id` becomes the callback_data for Telegram inline keyboards.
+  """
+  @spec intent_to_payload_with_actions(OutputIntent.t()) :: OutboundPayload.t()
+  def intent_to_payload_with_actions(%OutputIntent{route: %ChannelRoute{} = route} = intent) do
+    {kind, content} = translate_op(intent.op, intent.body)
+    actions = Map.get(intent.body, :actions, [])
+    reply_markup = render_prompt_actions(route.channel_id, actions)
+
+    base_meta =
+      Map.drop(intent.meta, [:idempotency_key, :reply_to, :notify_pid, :notify_ref])
+
+    meta =
+      if reply_markup do
+        Map.put(base_meta, :reply_markup, reply_markup)
+      else
+        base_meta
+      end
+
+    struct!(OutboundPayload,
+      channel_id: route.channel_id,
+      account_id: route.account_id,
+      peer: %{
+        kind: route.peer_kind,
+        id: route.peer_id,
+        thread_id: route.thread_id
+      },
+      kind: kind,
+      content: content,
+      idempotency_key: intent.meta[:idempotency_key],
+      reply_to: intent.meta[:reply_to],
+      meta: meta,
+      notify_pid: intent.meta[:notify_pid],
+      notify_ref: intent.meta[:notify_ref]
+    )
+  end
+
+  # -- Channel-specific prompt action rendering --
+
+  @doc false
+  def render_prompt_actions(_channel_id, nil), do: nil
+  def render_prompt_actions(_channel_id, []), do: nil
+
+  def render_prompt_actions("telegram", actions) when is_list(actions) do
+    buttons =
+      Enum.map(actions, fn action ->
+        %{
+          "text" => to_string(action[:label] || action["label"] || ""),
+          "callback_data" => to_string(action[:id] || action["id"] || "")
+        }
+      end)
+
+    %{"inline_keyboard" => [buttons]}
+  end
+
+  def render_prompt_actions(_channel_id, actions) when is_list(actions) do
+    # For non-Telegram channels, store actions as structured data.
+    # The outbound adapter can decide how to render them.
+    %{"actions" => actions}
   end
 
   # -- Private: op -> {kind, content} translation --

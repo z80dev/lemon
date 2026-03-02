@@ -326,4 +326,181 @@ defmodule LemonChannels.DispatcherTest do
       assert payload.content == "hello"
     end
   end
+
+  # ---------------------------------------------------------------
+  # render_prompt_actions/2 — channel-specific action rendering
+  # ---------------------------------------------------------------
+
+  describe "render_prompt_actions/2" do
+    test "returns nil for nil actions" do
+      assert Dispatcher.render_prompt_actions("telegram", nil) == nil
+      assert Dispatcher.render_prompt_actions("discord", nil) == nil
+    end
+
+    test "returns nil for empty actions list" do
+      assert Dispatcher.render_prompt_actions("telegram", []) == nil
+      assert Dispatcher.render_prompt_actions("discord", []) == nil
+    end
+
+    test "renders Telegram inline keyboard from actions" do
+      actions = [
+        %{id: "lemon:idle:c:run_1", label: "Keep Waiting"},
+        %{id: "lemon:idle:k:run_1", label: "Stop Run"}
+      ]
+
+      result = Dispatcher.render_prompt_actions("telegram", actions)
+
+      assert %{"inline_keyboard" => [buttons]} = result
+      assert length(buttons) == 2
+
+      [keep_btn, stop_btn] = buttons
+      assert keep_btn == %{"text" => "Keep Waiting", "callback_data" => "lemon:idle:c:run_1"}
+      assert stop_btn == %{"text" => "Stop Run", "callback_data" => "lemon:idle:k:run_1"}
+    end
+
+    test "renders Telegram inline keyboard with string keys" do
+      actions = [
+        %{"id" => "cb_1", "label" => "Button 1"}
+      ]
+
+      result = Dispatcher.render_prompt_actions("telegram", actions)
+
+      assert %{"inline_keyboard" => [[btn]]} = result
+      assert btn == %{"text" => "Button 1", "callback_data" => "cb_1"}
+    end
+
+    test "renders structured actions for non-Telegram channels" do
+      actions = [
+        %{id: "action_1", label: "Do Thing"},
+        %{id: "action_2", label: "Other Thing"}
+      ]
+
+      result = Dispatcher.render_prompt_actions("discord", actions)
+      assert result == %{"actions" => actions}
+    end
+
+    test "renders structured actions for generic channels" do
+      actions = [%{id: "a1", label: "OK"}]
+
+      result = Dispatcher.render_prompt_actions("xmtp", actions)
+      assert result == %{"actions" => actions}
+    end
+  end
+
+  # ---------------------------------------------------------------
+  # intent_to_payload_with_actions/1 — keepalive prompt payloads
+  # ---------------------------------------------------------------
+
+  describe "intent_to_payload_with_actions/1" do
+    test "includes Telegram inline keyboard in payload meta" do
+      actions = [
+        %{id: "lemon:idle:c:run_abc", label: "Keep Waiting"},
+        %{id: "lemon:idle:k:run_abc", label: "Stop Run"}
+      ]
+
+      intent = %OutputIntent{
+        route: @route,
+        op: :keepalive_prompt,
+        body: %{text: "Still running...", actions: actions},
+        meta: %{
+          idempotency_key: "run_abc:watchdog:prompt:120000",
+          run_id: "run_abc"
+        }
+      }
+
+      payload = Dispatcher.intent_to_payload_with_actions(intent)
+
+      assert %OutboundPayload{} = payload
+      assert payload.kind == :text
+      assert payload.content == "Still running..."
+      assert payload.channel_id == "telegram"
+
+      # The Telegram inline keyboard should be in meta.reply_markup
+      assert %{"inline_keyboard" => [buttons]} = payload.meta[:reply_markup]
+      assert length(buttons) == 2
+    end
+
+    test "includes structured actions for non-Telegram channels" do
+      actions = [%{id: "act_1", label: "Continue"}]
+
+      intent = %OutputIntent{
+        route: @route_with_thread,
+        op: :keepalive_prompt,
+        body: %{text: "Prompt text", actions: actions},
+        meta: %{idempotency_key: "test:actions:1"}
+      }
+
+      payload = Dispatcher.intent_to_payload_with_actions(intent)
+
+      assert payload.channel_id == "discord"
+      assert payload.meta[:reply_markup] == %{"actions" => actions}
+    end
+
+    test "omits reply_markup when no actions provided" do
+      intent = %OutputIntent{
+        route: @route,
+        op: :keepalive_prompt,
+        body: %{text: "No actions here"},
+        meta: %{idempotency_key: "test:no-actions:1"}
+      }
+
+      payload = Dispatcher.intent_to_payload_with_actions(intent)
+
+      refute Map.has_key?(payload.meta, :reply_markup)
+    end
+
+    test "maps route and meta fields correctly" do
+      pid = self()
+      ref = make_ref()
+
+      intent = %OutputIntent{
+        route: @route_with_thread,
+        op: :keepalive_prompt,
+        body: %{text: "test", actions: [%{id: "a", label: "A"}]},
+        meta: %{
+          idempotency_key: "ik_actions",
+          reply_to: "msg_1",
+          notify_pid: pid,
+          notify_ref: ref,
+          run_id: "r_1"
+        }
+      }
+
+      payload = Dispatcher.intent_to_payload_with_actions(intent)
+
+      assert payload.idempotency_key == "ik_actions"
+      assert payload.reply_to == "msg_1"
+      assert payload.notify_pid == pid
+      assert payload.notify_ref == ref
+      assert payload.meta[:run_id] == "r_1"
+
+      # Reserved keys should not be in meta
+      refute Map.has_key?(payload.meta, :idempotency_key)
+      refute Map.has_key?(payload.meta, :reply_to)
+      refute Map.has_key?(payload.meta, :notify_pid)
+      refute Map.has_key?(payload.meta, :notify_ref)
+    end
+  end
+
+  # ---------------------------------------------------------------
+  # dispatch_with_actions/1 — delivery with action rendering
+  # ---------------------------------------------------------------
+
+  describe "dispatch_with_actions/1" do
+    test "returns :ok when Outbox is running" do
+      actions = [
+        %{id: "lemon:idle:c:run_x", label: "Keep Waiting"},
+        %{id: "lemon:idle:k:run_x", label: "Stop Run"}
+      ]
+
+      intent = %OutputIntent{
+        route: @route,
+        op: :keepalive_prompt,
+        body: %{text: "Watchdog prompt", actions: actions},
+        meta: %{idempotency_key: "dispatch-actions-#{System.unique_integer([:positive])}"}
+      }
+
+      assert :ok = Dispatcher.dispatch_with_actions(intent)
+    end
+  end
 end

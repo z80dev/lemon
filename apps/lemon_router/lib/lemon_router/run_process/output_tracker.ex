@@ -11,9 +11,9 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   require Logger
 
-  alias LemonCore.SessionKey
-  alias LemonChannels.OutboundPayload
-  alias LemonRouter.{ChannelAdapter, ChannelContext, ChannelsDelivery}
+  alias LemonCore.{ChannelRoute, OutputIntent, SessionKey}
+  alias LemonChannels.Dispatcher
+  alias LemonRouter.{ChannelAdapter, ChannelContext}
   alias LemonRouter.RunProcess.CompactionTrigger
 
   @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
@@ -222,12 +222,10 @@ defmodule LemonRouter.RunProcess.OutputTracker do
       |> Enum.reject(&(fanout_route_signature(&1) == primary_signature))
       |> Enum.with_index()
       |> Enum.each(fn {route, idx} ->
-        payload = fanout_payload(route, state, answer, idx + 1)
+        intent = fanout_intent(route, state, answer, idx + 1)
 
-        case ChannelsDelivery.enqueue(payload,
-               context: %{component: :run_process, phase: :fanout_final_output}
-             ) do
-          {:ok, _ref} ->
+        case Dispatcher.dispatch(intent) do
+          :ok ->
             :ok
 
           {:error, :duplicate} ->
@@ -357,19 +355,19 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     {route.channel_id, route.account_id, route.peer_kind, route.peer_id, route.thread_id}
   end
 
-  defp fanout_payload(route, state, answer, index) do
-    %OutboundPayload{
-      channel_id: route.channel_id,
-      account_id: route.account_id,
-      peer: %{
-        kind: route.peer_kind,
-        id: route.peer_id,
+  defp fanout_intent(route, state, answer, index) do
+    %OutputIntent{
+      route: %ChannelRoute{
+        channel_id: route.channel_id,
+        account_id: route.account_id,
+        peer_kind: route.peer_kind,
+        peer_id: route.peer_id,
         thread_id: route.thread_id
       },
-      kind: :text,
-      content: answer,
-      idempotency_key: "#{state.run_id}:fanout:#{index}",
+      op: :fanout_text,
+      body: %{text: answer},
       meta: %{
+        idempotency_key: "#{state.run_id}:fanout:#{index}",
         run_id: state.run_id,
         session_key: state.session_key,
         fanout: true,
