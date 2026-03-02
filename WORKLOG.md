@@ -30,7 +30,7 @@ Coordination file for the archfix.md implementation.
 | ARCH-010 | Core-owned output intent contract | MERGED | ARCH-001, ARCH-003 (done) |
 | ARCH-011 | Move delivery semantics into lemon_channels | MERGED | ARCH-010 |
 | ARCH-012 | Move Telegram state out of router | MERGED | ARCH-011 |
-| ARCH-013 | Canonicalize resume-token in lemon_core | IN_PROGRESS | ARCH-012 |
+| ARCH-013 | Canonicalize resume-token in lemon_core | MERGED | ARCH-012 |
 | ARCH-014 | Remove thin wrappers | BLOCKED | ARCH-013 |
 
 ## Wave 3 — Store ownership (depends on ARCH-012)
@@ -45,8 +45,8 @@ Coordination file for the archfix.md implementation.
 
 | Ticket | Description | Status | Depends On |
 |--------|-------------|--------|------------|
-| MOD-010 | Split Telegram.Transport | IN_PROGRESS | ARCH-011 |
-| MOD-011 | Split Webhook transport | IN_PROGRESS | ARCH-011 |
+| MOD-010 | Split Telegram.Transport | MERGED | ARCH-011 |
+| MOD-011 | Split Webhook transport | MERGED | ARCH-011 |
 | MOD-012 | Split CodingAgent.Session | BLOCKED | Wave 2 complete |
 
 ## Skipped
@@ -66,3 +66,5 @@ Coordination file for the archfix.md implementation.
 | Wave2 | worktree-agent-ac25e581 | ARCH-010 | No |
 | Wave2 | worktree-agent-a2e239c6 | ARCH-011 | No (fast-forward) |
 | Wave3 | worktree-agent-a1cf5edf | DATA-010 | No |
+
+| — | feature/pln-20260303-rate-limit-auto-resume-m3 | ARCH-013, MOD-010, MOD-011 | No |
