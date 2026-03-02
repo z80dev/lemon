@@ -434,6 +434,119 @@ defmodule CodingAgent.RunGraphTest do
     end
   end
 
+  describe "pause_for_limit/2" do
+    test "pauses a running run for rate limit" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+
+      pause_data = %{
+        pause_id: "rlp_test123",
+        provider: :anthropic,
+        retry_after_ms: 60_000,
+        reason: "rate_limit"
+      }
+
+      assert :ok = RunGraph.pause_for_limit(run_id, pause_data)
+
+      assert {:ok, record} = RunGraph.get(run_id)
+      assert record.status == :paused_for_limit
+      assert record.pause_data == pause_data
+      assert record.paused_at != nil
+    end
+
+    test "cannot pause a run that is not running" do
+      run_id = RunGraph.new_run(%{type: :task})
+      # Still queued, not running
+
+      assert {:error, :invalid_transition} =
+               RunGraph.pause_for_limit(run_id, %{provider: :anthropic})
+    end
+
+    test "cannot pause a completed run" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+      RunGraph.finish(run_id, %{result: "done"})
+
+      assert {:error, :invalid_transition} =
+               RunGraph.pause_for_limit(run_id, %{provider: :anthropic})
+    end
+  end
+
+  describe "resume_from_limit/1" do
+    test "resumes a paused run back to running" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+
+      pause_data = %{
+        pause_id: "rlp_test456",
+        provider: :openai,
+        retry_after_ms: 30_000
+      }
+
+      RunGraph.pause_for_limit(run_id, pause_data)
+      assert {:ok, %{status: :paused_for_limit}} = RunGraph.get(run_id)
+
+      assert :ok = RunGraph.resume_from_limit(run_id)
+
+      assert {:ok, record} = RunGraph.get(run_id)
+      assert record.status == :running
+      assert record.resumed_at != nil
+      assert record.pause_data == nil
+      assert record.paused_at == nil
+      assert length(record.pause_history) == 1
+      assert hd(record.pause_history) == pause_data
+    end
+
+    test "no-op when run is not paused_for_limit" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+
+      # Should not error, just no-op
+      assert :ok = RunGraph.resume_from_limit(run_id)
+      assert {:ok, %{status: :running}} = RunGraph.get(run_id)
+    end
+
+    test "can complete run after resuming" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+      RunGraph.pause_for_limit(run_id, %{provider: :anthropic})
+      RunGraph.resume_from_limit(run_id)
+
+      assert :ok = RunGraph.finish(run_id, %{result: "success after pause"})
+      assert {:ok, %{status: :completed}} = RunGraph.get(run_id)
+    end
+  end
+
+  describe "paused_for_limit in await" do
+    test "await does not consider paused_for_limit as terminal" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+      RunGraph.pause_for_limit(run_id, %{provider: :anthropic})
+
+      # This would timeout if paused_for_limit were terminal
+      assert {:error, :timeout, %{runs: [record]}} =
+               RunGraph.await([run_id], :wait_all, 50)
+
+      assert record.status == :paused_for_limit
+    end
+
+    test "await completes after run resumes and finishes" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+      RunGraph.pause_for_limit(run_id, %{provider: :anthropic})
+
+      # Resume and finish asynchronously
+      Task.start(fn ->
+        Process.sleep(50)
+        RunGraph.resume_from_limit(run_id)
+        RunGraph.finish(run_id, %{result: "done"})
+      end)
+
+      assert {:ok, %{runs: [record]}} = RunGraph.await([run_id], :wait_all, 500)
+      assert record.status == :completed
+    end
+  end
+
   describe "lifecycle" do
     test "full run lifecycle: queued -> running -> completed" do
       run_id = RunGraph.new_run(%{type: :task, description: "Full lifecycle"})
@@ -453,6 +566,27 @@ defmodule CodingAgent.RunGraphTest do
       assert {:ok, %{status: :completed} = record} = RunGraph.get(run_id)
       assert record.result == %{result: "success"}
       assert record.completed_at != nil
+    end
+
+    test "full run lifecycle with rate limit pause: queued -> running -> paused -> running -> completed" do
+      run_id = RunGraph.new_run(%{type: :task, description: "Lifecycle with pause"})
+
+      # queued -> running
+      RunGraph.mark_running(run_id)
+      assert {:ok, %{status: :running}} = RunGraph.get(run_id)
+
+      # running -> paused_for_limit
+      pause_data = %{provider: :anthropic, retry_after_ms: 60_000}
+      RunGraph.pause_for_limit(run_id, pause_data)
+      assert {:ok, %{status: :paused_for_limit, pause_data: ^pause_data}} = RunGraph.get(run_id)
+
+      # paused_for_limit -> running
+      RunGraph.resume_from_limit(run_id)
+      assert {:ok, %{status: :running, pause_history: [^pause_data]}} = RunGraph.get(run_id)
+
+      # running -> completed
+      RunGraph.finish(run_id, %{result: "success"})
+      assert {:ok, %{status: :completed}} = RunGraph.get(run_id)
     end
 
     test "full run lifecycle with parent-child" do

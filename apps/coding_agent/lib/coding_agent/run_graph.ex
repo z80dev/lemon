@@ -37,9 +37,11 @@ defmodule CodingAgent.RunGraph do
   @type run_id :: String.t()
 
   # Monotonic state ordering. Higher values can only transition forward.
+  # Note: paused_for_limit is at same level as running (transitions allowed both ways)
   @state_order %{
     queued: 0,
     running: 1,
+    paused_for_limit: 1,
     completed: 2,
     error: 2,
     killed: 2,
@@ -113,6 +115,41 @@ defmodule CodingAgent.RunGraph do
       |> Map.put(:status, :error)
       |> Map.put(:error, error)
       |> Map.put(:completed_at, System.system_time(:second))
+    end)
+  end
+
+  @doc """
+  Pause a run due to rate limit. Stores pause metadata for auto-resume.
+  """
+  @spec pause_for_limit(run_id(), map()) :: :ok | {:error, :invalid_transition | :not_found}
+  def pause_for_limit(run_id, pause_data) do
+    RunGraphServer.atomic_transition(run_id, :paused_for_limit, fn record ->
+      record
+      |> Map.put(:status, :paused_for_limit)
+      |> Map.put(:pause_data, pause_data)
+      |> Map.put(:paused_at, System.system_time(:second))
+    end)
+  end
+
+  @doc """
+  Resume a run from rate limit pause.
+  """
+  @spec resume_from_limit(run_id()) :: :ok | {:error, :invalid_transition | :not_found}
+  def resume_from_limit(run_id) do
+    # Special case: paused_for_limit -> running is allowed (same order level)
+    RunGraphServer.atomic_update(run_id, fn record ->
+      if record.status == :paused_for_limit do
+        record
+        |> Map.put(:status, :running)
+        |> Map.put(:resumed_at, System.system_time(:second))
+        |> Map.update(:pause_history, [], fn history ->
+          [Map.get(record, :pause_data, %{}) | history]
+        end)
+        |> Map.delete(:pause_data)
+        |> Map.delete(:paused_at)
+      else
+        record
+      end
     end)
   end
 
@@ -227,15 +264,32 @@ defmodule CodingAgent.RunGraph do
   end
 
   @doc """
-  Check whether a state transition is valid (monotonically forward).
+  Check whether a state transition is valid.
 
-  Returns `true` if `from` -> `to` is a valid forward transition.
+  Returns `true` if `from` -> `to` is a valid transition.
+  Most transitions must be monotonically forward, but some
+  bidirectional transitions are allowed (e.g., running <-> paused_for_limit).
   """
   @spec valid_transition?(atom(), atom()) :: boolean()
   def valid_transition?(from, to) do
-    from_order = Map.get(@state_order, normalize_status(from), -1)
-    to_order = Map.get(@state_order, normalize_status(to), -1)
-    to_order > from_order
+    from_status = normalize_status(from)
+    to_status = normalize_status(to)
+
+    # Allow bidirectional transitions between same-order states
+    from_order = Map.get(@state_order, from_status, -1)
+    to_order = Map.get(@state_order, to_status, -1)
+
+    cond do
+      # Same state - always valid (idempotent)
+      from_status == to_status -> true
+      # running <-> paused_for_limit is allowed bidirectionally
+      {from_status, to_status} == {:running, :paused_for_limit} -> true
+      {from_status, to_status} == {:paused_for_limit, :running} -> true
+      # Same order level (but not the special cases above) - not allowed
+      from_order == to_order -> false
+      # Different order - must be forward
+      true -> to_order > from_order
+    end
   end
 
   # Private Functions
@@ -300,6 +354,7 @@ defmodule CodingAgent.RunGraph do
 
   defp terminal_status?(record) do
     status = normalize_status(Map.get(record, :status, :unknown))
+    # paused_for_limit is NOT terminal - runs can resume from this state
     status in [:completed, :error, :lost, :killed, :cancelled, :unknown]
   end
 
@@ -314,6 +369,7 @@ defmodule CodingAgent.RunGraph do
       "killed" -> :killed
       "cancelled" -> :cancelled
       "running" -> :running
+      "paused_for_limit" -> :paused_for_limit
       "queued" -> :queued
       "unknown" -> :unknown
       _ -> :unknown
