@@ -237,6 +237,23 @@ defmodule CodingAgent.ParallelTest do
       assert results == [2, 4, 6]
     end
 
+    test "exits on per-task timeout" do
+      Process.flag(:trap_exit, true)
+
+      assert catch_exit(
+               Parallel.map_with_concurrency_limit(
+                 [1, 2, 3],
+                 2,
+                 fn item ->
+                   # Item 2 sleeps long enough to exceed the timeout
+                   if item == 2, do: Process.sleep(500)
+                   item
+                 end,
+                 timeout: 50
+               )
+             )
+    end
+
     test "accepts task_supervisor option" do
       {:ok, sup} = Task.Supervisor.start_link()
 

@@ -2,9 +2,9 @@ defmodule CodingAgent.Parallel do
   @moduledoc """
   Concurrency control utilities for task execution.
 
-  Provides a semaphore-based approach for limiting the number of concurrently
-  running tasks, and a `map_with_concurrency_limit` helper for executing a
-  batch of work items with bounded parallelism.
+  Provides a `Semaphore` GenServer for explicit acquire/release concurrency
+  control and a `map_with_concurrency_limit` helper for executing a batch of
+  work items with bounded parallelism backed by `Task.async_stream`.
   """
 
   defmodule Semaphore do
@@ -99,6 +99,9 @@ defmodule CodingAgent.Parallel do
   Maps over `items` with at most `max_concurrency` items executing `fun`
   concurrently.
 
+  Uses `Task.async_stream` under the hood for demand-driven scheduling
+  instead of spawning all tasks upfront.
+
   Returns a list of results in the same order as the input items.
 
   ## Options
@@ -122,32 +125,19 @@ defmodule CodingAgent.Parallel do
     timeout = Keyword.get(opts, :timeout, :infinity)
     task_supervisor = Keyword.get(opts, :task_supervisor)
 
-    {:ok, semaphore} = Semaphore.start_link(max_concurrency)
+    stream_opts = [max_concurrency: max_concurrency, timeout: timeout, ordered: true]
 
-    try do
-      tasks =
-        Enum.map(items, fn item ->
-          start_task(task_supervisor, fn ->
-            Semaphore.acquire(semaphore)
+    stream =
+      if task_supervisor do
+        Task.Supervisor.async_stream(task_supervisor, items, fun, stream_opts)
+      else
+        Task.async_stream(items, fun, stream_opts)
+      end
 
-            try do
-              fun.(item)
-            after
-              Semaphore.release(semaphore)
-            end
-          end)
-        end)
-
-      Task.await_many(tasks, timeout)
-    after
-      GenServer.stop(semaphore)
-    end
-  end
-
-  defp start_task(nil, fun), do: Task.async(fun)
-
-  defp start_task(supervisor, fun) do
-    Task.Supervisor.async(supervisor, fun)
+    Enum.map(stream, fn
+      {:ok, result} -> result
+      {:exit, reason} -> exit(reason)
+    end)
   end
 
   @doc """
