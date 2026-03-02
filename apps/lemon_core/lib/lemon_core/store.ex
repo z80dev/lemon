@@ -625,29 +625,6 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_cast({:append_introspection_event, event}, state) do
-    case normalize_introspection_event(event) do
-      {:ok, event} ->
-        key = {event.ts_ms, event.event_id}
-
-        case state.backend.put(state.backend_state, :introspection_log, key, event) do
-          {:ok, backend_state} ->
-            {:noreply, %{state | backend_state: backend_state}}
-
-          {:error, reason} ->
-            log_backend_error(:put, :introspection_log, key, reason)
-            {:noreply, state}
-
-          other ->
-            log_backend_unexpected(:put, :introspection_log, key, other)
-            {:noreply, state}
-        end
-
-      {:error, _reason} ->
-        {:noreply, state}
-    end
-  end
-
   def handle_call({:list_introspection_events, opts}, _from, state) do
     limit =
       normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
@@ -767,6 +744,29 @@ defmodule LemonCore.Store do
   end
 
   @impl true
+  def handle_cast({:append_introspection_event, event}, state) do
+    case normalize_introspection_event(event) do
+      {:ok, event} ->
+        key = {event.ts_ms, event.event_id}
+
+        case state.backend.put(state.backend_state, :introspection_log, key, event) do
+          {:ok, backend_state} ->
+            {:noreply, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:put, :introspection_log, key, reason)
+            {:noreply, state}
+
+          other ->
+            log_backend_unexpected(:put, :introspection_log, key, other)
+            {:noreply, state}
+        end
+
+      {:error, _reason} ->
+        {:noreply, state}
+    end
+  end
+
   def handle_cast({:put_chat_state, scope, value}, state) do
     # Calculate expires_at based on TTL
     now = System.system_time(:millisecond)
