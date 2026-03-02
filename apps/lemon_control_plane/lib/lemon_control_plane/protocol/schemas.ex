@@ -804,9 +804,26 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
   @doc """
   Get schema for a method.
+
+  Checks the static `@schemas` map first, then falls back to auto-discovered
+  schemas from modules that `use LemonControlPlane.Method`.
   """
   @spec get(String.t()) :: map() | nil
-  def get(method), do: Map.get(@schemas, method)
+  def get(method) do
+    case Map.get(@schemas, method) do
+      nil -> get_discovered_schema(method)
+      schema -> schema
+    end
+  end
+
+  defp get_discovered_schema(method) do
+    LemonControlPlane.Method.discover_methods()
+    |> Enum.find_value(fn {name, mod} ->
+      if name == method and LemonControlPlane.Method.has_macro_metadata?(mod) do
+        mod.__schema__()
+      end
+    end)
+  end
 
   @doc """
   Validate params against a method's schema.

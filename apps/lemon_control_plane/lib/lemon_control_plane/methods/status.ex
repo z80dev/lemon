@@ -36,13 +36,10 @@ defmodule LemonControlPlane.Methods.Status do
       }
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "status"
-
-  @impl true
-  def scopes, do: [:read]
+  use LemonControlPlane.Method,
+    name: "status",
+    scopes: [:read],
+    schema: %{optional: %{}}
 
   @impl true
   def handle(_params, _ctx) do

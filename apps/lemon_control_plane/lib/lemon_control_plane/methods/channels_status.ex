@@ -5,13 +5,10 @@ defmodule LemonControlPlane.Methods.ChannelsStatus do
   Returns the status of all configured channel adapters.
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "channels.status"
-
-  @impl true
-  def scopes, do: [:read]
+  use LemonControlPlane.Method,
+    name: "channels.status",
+    scopes: [:read],
+    schema: %{optional: %{}}
 
   @impl true
   def handle(_params, _ctx) do

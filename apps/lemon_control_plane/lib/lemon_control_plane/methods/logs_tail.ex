@@ -5,13 +5,15 @@ defmodule LemonControlPlane.Methods.LogsTail do
   Returns recent log entries from the system.
   """
 
-  @behaviour LemonControlPlane.Method
-
-  @impl true
-  def name, do: "logs.tail"
-
-  @impl true
-  def scopes, do: [:read]
+  use LemonControlPlane.Method,
+    name: "logs.tail",
+    scopes: [:read],
+    schema: %{
+      optional: %{
+        "lines" => :integer,
+        "filter" => :string
+      }
+    }
 
   @impl true
   def handle(params, _ctx) do
