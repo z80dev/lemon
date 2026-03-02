@@ -22,4 +22,4 @@ config :lemon_games, :autoplay,
   enabled: true,
   interval_ms: 15_000,
   max_active_matches: 5,
-  game_types: ["rock_paper_scissors", "connect4"]
+  game_types: ["rock_paper_scissors", "connect4", "tic_tac_toe", "battleship"]

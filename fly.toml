@@ -1,0 +1,30 @@
+app = "games-platform-zeebot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MIX_ENV = "prod"
+  PHX_HOST = "games.zeebot.xyz"
+  PORT = "8080"
+  DATABASE_PATH = "/data/games.db"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+
+[[mounts]]
+  source = "games_data"
+  destination = "/data"
