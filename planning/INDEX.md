@@ -34,7 +34,7 @@ These entries were already completed before the `planning/` workflow was created
 |---|---|---|---|---|---|---|---|
 | [PLN-20260223-secrets-store-preferred](plans/PLN-20260223-secrets-store-preferred.md) | Encrypted Secrets Store as Preferred Secret Access Path | `in_progress` | `janitor` | `feature/pln-20260223-secrets-store-preferred` | `pending` | ROADMAP.md "Now" | 2026-03-02 |
 | [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `in_progress` | `janitor` | `feature/pln-20260302-secrets-store-preferred-path` | `pending` | ROADMAP.md | 2026-03-02 |
-| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `ready_to_land` | `janitor` | `feature/pln-20260303-rate-limit-auto-resume-m3` | `pending` | — | 2026-03-05 |
+| [PLN-20260306-rate-limit-self-healing](plans/PLN-20260306-rate-limit-self-healing.md) | Rate-Limit Session Self-Healing | `planned` | `janitor` | `feature/pln-20260306-rate-limit-self-healing` | `pending` | — | 2026-03-06 |
 
 ## Ready for Review
 
@@ -58,6 +58,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `62833edb` | Rate limit pause tracking, ResumeScheduler, RunGraph integration, 69 tests | 2026-03-05 |
 | [PLN-20260302-tool-call-name-normalization](plans/PLN-20260302-tool-call-name-normalization.md) | Normalize Whitespace-Padded Tool Call Names | `6f3d3ace` | Tool name normalization + telemetry in agent_core and coding_agent | 2026-03-02 |
 | [PLN-20260301-mcp-tool-integration](plans/PLN-20260301-mcp-tool-integration.md) | MCP Tool Integration | `d29fd4b7` | MCP client/server, tool registry integration, 54+ tests | 2026-03-01 |
 | [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `61e6c71e` | Merged with TicTacToe addition; 71 tests pass | 2026-03-01 |
