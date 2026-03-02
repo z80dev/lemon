@@ -1,5 +1,39 @@
 # JANITOR.md - Implementation Agent Work Log
 
+## 2026-03-02
+
+### Secrets Store Preferred - Plan Complete
+**Plan:** PLN-20260223-secrets-store-preferred  
+**Status:** ready_to_land
+
+Completed the secrets store preferred migration plan. The encrypted secrets store is now the canonical method for secret access across the Lemon umbrella.
+
+**Key Finding:** Most of the implementation was already complete - all AI providers, channel adapters, and tools were already using `Secrets.fetch_value/1`.
+
+**Changes:**
+- `apps/market_intel/lib/market_intel/secrets.ex`
+  - Fixed `put/2` bug: was calling non-existent `persist/2`, now correctly uses `set/3`
+  - All 18 secrets tests pass
+
+**Documentation:**
+- Created `docs/security/secrets-migration-guide.md`
+  - Step-by-step migration instructions
+  - Supported secret names reference
+  - Troubleshooting guide
+- Updated `README.md` with `mix lemon.secrets.check` and `mix lemon.secrets.import_env`
+- Added migration guide to `docs/catalog.exs`
+
+**Artifacts:**
+- Review: `planning/reviews/RVW-PLN-20260223-secrets-store-preferred.md`
+- Merge: `planning/merges/MRG-PLN-20260223-secrets-store-preferred.md`
+
+**Verification:**
+- 372 tests pass (lemon_core + market_intel)
+- No breaking changes - env fallback preserved
+- All milestones complete (M1-M5)
+
+---
+
 ## 2026-02-24
 
 ### Completed Work
