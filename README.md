@@ -533,7 +533,7 @@ lemon/
 │   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (14 apps)
+├── apps/                        # Umbrella applications (16 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
@@ -596,6 +596,11 @@ lemon/
 │   │       ├── bus.ex           # Phoenix.PubSub wrapper for events
 │   │       ├── event.ex         # Canonical event envelope
 │   │       ├── store.ex         # Persistent key-value storage (ETS/JSONL/SQLite backends)
+│   │       ├── run_store.ex     # Typed store for run state (wraps Store with telemetry)
+│   │       ├── session_store.ex # Typed store for session/chat state (wraps Store with telemetry)
+│   │       ├── progress_store.ex # Typed store for progress/compaction state (wraps Store with telemetry)
+│   │       ├── output_intent.ex # Channel-neutral output intent (what to deliver, not how)
+│   │       ├── background_task.ex # Centralized supervised background task spawning
 │   │       ├── secrets.ex       # Encrypted secrets store
 │   │       ├── id.ex            # Prefixed UUID generation
 │   │       ├── idempotency.ex   # At-most-once execution
@@ -633,6 +638,8 @@ lemon/
 │   │
 │   ├── lemon_channels/          # Pluggable channel adapters
 │   │   └── lib/lemon_channels/
+│   │       ├── dispatcher.ex    # OutputIntent → channel payload bridge
+│   │       ├── channel_state.ex # Abstract API for channel-specific persistent state
 │   │       ├── plugin.ex        # Channel adapter behaviour
 │   │       ├── registry.ex      # Adapter registration
 │   │       ├── outbox.ex        # Message delivery queue
@@ -659,6 +666,7 @@ lemon/
 │   │
 │   ├── lemon_control_plane/     # HTTP/WebSocket control server
 │   │   └── lib/lemon_control_plane/
+│   │       ├── method.ex        # Self-describing Method macro (auto-discovery, schema, scopes)
 │   │       ├── http/router.ex   # HTTP routes (/healthz, /ws)
 │   │       ├── ws/connection.ex # WebSocket protocol handler
 │   │       ├── presence.ex      # Connection tracking
@@ -690,6 +698,15 @@ lemon/
 │   │       ├── installer.ex     # Install/update/uninstall
 │   │       └── tools/
 │   │           └── read_skill.ex # Agent tool for skill access
+│   │
+│   ├── lemon_mcp/               # MCP (Model Context Protocol) client/server
+│   │   └── lib/lemon_mcp/
+│   │       ├── client.ex        # GenServer client for MCP connections
+│   │       ├── server.ex        # MCP server GenServer
+│   │       ├── tool_adapter.ex  # Adapter exposing CodingAgent tools via MCP
+│   │       └── transport/       # Stdio, HTTP transports
+│   │
+│   ├── lemon_services/          # Long-running external process management (OTP-based, standalone)
 │   │
 │   ├── lemon_web/               # Phoenix web interface
 │   │   └── lib/lemon_web/
@@ -737,6 +754,8 @@ lemon/
 ├── docs/                        # Documentation
 │   ├── README.md                # Docs index
 │   ├── beam_agents.md           # BEAM architecture
+│   ├── architecture_boundaries.md # Dependency boundaries and enforcement
+│   ├── state_ownership.md       # Store table ownership map and typed stores
 │   ├── extensions.md            # Extension system
 │   ├── skills.md                # Skills system
 │   ├── telemetry.md             # Observability

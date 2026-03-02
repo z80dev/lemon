@@ -8,12 +8,18 @@ This document describes the BEAM/OTP architecture for agent management in the Le
 2. [Supervision Tree](#supervision-tree)
 3. [Event Flow](#event-flow)
 4. [Telemetry Events](#telemetry-events)
-5. [Baseline Documentation (Phase 0)](#baseline-documentation-phase-0)
+5. [Architecture Patterns (Archfix Waves 1-4)](#architecture-patterns-archfix-waves-1-4)
+   - [OutputIntent and Dispatcher](#outputintent-and-dispatcher)
+   - [ChannelState API](#channelstate-api)
+   - [Typed Stores](#typed-stores)
+   - [BackgroundTask](#backgroundtask)
+   - [Self-Describing Method Macro](#self-describing-method-macro)
+6. [Baseline Documentation (Phase 0)](#baseline-documentation-phase-0)
    - [Current Tool Execution Path](#current-tool-execution-path)
    - [Failure Handling](#failure-handling)
    - [Session Event Fan-Out](#session-event-fan-out)
    - [Current Supervision Structure](#current-supervision-structure)
-6. [Regression Testing Checklist](#regression-testing-checklist)
+7. [Regression Testing Checklist](#regression-testing-checklist)
 
 ---
 

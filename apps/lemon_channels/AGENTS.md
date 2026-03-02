@@ -425,7 +425,7 @@ cwd     = LemonChannels.BindingResolver.resolve_cwd(scope)
 mode    = LemonChannels.BindingResolver.resolve_queue_mode(scope)
 ```
 
-Bindings from `GatewayConfig.get(:bindings)`. Projects from `GatewayConfig.get(:projects)`.
+Bindings from `LemonCore.GatewayConfig.get(:bindings)`. Projects from `LemonCore.GatewayConfig.get(:projects)`.
 
 ## Engine Registry
 

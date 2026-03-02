@@ -171,6 +171,44 @@ Lemon includes built-in harness primitives to support multi-step, long-lived imp
 - `CodingAgent.Tools.TodoStore` tracks dependency-aware todo progression and normalizes mixed key shapes (atom-key and JSON string-key todo maps).
 - `CodingAgent.Checkpoint` snapshots/restores long-running session state and provides aggregate stats (`stats/1`) used by control-plane introspection.
 
+### Rate Limit Auto-Resume
+
+When AI provider rate limits are hit, runs can automatically pause and resume instead of failing:
+
+- `CodingAgent.RateLimitPause` - ETS-backed pause tracking with retry-after timing
+- `CodingAgent.ResumeScheduler` - GenServer that periodically checks and resumes paused runs
+- `CodingAgent.RunGraph` - `pause_for_limit/2` and `resume_from_limit/1` state transitions
+
+**Configuration:**
+```elixir
+config :coding_agent, :rate_limit_auto_resume,
+  enabled: true,
+  default_retry_after_ms: 60_000,
+  max_retry_attempts: 3
+
+config :coding_agent, :rate_limit_resume,
+  enabled: true,
+  check_interval_ms: 30_000,
+  max_concurrent_resumes: 5
+```
+
+**Usage:**
+```elixir
+# Create a pause when rate limit is detected
+{:ok, pause} = CodingAgent.RateLimitPause.create(
+  session_id, :anthropic, 60_000
+)
+
+# Check if ready to resume
+CodingAgent.RateLimitPause.ready_to_resume?(pause.id)
+
+# The ResumeScheduler automatically resumes when ready
+# Or manually trigger:
+CodingAgent.ResumeScheduler.resume_pause(pause.id)
+```
+
+See `docs/rate_limit_auto_resume.md` for full documentation.
+
 ## Tool System Architecture
 
 ### Adding a New Tool

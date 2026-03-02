@@ -23,6 +23,7 @@
 | Build cron jobs or automation | `apps/lemon_automation/` |
 | Manage long-running external processes | `apps/lemon_services/` |
 | Work on the web UI | `apps/lemon_web/` |
+| Expose tools or integrate via MCP (Model Context Protocol) | `apps/lemon_mcp/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
 | Market data ingestion | `apps/market_intel/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
@@ -143,12 +144,13 @@ apps/
 ├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
-├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
-├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
-├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
+├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP), Dispatcher (intent→payload), ChannelState (abstract Telegram state API)
+├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods, self-describing Method macro
+├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus, OutputIntent, BackgroundTask, typed stores (RunStore, SessionStore, ProgressStore)
 ├── lemon_games/         # Agent-vs-agent game platform (RPS, Connect4, event-sourced matches)
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
-├── lemon_router/        # Message routing, agent directory, run orchestration
+├── lemon_mcp/           # MCP (Model Context Protocol) client/server, tool adapter for exposing CodingAgent tools
+├── lemon_router/        # Message routing, agent directory, run orchestration, emits OutputIntent
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
 ├── lemon_skills/        # Skill registry, discovery, installation
 ├── lemon_web/           # Phoenix LiveView web interface
@@ -266,7 +268,7 @@ lemon_channels ───────→ lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
-lemon_games ──────────→ lemon_core
+lemon_mcp ────────────→ agent_core, coding_agent
 lemon_web ────────────→ lemon_core, lemon_games, lemon_router
 market_intel ─────────→ lemon_core, agent_core, lemon_channels*
 lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
@@ -439,6 +441,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_games | `apps/lemon_games/AGENTS.md` |
 | lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
+| lemon_mcp | `apps/lemon_mcp/AGENTS.md` |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
@@ -450,4 +453,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-02-27* (full documentation refresh — all app README.md and AGENTS.md files rewritten)
+*Last updated: 2026-03-02* (archfix wave 1-4: OutputIntent/Dispatcher, ChannelState, typed stores, BackgroundTask, Method macro, lemon_mcp, module splits)

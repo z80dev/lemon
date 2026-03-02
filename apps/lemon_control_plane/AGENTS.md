@@ -171,6 +171,18 @@ alias LemonControlPlane.Protocol.Errors
 | `[:invoke, :event]` | Node-only operations: `node.invoke.result`, `node.event`, `skills.bins` |
 | `[:control]` | Device-only operations |
 
+### Typed Store Access
+
+Several methods access run and session data through typed store modules instead of raw `LemonCore.Store` calls. These typed stores provide structured query APIs over the underlying ETS backend:
+
+| Typed Store | Methods Using It | Key Functions |
+|-------------|-----------------|---------------|
+| `LemonCore.RunStore` | `SessionDetail`, `RunGraphGet`, `RunIntrospectionList`, `CronRuns`, `AgentWait`, `SessionsPreview`, `ChatHistory` | `get/1`, `get_history/2` |
+| `LemonCore.SessionStore` | `SessionsReset` | Session lifecycle operations |
+| `LemonCore.ProgressStore` | (progress-related methods) | Progress tracking queries |
+
+When writing new methods that need run or session data, prefer using the typed store modules over direct `LemonCore.Store` access.
+
 ## API Method Reference
 
 ### System / Utility
