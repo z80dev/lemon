@@ -34,7 +34,7 @@ These entries were already completed before the `planning/` workflow was created
 |---|---|---|---|---|---|---|---|
 | [PLN-20260223-secrets-store-preferred](plans/PLN-20260223-secrets-store-preferred.md) | Encrypted Secrets Store as Preferred Secret Access Path | `in_progress` | `janitor` | `feature/pln-20260223-secrets-store-preferred` | `pending` | ROADMAP.md "Now" | 2026-03-02 |
 | [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `in_progress` | `janitor` | `feature/pln-20260302-secrets-store-preferred-path` | `pending` | ROADMAP.md | 2026-03-02 |
-| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `in_progress` | `janitor` | `feature/pln-20260303-rate-limit-auto-resume` | `pending` | — | 2026-03-03 |
+| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `in_progress` | `janitor` | `feature/pln-20260303-rate-limit-auto-resume-m3` | `pending` | — | 2026-03-03 |
 
 ## Ready for Review
 
