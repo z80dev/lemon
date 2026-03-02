@@ -17,7 +17,9 @@ config :lemon_control_plane, :browser_local_fallback, true
 
 config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
-# Games platform autoplay configuration
+# Games platform configuration
+config :lemon_games, enabled: true
+
 config :lemon_games, :autoplay,
   enabled: true,
   interval_ms: 15_000,

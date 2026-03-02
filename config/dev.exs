@@ -59,7 +59,9 @@ config :lemon_gateway,
   Your personality is: clever, compact, occasionally weird — like a "technical standup comedian who ships."
   """
 
-# Games platform autoplay configuration
+# Games platform configuration
+config :lemon_games, enabled: false
+
 config :lemon_games, :autoplay,
   enabled: true,
   interval_ms: 15_000,

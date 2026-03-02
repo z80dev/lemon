@@ -5,13 +5,19 @@ defmodule LemonGames.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      LemonGames.Matches.DeadlineSweeper
-      | maybe_autoplay_children()
-    ]
+    children =
+      if enabled?() do
+        [LemonGames.Matches.DeadlineSweeper | maybe_autoplay_children()]
+      else
+        []
+      end
 
     opts = [strategy: :one_for_one, name: LemonGames.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp enabled? do
+    Application.get_env(:lemon_games, :enabled, false)
   end
 
   defp maybe_autoplay_children do

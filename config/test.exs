@@ -58,6 +58,9 @@ config :lemon_gateway, :telegram, nil
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
 
+# Enable games features so DeadlineSweeper and match tests work.
+config :lemon_games, enabled: true
+
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],
   secret_key_base:
