@@ -143,10 +143,6 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260302-pi-skill-auto-discovery](ideas/IDEA-20260302-pi-skill-auto-discovery.md) | Auto-Discover Skills in .agents Paths by Default | pi | `completed` | S | H | **Already implemented** - Lemon has skill auto-discovery parity |
 | [IDEA-20260302-openclaw-mistral-provider-support](ideas/IDEA-20260302-openclaw-mistral-provider-support.md) | Full Mistral AI Provider Support | openclaw | `proposed` | M | M | **Investigate** - Add Mistral as a provider option |
 | [IDEA-20260302-community-ai-agent-production-readiness](ideas/IDEA-20260302-community-ai-agent-production-readiness.md) | AI Agent Production Readiness - Context Windows & Operational Awareness | community | `proposed` | L | H | **Proceed** - Address production deployment blockers |
-| [IDEA-20260302-ironclaw-fulljob-routine-mode](ideas/IDEA-20260302-ironclaw-fulljob-routine-mode.md) | FullJob Routine Mode with Scheduler Dispatch | ironclaw | `proposed` | M | H | **Investigate** - Scheduled job execution and channel-first prompts |
-| [IDEA-20260302-pi-skill-auto-discovery](ideas/IDEA-20260302-pi-skill-auto-discovery.md) | Auto-Discover Skills in .agents Paths by Default | pi | `completed` | S | H | **Already implemented** - Lemon has skill auto-discovery parity |
-| [IDEA-20260302-openclaw-mistral-provider-support](ideas/IDEA-20260302-openclaw-mistral-provider-support.md) | Full Mistral AI Provider Support | openclaw | `proposed` | M | M | **Investigate** - Add Mistral as a provider option |
-| [IDEA-20260302-community-ai-agent-production-readiness](ideas/IDEA-20260302-community-ai-agent-production-readiness.md) | AI Agent Production Readiness - Context Windows & Operational Awareness | community | `proposed` | L | H | **Proceed** - Address production deployment blockers |
 
 ### Summary
 
@@ -235,23 +231,3 @@ New community/industry signals captured:
 
 - [PLAN_TEMPLATE.md](./templates/PLAN_TEMPLATE.md)
 - [IDEA_TEMPLATE.md](./templates/IDEA_TEMPLATE.md) (create when first idea promoted to plan)
-
-
-### Research Addendum (2026-03-02)
-
-New upstream deltas captured from inspiration research:
-- **IronClaw v0.11.0**: FullJob routine mode with scheduler dispatch (commit 04d3b00) - scheduled job execution pattern
-- **IronClaw v0.11.0**: Hot-activate WASM channels with channel-first prompts (commit ea57447) - dynamic channel activation
-- **Pi v0.54.0**: Auto-discover skills in .agents paths by default (commit 39cbf47e) - **Lemon already has parity**
-- **OpenClaw**: Full Mistral AI provider support (commit d92ba4f8a) - adds Mistral as first-class provider
-
-New community/industry signals captured:
-- **Production readiness gap**: Industry analysis shows AI agents lack context window awareness, operational awareness (OS/environment), and produce "agentic slop"
-- **Multi-agent orchestration**: OpenAI Agents SDK and community converging on structured output-based orchestration patterns
-- **OpenClaw vs Claude Code**: Community views OpenClaw as "Swiss Army knife" vs Claude Code "surgical scalpel" - different use cases
-
-**New Idea Artifacts Created:**
-1. `IDEA-20260302-ironclaw-fulljob-routine-mode.md` - Scheduled job execution patterns
-2. `IDEA-20260302-pi-skill-auto-discovery.md` - Skill discovery parity confirmation
-3. `IDEA-20260302-openclaw-mistral-provider-support.md` - Mistral provider evaluation
-4. `IDEA-20260302-community-ai-agent-production-readiness.md` - Production readiness improvements
