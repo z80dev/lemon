@@ -106,7 +106,16 @@ defmodule LemonGateway.Scheduler do
         thread_key: inspect(thread_key)
       }, run_id: job.run_id, session_key: job.session_key, engine: "lemon", provenance: :direct)
 
-    :ok = enqueue_job(thread_key, job)
+    case enqueue_job(thread_key, job) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "Scheduler: submit failed for run_id=#{inspect(job.run_id)}, " <>
+            "thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+        )
+    end
 
     {:noreply, state}
   end
@@ -595,7 +604,7 @@ defmodule LemonGateway.Scheduler do
                       "Scheduler: second enqueue attempt failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
                     )
 
-                    normalize_enqueue(err)
+                    handle_enqueue_failure(err, thread_key, job)
                 end
 
               {:error, reason} = err ->
@@ -603,7 +612,7 @@ defmodule LemonGateway.Scheduler do
                   "Scheduler: failed to recreate worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
                 )
 
-                normalize_enqueue(err)
+                handle_enqueue_failure(err, thread_key, job)
             end
 
           {:error, reason} = err ->
@@ -611,7 +620,7 @@ defmodule LemonGateway.Scheduler do
               "Scheduler: enqueue failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
             )
 
-            normalize_enqueue(err)
+            handle_enqueue_failure(err, thread_key, job)
         end
 
       {:error, reason} = err ->
@@ -619,7 +628,7 @@ defmodule LemonGateway.Scheduler do
           "Scheduler: failed to ensure worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
         )
 
-        normalize_enqueue(err)
+        handle_enqueue_failure(err, thread_key, job)
     end
   end
 
@@ -690,7 +699,28 @@ defmodule LemonGateway.Scheduler do
     end
   end
 
-  defp normalize_enqueue(_result), do: :ok
+  # Dead-letter handler: emits telemetry and logs when a job cannot be enqueued.
+  # Returns the error tuple so callers can distinguish success from failure.
+  defp handle_enqueue_failure({:error, reason} = err, thread_key, job) do
+    run_id = if is_map(job), do: Map.get(job, :run_id), else: nil
+
+    Logger.error(
+      "Scheduler dead-letter: job dropped for thread_key=#{inspect(thread_key)}, " <>
+        "run_id=#{inspect(run_id)}, reason=#{inspect(reason)}"
+    )
+
+    :telemetry.execute(
+      [:lemon, :gateway, :scheduler, :enqueue_failure],
+      %{count: 1},
+      %{
+        thread_key: thread_key,
+        run_id: run_id,
+        reason: reason
+      }
+    )
+
+    err
+  end
 
   defp slot_request_times(state), do: Map.get(state, :slot_request_times, %{})
 

@@ -2282,6 +2282,240 @@ defmodule LemonGateway.SchedulerTest do
     end
   end
 
+  describe "enqueue failure handling (PERF-012)" do
+    setup do
+      # Ensure ThreadRegistry is available
+      if is_nil(Process.whereis(Elixir.LemonGateway.ThreadRegistry)) do
+        {:ok, _} =
+          start_supervised({Registry, keys: :unique, name: Elixir.LemonGateway.ThreadRegistry})
+      end
+
+      # Ensure ThreadWorkerSupervisor is available (typically already started
+      # by the application, but ensured here for isolated test environments).
+      if is_nil(Process.whereis(Elixir.LemonGateway.ThreadWorkerSupervisor)) do
+        {:ok, _} = start_supervised(Elixir.LemonGateway.ThreadWorkerSupervisor)
+      end
+
+      # Attach telemetry handler to capture enqueue_failure events
+      test_pid = self()
+      handler_id = "test-enqueue-failure-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:lemon, :gateway, :scheduler, :enqueue_failure],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, %{handler_id: handler_id}}
+    end
+
+    # Helper: temporarily unregister the ThreadWorkerSupervisor name so that
+    # start_worker_with_timeout's Task sees :noproc when calling
+    # DynamicSupervisor.start_child.  We trap exits to prevent the linked
+    # Task from killing the test process.
+    defp with_failing_worker_startup(fun) do
+      sup_pid = Process.whereis(Elixir.LemonGateway.ThreadWorkerSupervisor)
+
+      # Unregister the name so DynamicSupervisor.start_child sees :noproc
+      if sup_pid do
+        Process.unregister(Elixir.LemonGateway.ThreadWorkerSupervisor)
+      end
+
+      old_trap = Process.flag(:trap_exit, true)
+
+      try do
+        fun.()
+      after
+        Process.flag(:trap_exit, old_trap)
+
+        # Drain EXIT messages from linked Task crashes
+        drain_exits()
+
+        # Re-register the supervisor under its name so other tests work
+        if sup_pid && Process.alive?(sup_pid) do
+          try do
+            Process.register(sup_pid, Elixir.LemonGateway.ThreadWorkerSupervisor)
+          rescue
+            ArgumentError -> :already_registered
+          end
+        end
+      end
+    end
+
+    defp drain_exits do
+      receive do
+        {:EXIT, _, _} -> drain_exits()
+      after
+        50 -> :ok
+      end
+    end
+
+    test "enqueue failure returns {:error, reason} instead of :ok" do
+      session_key = "enqueue_fail_test:#{System.unique_integer([:positive])}"
+      job = make_job(session_key: session_key)
+
+      state = %{
+        max: 2,
+        in_flight: %{},
+        waitq: :queue.new(),
+        monitors: %{},
+        worker_counts: %{}
+      }
+
+      with_failing_worker_startup(fn ->
+        # The handle_cast should not crash even though enqueue fails
+        {:noreply, _new_state} = Scheduler.handle_cast({:submit, job}, state)
+      end)
+
+      # Verify telemetry was emitted for the failure
+      assert_receive {:telemetry_event, [:lemon, :gateway, :scheduler, :enqueue_failure],
+                       %{count: 1}, metadata},
+                     2_000
+
+      assert metadata.thread_key == {:session, session_key}
+      assert metadata.reason != nil
+    end
+
+    test "telemetry event includes thread_key, run_id, and reason metadata" do
+      session_key = "telemetry_meta_test:#{System.unique_integer([:positive])}"
+      job = make_job(session_key: session_key)
+
+      state = %{
+        max: 2,
+        in_flight: %{},
+        waitq: :queue.new(),
+        monitors: %{},
+        worker_counts: %{}
+      }
+
+      with_failing_worker_startup(fn ->
+        {:noreply, _} = Scheduler.handle_cast({:submit, job}, state)
+      end)
+
+      assert_receive {:telemetry_event, [:lemon, :gateway, :scheduler, :enqueue_failure],
+                       measurements, metadata},
+                     2_000
+
+      # Verify measurements
+      assert measurements == %{count: 1}
+
+      # Verify all required metadata keys
+      assert Map.has_key?(metadata, :thread_key)
+      assert Map.has_key?(metadata, :run_id)
+      assert Map.has_key?(metadata, :reason)
+      assert metadata.thread_key == {:session, session_key}
+    end
+
+    test "successful enqueue does not emit failure telemetry" do
+      session_key = "success_no_telemetry:#{System.unique_integer([:positive])}"
+      thread_key = {:session, session_key}
+
+      # Register a live worker in the registry so enqueue succeeds
+      {:ok, worker_pid} =
+        start_supervised(
+          {BlockingEnqueueWorker, thread_key: thread_key, notify_pid: self(), delay_ms: 10}
+        )
+
+      assert is_pid(worker_pid)
+
+      job = make_job(session_key: session_key)
+
+      state = %{
+        max: 2,
+        in_flight: %{},
+        waitq: :queue.new(),
+        monitors: %{},
+        worker_counts: %{}
+      }
+
+      {:noreply, _} = Scheduler.handle_cast({:submit, job}, state)
+
+      # The enqueue should succeed and reach the worker
+      assert_receive {:blocking_worker_enqueue_cast, %Job{}}, 1_000
+
+      # No failure telemetry should be emitted
+      refute_receive {:telemetry_event, [:lemon, :gateway, :scheduler, :enqueue_failure], _, _},
+                     200
+    end
+
+    test "dead-letter logging occurs on enqueue failure" do
+      session_key = "dead_letter_test:#{System.unique_integer([:positive])}"
+      job = make_job(session_key: session_key)
+
+      state = %{
+        max: 2,
+        in_flight: %{},
+        waitq: :queue.new(),
+        monitors: %{},
+        worker_counts: %{}
+      }
+
+      # Capture log output to verify dead-letter logging
+      log_output =
+        ExUnit.CaptureLog.capture_log(fn ->
+          with_failing_worker_startup(fn ->
+            {:noreply, _} = Scheduler.handle_cast({:submit, job}, state)
+          end)
+
+          # Give time for async Task to complete and log
+          Process.sleep(200)
+        end)
+
+      assert log_output =~ "dead-letter"
+      assert log_output =~ "job dropped"
+      assert log_output =~ session_key
+    end
+
+    test "callers can distinguish success from failure" do
+      # Test 1: Success path - worker exists and accepts the job
+      success_session = "distinguish_success:#{System.unique_integer([:positive])}"
+      success_thread_key = {:session, success_session}
+
+      {:ok, _worker_pid} =
+        start_supervised(
+          {BlockingEnqueueWorker,
+           thread_key: success_thread_key, notify_pid: self(), delay_ms: 10}
+        )
+
+      success_job = make_job(session_key: success_session)
+
+      state = %{
+        max: 2,
+        in_flight: %{},
+        waitq: :queue.new(),
+        monitors: %{},
+        worker_counts: %{}
+      }
+
+      {:noreply, _} = Scheduler.handle_cast({:submit, success_job}, state)
+
+      # Success: job reaches the worker, no failure telemetry
+      assert_receive {:blocking_worker_enqueue_cast, %Job{}}, 1_000
+      refute_receive {:telemetry_event, [:lemon, :gateway, :scheduler, :enqueue_failure], _, _},
+                     100
+
+      # Test 2: Failure path - supervisor name unregistered, so worker can't start
+      fail_session = "distinguish_fail:#{System.unique_integer([:positive])}"
+      fail_job = make_job(session_key: fail_session)
+
+      with_failing_worker_startup(fn ->
+        {:noreply, _} = Scheduler.handle_cast({:submit, fail_job}, state)
+      end)
+
+      # Failure: telemetry is emitted
+      assert_receive {:telemetry_event, [:lemon, :gateway, :scheduler, :enqueue_failure],
+                       %{count: 1}, metadata},
+                     2_000
+
+      assert metadata.thread_key == {:session, fail_session}
+    end
+  end
+
   defp eventually(fun, attempts_left \\ 40)
 
   defp eventually(fun, 0) when is_function(fun, 0) do
