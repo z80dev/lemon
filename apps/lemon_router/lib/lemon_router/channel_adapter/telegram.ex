@@ -41,7 +41,8 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
     chat_id = parse_int(parsed.peer_id)
     thread_id = parse_int(parsed.thread_id)
 
-    reply_to = meta_get(snapshot, :user_msg_id)
+    reply_to =
+      if telegram_reply_to_user_message?(), do: meta_get(snapshot, :user_msg_id), else: nil
     answer_msg_id = meta_get(snapshot, :answer_msg_id)
 
     text = truncate(snapshot.full_text)
@@ -164,7 +165,9 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
     text = if show_resume_line?(), do: maybe_append_resume_line(text, resume), else: text
 
-    reply_to = meta_get(snapshot, :user_msg_id)
+    reply_to =
+      if telegram_reply_to_user_message?(), do: meta_get(snapshot, :user_msg_id), else: nil
+
     answer_msg_id = meta_get(snapshot, :answer_msg_id)
 
     parsed = ChannelContext.parse_session_key(snapshot.session_key)
@@ -349,6 +352,9 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
 
   @impl true
   def emit_tool_status(snapshot, text) do
+    unless telegram_show_tool_status?() do
+      :skip
+    else
     if not ChannelsDelivery.telegram_outbox_available?() do
       # Fall back to generic path when Telegram outbox is down
       LemonRouter.ChannelAdapter.Generic.emit_tool_status(snapshot, text)
@@ -469,6 +475,7 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
               {:ok, %{}}
           end
       end
+    end
     end
   rescue
     _ -> {:ok, %{}}
@@ -1354,4 +1361,12 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
   end
 
   defp positive_int_or(_value, default), do: default
+
+  defp telegram_reply_to_user_message? do
+    LemonChannels.GatewayConfig.get_telegram(:reply_to_user_message, true)
+  end
+
+  defp telegram_show_tool_status? do
+    LemonChannels.GatewayConfig.get_telegram(:show_tool_status, true)
+  end
 end

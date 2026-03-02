@@ -548,7 +548,10 @@ defmodule LemonCore.Config do
       debug_inbound: map["debug_inbound"],
       log_drops: map["log_drops"],
       compaction: parse_gateway_telegram_compaction(map["compaction"] || %{}),
-      files: parse_gateway_telegram_files(map["files"] || %{})
+      files: parse_gateway_telegram_files(map["files"] || %{}),
+      progress_reactions: parse_boolean(map["progress_reactions"], nil),
+      reply_to_user_message: parse_boolean(map["reply_to_user_message"], nil),
+      show_tool_status: parse_boolean(map["show_tool_status"], nil)
     }
     |> reject_nil_values()
   end

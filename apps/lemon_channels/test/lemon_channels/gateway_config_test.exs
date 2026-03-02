@@ -93,6 +93,39 @@ defmodule LemonChannels.GatewayConfigTest do
     assert fetch(xmtp, :poll_interval_ms) == 300
   end
 
+  describe "get_telegram/2" do
+    test "returns value from telegram sub-config" do
+      Application.put_env(:lemon_channels, :telegram, %{progress_reactions: true})
+      assert GatewayConfig.get_telegram(:progress_reactions, :missing) == true
+    end
+
+    test "returns default when key is absent" do
+      Application.put_env(:lemon_channels, :telegram, %{})
+      # Use a key that won't exist in any real config file.
+      assert GatewayConfig.get_telegram(:__test_nonexistent_key__, :default_val) == :default_val
+    end
+
+    test "returns false (not default) when key is explicitly false — boolean correctness" do
+      Application.put_env(:lemon_channels, :telegram, %{progress_reactions: false})
+      assert GatewayConfig.get_telegram(:progress_reactions, true) == false
+    end
+
+    test "returns false for show_tool_status when explicitly false" do
+      Application.put_env(:lemon_channels, :telegram, %{show_tool_status: false})
+      assert GatewayConfig.get_telegram(:show_tool_status, true) == false
+    end
+
+    test "returns false for reply_to_user_message when explicitly false" do
+      Application.put_env(:lemon_channels, :telegram, %{reply_to_user_message: false})
+      assert GatewayConfig.get_telegram(:reply_to_user_message, true) == false
+    end
+
+    test "handles string-keyed telegram config" do
+      Application.put_env(:lemon_channels, :telegram, %{"progress_reactions" => false})
+      assert GatewayConfig.get_telegram(:progress_reactions, true) == false
+    end
+  end
+
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
