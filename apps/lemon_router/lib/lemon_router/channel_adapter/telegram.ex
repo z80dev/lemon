@@ -991,14 +991,14 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
   defp maybe_append_resume_line(text, _resume), do: text
 
   defp resume_token_present?(text) when is_binary(text) do
-    match?({:ok, %ResumeToken{}}, LemonChannels.EngineRegistry.extract_resume(text))
+    match?(%ResumeToken{}, LemonCore.ResumeToken.extract_resume(text))
   rescue
     _ -> false
   end
 
   defp format_resume_line(%ResumeToken{engine: engine, value: value})
        when is_binary(engine) and is_binary(value) do
-    LemonChannels.EngineRegistry.format_resume(%ResumeToken{
+    LemonCore.ResumeToken.format(%ResumeToken{
       engine: String.downcase(engine),
       value: value
     })

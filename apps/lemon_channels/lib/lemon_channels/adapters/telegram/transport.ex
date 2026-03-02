@@ -18,12 +18,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonCore.MapHelpers
   alias LemonCore.SessionKey
   alias LemonCore.Store, as: CoreStore
-  alias LemonChannels.Adapters.Telegram.Inbound
+  alias LemonChannels.Adapters.Telegram.Transport.AsyncTaskRunner
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.MediaGroups
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
+  alias LemonChannels.Adapters.Telegram.Transport.Poller
+  alias LemonChannels.Adapters.Telegram.Transport.ReactionTracker
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
+  alias LemonChannels.Adapters.Telegram.Transport.UpdateRouter
   alias LemonChannels.Telegram.OffsetStore
   alias LemonChannels.Telegram.PollerLock
   alias LemonCore.Config
@@ -32,7 +35,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
-  @webhook_clear_retry_ms 5 * 60 * 1000
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @cancel_callback_prefix "lemon:cancel"
   @model_callback_prefix "lemon:model"
@@ -122,7 +124,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             # If we're configured to drop pending updates on boot, start from 0 so we can
             # advance to the real "latest" update_id even if a stale stored offset is ahead.
             offset:
-              if(drop_pending_updates, do: 0, else: initial_offset(config_offset, stored_offset)),
+              if(drop_pending_updates,
+                do: 0,
+                else: Poller.initial_offset(config_offset, stored_offset)
+              ),
             drop_pending_updates?: drop_pending_updates,
             drop_pending_done?: false,
             buffers: %{},
@@ -141,7 +146,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             last_webhook_clear_ts: nil
           }
 
-          maybe_subscribe_exec_approvals()
+          AsyncTaskRunner.maybe_subscribe_exec_approvals()
           send(self(), :poll)
           {:ok, state}
 
@@ -159,7 +164,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def handle_info(:poll, state) do
-    state = poll_updates(state)
+    state = Poller.poll_updates(state, &process_single_update/3)
     Process.send_after(self(), :poll, state.poll_interval_ms)
     {:noreply, state}
   end
@@ -211,8 +216,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   # Tool execution approval requests/resolutions are delivered on the `exec_approvals` bus topic.
   def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
     _ =
-      start_async_task(state, fn ->
-        maybe_send_approval_request(state, payload)
+      AsyncTaskRunner.start_async_task(state, fn ->
+        AsyncTaskRunner.maybe_send_approval_request(state, payload)
       end)
 
     {:noreply, state}
@@ -288,45 +293,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     # Handle reaction updates for regular runs
     state =
-      case session_key && Map.get(state.reaction_runs, session_key) do
-        %{
-          chat_id: chat_id,
-          thread_id: _thread_id,
-          user_msg_id: user_msg_id
-        } = _reaction_run ->
-          ok? =
-            case event.payload do
-              %{completed: %{ok: ok}} when is_boolean(ok) -> ok
-              %{ok: ok} when is_boolean(ok) -> ok
-              _ -> true
-            end
-
-          # Update reaction: ✅ for success, ❌ for failure
-          reaction_emoji = if ok?, do: "✅", else: "❌"
-
-          _ =
-            start_async_task(state, fn ->
-              state.api_mod.set_message_reaction(
-                state.token,
-                chat_id,
-                user_msg_id,
-                reaction_emoji,
-                %{is_big: true}
-              )
-            end)
-
-          # Unsubscribe from session topic and remove from tracking
-          if Code.ensure_loaded?(LemonCore.Bus) and
-               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
-            topic = LemonCore.Bus.session_topic(session_key)
-            _ = LemonCore.Bus.unsubscribe(topic)
-          end
-
-          %{state | reaction_runs: Map.delete(state.reaction_runs, session_key)}
-
-        _ ->
-          state
-      end
+      ReactionTracker.handle_run_completed(state, event, fn fun ->
+        AsyncTaskRunner.start_async_task(state, fun)
+      end)
 
     {:noreply, state}
   rescue
@@ -341,160 +310,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     :ok
   end
 
-  defp poll_updates(state) do
-    _ = PollerLock.heartbeat(state.account_id, state.token)
-
-    case safe_get_updates(state) do
-      {:ok, %{"ok" => true, "result" => updates}} ->
-        if state.drop_pending_updates? and not state.drop_pending_done? do
-          if updates == [] do
-            # Nothing to drop; we're at the live edge.
-            %{state | drop_pending_done?: true}
-          else
-            # Keep dropping until Telegram returns an empty batch (there can be >100 pending).
-            max_id = max_update_id(updates, state.offset)
-            new_offset = max(state.offset, max_id + 1)
-            persist_offset(state, new_offset)
-            %{state | offset: new_offset, drop_pending_done?: false}
-          end
-        else
-          {state, max_id} = handle_updates(state, updates)
-          new_offset = max(state.offset, max_id + 1)
-          persist_offset(state, new_offset)
-          %{state | offset: new_offset}
-        end
-
-      {:error, reason} ->
-        maybe_log_poll_error(state, reason)
-
-      other ->
-        maybe_log_poll_error(state, other)
-    end
-  rescue
-    e ->
-      Logger.warning("Telegram poll error: #{inspect(e)}")
-      state
-  end
-
-  defp maybe_log_poll_error(state, reason) do
-    state = maybe_attempt_webhook_clear(state, reason)
-
-    now = System.monotonic_time(:millisecond)
-    last_ts = state.last_poll_error_log_ts
-    last_reason = state.last_poll_error
-
-    should_log? =
-      cond do
-        is_nil(last_ts) ->
-          true
-
-        now - last_ts > 60_000 ->
-          true
-
-        last_reason != reason ->
-          true
-
-        true ->
-          false
-      end
-
-    if should_log? do
-      msg =
-        case reason do
-          {:http_error, 409, body} ->
-            body_s = body |> to_string() |> String.slice(0, 200)
-
-            "Telegram getUpdates returned HTTP 409 Conflict (#{body_s}). " <>
-              "This usually means a webhook is set for the bot, which conflicts with polling. " <>
-              "Fix: call Telegram Bot API deleteWebhook (optionally with drop_pending_updates=true), " <>
-              "then restart the gateway."
-
-          other ->
-            "Telegram getUpdates failed: #{inspect(other)}"
-        end
-
-      Logger.warning(msg)
-    end
-
-    %{state | last_poll_error: reason, last_poll_error_log_ts: now}
-  rescue
-    _ -> state
-  end
-
-  defp maybe_attempt_webhook_clear(state, {:http_error, 409, _body}) do
-    now = System.monotonic_time(:millisecond)
-    last_attempt = state[:last_webhook_clear_ts]
-
-    should_attempt? =
-      is_nil(last_attempt) or
-        (is_integer(last_attempt) and now - last_attempt >= @webhook_clear_retry_ms)
-
-    if should_attempt? do
-      result =
-        try do
-          state.api_mod.delete_webhook(state.token, drop_pending_updates: false)
-        rescue
-          e -> {:error, e}
-        end
-
-      case result do
-        {:ok, %{"ok" => true}} ->
-          Logger.warning(
-            "Telegram auto-recovery: deleteWebhook succeeded after getUpdates 409 conflict"
-          )
-
-        other ->
-          Logger.warning(
-            "Telegram auto-recovery: deleteWebhook failed after getUpdates 409 conflict: #{inspect(other)}"
-          )
-      end
-
-      %{state | last_webhook_clear_ts: now}
-    else
-      state
-    end
-  end
-
-  defp maybe_attempt_webhook_clear(state, _reason), do: state
-
-  defp safe_get_updates(state) do
-    try do
-      state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms)
-    catch
-      :exit, reason ->
-        Logger.debug("Telegram get_updates exited: #{inspect(reason)}")
-        {:error, {:exit, reason}}
-    end
-  end
-
-  defp handle_updates(state, updates) do
-    # If updates is empty, keep max_id at offset - 1 so we don't accidentally advance the offset.
-    Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
-      id = update["update_id"] || max_id
-      acc_state = UpdateProcessor.maybe_index_known_target(acc_state, update)
-      acc_state = process_single_update(acc_state, update, id)
-      {acc_state, max(max_id, id)}
-    end)
-  end
-
-  defp process_single_update(state, %{"callback_query" => cb} = _update, _id) do
-    if authorized_callback_query?(state, cb), do: handle_callback_query(state, cb)
-    state
-  end
-
   defp process_single_update(state, update, id) do
-    with {:ok, inbound} <- Inbound.normalize(update),
-         inbound <- UpdateProcessor.prepare_inbound(inbound, state, update, id),
-         {:ok, inbound} <- maybe_transcribe_voice(state, inbound) do
-      route_authorized_inbound(state, inbound)
-    else
-      {:error, _reason} -> state
-      {:skip, new_state} -> new_state
-    end
-  end
-
-  defp route_authorized_inbound(state, inbound) do
-    UpdateProcessor.route_authorized_inbound(state, inbound, &handle_inbound_message/2)
+    UpdateRouter.process_single_update(
+      state,
+      update,
+      id,
+      &handle_callback_query/2,
+      &handle_inbound_message/2,
+      &maybe_transcribe_voice/2
+    )
   end
 
   defp handle_inbound_message(state, inbound) do
@@ -558,8 +382,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         true ->
           cond do
-            should_ignore_for_trigger?(state, inbound, original_text) ->
-              maybe_log_drop(state, inbound, :trigger_mentions)
+            UpdateRouter.should_ignore_for_trigger?(state, inbound, original_text) ->
+              UpdateRouter.maybe_log_drop(state, inbound, :trigger_mentions)
               state
 
             true ->
@@ -602,7 +426,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     progress_msg_id =
       if is_integer(chat_id) and is_integer(user_msg_id) do
-        send_progress(state, chat_id, thread_id, user_msg_id)
+        ReactionTracker.send_progress(state, chat_id, thread_id, user_msg_id)
       else
         nil
       end
@@ -664,46 +488,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     # Track this run for reaction updates if we set a progress reaction
     state =
-      if is_integer(progress_msg_id) and is_binary(session_key) do
-        # Subscribe to session topic to get run completion events
-        maybe_subscribe_to_session(session_key)
-
-        reaction_run = %{
-          chat_id: chat_id,
-          thread_id: thread_id,
-          user_msg_id: user_msg_id,
-          session_key: session_key
-        }
-
-        %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
-      else
-        state
-      end
+      ReactionTracker.track_run(state, progress_msg_id, session_key, chat_id, thread_id, user_msg_id)
 
     inbound = %{inbound | meta: meta}
     route_to_router(inbound)
     state
-  end
-
-  defp send_progress(state, chat_id, _thread_id, reply_to_message_id) do
-    # Set 👀 reaction on the user's message to indicate we're processing
-    # The reaction is set on reply_to_message_id (the user's message)
-    if is_integer(reply_to_message_id) do
-      case state.api_mod.set_message_reaction(
-             state.token,
-             chat_id,
-             reply_to_message_id,
-             "👀",
-             %{is_big: true}
-           ) do
-        {:ok, %{"ok" => true}} -> reply_to_message_id
-        _ -> nil
-      end
-    else
-      nil
-    end
-  rescue
-    _ -> nil
   end
 
   defp maybe_cancel_by_reply(state, inbound) do
@@ -824,7 +613,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             prompt = String.trim("#{caption}\n\n[uploaded: #{final_rel}]")
             inbound = %{inbound | message: Map.put(inbound.message, :text, prompt)}
 
-            if should_ignore_for_trigger?(state, inbound, prompt) do
+            if UpdateRouter.should_ignore_for_trigger?(state, inbound, prompt) do
               state
             else
               {state, inbound} = maybe_switch_session_from_reply(state, inbound)
@@ -969,8 +758,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     cond do
       is_binary(reply_text) and reply_text != "" ->
-        case EngineRegistry.extract_resume(reply_text) do
-          {:ok, %ResumeToken{} = token} -> {token, :reply_text}
+        case ResumeToken.extract_resume(reply_text) do
+          %ResumeToken{} = token -> {token, :reply_text}
           _ -> {nil, nil}
         end
 
@@ -1139,17 +928,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       true ->
         # Accept a full resume line (e.g., "codex resume X", "claude --resume X").
-        case EngineRegistry.extract_resume(selector) do
-          {:ok, %ResumeToken{} = token} ->
+        case ResumeToken.extract_resume(selector) do
+          %ResumeToken{} = token ->
             token
 
-          _ ->
+          nil ->
             # Accept "engine token" shorthand.
             case String.split(selector, ~r/\s+/, parts: 2) do
               [engine_id, token_value] ->
                 engine_id = String.downcase(engine_id || "")
 
-                if EngineRegistry.get_engine(engine_id) && token_value && token_value != "" do
+                if EngineRegistry.engine_known?(engine_id) && token_value && token_value != "" do
                   %ResumeToken{engine: engine_id, value: String.trim(token_value)}
                 else
                   find_by_token_value(selector, sessions)
@@ -1305,7 +1094,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
 
     _ =
-      start_async_task(state, fn ->
+      AsyncTaskRunner.start_async_task(state, fn ->
         run_new_session_background_work(
           state,
           inbound,
@@ -1356,22 +1145,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     :ok
   rescue
     _ -> :ok
-  end
-
-  defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
-    if Code.ensure_loaded?(LemonCore.Bus) and
-         function_exported?(LemonCore.Bus, :subscribe, 1) do
-      topic = LemonCore.Bus.session_topic(session_key)
-      _ = LemonCore.Bus.subscribe(topic)
-    end
-  end
-
-  defp maybe_subscribe_to_run(run_id) do
-    if Code.ensure_loaded?(LemonCore.Bus) and
-         function_exported?(LemonCore.Bus, :subscribe, 1) do
-      topic = LemonCore.Bus.run_topic(run_id)
-      _ = LemonCore.Bus.subscribe(topic)
-    end
   end
 
   defp started_new_session_message(
@@ -1549,7 +1322,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       case LemonCore.RouterBridge.submit_run(request) do
         {:ok, run_id} when is_binary(run_id) ->
-          maybe_subscribe_to_run(run_id)
+          ReactionTracker.maybe_subscribe_to_run(run_id)
           :ok
 
         _ ->
@@ -2517,129 +2290,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     |> String.trim()
     |> String.trim_leading("@")
   end
-
-  defp should_ignore_for_trigger?(state, inbound, text) do
-    case inbound.peer.kind do
-      :group ->
-        trigger_mode = trigger_mode_for(state, inbound)
-        trigger_mode.mode == :mentions and not explicit_invocation?(state, inbound, text)
-
-      :channel ->
-        trigger_mode = trigger_mode_for(state, inbound)
-        trigger_mode.mode == :mentions and not explicit_invocation?(state, inbound, text)
-
-      _ ->
-        false
-    end
-  rescue
-    _ -> false
-  end
-
-  defp trigger_mode_for(state, inbound) do
-    {chat_id, topic_id} = extract_chat_ids(inbound)
-    account_id = state.account_id || "default"
-
-    if is_integer(chat_id) do
-      TriggerMode.resolve(account_id, chat_id, topic_id)
-    else
-      %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
-    end
-  rescue
-    _ -> %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
-  end
-
-  defp explicit_invocation?(state, inbound, text) do
-    Commands.command_message_for_bot?(text, state.bot_username) or
-      mention_of_bot?(state, inbound) or
-      reply_to_bot?(state, inbound)
-  rescue
-    _ -> false
-  end
-
-  defp mention_of_bot?(state, inbound) do
-    bot_username = state.bot_username
-    bot_id = state.bot_id
-    message = inbound_message_from_update(inbound.raw)
-    text = message["text"] || message["caption"] || inbound.message.text || ""
-
-    mention_by_username =
-      if is_binary(bot_username) and bot_username != "" do
-        Regex.match?(~r/(?:^|\W)@#{Regex.escape(bot_username)}(?:\b|$)/i, text || "")
-      else
-        false
-      end
-
-    mention_by_id =
-      if is_integer(bot_id) do
-        entities = message_entities(message)
-
-        Enum.any?(entities, fn entity ->
-          case entity do
-            %{"type" => "text_mention", "user" => %{"id" => id}} ->
-              parse_int(id) == bot_id
-
-            _ ->
-              false
-          end
-        end)
-      else
-        false
-      end
-
-    mention_by_username or mention_by_id
-  rescue
-    _ -> false
-  end
-
-  defp reply_to_bot?(state, inbound) do
-    message = inbound_message_from_update(inbound.raw)
-    reply = message["reply_to_message"] || %{}
-    thread_id = message["message_thread_id"]
-
-    cond do
-      reply == %{} ->
-        false
-
-      topic_root_reply?(thread_id, reply) ->
-        false
-
-      is_integer(state.bot_id) and get_in(reply, ["from", "id"]) == state.bot_id ->
-        true
-
-      is_binary(state.bot_username) and state.bot_username != "" ->
-        reply_username = get_in(reply, ["from", "username"])
-
-        is_binary(reply_username) and
-          String.downcase(reply_username) == String.downcase(state.bot_username)
-
-      true ->
-        false
-    end
-  rescue
-    _ -> false
-  end
-
-  defp topic_root_reply?(thread_id, reply) do
-    is_integer(thread_id) and is_map(reply) and reply["message_id"] == thread_id
-  end
-
-  defp inbound_message_from_update(update) when is_map(update) do
-    cond do
-      is_map(update["message"]) -> update["message"]
-      is_map(update["edited_message"]) -> update["edited_message"]
-      is_map(update["channel_post"]) -> update["channel_post"]
-      true -> %{}
-    end
-  end
-
-  defp inbound_message_from_update(_), do: %{}
-
-  defp message_entities(message) when is_map(message) do
-    entities = message["entities"] || message["caption_entities"]
-    if is_list(entities), do: entities, else: []
-  end
-
-  defp message_entities(_), do: []
 
   defp maybe_handle_model_picker_input(state, inbound, text) do
     trimmed = String.trim(text || "")
@@ -3806,31 +3456,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp cwd_usage, do: "Usage: /cwd [project_id|path|clear]"
 
-  defp authorized_callback_query?(state, cb) when is_map(cb) do
-    msg = cb["message"] || %{}
-    chat_id = get_in(msg, ["chat", "id"])
-
-    cond do
-      not is_integer(chat_id) ->
-        false
-
-      not allowed_chat?(state.allowed_chat_ids, chat_id) ->
-        false
-
-      state.deny_unbound_chats ->
-        topic_id = msg["message_thread_id"]
-        scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: parse_int(topic_id)}
-        binding_exists?(scope)
-
-      true ->
-        true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp authorized_callback_query?(_state, _cb), do: false
-
   defp binding_exists?(%ChatScope{} = scope) do
     case BindingResolver.resolve_binding(scope) do
       nil -> false
@@ -3856,33 +3481,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp parse_allowed_chat_ids(_), do: nil
 
-  defp initial_offset(config_offset, stored_offset) do
-    cond do
-      is_integer(config_offset) -> config_offset
-      is_integer(stored_offset) -> stored_offset
-      true -> 0
-    end
-  end
-
-  defp max_update_id([], offset), do: offset - 1
-
-  defp max_update_id(updates, offset) do
-    Enum.reduce(updates, offset - 1, fn update, acc ->
-      case update["update_id"] do
-        id when is_integer(id) -> max(acc, id)
-        _ -> acc
-      end
-    end)
-  end
-
-  defp persist_offset(state, new_offset) do
-    if new_offset != state.offset do
-      OffsetStore.put(state.account_id, state.token, new_offset)
-    end
-
-    :ok
-  end
-
   defp route_to_router(inbound) do
     case LemonCore.RouterBridge.handle_inbound(inbound) do
       :ok ->
@@ -3907,20 +3505,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       Logger.warning("Failed to route inbound message: #{inspect(e)}")
   end
 
-  defp maybe_log_drop(state, inbound, reason) do
-    if state.debug_inbound or state.log_drops do
-      meta = inbound.meta || %{}
-
-      Logger.debug(
-        "Telegram inbound dropped (#{inspect(reason)}) chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])} peer=#{inspect(inbound.peer)}"
-      )
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
   defp merge_config(base, nil), do: base
 
   defp merge_config(base, cfg) when is_map(cfg) do
@@ -3934,81 +3518,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       base || %{}
     end
   end
-
-  defp maybe_subscribe_exec_approvals do
-    if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      _ = LemonCore.Bus.subscribe("exec_approvals")
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_send_approval_request(state, payload) when is_map(payload) do
-    approval_id = payload[:approval_id] || payload["approval_id"]
-    pending = payload[:pending] || payload["pending"] || %{}
-    session_key = pending[:session_key] || pending["session_key"]
-
-    with true <- is_binary(approval_id) and is_binary(session_key),
-         %{
-           kind: :channel_peer,
-           channel_id: "telegram",
-           account_id: account_id,
-           peer_id: peer_id,
-           thread_id: thread_id
-         } <-
-           LemonCore.SessionKey.parse(session_key),
-         true <- is_nil(account_id) or account_id == state.account_id,
-         chat_id when is_integer(chat_id) <- parse_int(peer_id) do
-      tool = pending[:tool] || pending["tool"]
-      action = pending[:action] || pending["action"]
-
-      text =
-        "Approval requested: #{tool}\n\n" <>
-          "Action: #{format_action(action)}\n\n" <>
-          "Choose:"
-
-      reply_markup = %{
-        "inline_keyboard" => [
-          [
-            %{"text" => "Approve once", "callback_data" => "#{approval_id}|once"},
-            %{"text" => "Deny", "callback_data" => "#{approval_id}|deny"}
-          ],
-          [
-            %{"text" => "Session", "callback_data" => "#{approval_id}|session"},
-            %{"text" => "Agent", "callback_data" => "#{approval_id}|agent"},
-            %{"text" => "Global", "callback_data" => "#{approval_id}|global"}
-          ]
-        ]
-      }
-
-      topic_id = parse_int(thread_id)
-
-      opts =
-        %{"reply_markup" => reply_markup}
-        |> maybe_put("message_thread_id", topic_id)
-
-      _ = state.api_mod.send_message(state.token, chat_id, text, opts)
-      :ok
-    else
-      _ -> :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_send_approval_request(_state, _payload), do: :ok
-
-  defp format_action(action) when is_map(action) do
-    cond do
-      is_binary(action["cmd"]) -> action["cmd"]
-      is_binary(action[:cmd]) -> action[:cmd]
-      true -> inspect(action)
-    end
-  end
-
-  defp format_action(other), do: inspect(other)
 
   defp handle_callback_query(state, cb) when is_map(cb) do
     cb_id = cb["id"]
@@ -5149,28 +4658,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp maybe_put_kw(opts, _key, nil) when is_list(opts), do: opts
   defp maybe_put_kw(opts, key, value) when is_list(opts), do: [{key, value} | opts]
-
-  defp start_async_task(_state, fun) when is_function(fun, 0) do
-    wrapped = fn ->
-      try do
-        fun.()
-        :ok
-      rescue
-        _ -> :ok
-      catch
-        _kind, _reason -> :ok
-      end
-    end
-
-    LemonCore.BackgroundTask.start(wrapped,
-      supervisor: LemonChannels.Adapters.Telegram.AsyncSupervisor,
-      allow_unsupervised: true
-    )
-  rescue
-    _ -> :ok
-  end
-
-  defp start_async_task(_state, _fun), do: :ok
 
   defp map_get(map, key), do: MapHelpers.get_key(map, key)
 

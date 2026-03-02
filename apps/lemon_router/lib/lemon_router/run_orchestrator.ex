@@ -19,7 +19,6 @@ defmodule LemonRouter.RunOrchestrator do
   alias LemonCore.{Introspection, RunRequest, SessionKey}
   alias LemonCore.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
-  alias LemonChannels.EngineRegistry
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -476,11 +475,11 @@ defmodule LemonRouter.RunOrchestrator do
         get_in(meta, [:raw, "message", "reply_to_message", "caption"])
 
     resume =
-      case EngineRegistry.extract_resume(prompt) do
-        {:ok, token} ->
+      case ResumeToken.extract_resume(prompt) do
+        %ResumeToken{} = token ->
           token
 
-        :none ->
+        nil ->
           extract_resume_from_reply(reply_to_text)
       end
 
@@ -501,10 +500,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   @spec extract_resume_from_reply(binary() | nil) :: ResumeToken.t() | nil
   defp extract_resume_from_reply(text) when is_binary(text) and text != "" do
-    case EngineRegistry.extract_resume(text) do
-      {:ok, token} -> token
-      :none -> nil
-    end
+    ResumeToken.extract_resume(text)
   end
 
   defp extract_resume_from_reply(_), do: nil

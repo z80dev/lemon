@@ -101,12 +101,16 @@ defmodule CodingAgent.Tools.Read do
          :ok <- check_abort(signal) do
       case resolve_existing_read_path(path, resolved_path, cwd, opts) do
         {:ok, readable_path, stat} ->
-          case detect_mime_type(readable_path) do
-            nil ->
+          case detect_file_type(readable_path) do
+            :text ->
               read_text_file(readable_path, stat, offset, limit, opts)
 
-            mime_type ->
+            {:image, mime_type} ->
               read_image_file(readable_path, mime_type)
+
+            :binary ->
+              {:error,
+               "Cannot read binary file: #{readable_path}. Use the bash tool with sqlite3 or another appropriate command to inspect this file."}
           end
 
         {:ok_optional_missing, readable_path} ->
@@ -317,18 +321,35 @@ defmodule CodingAgent.Tools.Read do
   # MIME Type Detection
   # ============================================================================
 
-  defp detect_mime_type(path) do
+  @binary_extensions MapSet.new(~w[
+    .db .sqlite .sqlite3 .sqlite2
+    .exe .dll .so .dylib .o .a
+    .zip .tar .gz .bz2 .xz .7z .rar
+    .pdf .doc .docx .xls .xlsx .ppt .pptx
+    .class .pyc .pyo .beam .wasm
+    .bin .dat .iso .img .dmg
+  ])
+
+  defp detect_file_type(path) do
     ext = path |> Path.extname() |> String.downcase()
 
-    case ext do
-      ".jpg" -> "image/jpeg"
-      ".jpeg" -> "image/jpeg"
-      ".png" -> "image/png"
-      ".gif" -> "image/gif"
-      ".webp" -> "image/webp"
-      _ -> nil
+    cond do
+      ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"] ->
+        {:image, image_mime_type(ext)}
+
+      MapSet.member?(@binary_extensions, ext) ->
+        :binary
+
+      true ->
+        :text
     end
   end
+
+  defp image_mime_type(".jpg"), do: "image/jpeg"
+  defp image_mime_type(".jpeg"), do: "image/jpeg"
+  defp image_mime_type(".png"), do: "image/png"
+  defp image_mime_type(".gif"), do: "image/gif"
+  defp image_mime_type(".webp"), do: "image/webp"
 
   # ============================================================================
   # Image File Reading
@@ -368,46 +389,52 @@ defmodule CodingAgent.Tools.Read do
 
     case File.read(path) do
       {:ok, content} ->
-        lines = String.split(content, ~r/\r?\n/, trim: false)
-        total_lines = length(lines)
+        if String.valid?(content) do
+          lines = String.split(content, ~r/\r?\n/, trim: false)
+          total_lines = length(lines)
 
-        # Apply offset (1-indexed to 0-indexed)
-        start_line = normalize_offset(offset)
-        lines_after_offset = Enum.drop(lines, start_line)
+          # Apply offset (1-indexed to 0-indexed)
+          start_line = normalize_offset(offset)
+          lines_after_offset = Enum.drop(lines, start_line)
 
-        # Apply user limit
-        lines_after_limit =
-          if limit && limit > 0 do
-            Enum.take(lines_after_offset, limit)
-          else
-            lines_after_offset
-          end
+          # Apply user limit
+          lines_after_limit =
+            if limit && limit > 0 do
+              Enum.take(lines_after_offset, limit)
+            else
+              lines_after_offset
+            end
 
-        # Apply truncation (max lines and max bytes)
-        {truncated_lines, truncation_info} =
-          truncate_head(lines_after_limit, start_line, total_lines, max_lines, max_bytes)
+          # Apply truncation (max lines and max bytes)
+          {truncated_lines, truncation_info} =
+            truncate_head(lines_after_limit, start_line, total_lines, max_lines, max_bytes)
 
-        # Format with line numbers
-        formatted = format_line_numbers(truncated_lines, start_line + 1)
+          # Format with line numbers
+          formatted = format_line_numbers(truncated_lines, start_line + 1)
 
-        # Build result text
-        result_text =
-          if truncation_info do
-            formatted <> "\n" <> truncation_info.message
-          else
-            formatted
-          end
+          # Build result text
+          result_text =
+            if truncation_info do
+              formatted <> "\n" <> truncation_info.message
+            else
+              formatted
+            end
 
-        %AgentToolResult{
-          content: [%TextContent{text: result_text}],
-          details: %{
-            path: path,
-            total_lines: total_lines,
-            start_line: start_line + 1,
-            lines_shown: length(truncated_lines),
-            truncation: truncation_info
+          %AgentToolResult{
+            content: [%TextContent{text: result_text}],
+            details: %{
+              path: path,
+              total_lines: total_lines,
+              start_line: start_line + 1,
+              lines_shown: length(truncated_lines),
+              truncation: truncation_info
+            }
           }
-        }
+        else
+          {:error,
+           "Cannot read binary file: #{path}. The file contains non-UTF-8 data. " <>
+             "Use the bash tool with an appropriate command (e.g. sqlite3, hexdump) to inspect this file."}
+        end
 
       {:error, reason} ->
         {:error, "Failed to read file: #{path} (#{reason})"}
