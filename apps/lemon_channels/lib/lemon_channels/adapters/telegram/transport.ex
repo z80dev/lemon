@@ -708,31 +708,58 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp maybe_cancel_by_reply(state, inbound) do
     {chat_id, thread_id} = extract_chat_ids(inbound)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
     reply_to_id = inbound.message.reply_to_id || inbound.meta[:reply_to_id]
 
-    if is_integer(chat_id) and reply_to_id do
-      case Integer.parse(to_string(reply_to_id)) do
-        {progress_msg_id, _} ->
+    cancelled? =
+      if is_integer(chat_id) and reply_to_id do
+        case Integer.parse(to_string(reply_to_id)) do
+          {progress_msg_id, _} ->
+            scope = %LemonCore.ChatScope{
+              transport: :telegram,
+              chat_id: chat_id,
+              topic_id: thread_id
+            }
+
+            session_key =
+              lookup_session_key_for_reply(state, scope, progress_msg_id) ||
+                build_session_key(state, inbound, scope)
+
+            if Code.ensure_loaded?(LemonChannels.Runtime) and
+                 function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
+              LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
+              true
+            else
+              false
+            end
+
+          _ ->
+            false
+        end
+      else
+        # No reply context — cancel the active run for this thread's session
+        if is_integer(chat_id) do
           scope = %LemonCore.ChatScope{
             transport: :telegram,
             chat_id: chat_id,
             topic_id: thread_id
           }
 
-          session_key =
-            lookup_session_key_for_reply(state, scope, progress_msg_id) ||
-              build_session_key(state, inbound, scope)
+          session_key = build_session_key(state, inbound, scope)
 
           if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
-            LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
+               function_exported?(LemonChannels.Runtime, :cancel_by_session_key, 1) do
+            LemonChannels.Runtime.cancel_by_session_key(session_key)
+          else
+            false
           end
-
-          :ok
-
-        _ ->
-          :ok
+        else
+          false
+        end
       end
+
+    if cancelled? and is_integer(chat_id) do
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cancelled.")
     end
 
     state

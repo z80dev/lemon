@@ -61,9 +61,6 @@ defmodule LemonGames.Matches.Service do
 
       Bus.broadcast_lobby_changed(match["id"], match["status"], "match_created")
 
-      # Trigger bot turn if next player is a bot
-      Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
-
       {:ok, match}
     end
   end
@@ -281,9 +278,6 @@ defmodule LemonGames.Matches.Service do
             if terminal do
               Bus.broadcast_lobby_changed(match_id, "finished", "game_over")
             end
-
-            # Trigger bot turn if next player is a bot
-            Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
 
             {:ok, match, seq}
 

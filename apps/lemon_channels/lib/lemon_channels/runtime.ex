@@ -15,6 +15,16 @@ defmodule LemonChannels.Runtime do
 
   def cancel_by_progress_msg(_, _), do: :ok
 
+  @spec cancel_by_session_key(binary()) :: boolean()
+  def cancel_by_session_key(session_key) when is_binary(session_key) and session_key != "" do
+    _ = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
+    true
+  rescue
+    _ -> false
+  end
+
+  def cancel_by_session_key(_), do: false
+
   @spec cancel_by_run_id(binary(), term()) :: :ok
   def cancel_by_run_id(run_id, reason \\ :user_requested)
 

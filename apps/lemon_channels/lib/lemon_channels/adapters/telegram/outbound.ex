@@ -15,6 +15,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   @default_transient_backoff_ms 500
   @max_rate_limit_retries 5
   @max_transient_retries 3
+  # Don't sleep inline for more than 5s; let the Outbox re-queue with proper delay instead.
+  @max_inline_rate_limit_sleep_ms 5_000
 
   @doc """
   Deliver an outbound payload to Telegram.
@@ -484,7 +486,20 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp retry_decision(reason, rate_limit_attempts, transient_attempts) do
     cond do
       rate_limited_reason?(reason) and rate_limit_attempts < @max_rate_limit_retries ->
-        {:rate_limit, retry_after_ms(reason)}
+        wait_ms = retry_after_ms(reason)
+
+        if wait_ms > @max_inline_rate_limit_sleep_ms do
+          # Don't block a task supervisor thread for 10+ seconds;
+          # return the error so the Outbox can re-queue with proper delay.
+          Logger.debug(
+            "Telegram outbound rate limit wait #{wait_ms}ms exceeds inline cap; " <>
+              "deferring to Outbox retry"
+          )
+
+          :stop
+        else
+          {:rate_limit, wait_ms}
+        end
 
       transient_reason?(reason) and transient_attempts < @max_transient_retries ->
         {:transient, transient_backoff_ms(transient_attempts)}

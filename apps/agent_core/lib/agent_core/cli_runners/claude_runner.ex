@@ -78,6 +78,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   @engine "claude"
 
+  # Environment variables that must never leak into Claude CLI subprocesses.
+  # CLAUDECODE causes "cannot launch inside another Claude Code session" (exit 1).
+  @env_denylist ["CLAUDECODE"]
+
   # ============================================================================
   # Runner State
   # ============================================================================
@@ -168,23 +172,26 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       cond do
         scrub_env ->
           allowlist = config[:env_allowlist] || default_env_allowlist()
-          prefixes = config[:env_allow_prefixes] || []
+          prefixes = config[:env_allow_prefixes] || default_env_allow_prefixes()
           build_scrubbed_env(allowlist, prefixes)
 
-        map_size(overrides) > 0 ->
-          System.get_env()
-
         true ->
-          nil
+          System.get_env()
       end
 
-    if is_nil(env) do
-      nil
-    else
+    result =
       env
       |> Map.merge(overrides)
+      |> Map.drop(@env_denylist)
       |> Enum.to_list()
-    end
+
+    has_claudecode = Enum.any?(result, fn {k, _} -> k == "CLAUDECODE" end)
+
+    Logger.debug(
+      "ClaudeRunner.env scrub=#{scrub_env} env_keys=#{length(result)} has_CLAUDECODE=#{has_claudecode}"
+    )
+
+    result
   end
 
   @impl true
@@ -640,6 +647,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       "XDG_CONFIG_HOME",
       "XDG_CACHE_HOME"
     ]
+  end
+
+  defp default_env_allow_prefixes do
+    ["ANTHROPIC_", "CLAUDE_", "OPENAI_"]
   end
 
   defp normalize_env_overrides(nil), do: %{}
