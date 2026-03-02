@@ -30,20 +30,28 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 ## Milestones
 
 ### M1 — Rate Limit Detection and State Tracking
-- [ ] Identify rate limit error patterns across providers (Anthropic, OpenAI, Google, Bedrock)
-- [ ] Add rate limit metadata extraction (retry-after header, reset window)
-- [ ] Create `RateLimitPause` struct for tracking pause state
+- [x] Identify rate limit error patterns across providers (Anthropic, OpenAI, Google, Bedrock)
+- [x] Add rate limit metadata extraction (retry-after header, reset window)
+- [x] Create `RateLimitPause` struct for tracking pause state
 
 ### M2 — Pause/Resume Orchestration
-- [ ] Add `paused_for_limit` run state to RunGraph
-- [ ] Implement pause transition with checkpoint creation
-- [ ] Implement resume trigger after reset window
+- [x] Add `paused_for_limit` run state to RunGraph
+- [x] Implement pause transition with checkpoint creation
+- [x] Implement resume trigger after reset window
 - [ ] Add resume scheduling via cron or internal timer
 
+### M2.5 — RunGraph Integration (M3 from original plan)
+- [x] Add `pause_for_limit/2` to RunGraph for pausing runs
+- [x] Add `resume_from_limit/1` to RunGraph for resuming runs
+- [x] Update `valid_transition?` to allow running <-> paused_for_limit
+- [x] Track pause_history in run records for audit trail
+- [x] Ensure paused_for_limit is NOT a terminal status
+- [x] Add comprehensive tests (9 new tests, all passing)
+
 ### M3 — Telemetry and Observability
-- [ ] Add telemetry events for pause/resume cycles
+- [x] Add telemetry events for pause/resume cycles (in RateLimitPause)
 - [ ] Expose pause state in introspection API
-- [ ] Add metrics: time_paused, resume_count, limit_hits_by_provider
+- [x] Add metrics: time_paused, resume_count, limit_hits_by_provider (in RateLimitPause.stats/0)
 
 ### M4 — User Experience
 - [ ] Add user notification when run enters paused-for-limit state
@@ -76,6 +84,11 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 | 2026-03-03 | M1-M2 | Implemented `CodingAgent.RateLimitPause` module with ETS-backed pause tracking |
 | 2026-03-03 | M1-M2 | Added create/get/resume/list/stats/cleanup functions with telemetry |
 | 2026-03-03 | M1-M2 | 20 comprehensive tests pass |
+| 2026-03-03 | M2.5 | Added `paused_for_limit` state to RunGraph |
+| 2026-03-03 | M2.5 | Implemented `pause_for_limit/2` and `resume_from_limit/1` functions |
+| 2026-03-03 | M2.5 | Updated state machine to allow running <-> paused_for_limit transitions |
+| 2026-03-03 | M2.5 | Added pause_history tracking for audit trail |
+| 2026-03-03 | M2.5 | 9 new RunGraph tests pass (45 total tests in run_graph_test.exs) |
 
 ## Implementation Notes
 
