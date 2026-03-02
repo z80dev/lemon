@@ -32,8 +32,6 @@ defmodule Ai.MixProject do
       {:req, "~> 0.5"},
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
-      # Options validation
-      {:nimble_options, "~> 1.1"},
       # Required for Req.Test stubs
       {:plug, "~> 1.16", only: :test}
     ]
