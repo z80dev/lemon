@@ -2,6 +2,33 @@
 
 ## 2026-03-05 (cron run)
 
+### PLN-20260303-rate-limit-auto-resume - Landed
+**Plan:** PLN-20260303-rate-limit-auto-resume  
+**Status:** `landed`  
+**Landed Revision:** `62833edb`  
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`  
+
+Completed landing of the rate limit auto-resume feature. All milestones (M1-M6) complete with comprehensive test coverage.
+
+**Key Deliverables:**
+- `CodingAgent.RateLimitPause` - ETS-backed pause tracking (20 tests)
+- `CodingAgent.ResumeScheduler` - Automatic resume scheduling (11 tests)
+- RunGraph integration - `paused_for_limit` state with transitions (9 tests)
+- Introspection API methods - `rate_limit_pause.list`, `.get`, `.stats` (14 tests)
+- Integration tests - Full pause/resume cycle coverage (24 tests)
+- Documentation - `docs/rate_limit_auto_resume.md` + `apps/coding_agent/AGENTS.md`
+
+**Total Test Coverage:** 69 tests, all passing
+
+**Landing Actions:**
+- Updated `planning/INDEX.md` - moved to `Recently Landed` with revision `62833edb`
+- Updated `planning/merges/MRG-PLN-20260303-rate-limit-auto-resume.md` - added `landed_at` and `landed_revision`
+- Updated `planning/JANITOR.md` - added this completion summary
+
+---
+
+## 2026-03-05 (cron run)
+
 ### Architecture Module Decomposition - MOD-010, MOD-011, ARCH-013 Complete
 **Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
 

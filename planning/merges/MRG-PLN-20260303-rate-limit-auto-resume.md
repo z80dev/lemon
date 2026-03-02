@@ -2,6 +2,8 @@
 
 **Plan ID:** PLN-20260303-rate-limit-auto-resume  
 **Merge Date:** 2026-03-05  
+**Landed At:** 2026-03-05  
+**Landed Revision:** 62833edb  
 **Source Branch:** feature/pln-20260303-rate-limit-auto-resume-m3  
 **Target Branch:** main  
 **Merged By:** janitor  
