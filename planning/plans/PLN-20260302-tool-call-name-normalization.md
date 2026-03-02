@@ -1,7 +1,7 @@
 ---
 id: PLN-20260302-tool-call-name-normalization
 title: Tool Call Name Normalization for Provider Formatting Drift
-status: in_progress
+status: ready_to_land
 owner: janitor
 reviewer: janitor
 branch: feature/pln-20260302-tool-call-name-normalization
@@ -35,7 +35,7 @@ OpenClaw added dispatch hardening that trims/normalizes tool call names before l
   - Test Unicode whitespace handling
   - Test "not found" behavior after normalization
 
-- [ ] **M4** — Documentation and review
+- [x] **M4** — Documentation and review
   - Update AGENTS.md if needed
   - Create review artifact
   - Create merge artifact
@@ -73,4 +73,4 @@ OpenClaw added dispatch hardening that trims/normalizes tool call names before l
 | 2026-03-02T22:00 | M1 | Implemented `normalize_tool_name/1` with Unicode whitespace support |
 | 2026-03-02T22:01 | M2 | Updated `find_tool/2` to use normalized matching with telemetry |
 | 2026-03-02T22:03 | M3 | Added 4 comprehensive tests, all passing |
-| 2026-03-02T22:04 | M4 | Pending - documentation and review artifacts |
+| 2026-03-02T22:05 | M4 | Created review and merge artifacts, moved to ready_to_land |

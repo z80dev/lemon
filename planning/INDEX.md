@@ -32,19 +32,19 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| [PLN-20260302-tool-call-name-normalization](plans/PLN-20260302-tool-call-name-normalization.md) | Tool Call Name Normalization | `in_progress` | janitor | `feature/pln-20260302-tool-call-name-normalization` | — | — | 2026-03-02 |
+| — | — | — | — | — | — | — | — |
 
 ## Ready for Review
 
 | Plan ID | Title | Review Doc | Owner | Updated |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| — | — | — | — | — | — |
 
 ## Ready to Land
 
 | Plan ID | Title | Landing Doc | Owner | Updated |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| [PLN-20260302-tool-call-name-normalization](plans/PLN-20260302-tool-call-name-normalization.md) | Tool Call Name Normalization | [MRG-PLN-20260302-tool-call-name-normalization](merges/MRG-PLN-20260302-tool-call-name-normalization.md) | janitor | 2026-03-02 |
 
 
 ## Blocked
