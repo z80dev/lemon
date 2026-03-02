@@ -4,16 +4,26 @@ defmodule CodingAgent.ResumeSchedulerTest do
   alias CodingAgent.{RateLimitPause, ResumeScheduler}
 
   setup do
-    # Ensure the RateLimitPause ETS table exists
+    # Ensure the RateLimitPause ETS table exists and is clean
     _ = RateLimitPause.stats()
+    table = :coding_agent_rate_limit_pauses
+    if :ets.whereis(table) != :undefined do
+      :ets.delete_all_objects(table)
+    end
 
-    # Start the scheduler
-    {:ok, pid} = ResumeScheduler.start_link(check_interval_ms: 100_000)
+    # Start the scheduler if not already running
+    pid =
+      case Process.whereis(ResumeScheduler) do
+        nil ->
+          {:ok, pid} = ResumeScheduler.start_link(check_interval_ms: 100_000)
+          pid
+        pid ->
+          pid
+      end
 
     on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
-      end
+      # Don't stop the scheduler on exit - other tests may need it
+      :ok
     end)
 
     {:ok, scheduler: pid}
