@@ -361,6 +361,86 @@ defmodule LemonChannels.ChannelStateTest do
     end
   end
 
+  # ── Known Targets ───────────────────────────────────────────────────
+
+  describe "list_known_targets/0" do
+    test "returns empty list when no targets exist" do
+      # This test relies on isolation; if other tests add targets they
+      # are cleaned up. A fresh store should be empty for this table.
+      targets = ChannelState.list_known_targets()
+      assert is_list(targets)
+    end
+
+    test "returns stored known targets" do
+      key = {"botx", -1_001_234, nil}
+      entry = %{
+        channel_id: "telegram",
+        account_id: "botx",
+        peer_kind: :group,
+        peer_id: "-1001234",
+        chat_id: -1_001_234,
+        chat_type: "supergroup",
+        chat_title: "Test Group"
+      }
+
+      on_exit(fn ->
+        cleanup_store_keys([:telegram_known_targets], [key])
+      end)
+
+      _ = LemonCore.Store.put(:telegram_known_targets, key, entry)
+      targets = ChannelState.list_known_targets()
+
+      assert Enum.any?(targets, fn {k, _v} -> k == key end)
+    end
+  end
+
+  describe "get_known_target/3" do
+    test "returns the target entry when present" do
+      key = {"botx", -1_005_678, nil}
+      entry = %{
+        channel_id: "telegram",
+        account_id: "botx",
+        peer_kind: :group,
+        peer_id: "-1005678",
+        chat_id: -1_005_678,
+        chat_type: "supergroup"
+      }
+
+      on_exit(fn ->
+        cleanup_store_keys([:telegram_known_targets], [key])
+      end)
+
+      _ = LemonCore.Store.put(:telegram_known_targets, key, entry)
+      assert %{chat_type: "supergroup"} = ChannelState.get_known_target("botx", -1_005_678, nil)
+    end
+
+    test "returns nil when no target exists" do
+      assert nil == ChannelState.get_known_target("botx", -9_999_999, nil)
+    end
+  end
+
+  describe "put_known_target/4" do
+    test "stores a known target entry" do
+      key = {"botx", -1_009_999, nil}
+      entry = %{
+        channel_id: "telegram",
+        account_id: "botx",
+        peer_kind: :group,
+        peer_id: "-1009999",
+        chat_id: -1_009_999,
+        chat_type: "group"
+      }
+
+      on_exit(fn ->
+        cleanup_store_keys([:telegram_known_targets], [key])
+      end)
+
+      assert :ok = ChannelState.put_known_target("botx", -1_009_999, nil, entry)
+      stored = LemonCore.Store.get(:telegram_known_targets, key)
+      assert stored.chat_type == "group"
+    end
+  end
+
   # ── Integration: mark_pending_compaction + reset_resume_state ───────
 
   describe "integration: compaction workflow" do

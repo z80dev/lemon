@@ -12,6 +12,7 @@ defmodule LemonChannels.ChannelState do
   - `:telegram_msg_resume` — maps message IDs to resume tokens
   - `:telegram_selected_resume` — currently selected resume token per thread
   - `:telegram_msg_session` — maps message IDs to session keys
+  - `:telegram_known_targets` — known Telegram chat targets
 
   ## Session Key Parsing
 
@@ -314,6 +315,48 @@ defmodule LemonChannels.ChannelState do
   end
 
   def get_msg_session(_account_id, _chat_id, _thread_id, _generation, _message_id), do: nil
+
+  # ── Known Targets ───────────────────────────────────────────────────────
+
+  @doc """
+  List all known Telegram targets.
+
+  Returns the raw list of `{key, entry}` tuples from the
+  `:telegram_known_targets` store table.
+  """
+  @spec list_known_targets() :: [{tuple(), map()}]
+  def list_known_targets do
+    LemonCore.Store.list(:telegram_known_targets)
+  rescue
+    _ -> []
+  end
+
+  @doc """
+  Retrieve a known Telegram target by key.
+
+  The key is `{account_id, chat_id, topic_id}`.
+  """
+  @spec get_known_target(String.t(), integer(), integer() | nil) :: map() | nil
+  def get_known_target(account_id, chat_id, topic_id)
+      when is_binary(account_id) and is_integer(chat_id) do
+    LemonCore.Store.get(:telegram_known_targets, {account_id, chat_id, topic_id})
+  rescue
+    _ -> nil
+  end
+
+  @doc """
+  Store a known Telegram target.
+
+  The key is `{account_id, chat_id, topic_id}`.
+  """
+  @spec put_known_target(String.t(), integer(), integer() | nil, map()) :: :ok
+  def put_known_target(account_id, chat_id, topic_id, entry)
+      when is_binary(account_id) and is_integer(chat_id) and is_map(entry) do
+    LemonCore.Store.put(:telegram_known_targets, {account_id, chat_id, topic_id}, entry)
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   # ── Private Helpers ─────────────────────────────────────────────────────
 
