@@ -14,6 +14,7 @@ config :lemon_core, LemonCore.Store,
 config :lemon_control_plane, :browser_local_fallback, true
 
 config :lemon_web, LemonWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
   http: [ip: {127, 0, 0, 1}, port: 4080],
   check_origin: false,
   code_reloader: true,
