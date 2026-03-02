@@ -6,9 +6,17 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   - Token storage and retrieval
   - Automatic refresh before expiry
   - Token rotation on refresh
+  - Non-blocking token refresh with caller coalescing
 
   Persists refreshed tokens to runtime config/env and Lemon secrets store
   (when available) so token rotation survives restarts.
+
+  ## Non-blocking refresh
+
+  When a caller requests a token that needs refreshing, the refresh is
+  offloaded to an async task. All callers that arrive while a refresh is
+  in flight are queued (`waiters`) and replied to once the refresh
+  completes or fails. At most one refresh runs at a time.
   """
 
   use GenServer
@@ -28,6 +36,8 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     token_expires_at: "X_API_TOKEN_EXPIRES_AT"
   ]
 
+  @telemetry_prefix [:lemon_channels, :x_api, :token_refresh]
+
   # Token structure
   defstruct [
     :access_token,
@@ -37,6 +47,10 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     :secrets_module,
     :persist_secrets?,
     :timer_ref,
+    :refresh_ref,
+    :refresh_start_time,
+    refreshing?: false,
+    waiters: [],
     pkce_states: %{}
   ]
 
@@ -48,6 +62,10 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
           secrets_module: module(),
           persist_secrets?: boolean(),
           timer_ref: reference() | nil,
+          refresh_ref: reference() | nil,
+          refresh_start_time: integer() | nil,
+          refreshing?: boolean(),
+          waiters: [GenServer.from()],
           pkce_states: map()
         }
 
@@ -61,6 +79,11 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   @doc """
   Get the current valid access token.
   Automatically refreshes if expired or about to expire.
+
+  This call is non-blocking with respect to the GenServer: if a refresh
+  is needed, the caller is queued and a background task performs the
+  network I/O. Multiple concurrent callers are coalesced into a single
+  refresh operation.
   """
   def get_access_token do
     get_access_token(@name)
@@ -149,13 +172,27 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   end
 
   @impl true
-  def handle_call(:get_access_token, _from, state) do
-    case ensure_valid(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.access_token}, new_state}
+  def handle_call(:get_access_token, from, state) do
+    cond do
+      # Token is valid -- return immediately
+      has_valid_token?(state) ->
+        {:reply, {:ok, state.access_token}, state}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      # No refresh token available -- can't refresh
+      is_nil(state.refresh_token) and is_nil(state.access_token) ->
+        {:reply, {:error, :no_token}, state}
+
+      is_nil(state.refresh_token) ->
+        {:reply, {:error, :no_refresh_token}, state}
+
+      # Refresh already in flight -- queue this caller
+      state.refreshing? ->
+        {:noreply, %{state | waiters: [from | state.waiters]}}
+
+      # Need to refresh -- start async task and queue caller
+      true ->
+        state = start_async_refresh(state)
+        {:noreply, %{state | waiters: [from | state.waiters]}}
     end
   end
 
@@ -200,30 +237,128 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     end
   end
 
+  # Timer-based background refresh (proactive, before expiry)
   @impl true
   def handle_info(:refresh_token, state) do
-    case do_refresh(state) do
-      {:ok, new_state} ->
-        Logger.info("[XAPI] Token refreshed successfully")
-        {:noreply, new_state}
-
-      {:error, reason} ->
-        retry_ms = refresh_retry_delay_ms(reason)
-
-        if retry_ms == @invalid_refresh_retry_ms do
-          Logger.error(
-            "[XAPI] Token refresh failed with non-recoverable auth error #{inspect(reason)}; " <>
-              "retrying in #{div(retry_ms, 1000)}s. Re-auth may be required."
-          )
-        else
-          Logger.error("[XAPI] Token refresh failed: #{inspect(reason)}")
-        end
-
-        # Cancel existing timer before scheduling retry (Bug #1 fix)
-        if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-        ref = Process.send_after(self(), :refresh_token, retry_ms)
-        {:noreply, %{state | timer_ref: ref}}
+    if state.refreshing? do
+      # Already refreshing, skip this timer tick
+      {:noreply, state}
+    else
+      state = start_async_refresh(state)
+      {:noreply, state}
     end
+  end
+
+  # Async refresh task completed successfully
+  @impl true
+  def handle_info({ref, {:ok, new_state}}, %{refresh_ref: ref} = state)
+      when is_reference(ref) do
+    # Flush the DOWN message from the task
+    Process.demonitor(ref, [:flush])
+
+    :telemetry.execute(
+      @telemetry_prefix ++ [:stop],
+      %{duration: System.monotonic_time() - (state.refresh_start_time || System.monotonic_time())},
+      %{status: :ok}
+    )
+
+    Logger.info("[XAPI] Token refreshed successfully")
+
+    # Merge the refreshed token data into the current state, preserving
+    # fields that belong to the GenServer (waiters, pkce_states, etc.)
+    merged_state = %{state |
+      access_token: new_state.access_token,
+      refresh_token: new_state.refresh_token,
+      expires_at: new_state.expires_at,
+      token_type: new_state.token_type,
+      timer_ref: new_state.timer_ref,
+      refreshing?: false,
+      refresh_ref: nil,
+      refresh_start_time: nil
+    }
+
+    # Reply to all waiters with the new access token
+    for waiter <- state.waiters do
+      GenServer.reply(waiter, {:ok, merged_state.access_token})
+    end
+
+    {:noreply, %{merged_state | waiters: []}}
+  end
+
+  # Async refresh task completed with an error
+  @impl true
+  def handle_info({ref, {:error, reason}}, %{refresh_ref: ref} = state)
+      when is_reference(ref) do
+    # Flush the DOWN message from the task
+    Process.demonitor(ref, [:flush])
+
+    :telemetry.execute(
+      @telemetry_prefix ++ [:stop],
+      %{duration: System.monotonic_time() - (state.refresh_start_time || System.monotonic_time())},
+      %{status: :error, reason: reason}
+    )
+
+    retry_ms = refresh_retry_delay_ms(reason)
+
+    if retry_ms == @invalid_refresh_retry_ms do
+      Logger.error(
+        "[XAPI] Token refresh failed with non-recoverable auth error #{inspect(reason)}; " <>
+          "retrying in #{div(retry_ms, 1000)}s. Re-auth may be required."
+      )
+    else
+      Logger.error("[XAPI] Token refresh failed: #{inspect(reason)}")
+    end
+
+    # Reply to all waiters with the error
+    for waiter <- state.waiters do
+      GenServer.reply(waiter, {:error, reason})
+    end
+
+    # Cancel existing timer before scheduling retry
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    timer_ref = Process.send_after(self(), :refresh_token, retry_ms)
+
+    new_state = %{state |
+      refreshing?: false,
+      refresh_ref: nil,
+      refresh_start_time: nil,
+      timer_ref: timer_ref,
+      waiters: []
+    }
+
+    {:noreply, new_state}
+  end
+
+  # Async refresh task crashed (DOWN message)
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{refresh_ref: ref} = state)
+      when is_reference(ref) do
+    :telemetry.execute(
+      @telemetry_prefix ++ [:stop],
+      %{duration: System.monotonic_time() - (state.refresh_start_time || System.monotonic_time())},
+      %{status: :error, reason: {:task_crashed, reason}}
+    )
+
+    Logger.error("[XAPI] Token refresh task crashed: #{inspect(reason)}")
+
+    # Reply to all waiters with an error
+    for waiter <- state.waiters do
+      GenServer.reply(waiter, {:error, {:refresh_crashed, reason}})
+    end
+
+    # Schedule a retry
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    timer_ref = Process.send_after(self(), :refresh_token, @default_refresh_retry_ms)
+
+    new_state = %{state |
+      refreshing?: false,
+      refresh_ref: nil,
+      refresh_start_time: nil,
+      timer_ref: timer_ref,
+      waiters: []
+    }
+
+    {:noreply, new_state}
   end
 
   @impl true
@@ -239,23 +374,50 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     {:noreply, state}
   end
 
-  ## Private Functions
-
-  defp ensure_valid(%__MODULE__{access_token: nil} = state) do
-    # Try to refresh if we have a refresh token
-    if state.refresh_token do
-      do_refresh(state)
-    else
-      {:error, :no_token}
-    end
+  # Catch-all for unrelated DOWN messages and task results
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
   end
 
-  defp ensure_valid(%__MODULE__{} = state) do
-    if needs_refresh?(state) do
-      do_refresh(state)
-    else
-      {:ok, state}
-    end
+  ## Private Functions
+
+  defp has_valid_token?(%__MODULE__{access_token: nil}), do: false
+
+  defp has_valid_token?(%__MODULE__{} = state) do
+    not needs_refresh?(state)
+  end
+
+  defp start_async_refresh(%__MODULE__{} = state) do
+    :telemetry.execute(
+      @telemetry_prefix ++ [:start],
+      %{system_time: System.system_time()},
+      %{}
+    )
+
+    # Capture everything the task needs from state before spawning
+    refresh_token = state.refresh_token
+    secrets_module = state.secrets_module
+    persist_secrets? = state.persist_secrets?
+    server = self()
+
+    task =
+      Task.async(fn ->
+        # Build a minimal state for do_refresh
+        refresh_state = %__MODULE__{
+          refresh_token: refresh_token,
+          secrets_module: secrets_module,
+          persist_secrets?: persist_secrets?
+        }
+
+        do_refresh(refresh_state, server)
+      end)
+
+    %{state |
+      refreshing?: true,
+      refresh_ref: task.ref,
+      refresh_start_time: System.monotonic_time()
+    }
   end
 
   defp needs_refresh?(%__MODULE__{expires_at: nil}), do: false
@@ -266,11 +428,11 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     DateTime.compare(now, refresh_at) == :gt
   end
 
-  defp do_refresh(%__MODULE__{refresh_token: nil}) do
+  defp do_refresh(%__MODULE__{refresh_token: nil}, _server) do
     {:error, :no_refresh_token}
   end
 
-  defp do_refresh(%__MODULE__{} = state) do
+  defp do_refresh(%__MODULE__{} = state, server) do
     config = LemonChannels.Adapters.XAPI.config()
 
     with {:ok, client_id, _client_secret} <- refresh_credentials(config) do
@@ -292,7 +454,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
            ) do
         {:ok, %{status: 200, body: response}} ->
           new_state = parse_token_response(response, state)
-          new_state = schedule_refresh(new_state)
+          new_state = schedule_refresh_for(new_state, server)
 
           case persist_runtime_tokens(new_state) do
             :ok ->
@@ -303,7 +465,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
                 "[XAPI] Token refresh succeeded but secrets persist failed; scheduling retry"
               )
 
-              Process.send_after(self(), :retry_persist_secrets, 30_000)
+              Process.send_after(server, :retry_persist_secrets, 30_000)
           end
 
           {:ok, new_state}
@@ -332,13 +494,17 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   end
 
   defp schedule_refresh(%__MODULE__{} = state) do
+    schedule_refresh_for(state, self())
+  end
+
+  defp schedule_refresh_for(%__MODULE__{} = state, server) do
     # Cancel any existing timer
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
 
     delay =
       case state.expires_at do
         nil ->
-          # No expiry known — refresh soon in background
+          # No expiry known -- refresh soon in background
           5_000
 
         expires_at ->
@@ -352,7 +518,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
       end
 
     Logger.info("[XAPI] Scheduling token refresh in #{div(delay, 1000)}s")
-    ref = Process.send_after(self(), :refresh_token, delay)
+    ref = Process.send_after(server, :refresh_token, delay)
     %{state | timer_ref: ref}
   end
 
