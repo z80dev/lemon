@@ -10,6 +10,7 @@ defmodule LemonCore.Application do
   - LemonCore.Store - Key-value storage backend
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
+  - LemonCore.BackgroundTaskSupervisor - Task.Supervisor for background tasks
   - LemonCore.Browser.LocalServer - Local browser automation server
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
@@ -43,6 +44,7 @@ defmodule LemonCore.Application do
 
     children = [
       {Phoenix.PubSub, name: LemonCore.PubSub},
+      {Task.Supervisor, name: LemonCore.BackgroundTaskSupervisor},
       {LemonCore.ConfigCache, config_cache_opts},
       LemonCore.Store,
       LemonCore.ConfigReloader,

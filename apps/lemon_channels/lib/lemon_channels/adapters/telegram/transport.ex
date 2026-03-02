@@ -5124,29 +5124,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp maybe_put_kw(opts, key, value) when is_list(opts), do: [{key, value} | opts]
 
   defp start_async_task(_state, fun) when is_function(fun, 0) do
-    supervisor = async_supervisor_name()
-
-    if is_pid(Process.whereis(supervisor)) do
-      Task.Supervisor.start_child(supervisor, fn -> run_async_task(fun) end)
-    else
-      Task.start(fn -> run_async_task(fun) end)
+    wrapped = fn ->
+      try do
+        fun.()
+        :ok
+      rescue
+        _ -> :ok
+      catch
+        _kind, _reason -> :ok
+      end
     end
+
+    LemonCore.BackgroundTask.start(wrapped,
+      supervisor: LemonChannels.Adapters.Telegram.AsyncSupervisor,
+      allow_unsupervised: true
+    )
   rescue
     _ -> :ok
   end
 
   defp start_async_task(_state, _fun), do: :ok
-
-  defp run_async_task(fun) when is_function(fun, 0) do
-    fun.()
-    :ok
-  rescue
-    _ -> :ok
-  catch
-    _kind, _reason -> :ok
-  end
-
-  defp async_supervisor_name, do: LemonChannels.Adapters.Telegram.AsyncSupervisor
 
   defp map_get(map, key), do: MapHelpers.get_key(map, key)
 

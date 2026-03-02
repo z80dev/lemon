@@ -380,23 +380,10 @@ defmodule CodingAgent.Session.CompactionManager do
 
   @spec start_background_task((-> any())) :: {:ok, pid()} | {:error, term()}
   def start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to start supervised session task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
+    LemonCore.BackgroundTask.start(fun,
+      supervisor: @task_supervisor,
+      allow_unsupervised: true
+    )
   end
 
   @spec start_tracked_background_task((-> any()), non_neg_integer(), atom()) ::
