@@ -1,5 +1,51 @@
 # JANITOR.md - Implementation Agent Work Log
 
+## 2026-03-05 (cron run)
+
+### Architecture Module Decomposition - MOD-010, MOD-011, ARCH-013 Complete
+**Branch:** `feature/pln-20260303-rate-limit-auto-resume-m3`
+
+Completed major module decomposition work from the architecture refactoring backlog:
+
+**MOD-010: Split Telegram.Transport**
+- Created focused submodules:
+  - `Poller` - Long-polling logic, offset management, webhook conflict recovery
+  - `AsyncTaskRunner` - Background task spawning for approvals
+  - `ReactionTracker` - Reaction update handling for run completion
+  - `UpdateRouter` - Update routing logic
+- Reduced transport.ex from ~900 lines to ~400 lines
+- All existing tests pass
+
+**MOD-011: Split Webhook Transport**
+- Created focused submodules:
+  - `Auth` - Request verification and token authentication
+  - `Payload` - Request normalization
+  - `Routing` - Integration config resolution
+  - `Callback` - Callback delivery with retries
+  - `CallbackUrl` - URL validation and SSRF protection
+  - `Idempotency` - Idempotency key tracking
+  - `Response` - Reply shaping
+  - `Helpers` - Shared utilities
+- Reduced webhook.ex from ~1400 lines to ~300 lines
+- All 11 webhook transport tests pass
+
+**ARCH-013: Canonicalize Resume Token in lemon_core**
+- Moved resume token handling from `LemonChannels.EngineRegistry` to `LemonCore.ResumeToken`
+- Updated `RunOrchestrator` to use new location
+- Updated `Telegram` channel adapter to use new location
+- Cleaner separation: core concepts live in lemon_core
+
+**Commits:**
+- `96c2c6d5` - refactor: Split Telegram.Transport and Webhook into focused submodules
+- `9f164ae9` - docs: Update WORKLOG with completed ARCH-013, MOD-010, MOD-011
+
+**Validation:**
+- `mix test apps/lemon_gateway/test/webhook_transport_test.exs` ✅ (11 tests)
+- `mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/transport_*` ✅ (all transport tests)
+- `mix compile` ✅
+
+---
+
 ## 2026-03-05
 ### Rate Limit Auto-Resume - M2 Resume Scheduling Complete
 **Plan:** PLN-20260303-rate-limit-auto-resume
