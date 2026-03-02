@@ -73,4 +73,30 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 
 | Timestamp | Milestone | Notes |
 |-----------|-----------|-------|
-| 2026-03-03 | M1 | Started rate limit detection analysis |
+| 2026-03-03 | M1-M2 | Implemented `CodingAgent.RateLimitPause` module with ETS-backed pause tracking |
+| 2026-03-03 | M1-M2 | Added create/get/resume/list/stats/cleanup functions with telemetry |
+| 2026-03-03 | M1-M2 | 20 comprehensive tests pass |
+
+## Implementation Notes
+
+### M1-M2: Rate Limit Pause Tracking
+
+Created `CodingAgent.RateLimitPause` module:
+
+**Core Functions:**
+- `create/4` - Creates pause record with retry-after timing
+- `ready_to_resume?/1` - Checks if pause window has elapsed
+- `resume/1` - Marks pause as resumed with telemetry
+- `get/1` - Fetches pause by ID
+- `list_pending/1` - Lists active pauses for session
+- `list_all/1` - Lists all pauses for session
+- `stats/0` - Aggregate statistics across all pauses
+- `cleanup_expired/1` - Removes old pause records
+
+**Features:**
+- ETS-backed in-memory storage with concurrent access
+- Telemetry events: `[:coding_agent, :rate_limit_pause, :paused|:resumed]`
+- Automatic resume_at calculation from retry_after_ms
+- Provider-specific tracking and statistics
+
+**Tests:** 20 tests covering all functionality
