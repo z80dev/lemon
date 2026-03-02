@@ -15,7 +15,9 @@ defmodule Lemon.MixProject do
   # project and cannot be accessed from applications inside
   # the apps folder.
   defp deps do
-    []
+    [
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+    ]
   end
 
   # Release configuration for games.zeebot.xyz
