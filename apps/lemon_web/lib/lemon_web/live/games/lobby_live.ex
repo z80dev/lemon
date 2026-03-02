@@ -89,6 +89,7 @@ defmodule LemonWeb.Games.LobbyLive do
         <% "rock_paper_scissors" -> %>✊
         <% "connect4" -> %>🔴
         <% "tic_tac_toe" -> %>⭕
+        <% "battleship" -> %>🚢
         <% _ -> %>🎮
       <% end %>
     </span>

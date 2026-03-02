@@ -20,6 +20,13 @@ config :coding_agent, :lane_caps,
   subagent: 8,
   background_exec: 4
 
+# Rate limit auto-resume configuration
+# Controls behavior when runs hit provider rate limits
+config :coding_agent, :rate_limit_auto_resume,
+  enabled: true,
+  default_retry_after_ms: 60_000,
+  max_retry_attempts: 3
+
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,

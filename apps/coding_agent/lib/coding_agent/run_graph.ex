@@ -120,15 +120,56 @@ defmodule CodingAgent.RunGraph do
 
   @doc """
   Pause a run due to rate limit. Stores pause metadata for auto-resume.
+
+  Emits a PubSub event (`:run_paused_for_rate_limit`) that channel adapters
+  can consume to notify users of the pause state.
   """
   @spec pause_for_limit(run_id(), map()) :: :ok | {:error, :invalid_transition | :not_found}
   def pause_for_limit(run_id, pause_data) do
-    RunGraphServer.atomic_transition(run_id, :paused_for_limit, fn record ->
-      record
-      |> Map.put(:status, :paused_for_limit)
-      |> Map.put(:pause_data, pause_data)
-      |> Map.put(:paused_at, System.system_time(:second))
-    end)
+    result =
+      RunGraphServer.atomic_transition(run_id, :paused_for_limit, fn record ->
+        record
+        |> Map.put(:status, :paused_for_limit)
+        |> Map.put(:pause_data, pause_data)
+        |> Map.put(:paused_at, System.system_time(:second))
+      end)
+
+    # Emit specific PubSub event for channel adapters to notify users
+    if result == :ok do
+      broadcast_rate_limit_pause(run_id, pause_data)
+    end
+
+    result
+  end
+
+  # Broadcast a specific rate limit pause event for user notifications
+  defp broadcast_rate_limit_pause(run_id, pause_data) do
+    payload = %{
+      run_id: run_id,
+      status: :paused_for_limit,
+      retry_after_ms: pause_data[:retry_after_ms],
+      provider: pause_data[:provider],
+      message: "Run paused due to rate limit. Will auto-resume shortly."
+    }
+
+    meta = %{
+      run_id: run_id,
+      session_key: pause_data[:session_key]
+    }
+
+    event = LemonCore.Event.new(:run_paused_for_rate_limit, payload, meta)
+
+    # Broadcast to run topic for direct subscribers
+    LemonCore.Bus.broadcast("run:#{run_id}", event)
+
+    # Also broadcast to session topic if session_key is present
+    if is_binary(pause_data[:session_key]) do
+      LemonCore.Bus.broadcast("session:#{pause_data[:session_key]}", event)
+    end
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   @doc """

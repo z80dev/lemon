@@ -584,28 +584,49 @@ reaching into Store tables directly. Tables to migrate:
 - `:telegram_topic_trigger_mode`
 - `:telegram_offsets`
 
-### Run state -> `LemonCore.RunStore` (future)
+### Run state -> `LemonCore.RunStore` (implemented, DATA-012)
 
-Consolidate run-related state into a dedicated module:
+Typed store providing a clear API for run events, finalization, and history
+lookup. Wraps `LemonCore.Store` and emits telemetry for each operation.
+
+Tables managed:
 
 - `:runs` (active run events/summaries)
 - `:run_history` (finalized run history by session)
-- `:progress` (progress message -> run mapping)
 
-### Session state -> `LemonCore.SessionStore` (future)
+API: `append_run_event/2`, `finalize_run/2`, `get_run/1`, `get_run_history/2`
 
-Consolidate session-related state:
+### Session state -> `LemonCore.SessionStore` (implemented, DATA-012)
+
+Typed store providing a clear API for chat state and session metadata.
+Wraps `LemonCore.Store` with TTL-aware chat state and session index operations.
+
+Tables managed:
 
 - `:chat` (chat state with TTL)
 - `:sessions_index` (session metadata)
+
+API: `put_chat_state/2`, `get_chat_state/1`, `delete_chat_state/1`,
+`get_session/1`, `list_sessions/1`, `delete_session/1`
+
+Remaining candidates for future inclusion:
+
 - `:session_policies` (session policy overrides)
 - `:session_overrides` (session config overrides)
 - `:talk_mode` (per-session talk mode)
 
-### Progress/output tracking -> `LemonCore.ProgressStore` (future)
+### Progress/output tracking -> `LemonCore.ProgressStore` (implemented, DATA-012)
+
+Typed store for progress message mappings and compaction markers. Wraps
+`LemonCore.Store` and emits telemetry for each operation.
+
+Tables managed:
 
 - `:progress` (progress message mappings)
 - `:pending_compaction` (compaction markers)
+
+API: `put_progress_mapping/3`, `get_run_by_progress/2`, `delete_progress_mapping/2`,
+`put_pending_compaction/2`, `get_pending_compaction/1`, `delete_pending_compaction/1`
 
 ### Policy state -> `LemonCore.PolicyStore` (future)
 

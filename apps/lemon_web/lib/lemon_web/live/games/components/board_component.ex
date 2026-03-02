@@ -62,6 +62,126 @@ defmodule LemonWeb.Games.Components.BoardComponent do
     """
   end
 
+  def board(%{game_type: "battleship"} = assigns) do
+    my_grid = Map.get(assigns.game_state, "my_grid", [])
+    opponent_grid = Map.get(assigns.game_state, "opponent_grid", [])
+    my_ships = Map.get(assigns.game_state, "my_ships", [])
+    opponent_ships = Map.get(assigns.game_state, "opponent_ships", [])
+    phase = Map.get(assigns.game_state, "phase", "setup")
+    last_move = Map.get(assigns.game_state, "last_move")
+    winner = Map.get(assigns.game_state, "winner")
+
+    assigns =
+      assigns
+      |> assign(:my_grid, my_grid)
+      |> assign(:opponent_grid, opponent_grid)
+      |> assign(:my_ships, my_ships)
+      |> assign(:opponent_ships, opponent_ships)
+      |> assign(:phase, phase)
+      |> assign(:last_move, last_move)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div id="battleship-board" class="space-y-4">
+      <%!-- Phase Indicator --%>
+      <div class="flex justify-center">
+        <span class={[
+          "rounded-full px-3 py-1 text-xs font-medium",
+          @phase == "setup" && "bg-amber-100 text-amber-700",
+          @phase == "battle" && "bg-rose-100 text-rose-700"
+        ]}>
+          <%= case @phase do %>
+            <% "setup" -> %>⚓ Setup Phase
+            <% "battle" -> %>💥 Battle Phase
+            <% _ -> %>Unknown Phase
+          <% end %>
+        </span>
+      </div>
+
+      <%!-- Last Move Banner --%>
+      <%= if @last_move do %>
+        <div class={[
+          "rounded-lg px-4 py-2 text-center text-sm font-medium",
+          @last_move["result"] == "hit" && "bg-rose-100 text-rose-700",
+          @last_move["result"] == "miss" && "bg-slate-100 text-slate-600"
+        ]}>
+          <%= if @last_move["result"] == "hit" do %>
+            💥 HIT at {<<65 + @last_move["row"]>>}{@last_move["col"] + 1}
+            <%= if @last_move["sunk_ship"] do %>
+              <span class="ml-2 font-bold">— Ship Sunk!</span>
+            <% end %>
+          <% else %>
+            💨 Miss at {<<65 + @last_move["row"]>>}{@last_move["col"] + 1}
+          <% end %>
+        </div>
+      <% end %>
+
+      <%!-- Winner Banner --%>
+      <%= if @winner do %>
+        <div class="rounded-lg bg-emerald-100 px-4 py-2 text-center text-sm font-bold text-emerald-700">
+          🏆 {@winner} Wins!
+        </div>
+      <% end %>
+
+      <%!-- Dual Grid Layout --%>
+      <div class="flex flex-col gap-6 lg:flex-row lg:justify-center">
+        <%!-- My Fleet --%>
+        <div class="rounded-xl border-2 border-blue-300 bg-blue-50 p-3">
+          <div class="mb-2 text-center text-sm font-semibold text-blue-700">🚢 My Fleet</div>
+          <div class="inline-block rounded bg-blue-200 p-1">
+            <%= for {row, row_idx} <- Enum.with_index(@my_grid) do %>
+              <div class="flex">
+                <%= for {cell, col_idx} <- Enum.with_index(row) do %>
+                  <span class={battleship_my_cell_class(cell)} />
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+          <%!-- My Ships Status --%>
+          <div class="mt-2 space-y-1">
+            <%= for ship <- @my_ships do %>
+              <div class="flex items-center justify-between text-xs">
+                <span class="capitalize text-slate-600">{ship.name}</span>
+                <span class={ship.hits >= ship.size && "text-rose-600 font-bold" || "text-emerald-600"}>
+                  {ship.hits}/{ship.size}
+                </span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Enemy Waters --%>
+        <div class="rounded-xl border-2 border-rose-300 bg-rose-50 p-3">
+          <div class="mb-2 text-center text-sm font-semibold text-rose-700">🎯 Enemy Waters</div>
+          <div class="inline-block rounded bg-rose-200 p-1">
+            <%= for {row, row_idx} <- Enum.with_index(@opponent_grid) do %>
+              <div class="flex">
+                <%= for {cell, col_idx} <- Enum.with_index(row) do %>
+                  <% is_last = @last_move && @last_move["row"] == row_idx && @last_move["col"] == col_idx %>
+                  <span class={battleship_opponent_cell_class(cell, is_last)} />
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+          <%!-- Opponent Ships Status (hidden until sunk) --%>
+          <div class="mt-2 space-y-1">
+            <%= for ship <- @opponent_ships do %>
+              <div class="flex items-center justify-between text-xs">
+                <span class="capitalize text-slate-600">{ship.name}</span>
+                <%= if ship.sunk do %>
+                  <span class="font-bold text-rose-600">💀 Sunk</span>
+                <% else %>
+                  <span class="text-slate-400">???</span>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   def board(assigns) do
     ~H"""
     <p class="text-sm text-slate-600">Unsupported game type: {@game_type}</p>
@@ -102,4 +222,21 @@ defmodule LemonWeb.Games.Components.BoardComponent do
 
   defp tictactoe_cell_content(nil), do: ""
   defp tictactoe_cell_content(cell), do: cell
+
+  # Battleship cell styling
+  defp battleship_my_cell_class(nil), do: "block h-6 w-6 bg-blue-300 m-0.5 rounded-sm"
+  defp battleship_my_cell_class(%{"fired" => true, "hit" => false}), do: "block h-6 w-6 bg-slate-400 m-0.5 rounded-sm"
+  defp battleship_my_cell_class(%{"fired" => true, "hit" => true}), do: "block h-6 w-6 bg-rose-500 m-0.5 rounded-sm"
+  defp battleship_my_cell_class(%{"ship" => true}), do: "block h-6 w-6 bg-emerald-500 m-0.5 rounded-sm"
+  defp battleship_my_cell_class(_), do: "block h-6 w-6 bg-blue-300 m-0.5 rounded-sm"
+
+  defp battleship_opponent_cell_class(cell, is_last \\ false)
+  defp battleship_opponent_cell_class(%{"fired" => false}, false), do: "block h-6 w-6 bg-rose-300 m-0.5 rounded-sm"
+  defp battleship_opponent_cell_class(%{"fired" => false}, true), do: "block h-6 w-6 bg-rose-300 m-0.5 rounded-sm ring-2 ring-yellow-400"
+  defp battleship_opponent_cell_class(%{"fired" => true, "hit" => false}, false), do: "block h-6 w-6 bg-slate-400 m-0.5 rounded-sm"
+  defp battleship_opponent_cell_class(%{"fired" => true, "hit" => false}, true), do: "block h-6 w-6 bg-slate-400 m-0.5 rounded-sm ring-2 ring-yellow-400"
+  defp battleship_opponent_cell_class(%{"fired" => true, "hit" => true}, false), do: "block h-6 w-6 bg-rose-600 m-0.5 rounded-sm"
+  defp battleship_opponent_cell_class(%{"fired" => true, "hit" => true}, true), do: "block h-6 w-6 bg-rose-600 m-0.5 rounded-sm ring-2 ring-yellow-400"
+  defp battleship_opponent_cell_class(_, false), do: "block h-6 w-6 bg-rose-300 m-0.5 rounded-sm"
+  defp battleship_opponent_cell_class(_, true), do: "block h-6 w-6 bg-rose-300 m-0.5 rounded-sm ring-2 ring-yellow-400"
 end

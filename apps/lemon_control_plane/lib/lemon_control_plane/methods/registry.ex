@@ -157,6 +157,10 @@ defmodule LemonControlPlane.Methods.Registry do
     # Usage
     LemonControlPlane.Methods.UsageStatus,
     LemonControlPlane.Methods.UsageCost,
+    # Rate limit pause introspection
+    LemonControlPlane.Methods.RateLimitPauseList,
+    LemonControlPlane.Methods.RateLimitPauseGet,
+    LemonControlPlane.Methods.RateLimitPauseStats,
     # Events / Ingestion
     LemonControlPlane.Methods.EventsSubscribe,
     LemonControlPlane.Methods.EventsUnsubscribe,

@@ -19,6 +19,15 @@ defmodule CodingAgent.RateLimitPause do
 
       # List pending pauses for a session
       pauses = RateLimitPause.list_pending(session_id)
+
+  ## Configuration
+
+  Configure via `config :coding_agent, :rate_limit_auto_resume`:
+
+      config :coding_agent, :rate_limit_auto_resume,
+        enabled: true,                    # Enable/disable auto-resume
+        default_retry_after_ms: 60_000,   # Default retry delay
+        max_retry_attempts: 3             # Max retries before hard failure
   """
 
   require Logger
@@ -42,19 +51,62 @@ defmodule CodingAgent.RateLimitPause do
   # ETS table for in-memory pause tracking
   @table :coding_agent_rate_limit_pauses
 
+  # Default configuration values
+  @default_enabled true
+  @default_retry_after_ms 60_000
+  @default_max_retry_attempts 3
+
+  @doc """
+  Checks if rate limit auto-resume is enabled.
+
+  Reads from application config `:rate_limit_auto_resume, :enabled`.
+  Defaults to `true` if not configured.
+  """
+  @spec enabled?() :: boolean()
+  def enabled? do
+    Application.get_env(:coding_agent, :rate_limit_auto_resume, [])
+    |> Keyword.get(:enabled, @default_enabled)
+  end
+
+  @doc """
+  Gets the default retry after milliseconds from config.
+
+  Defaults to #{@default_retry_after_ms}ms if not configured.
+  """
+  @spec default_retry_after_ms() :: non_neg_integer()
+  def default_retry_after_ms do
+    Application.get_env(:coding_agent, :rate_limit_auto_resume, [])
+    |> Keyword.get(:default_retry_after_ms, @default_retry_after_ms)
+  end
+
+  @doc """
+  Gets the max retry attempts from config.
+
+  Defaults to #{@default_max_retry_attempts} if not configured.
+  """
+  @spec max_retry_attempts() :: non_neg_integer()
+  def max_retry_attempts do
+    Application.get_env(:coding_agent, :rate_limit_auto_resume, [])
+    |> Keyword.get(:max_retry_attempts, @default_max_retry_attempts)
+  end
+
   @doc """
   Creates a new rate limit pause record.
 
   ## Options
     * `:metadata` - Additional context (error message, headers, etc.)
+    * `:retry_after_ms` - Override the retry delay (defaults to config value)
   """
-  @spec create(session_id(), provider(), non_neg_integer(), keyword()) ::
+  @spec create(session_id(), provider(), non_neg_integer() | nil, keyword()) ::
     {:ok, t()} | {:error, term()}
-  def create(session_id, provider, retry_after_ms, opts \\ []) when is_binary(session_id) do
+  def create(session_id, provider, retry_after_ms \\ nil, opts \\ []) when is_binary(session_id) do
     ensure_table()
 
+    # Use provided retry_after_ms or fall back to config default
+    retry_after = retry_after_ms || default_retry_after_ms()
+
     now = DateTime.utc_now()
-    resume_at = DateTime.add(now, trunc(retry_after_ms / 1000), :second)
+    resume_at = DateTime.add(now, trunc(retry_after / 1000), :second)
 
     pause = %{
       id: generate_id(),
@@ -62,7 +114,7 @@ defmodule CodingAgent.RateLimitPause do
       provider: provider,
       status: :paused,
       paused_at: now,
-      retry_after_ms: retry_after_ms,
+      retry_after_ms: retry_after,
       resume_at: resume_at,
       resumed_at: nil,
       metadata: opts[:metadata] || %{}

@@ -74,33 +74,47 @@ defmodule CodingAgent.ResumeScheduler do
 
   @impl true
   def init(opts) do
-    check_interval = Keyword.get(opts, :check_interval_ms, default_check_interval())
-    max_concurrent = Keyword.get(opts, :max_concurrent_resumes, default_max_concurrent())
+    # Check if auto-resume is enabled via config
+    if RateLimitPause.enabled?() do
+      check_interval = Keyword.get(opts, :check_interval_ms, default_check_interval())
+      max_concurrent = Keyword.get(opts, :max_concurrent_resumes, default_max_concurrent())
 
-    state = %{
-      check_interval_ms: check_interval,
-      max_concurrent_resumes: max_concurrent,
-      checks_performed: 0,
-      runs_resumed: 0,
-      last_check_at: nil,
-      timer_ref: nil
-    }
+      state = %{
+        check_interval_ms: check_interval,
+        max_concurrent_resumes: max_concurrent,
+        checks_performed: 0,
+        runs_resumed: 0,
+        last_check_at: nil,
+        timer_ref: nil
+      }
 
-    # Schedule first check
-    timer_ref = schedule_check(check_interval)
-    state = %{state | timer_ref: timer_ref}
+      # Schedule first check
+      timer_ref = schedule_check(check_interval)
+      state = %{state | timer_ref: timer_ref}
 
-    Logger.info("[ResumeScheduler] Started with #{check_interval}ms interval")
-    {:ok, state}
+      Logger.info("[ResumeScheduler] Started with #{check_interval}ms interval")
+      {:ok, state}
+    else
+      Logger.info("[ResumeScheduler] Auto-resume is disabled via config. Running in standby mode.")
+      {:ok, %{disabled: true}}
+    end
   end
 
   @impl true
+  def handle_call(:check_and_resume, _from, %{disabled: true} = state) do
+    {:reply, {:error, :disabled}, state}
+  end
+
   def handle_call(:check_and_resume, _from, state) do
     {count, new_state} = do_check_and_resume(state)
     {:reply, {:ok, count}, new_state}
   end
 
   @impl true
+  def handle_call(:stats, _from, %{disabled: true} = state) do
+    {:reply, %{disabled: true, checks_performed: 0, runs_resumed: 0, last_check_at: nil}, state}
+  end
+
   def handle_call(:stats, _from, state) do
     stats = %{
       checks_performed: state.checks_performed,
@@ -111,6 +125,10 @@ defmodule CodingAgent.ResumeScheduler do
   end
 
   @impl true
+  def handle_call({:resume_pause, _pause_id}, _from, %{disabled: true} = state) do
+    {:reply, {:error, :disabled}, state}
+  end
+
   def handle_call({:resume_pause, pause_id}, _from, state) do
     result = do_resume_pause(pause_id)
     new_state =
@@ -122,6 +140,11 @@ defmodule CodingAgent.ResumeScheduler do
   end
 
   @impl true
+  def handle_info(:check, %{disabled: true} = state) do
+    # Ignore check messages when disabled
+    {:noreply, state}
+  end
+
   def handle_info(:check, state) do
     {_count, new_state} = do_check_and_resume(state)
     timer_ref = schedule_check(new_state.check_interval_ms)
@@ -129,6 +152,10 @@ defmodule CodingAgent.ResumeScheduler do
   end
 
   @impl true
+  def terminate(_reason, %{disabled: true}) do
+    :ok
+  end
+
   def terminate(_reason, state) do
     if state.timer_ref do
       Process.cancel_timer(state.timer_ref)

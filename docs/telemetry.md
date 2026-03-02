@@ -425,6 +425,94 @@ Emitted when a streaming error occurs.
 | `provider` | atom | Provider that failed |
 | `error` | term | Error details |
 
+## LemonCore Typed Store Events
+
+The typed store modules (`RunStore`, `SessionStore`, `ProgressStore`) emit telemetry for every operation. Each operation produces a `:start` and `:stop` event pair.
+
+### Event Name Pattern
+
+```
+[:lemon_core, :store, <operation>, :start]
+[:lemon_core, :store, <operation>, :stop]
+```
+
+### RunStore Operations
+
+| Operation | Start Event | Stop Event |
+|-----------|------------|------------|
+| `append_run_event` | `[:lemon_core, :store, :append_run_event, :start]` | `[:lemon_core, :store, :append_run_event, :stop]` |
+| `finalize_run` | `[:lemon_core, :store, :finalize_run, :start]` | `[:lemon_core, :store, :finalize_run, :stop]` |
+| `get_run` | `[:lemon_core, :store, :get_run, :start]` | `[:lemon_core, :store, :get_run, :stop]` |
+| `get_run_history` | `[:lemon_core, :store, :get_run_history, :start]` | `[:lemon_core, :store, :get_run_history, :stop]` |
+
+### SessionStore Operations
+
+| Operation | Start Event | Stop Event |
+|-----------|------------|------------|
+| `put_chat_state` | `[:lemon_core, :store, :put_chat_state, :start]` | `[:lemon_core, :store, :put_chat_state, :stop]` |
+| `get_chat_state` | `[:lemon_core, :store, :get_chat_state, :start]` | `[:lemon_core, :store, :get_chat_state, :stop]` |
+| `delete_chat_state` | `[:lemon_core, :store, :delete_chat_state, :start]` | `[:lemon_core, :store, :delete_chat_state, :stop]` |
+| `get_session` | `[:lemon_core, :store, :get_session, :start]` | `[:lemon_core, :store, :get_session, :stop]` |
+| `list_sessions` | `[:lemon_core, :store, :list_sessions, :start]` | `[:lemon_core, :store, :list_sessions, :stop]` |
+| `delete_session` | `[:lemon_core, :store, :delete_session, :start]` | `[:lemon_core, :store, :delete_session, :stop]` |
+
+### ProgressStore Operations
+
+| Operation | Start Event | Stop Event |
+|-----------|------------|------------|
+| `put_progress_mapping` | `[:lemon_core, :store, :put_progress_mapping, :start]` | `[:lemon_core, :store, :put_progress_mapping, :stop]` |
+| `get_run_by_progress` | `[:lemon_core, :store, :get_run_by_progress, :start]` | `[:lemon_core, :store, :get_run_by_progress, :stop]` |
+| `delete_progress_mapping` | `[:lemon_core, :store, :delete_progress_mapping, :start]` | `[:lemon_core, :store, :delete_progress_mapping, :stop]` |
+| `put_pending_compaction` | `[:lemon_core, :store, :put_pending_compaction, :start]` | `[:lemon_core, :store, :put_pending_compaction, :stop]` |
+| `get_pending_compaction` | `[:lemon_core, :store, :get_pending_compaction, :start]` | `[:lemon_core, :store, :get_pending_compaction, :stop]` |
+| `delete_pending_compaction` | `[:lemon_core, :store, :delete_pending_compaction, :start]` | `[:lemon_core, :store, :delete_pending_compaction, :stop]` |
+
+### Start Event Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `system_time` | integer | System time in native units |
+| **Metadata** | | |
+| `operation` | atom | Operation name (e.g., `:append_run_event`) |
+
+### Stop Event Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `duration` | integer | Duration in native time units |
+| **Metadata** | | |
+| `operation` | atom | Operation name |
+| `result` | `:ok` \| `:error` | Whether the operation succeeded |
+
+## BackgroundTask Events
+
+`LemonCore.BackgroundTask` emits telemetry for task lifecycle.
+
+#### [:lemon_core, :background_task, :start]
+
+Emitted when a background task is started.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `system_time` | integer | Start time |
+| **Metadata** | | |
+| `supervisor` | atom \| pid | The Task.Supervisor used |
+| `supervised` | boolean | Whether the task is supervised |
+
+#### [:lemon_core, :background_task, :error]
+
+Emitted when a background task fails to start.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `system_time` | integer | Error time |
+| **Metadata** | | |
+| `reason` | term | Failure reason |
+
 ## Example: Monitoring Dashboard
 
 ```elixir

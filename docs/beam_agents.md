@@ -151,6 +151,56 @@ The following telemetry events are emitted:
 
 ---
 
+## Architecture Patterns (Archfix Waves 1-4)
+
+These patterns were introduced across four archfix waves to improve modularity, reduce coupling, and enforce clearer boundaries between apps.
+
+### OutputIntent and Dispatcher
+
+The router no longer constructs channel-specific payloads directly. Instead, it emits a channel-neutral `LemonCore.OutputIntent` struct describing WHAT should be delivered (`:stream_append`, `:stream_replace`, `:tool_status`, `:final_text`, `:fanout_text`, `:send_files`, `:keepalive_prompt`). The `LemonChannels.Dispatcher` module is the single entry point that translates intents into `LemonChannels.OutboundPayload` structs for the outbox.
+
+```
+LemonRouter.RunProcess  ──(OutputIntent)──→  LemonChannels.Dispatcher  ──(OutboundPayload)──→  Outbox
+```
+
+This decouples the router from transport-specific knowledge and makes it straightforward to add new channels without modifying router code.
+
+### ChannelState API
+
+`LemonChannels.ChannelState` provides an abstract API for channel-specific persistent state. The router interacts with Telegram state (compaction markers, resume tokens, session mappings, known targets) through this module instead of reaching directly into `:telegram_*` Store tables. Non-Telegram session keys are silently ignored, making the API safe to call from channel-agnostic code.
+
+### Typed Stores
+
+Three typed store modules wrap `LemonCore.Store` with domain-specific APIs and automatic telemetry:
+
+| Module | Tables Managed | Purpose |
+|--------|----------------|---------|
+| `LemonCore.RunStore` | `:runs`, `:run_history` | Run events, finalization, history lookup |
+| `LemonCore.SessionStore` | `:chat`, `:sessions_index` | Chat state (TTL), session metadata |
+| `LemonCore.ProgressStore` | `:progress`, `:pending_compaction` | Progress message mappings, compaction markers |
+
+Each operation emits `[:lemon_core, :store, :operation, :start]` and `[:lemon_core, :store, :operation, :stop]` telemetry events. Callers should prefer the typed store APIs over raw `LemonCore.Store` calls for these domains.
+
+### BackgroundTask
+
+`LemonCore.BackgroundTask` centralizes supervised background task spawning. It replaces the duplicated `start_background_task/1` helpers that were scattered across multiple modules (Coordinator, CompactionManager, CronManager, HeartbeatManager, Telegram Transport).
+
+Key behavior:
+- Tasks run under a `Task.Supervisor` (default: `LemonCore.BackgroundTaskSupervisor`)
+- Returns `{:error, :supervisor_not_available}` if the supervisor is down
+- Opt-in `allow_unsupervised: true` for explicit degradation to `Task.start/1`
+- Emits telemetry events for task lifecycle
+
+### Self-Describing Method Macro
+
+`LemonControlPlane.Method` is a behaviour and macro for self-describing control plane methods. Modules that `use LemonControlPlane.Method` declare their metadata (name, scopes, schema, capabilities) at compile time. The registry auto-discovers these modules instead of relying on manually-maintained lists.
+
+Defined functions: `name/0`, `scopes/0`, `__schema__/0`, `__capabilities__/0`.
+
+Existing method modules can still implement the behaviour manually for backward compatibility during incremental migration.
+
+---
+
 ## Baseline Documentation (Phase 0)
 
 This section provides detailed baseline documentation for the current BEAM agent

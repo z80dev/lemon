@@ -401,6 +401,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 ## Documentation Index
 
 - `docs/architecture_boundaries.md` - Dependency boundaries and allowed cross-app references
+- `docs/state_ownership.md` - Store table ownership map, typed stores (RunStore, SessionStore, ProgressStore)
 - `docs/config.md` - Runtime configuration reference
 - `docs/skills.md` - Skill system documentation
 - `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
