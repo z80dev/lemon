@@ -145,6 +145,60 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  @doc """
+  Persist a secret to the encrypted store.
+
+  This is an alias for `set/3` that provides a consistent API for
+  modules that need a `persist/2` function.
+
+  ## Examples
+
+      iex> LemonCore.Secrets.persist("MY_API_KEY", "sk-...")
+      {:ok, %{name: "MY_API_KEY", ...}}
+  """
+  @spec persist(name(), String.t(), keyword()) :: {:ok, secret_metadata()} | {:error, atom()}
+  def persist(name, value, opts \\ []) do
+    set(name, value, opts)
+  end
+
+  @doc """
+  Import a secret from an environment variable into the encrypted store.
+
+  ## Options
+
+    * `:env_name` - The environment variable name (defaults to secret name)
+    * `:delete_after` - If true, deletes the env var after import (default: false)
+    * Other options are passed to `set/3`
+
+  ## Examples
+
+      iex> System.put_env("OLD_API_KEY", "sk-...")
+      iex> LemonCore.Secrets.import_from_env("NEW_API_KEY", env_name: "OLD_API_KEY")
+      {:ok, %{name: "NEW_API_KEY", ...}}
+  """
+  @spec import_from_env(name(), keyword()) :: {:ok, secret_metadata()} | {:error, atom()}
+  def import_from_env(name, opts \\ []) do
+    env_name = Keyword.get(opts, :env_name, name)
+    delete_after = Keyword.get(opts, :delete_after, false)
+
+    case System.get_env(env_name) do
+      nil ->
+        {:error, :env_not_found}
+
+      "" ->
+        {:error, :env_empty}
+
+      value ->
+        result = set(name, value, opts)
+
+        if delete_after and match?({:ok, _}, result) do
+          System.delete_env(env_name)
+        end
+
+        result
+    end
+  end
+
   @spec delete(name(), keyword()) :: :ok | {:error, atom()}
   def delete(name, opts \\ []) do
     with {:ok, name} <- normalize_name(name),

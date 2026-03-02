@@ -180,10 +180,36 @@ defmodule LemonCore.Config.Providers do
           provider[:api_key]
         else
           # Fall back to api_key_secret if available
-          # Note: Actual secret resolution would require the Secrets module
-          nil
+          resolve_api_key_secret(provider[:api_key_secret])
         end
     end
+  end
+
+  # Resolves api_key_secret reference using LemonCore.Secrets if available
+  defp resolve_api_key_secret(nil), do: nil
+
+  defp resolve_api_key_secret(secret_name) when is_binary(secret_name) do
+    # Check if Secrets module is available and configured
+    if secrets_available?() do
+      try do
+        case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
+          {:ok, value, _source} -> value
+          {:error, _reason} -> nil
+        end
+      rescue
+        _ -> nil
+      catch
+        :exit, _ -> nil
+      end
+    else
+      # Fallback to direct environment variable lookup
+      System.get_env(secret_name)
+    end
+  end
+
+  defp secrets_available? do
+    Code.ensure_loaded?(LemonCore.Secrets) and
+      function_exported?(LemonCore.Secrets, :resolve, 2)
   end
 
   @doc """

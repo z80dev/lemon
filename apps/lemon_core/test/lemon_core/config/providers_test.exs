@@ -249,13 +249,43 @@ defmodule LemonCore.Config.ProvidersTest do
       assert Providers.get_api_key(config, "unknown") == nil
     end
 
-    test "returns nil when api_key not present" do
+    test "resolves api_key_secret from environment when Secrets module not available" do
+      System.put_env("TEST_API_SECRET", "sk-from-env")
+
       config =
         Providers.resolve(%{
-          "providers" => %{"openai" => %{"api_key_secret" => "secret_name"}}
+          "providers" => %{"openai" => %{"api_key_secret" => "TEST_API_SECRET"}}
         })
 
-      # api_key_secret is not resolved here (would need Secrets module)
+      assert Providers.get_api_key(config, "openai") == "sk-from-env"
+    after
+      System.delete_env("TEST_API_SECRET")
+    end
+
+    test "prefers api_key over api_key_secret" do
+      System.put_env("TEST_API_SECRET2", "sk-from-env")
+
+      config =
+        Providers.resolve(%{
+          "providers" => %{
+            "openai" => %{
+              "api_key" => "sk-direct",
+              "api_key_secret" => "TEST_API_SECRET2"
+            }
+          }
+        })
+
+      assert Providers.get_api_key(config, "openai") == "sk-direct"
+    after
+      System.delete_env("TEST_API_SECRET2")
+    end
+
+    test "returns nil when api_key_secret env var not set" do
+      config =
+        Providers.resolve(%{
+          "providers" => %{"openai" => %{"api_key_secret" => "NONEXISTENT_SECRET_VAR"}}
+        })
+
       assert Providers.get_api_key(config, "openai") == nil
     end
   end
