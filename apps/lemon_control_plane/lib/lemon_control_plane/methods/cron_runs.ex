@@ -8,6 +8,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.RunStore
+
   @default_limit 100
   @max_limit 1_000
   @default_introspection_limit 200
@@ -122,7 +124,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
   end
 
   defp fetch_run_record(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       nil -> nil
       record when is_map(record) -> serialize_term(record)
       _ -> nil

@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.SessionsReset do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.SessionStore
+
   @impl true
   def name, do: "sessions.reset"
 
@@ -41,7 +43,7 @@ defmodule LemonControlPlane.Methods.SessionsReset do
         :ok
     end)
 
-    LemonCore.Store.delete_chat_state(session_key)
+    SessionStore.delete_chat_state(session_key)
 
     # Reset session overrides
     LemonCore.Store.delete(:session_overrides, session_key)

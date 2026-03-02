@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.AgentWait do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.RunStore
+
   @impl true
   def name, do: "agent.wait"
 
@@ -54,7 +56,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
   end
 
   defp check_run_completed(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       %{summary: %{completed: completed}} when not is_nil(completed) ->
         {:ok, format_result(completed)}
 

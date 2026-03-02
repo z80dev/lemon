@@ -10,6 +10,7 @@ defmodule LemonGateway.Scheduler do
   require Logger
 
   alias LemonCore.Introspection
+  alias LemonCore.SessionStore
   alias LemonGateway.{ChatState, Config}
   alias LemonCore.Store
   alias LemonCore.ResumeToken
@@ -531,7 +532,7 @@ defmodule LemonGateway.Scheduler do
   defp maybe_apply_auto_resume_inner(%Job{session_key: session_key} = job)
        when is_binary(session_key) do
     if auto_resume_enabled?() do
-      case Store.get_chat_state(session_key) do
+      case SessionStore.get_chat_state(session_key) do
         %ChatState{last_engine: engine, last_resume_token: token}
         when is_binary(engine) and is_binary(token) ->
           apply_resume_if_compatible(job, engine, token)

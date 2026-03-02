@@ -10,6 +10,7 @@ defmodule LemonRouter.AgentDirectory do
   to provide a "phonebook" for agent/session addressing.
   """
 
+  alias LemonCore.RunStore
   alias LemonCore.SessionKey
 
   @registry_select_spec [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}]
@@ -340,7 +341,7 @@ defmodule LemonRouter.AgentDirectory do
   defp active_session_entry(_), do: nil
 
   defp run_started_at_ms(run_id) when is_binary(run_id) and run_id != "" do
-    case LemonCore.Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       nil -> nil
       run when is_map(run) -> normalize_int(map_get(run, :started_at))
       _ -> nil

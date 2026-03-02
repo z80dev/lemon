@@ -10,6 +10,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   require Logger
 
   alias LemonCore.ResumeToken
+  alias LemonCore.SessionStore
   alias LemonRouter.ChannelContext
 
   @default_compaction_reserve_tokens 16_384
@@ -547,7 +548,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp compaction_trigger_ratio_or(_value, default), do: default
 
-  defp safe_delete_chat_state(key), do: LemonCore.Store.delete_chat_state(key)
+  defp safe_delete_chat_state(key), do: SessionStore.delete_chat_state(key)
 
   # ---- Shared utility helpers ----
 

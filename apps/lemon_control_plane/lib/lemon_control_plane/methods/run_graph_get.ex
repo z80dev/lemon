@@ -13,6 +13,8 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.RunStore
+
   @default_max_depth 10
   @max_max_depth 20
   @default_child_lookup_limit 200
@@ -324,7 +326,7 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   end
 
   defp fetch_store_record(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       record when is_map(record) -> record
       _ -> %{}
     end

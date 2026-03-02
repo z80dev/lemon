@@ -9,7 +9,9 @@ defmodule LemonRouter.Router do
   - Applying pending compaction for all channels (generic path)
   """
 
+  alias LemonCore.ProgressStore
   alias LemonCore.RunRequest
+  alias LemonCore.RunStore
   alias LemonCore.SessionKey
   alias LemonRouter.RunOrchestrator
 
@@ -258,11 +260,11 @@ defmodule LemonRouter.Router do
 
   defp apply_compaction(msg, meta, session_key, _pending) do
     transcript =
-      LemonCore.Store.get_run_history(session_key, limit: 8)
+      RunStore.get_history(session_key, limit: 8)
       |> format_run_history_transcript(max_chars: 8_000)
 
     if transcript != "" do
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = ProgressStore.delete_pending_compaction(session_key)
       text = build_pending_compaction_prompt(transcript, msg.message.text || "")
       meta = Map.put(meta, :auto_compacted, true)
 

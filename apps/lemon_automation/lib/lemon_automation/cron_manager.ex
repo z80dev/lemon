@@ -46,7 +46,7 @@ defmodule LemonAutomation.CronManager do
   @vsn 1
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
-  alias LemonCore.{Bus, Event, SessionKey, Store}
+  alias LemonCore.{Bus, Event, RunStore, SessionKey, Store}
 
   require Logger
 
@@ -503,7 +503,7 @@ defmodule LemonAutomation.CronManager do
         }
       }
 
-      Store.finalize_run(forwarded_run_id, summary)
+      RunStore.finalize(forwarded_run_id, summary)
 
       event =
         Event.new(

@@ -16,7 +16,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonCore.ChatScope
   alias LemonCore.ResumeToken
   alias LemonCore.MapHelpers
+  alias LemonCore.RunStore
   alias LemonCore.SessionKey
+  alias LemonCore.SessionStore
   alias LemonCore.Store, as: CoreStore
   alias LemonChannels.Adapters.Telegram.Transport.AsyncTaskRunner
   alias LemonChannels.Adapters.Telegram.Transport.Commands
@@ -963,7 +965,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp list_recent_sessions(session_key, opts) when is_binary(session_key) do
     limit = Keyword.get(opts, :limit, 20)
 
-    history = CoreStore.get_run_history(session_key, limit: limit * 5)
+    history = RunStore.get_history(session_key, limit: limit * 5)
 
     history
     |> Enum.map(fn {_run_id, data} ->
@@ -1351,7 +1353,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp fetch_run_history_for_memory(session_key, _scope, opts) do
     limit = Keyword.get(opts, :limit, 8)
 
-    CoreStore.get_run_history(session_key, limit: limit)
+    RunStore.get_history(session_key, limit: limit)
   rescue
     _ -> []
   end
@@ -1434,7 +1436,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp last_engine_hint(_), do: nil
 
   defp safe_delete_chat_state(key) do
-    CoreStore.delete_chat_state(key)
+    SessionStore.delete_chat_state(key)
     :ok
   rescue
     _ -> :ok
@@ -1594,7 +1596,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp safe_get_chat_state(key) do
-    CoreStore.get_chat_state(key)
+    SessionStore.get_chat_state(key)
   rescue
     _ -> nil
   end
@@ -1775,7 +1777,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           %{last_engine: engine, updated_at: now}
       end
 
-    CoreStore.put_chat_state(session_key, payload)
+    SessionStore.put_chat_state(session_key, payload)
   rescue
     _ -> :ok
   end
@@ -1790,7 +1792,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       updated_at: now
     }
 
-    CoreStore.put_chat_state(session_key, payload)
+    SessionStore.put_chat_state(session_key, payload)
 
     # Persist the explicitly selected session for subsequent messages, even if
     # auto-resume is disabled.

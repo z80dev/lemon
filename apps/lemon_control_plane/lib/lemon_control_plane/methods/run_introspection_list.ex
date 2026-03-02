@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.RunStore
+
   @default_limit 500
   @max_limit 5_000
   @default_run_event_limit 300
@@ -94,7 +96,7 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
   end
 
   defp fetch_run_record(run_id, include_run_events, run_event_limit) do
-    case LemonCore.Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       nil ->
         nil
 

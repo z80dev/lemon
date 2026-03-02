@@ -30,6 +30,9 @@ defmodule LemonGateway.Run do
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias LemonCore.Store
+  alias LemonCore.RunStore
+  alias LemonCore.SessionStore
+  alias LemonCore.ProgressStore
   alias LemonGateway.{ChatState, Cwd, Event}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
@@ -306,7 +309,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
-    LemonCore.Store.append_run_event(run_ref, event)
+    RunStore.append_event(run_ref, event)
 
     cond do
       is_started(event) ->
@@ -578,7 +581,7 @@ defmodule LemonGateway.Run do
     if state.run_ref do
       prompt = state.job.prompt
 
-      LemonCore.Store.finalize_run(state.run_ref, %{
+      RunStore.finalize(state.run_ref, %{
         completed: completed,
         session_key: state.session_key,
         run_id: state.run_id,
@@ -789,7 +792,7 @@ defmodule LemonGateway.Run do
     run_id = Map.get(completed, :run_id)
 
     if ok != true and context_length_exceeded_error?(error) do
-      Store.delete_chat_state(session_key)
+      SessionStore.delete_chat_state(session_key)
 
       Logger.warning(
         "Gateway run reset chat state after context overflow run_id=#{inspect(run_id)} " <>
@@ -829,7 +832,7 @@ defmodule LemonGateway.Run do
       updated_at: System.system_time(:millisecond)
     }
 
-    Store.put_chat_state(key, chat_state)
+    SessionStore.put_chat_state(key, chat_state)
   end
 
   defp register_progress_mapping(%Job{} = job, run_id) do
@@ -840,9 +843,9 @@ defmodule LemonGateway.Run do
 
     Enum.each(keys, fn key ->
       if progress_msg_id,
-        do: LemonCore.Store.put_progress_mapping(key, progress_msg_id, run_id)
+        do: ProgressStore.put_progress_mapping(key, progress_msg_id, run_id)
 
-      if status_msg_id, do: LemonCore.Store.put_progress_mapping(key, status_msg_id, run_id)
+      if status_msg_id, do: ProgressStore.put_progress_mapping(key, status_msg_id, run_id)
     end)
   end
 
@@ -853,8 +856,8 @@ defmodule LemonGateway.Run do
     status_msg_id = meta && meta[:status_msg_id]
 
     Enum.each(keys, fn key ->
-      if progress_msg_id, do: LemonCore.Store.delete_progress_mapping(key, progress_msg_id)
-      if status_msg_id, do: LemonCore.Store.delete_progress_mapping(key, status_msg_id)
+      if progress_msg_id, do: ProgressStore.delete_progress_mapping(key, progress_msg_id)
+      if status_msg_id, do: ProgressStore.delete_progress_mapping(key, status_msg_id)
     end)
   end
 

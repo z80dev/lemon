@@ -6,6 +6,7 @@ defmodule LemonGateway.Runtime do
   to submit jobs and cancel active runs by progress message ID or run ID.
   """
 
+  alias LemonCore.ProgressStore
   alias LemonGateway.Types.Job
 
   @doc "Submits a job to the scheduler for execution."
@@ -15,7 +16,7 @@ defmodule LemonGateway.Runtime do
   @doc "Cancels a run identified by its progress message ID within a scope."
   @spec cancel_by_progress_msg(term(), integer()) :: :ok
   def cancel_by_progress_msg(scope, progress_msg_id) do
-    case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
+    case ProgressStore.get_run_by_progress(scope, progress_msg_id) do
       nil -> :ok
       run_id when is_binary(run_id) -> cancel_by_run_id(run_id, :user_requested)
       _other -> :ok

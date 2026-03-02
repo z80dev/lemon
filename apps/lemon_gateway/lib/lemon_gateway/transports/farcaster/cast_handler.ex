@@ -9,6 +9,7 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   alias LemonGateway.{BindingResolver, Runtime}
   alias LemonCore.{Store, Secrets}
+  alias LemonCore.SessionStore
   alias LemonGateway.Transports.Farcaster.HubClient
   alias LemonCore.Store
   alias LemonGateway.Transports.Farcaster.HubClient
@@ -243,7 +244,7 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   defp delete_session(scope, session_ref) do
     old_key = build_session_key(scope, session_ref)
-    Store.delete_chat_state(old_key)
+    SessionStore.delete_chat_state(old_key)
   rescue
     _ -> :ok
   end
