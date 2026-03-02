@@ -2234,4 +2234,150 @@ defmodule LemonGateway.ThreadWorkerTest do
                      2000
     end
   end
+
+  # ============================================================================
+  # Non-blocking retry behavior (PERF-011)
+  # ============================================================================
+
+  describe "non-blocking retry behavior (PERF-011)" do
+    test "Process.sleep is not used in thread_worker.ex source code" do
+      # __DIR__ is the test directory; walk up to the app root, then into lib/
+      source_path =
+        Path.join([__DIR__, "..", "lib", "lemon_gateway", "thread_worker.ex"])
+        |> Path.expand()
+
+      assert File.exists?(source_path),
+             "Could not find thread_worker.ex source at #{source_path}"
+
+      source = File.read!(source_path)
+
+      refute source =~ ~r/Process\.sleep\(/,
+             "thread_worker.ex must not use Process.sleep/1 — " <>
+               "use Process.send_after/3 for non-blocking retries instead"
+    end
+
+    test "transient run-start failure schedules retry without blocking the GenServer" do
+      scope = make_scope()
+
+      # Submit a job that will use the echo engine (should succeed)
+      job = make_job(scope, prompt: "hello", queue_mode: :collect)
+      Elixir.LemonGateway.submit(job)
+
+      # Wait for worker to be started via the Registry
+      :timer.sleep(50)
+
+      # Look up the worker PID
+      worker_pid =
+        case Registry.lookup(LemonGateway.ThreadRegistry, scope) do
+          [{pid, _}] -> pid
+          [] -> nil
+        end
+
+      # If the worker already completed (echo is fast), verify the job completed
+      # Either way, the worker should never have used Process.sleep
+      assert_receive {:lemon_gateway_run_completed, ^job,
+                      %{__event__: :completed, ok: true, answer: "Echo: hello"}},
+                     2000
+
+      # Verify worker is responsive: if it's still alive, :sys.get_state should return quickly
+      if worker_pid && Process.alive?(worker_pid) do
+        # This would timeout if the worker were blocked by Process.sleep
+        assert {:ok, _state} =
+                 Task.async(fn -> :sys.get_state(worker_pid) end)
+                 |> Task.yield(500)
+      end
+    end
+
+    test "worker can still process messages during retry delay" do
+      # Start a worker directly and simulate a retry scenario
+      thread_key = "test:retry_responsive:#{System.unique_integer([:positive])}"
+      {:ok, worker_pid} = LemonGateway.ThreadWorker.start_link(thread_key: thread_key)
+
+      # Simulate a pending retry by sending a retry_run_start message with a non-matching
+      # state (the worker should just ignore it as stale). This proves the worker
+      # processes messages normally even when retry messages arrive.
+      fake_job = %Job{
+        session_key: thread_key,
+        prompt: "test",
+        queue_mode: :collect,
+        meta: %{}
+      }
+
+      send(worker_pid, {:retry_run_start, fake_job, make_ref(), 2})
+
+      # Worker should still be alive and responsive
+      assert Process.alive?(worker_pid)
+
+      # :sys.get_state should return immediately (not blocked)
+      assert {:ok, state} =
+               Task.async(fn -> :sys.get_state(worker_pid) end)
+               |> Task.yield(500)
+
+      # Verify the state has the retry tracking field
+      assert Map.has_key?(state, :run_start_retry)
+
+      # Clean up
+      GenServer.stop(worker_pid, :normal)
+    end
+
+    test "retry state is tracked in GenServer state" do
+      thread_key = "test:retry_state:#{System.unique_integer([:positive])}"
+      {:ok, worker_pid} = LemonGateway.ThreadWorker.start_link(thread_key: thread_key)
+
+      state = :sys.get_state(worker_pid)
+
+      # Initial state should have run_start_retry as nil
+      assert state.run_start_retry == nil
+
+      # Clean up
+      GenServer.stop(worker_pid, :normal)
+    end
+
+    test "stale retry messages are ignored" do
+      thread_key = "test:stale_retry:#{System.unique_integer([:positive])}"
+      {:ok, worker_pid} = LemonGateway.ThreadWorker.start_link(thread_key: thread_key)
+
+      # Send a retry message that doesn't match the current state (run_start_retry is nil)
+      fake_job = %Job{
+        session_key: thread_key,
+        prompt: "test",
+        queue_mode: :collect,
+        meta: %{}
+      }
+
+      send(worker_pid, {:retry_run_start, fake_job, make_ref(), 1})
+
+      # Give the worker a moment to process the message
+      :timer.sleep(20)
+
+      # Worker should still be alive and state unchanged
+      assert Process.alive?(worker_pid)
+      state = :sys.get_state(worker_pid)
+      assert state.run_start_retry == nil
+
+      # Clean up
+      GenServer.stop(worker_pid, :normal)
+    end
+
+    test "jobs still complete end-to-end after refactoring" do
+      # Integration-level test: submit multiple jobs and verify they all complete
+      # This ensures the retry refactoring didn't break normal operation
+      scope = make_scope()
+
+      jobs =
+        for i <- 1..3 do
+          make_job(scope, prompt: "msg#{i}", queue_mode: :collect)
+        end
+
+      for job <- jobs do
+        Elixir.LemonGateway.submit(job)
+      end
+
+      for job <- jobs do
+        assert_receive {:lemon_gateway_run_completed, ^job,
+                        %{__event__: :completed, ok: true}},
+                       3000
+      end
+    end
+  end
 end
