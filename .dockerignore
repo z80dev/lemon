@@ -1,0 +1,79 @@
+# .dockerignore - Optimizes Docker build context for `mix release games_platform`
+#
+# The build context is the repo root (see games-platform/fly.toml: context = "..").
+# The Dockerfile copies everything with `COPY . /build/`, then runs:
+#   mix deps.get --only prod && mix compile && mix release games_platform
+#
+# Required: mix.exs, mix.lock, config/, apps/, .formatter.exs, .credo.exs
+# Everything else can be excluded.
+
+# Build artifacts (re-created inside Docker)
+_build/
+deps/
+
+# Version control
+.git/
+.jj/
+.gitignore
+.gitmodules
+
+# Games-platform subdirectory (contains its own copy of the repo + Dockerfile;
+# Docker reads the Dockerfile separately, it doesn't need to be in the context)
+games-platform/
+
+# Client applications (TypeScript/JS, not needed for Elixir release)
+clients/
+
+# Native/WASM projects
+native/
+
+# Development tools and utilities
+tools/
+bin/
+scripts/
+examples/
+
+# Documentation and planning
+docs/
+planning/
+mintlify-docs/
+content/
+
+# AI/dev agent configuration
+.claude/
+.agent/
+.github/
+
+# Python files and artifacts
+*.py
+__pycache__/
+.venv*/
+telethon_ping/
+
+# Node.js artifacts
+node_modules/
+
+# Markdown files at root (documentation only)
+*.md
+
+# Environment and secrets
+.env
+.env.*
+
+# Debug and utility scripts at root (not mix.exs)
+abort_runs.exs
+reload.exs
+
+# Crash dumps and database files
+erl_crash.dump
+*.db3
+*.db3-shm
+*.db3-wal
+*.sqlite3
+
+# Miscellaneous
+lemon.zip
+chart.png
+*.tar.gz
+.DS_Store
+.codexignore
