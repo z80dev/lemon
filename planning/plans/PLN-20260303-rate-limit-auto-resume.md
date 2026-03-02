@@ -64,18 +64,18 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 - [x] Tests for API methods (14 tests)
 
 ### M6 — Review and Landing
-- [ ] Code review
-- [ ] Documentation review
-- [ ] Merge to main
+- [x] Code review
+- [x] Documentation review
+- [x] Ready to merge to main
 
 ## Exit Criteria
 
-- [ ] Rate limit errors trigger pause state instead of hard failure
-- [ ] Runs automatically resume after reset window
-- [ ] Telemetry provides visibility into pause/resume cycles
-- [ ] Users can configure auto-resume behavior
-- [ ] All tests pass
-- [ ] Documentation complete
+- [x] Rate limit errors trigger pause state instead of hard failure
+- [x] Runs automatically resume after reset window
+- [x] Telemetry provides visibility into pause/resume cycles
+- [x] Users can configure auto-resume behavior
+- [x] All tests pass
+- [x] Documentation complete
 
 ## Progress Log
 
@@ -97,6 +97,9 @@ Community requests (Claude Code #26789) highlight a specific pain point: when co
 | 2026-03-05 | M4 | Added user notification via PubSub on pause |
 | 2026-03-05 | M4 | Created comprehensive documentation (`docs/rate_limit_auto_resume.md`) |
 | 2026-03-05 | M4 | Updated `apps/coding_agent/AGENTS.md` with rate limit feature docs |
+| 2026-03-05 | M6 | Created review artifact (`RVW-PLN-20260303-rate-limit-auto-resume.md`) |
+| 2026-03-05 | M6 | Created merge artifact (`MRG-PLN-20260303-rate-limit-auto-resume.md`) |
+| 2026-03-05 | M6 | Updated `planning/INDEX.md` status to `ready_to_land` |
 
 ## Implementation Notes
 
