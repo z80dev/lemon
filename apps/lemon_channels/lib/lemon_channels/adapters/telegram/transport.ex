@@ -25,7 +25,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.Poller
   alias LemonChannels.Adapters.Telegram.Transport.ReactionTracker
-  alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
   alias LemonChannels.Adapters.Telegram.Transport.UpdateRouter
   alias LemonChannels.Telegram.OffsetStore
   alias LemonChannels.Telegram.PollerLock
@@ -241,7 +240,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   # /new triggers an internal "memory reflection" run; only clear auto-resume after it completes.
   def handle_info(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
     run_id = (meta || %{})[:run_id] || (meta || %{})["run_id"]
-    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
 
     # Check if this is a /new command run first
     state =
@@ -1839,7 +1837,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp format_resume_line(%ResumeToken{} = resume) do
-    EngineRegistry.format_resume(resume)
+    ResumeToken.format(resume)
   rescue
     _ -> "#{resume.engine} resume #{resume.value}"
   end
@@ -2023,7 +2021,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         inbound
 
       # If user already provided an explicit resume token, don't add another.
-      match?({:ok, %ResumeToken{}}, EngineRegistry.extract_resume(inbound.message.text || "")) ->
+      match?(%ResumeToken{}, ResumeToken.extract_resume(inbound.message.text || "")) ->
         inbound
 
       true ->
@@ -3455,18 +3453,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp clear_cwd_override(_), do: :ok
 
   defp cwd_usage, do: "Usage: /cwd [project_id|path|clear]"
-
-  defp binding_exists?(%ChatScope{} = scope) do
-    case BindingResolver.resolve_binding(scope) do
-      nil -> false
-      _ -> true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp allowed_chat?(nil, _chat_id), do: true
-  defp allowed_chat?(list, chat_id) when is_list(list), do: chat_id in list
 
   defp parse_allowed_chat_ids(nil), do: nil
 
