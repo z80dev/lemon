@@ -32,7 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — |
+| [PLN-20250309-wasm-sandbox-tools](plans/PLN-20250309-wasm-sandbox-tools.md) | WASM Sandbox Tools Enhancement | `in_progress` | janitor | feature/pln-20250309-wasm-sandbox-tools | pending | debt_plan.md Phase 10 | 2026-03-09 |
 
 ## Ready for Review
 
