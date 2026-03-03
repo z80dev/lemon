@@ -208,7 +208,14 @@ defmodule LemonChannels.Capabilities.Registry do
   Returns a predefined capability set.
   """
   @spec get_set(atom()) :: [Capability.t()]
-  def get_set(:messaging) do
+  def get_set(name) when is_atom(name) do
+    case Process.get({:capability_set, name}) do
+      nil -> get_builtin_set(name)
+      capabilities -> capabilities
+    end
+  end
+
+  defp get_builtin_set(:messaging) do
     [
       Capability.new(:threads, enabled: true),
       Capability.new(:reactions, enabled: true),
@@ -217,7 +224,7 @@ defmodule LemonChannels.Capabilities.Registry do
     ]
   end
 
-  def get_set(:rich_content) do
+  defp get_builtin_set(:rich_content) do
     [
       Capability.new(:attachments,
         enabled: true,
@@ -231,7 +238,7 @@ defmodule LemonChannels.Capabilities.Registry do
     ]
   end
 
-  def get_set(:realtime) do
+  defp get_builtin_set(:realtime) do
     [
       Capability.new(:streaming,
         enabled: true,
@@ -243,17 +250,17 @@ defmodule LemonChannels.Capabilities.Registry do
     ]
   end
 
-  def get_set(:full) do
+  defp get_builtin_set(:full) do
     get_set(:messaging) ++ get_set(:rich_content) ++ get_set(:realtime)
   end
 
-  def get_set(:minimal) do
+  defp get_builtin_set(:minimal) do
     [
       Capability.new(:chunk_limit, enabled: true, value: 2000)
     ]
   end
 
-  def get_set(_) do
+  defp get_builtin_set(_) do
     []
   end
 
@@ -324,7 +331,7 @@ defmodule LemonChannels.Capabilities.Registry do
   end
 
   def lookup(_) do
-    Capabilities.new([])
+    Capabilities.empty()
   end
 end
 

@@ -411,7 +411,7 @@ defmodule LemonChannels.CapabilitiesTest do
     test "lookup/1 returns empty for unknown adapter" do
       caps = Registry.lookup(:unknown)
 
-      assert caps == %{}
+      assert caps == Capabilities.empty()
     end
 
     test "register_set/1 stores custom set" do
