@@ -1,22 +1,32 @@
-### 2026-03-06 - Planning Index Cleanup: Secrets Store Plans
+### 2026-03-06 - Planning Index Cleanup: Landed Plans Metadata
 **Work Area**: Planning System Maintenance
 
 **Summary**:
-Cleaned up planning metadata for completed secrets store plans that were still showing as `in_progress` in INDEX.md despite being merged to main.
+Cleaned up planning metadata for completed plans that were still showing as `in_progress` or `ready_to_land` in INDEX.md despite being merged to main.
 
 **Changes Made**:
 1. **Updated `planning/INDEX.md`**:
    - Removed PLN-20260223-secrets-store-preferred from Active Plans
    - Removed PLN-20260302-secrets-store-preferred-path from Active Plans
-   - Added both plans to Recently Landed section with correct merge commits
+   - Removed PLN-20260303-rate-limit-auto-resume from Active Plans
+   - Added all three plans to Recently Landed section with correct merge commits
    - Updated last updated date to 2026-03-06
 
 2. **Updated plan documents**:
    - Changed PLN-20260223-secrets-store-preferred status from `in_progress` to `landed`
    - Changed PLN-20260302-secrets-store-preferred-path status from `in_progress` to `landed`
+   - Changed PLN-20260303-rate-limit-auto-resume status from `in_progress` to `landed`
+
+3. **Added inspiration research findings** (5 new idea artifacts):
+   - IDEA-20260306-ironclaw-auto-compact-context-retry.md
+   - IDEA-20260306-oh-my-pi-strict-mode-openai.md
+   - IDEA-20260306-openclaw-synology-chat-adapter.md
+   - IDEA-20260306-community-mcp-industry-standard.md
+   - IDEA-20260306-community-production-readiness-gaps.md
 
 **Commits**:
-- `302fa18a` - docs(planning): Clean up secrets-store plans - mark as landed in INDEX
+- `b28991eb` - docs(planning): Clean up secrets-store plans - mark as landed in INDEX
+- `1b7908d5` - docs(planning): add 2026-03-07 inspiration research findings
 
 **Branch**: `fix/planning-index-secrets-cleanup`
 
