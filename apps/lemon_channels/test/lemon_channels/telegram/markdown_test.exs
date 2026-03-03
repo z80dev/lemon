@@ -297,6 +297,43 @@ defmodule LemonChannels.Telegram.MarkdownTest do
   end
 
   # ------------------------------------------------------------------
+  # Tables
+  # ------------------------------------------------------------------
+
+  describe "tables" do
+    test "renders markdown table rows with column delimiters" do
+      md = """
+      | Name | Score |
+      | ---- | ----- |
+      | Ava  | 42    |
+      | Ben  | 7     |
+      """
+
+      {text, entities} = Markdown.render(md)
+
+      assert text =~ "| Name | Score |"
+      assert text =~ "| Ava  | 42    |"
+      assert text =~ "| Ben  | 7     |"
+      assert text =~ "| ---- | ----- |"
+      assert entities == []
+    end
+
+    test "keeps table cells separated instead of concatenating text" do
+      md = """
+      | Col1 | Col2 |
+      | ---- | ---- |
+      | a    | b    |
+      """
+
+      {text, _entities} = Markdown.render(md)
+
+      assert text =~ "| Col1 | Col2 |"
+      refute text =~ "Col1Col2"
+      assert text =~ "| a    | b    |"
+    end
+  end
+
+  # ------------------------------------------------------------------
   # Blockquote
   # ------------------------------------------------------------------
 
@@ -461,13 +498,17 @@ defmodule LemonChannels.Telegram.MarkdownTest do
 
     test "BMP characters (non-ASCII) have correct UTF-16 length" do
       # Cyrillic, CJK, etc. are still 1 UTF-16 unit each
-      assert utf16_len("\u{0410}") == 1  # Cyrillic A
-      assert utf16_len("\u{4E16}") == 1  # CJK character
+      # Cyrillic A
+      assert utf16_len("\u{0410}") == 1
+      # CJK character
+      assert utf16_len("\u{4E16}") == 1
     end
 
     test "supplementary plane emoji use 2 UTF-16 code units" do
-      assert utf16_len("\u{1F680}") == 2  # rocket
-      assert utf16_len("\u{1F600}") == 2  # grinning face
+      # rocket
+      assert utf16_len("\u{1F680}") == 2
+      # grinning face
+      assert utf16_len("\u{1F600}") == 2
     end
 
     test "multiple emoji before entity" do

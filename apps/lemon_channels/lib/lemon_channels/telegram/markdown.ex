@@ -160,6 +160,9 @@ defmodule LemonChannels.Telegram.Markdown do
         # List containers handle prefixes and newlines.
         render_nodes(children, %{acc | mode: :list_item})
 
+      "table" ->
+        render_table(children, acc)
+
       "blockquote" ->
         # Render as plain text with a "> " prefix. We intentionally drop nested entities
         # to avoid offset adjustments for per-line prefixes.
@@ -231,6 +234,139 @@ defmodule LemonChannels.Telegram.Markdown do
     else
       emit(acc, "\n")
     end
+  end
+
+  defp render_table(children, acc) do
+    rows = collect_table_rows(children)
+
+    if rows == [] do
+      acc
+    else
+      widths = table_column_widths(rows)
+      header_rows = Enum.filter(rows, fn {kind, _cells} -> kind == :header end)
+      body_rows = Enum.filter(rows, fn {kind, _cells} -> kind == :row end)
+
+      header_lines = Enum.map(header_rows, &format_table_row(&1, widths))
+      body_lines = Enum.map(body_rows, &format_table_row(&1, widths))
+
+      lines =
+        if header_lines == [] do
+          body_lines
+        else
+          [header_separator(widths) | body_lines]
+          |> then(&(header_lines ++ &1))
+        end
+
+      table_text = Enum.join(lines, "\n")
+      acc = emit(acc, table_text)
+
+      if acc.mode == :list_item do
+        acc
+      else
+        emit(acc, "\n\n")
+      end
+    end
+  end
+
+  defp collect_table_rows(nodes) when is_list(nodes) do
+    Enum.flat_map(nodes, &collect_table_rows/1)
+  end
+
+  defp collect_table_rows({"thead", _attrs, children, _meta}) do
+    collect_section_rows(children, :header)
+  end
+
+  defp collect_table_rows({"tbody", _attrs, children, _meta}) do
+    collect_section_rows(children, :row)
+  end
+
+  defp collect_table_rows({"tfoot", _attrs, children, _meta}) do
+    collect_section_rows(children, :row)
+  end
+
+  defp collect_table_rows({"tr", _attrs, children, _meta}) do
+    collect_row(:row, children)
+  end
+
+  defp collect_table_rows({_tag, _attrs, children, _meta}) when is_list(children) do
+    collect_table_rows(children)
+  end
+
+  defp collect_table_rows(_other), do: []
+
+  defp collect_section_rows(nodes, kind) when is_list(nodes) do
+    Enum.flat_map(nodes, fn
+      {"tr", _attrs, children, _meta} ->
+        collect_row(kind, children)
+
+      {_tag, _attrs, children, _meta} when is_list(children) ->
+        collect_section_rows(children, kind)
+
+      _ ->
+        []
+    end)
+  end
+
+  defp collect_row(kind, cells) when kind in [:header, :row] and is_list(cells) do
+    normalized_cells =
+      cells
+      |> Enum.flat_map(fn
+        {"th", _attrs, children, _meta} -> [normalize_table_cell(children)]
+        {"td", _attrs, children, _meta} -> [normalize_table_cell(children)]
+        _ -> []
+      end)
+
+    if normalized_cells == [] do
+      []
+    else
+      [{kind, normalized_cells}]
+    end
+  end
+
+  defp normalize_table_cell(children) do
+    children
+    |> render_plain()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp table_column_widths(rows) when is_list(rows) do
+    max_cols =
+      rows
+      |> Enum.map(fn {_kind, cells} -> length(cells) end)
+      |> Enum.max(fn -> 0 end)
+
+    if max_cols == 0 do
+      []
+    else
+      for idx <- 0..(max_cols - 1) do
+        rows
+        |> Enum.map(fn {_kind, cells} -> String.length(Enum.at(cells, idx, "")) end)
+        |> Enum.max(fn -> 0 end)
+      end
+    end
+  end
+
+  defp format_table_row({_kind, cells}, widths) do
+    formatted_cells =
+      widths
+      |> Enum.with_index()
+      |> Enum.map(fn {width, idx} ->
+        cells
+        |> Enum.at(idx, "")
+        |> String.pad_trailing(max(width, 0))
+      end)
+
+    "| " <> Enum.join(formatted_cells, " | ") <> " |"
+  end
+
+  defp header_separator(widths) do
+    segments =
+      Enum.map(widths, fn width ->
+        String.duplicate("-", max(width, 3))
+      end)
+
+    "| " <> Enum.join(segments, " | ") <> " |"
   end
 
   defp render_pre(children, acc) do

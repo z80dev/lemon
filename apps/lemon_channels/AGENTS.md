@@ -92,7 +92,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
-| `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets. |
+| `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
 | `telegram/truncate.ex` | Truncates to 4096 chars preserving resume lines at the end. |
 | `telegram/trigger_mode.ex` | Per-chat/topic `:all` vs `:mentions` trigger mode stored in ETS. |
 | `telegram/offset_store.ex` | Persists getUpdates offset via `LemonCore.Store`. |
@@ -204,7 +204,7 @@ Defined in `LemonChannels.Capabilities`:
 ### Modifying message formatting (Telegram)
 
 - Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
-- Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities
+- Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities and preserves markdown table column boundaries
 - Truncation: `telegram/truncate.ex` -- preserves resume lines at end
 
 ### Adding a new outbound payload kind
