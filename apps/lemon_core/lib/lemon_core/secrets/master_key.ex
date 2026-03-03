@@ -2,19 +2,212 @@ defmodule LemonCore.Secrets.MasterKey do
   @moduledoc """
   Master key resolution and initialization for encrypted secrets.
 
-  Resolution order:
-  1. macOS Keychain entry (preferred)
-  2. `LEMON_SECRETS_MASTER_KEY` environment variable
+  Resolution order (platform-dependent):
+
+      macOS:   Keychain → KeyFile → LEMON_SECRETS_MASTER_KEY env
+      Linux:   SecretService → KeyFile → LEMON_SECRETS_MASTER_KEY env
+      Other:   KeyFile → LEMON_SECRETS_MASTER_KEY env
   """
 
-  alias LemonCore.Secrets.Keychain
+  alias LemonCore.Secrets.{KeyFile, Keychain, SecretService}
 
   @env_var "LEMON_SECRETS_MASTER_KEY"
   @master_key_bytes 32
 
-  @spec resolve(keyword()) :: {:ok, binary(), :keychain | :env} | {:error, atom() | tuple()}
+  # -------------------------------------------------------------------
+  # Public API
+  # -------------------------------------------------------------------
+
+  @spec resolve(keyword()) :: {:ok, binary(), atom()} | {:error, atom() | tuple()}
   def resolve(opts \\ []) do
-    keychain_module = Keyword.get(opts, :keychain_module, Keychain)
+    if Keyword.has_key?(opts, :keychain_module) do
+      resolve_legacy(opts)
+    else
+      resolve_multi_backend(opts)
+    end
+  end
+
+  @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
+  def init(opts \\ []) do
+    if Keyword.has_key?(opts, :keychain_module) do
+      init_legacy(opts)
+    else
+      init_multi_backend(opts)
+    end
+  end
+
+  @spec status(keyword()) :: map()
+  def status(opts \\ []) do
+    if Keyword.has_key?(opts, :keychain_module) do
+      status_legacy(opts)
+    else
+      status_multi_backend(opts)
+    end
+  end
+
+  @spec env_var() :: String.t()
+  def env_var, do: @env_var
+
+  @spec generate_encoded_key() :: String.t()
+  def generate_encoded_key do
+    :crypto.strong_rand_bytes(@master_key_bytes)
+    |> Base.encode64()
+  end
+
+  @spec default_backends() :: [module()]
+  def default_backends do
+    case :os.type() do
+      {:unix, :darwin} -> [Keychain, KeyFile]
+      {:unix, _} -> [SecretService, KeyFile]
+      _ -> [KeyFile]
+    end
+  end
+
+  @spec backend_source(module()) :: atom()
+  def backend_source(module) do
+    case module do
+      Keychain -> :keychain
+      SecretService -> :secret_service
+      KeyFile -> :key_file
+      other -> other |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # Multi-backend resolution (new path — no :keychain_module in opts)
+  # -------------------------------------------------------------------
+
+  defp resolve_multi_backend(opts) do
+    backends = Keyword.get(opts, :backends, default_backends())
+
+    case try_backends_resolve(backends, opts) do
+      {:ok, _key, _source} = ok -> ok
+      :no_match -> resolve_from_env(opts)
+    end
+  end
+
+  defp try_backends_resolve([], _opts), do: :no_match
+
+  defp try_backends_resolve([backend | rest], opts) do
+    if backend_available?(backend) do
+      case backend.get_master_key(opts) do
+        {:ok, encoded} ->
+          case decode_master_key(encoded) do
+            {:ok, decoded} -> {:ok, decoded, backend_source(backend)}
+            {:error, _} -> try_backends_resolve(rest, opts)
+          end
+
+        {:error, :missing} ->
+          try_backends_resolve(rest, opts)
+
+        {:error, _} ->
+          try_backends_resolve(rest, opts)
+      end
+    else
+      try_backends_resolve(rest, opts)
+    end
+  end
+
+  defp init_multi_backend(opts) do
+    backends = Keyword.get(opts, :backends, default_backends())
+    encoded = generate_encoded_key()
+
+    case try_backends_init(backends, encoded, opts) do
+      {:ok, _} = ok -> ok
+      :no_backend -> {:error, :no_backend_available}
+    end
+  end
+
+  defp try_backends_init([], _encoded, _opts), do: :no_backend
+
+  defp try_backends_init([backend | rest], encoded, opts) do
+    if backend_available?(backend) do
+      case backend.put_master_key(encoded, opts) do
+        :ok -> {:ok, %{source: backend_source(backend), configured: true}}
+        {:error, _} -> try_backends_init(rest, encoded, opts)
+      end
+    else
+      try_backends_init(rest, encoded, opts)
+    end
+  end
+
+  defp status_multi_backend(opts) do
+    backends = Keyword.get(opts, :backends, default_backends())
+
+    env_present? =
+      case env_getter(opts).(@env_var) do
+        value when is_binary(value) and value != "" -> true
+        _ -> false
+      end
+
+    backend_statuses =
+      Enum.map(backends, fn backend ->
+        available = backend_available?(backend)
+        source = backend_source(backend)
+
+        result =
+          if available do
+            case backend.get_master_key(opts) do
+              {:ok, encoded} ->
+                case decode_master_key(encoded) do
+                  {:ok, _} -> :ok
+                  {:error, reason} -> {:error, reason}
+                end
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+          else
+            {:error, :unavailable}
+          end
+
+        %{backend: source, module: backend, available: available, result: result}
+      end)
+
+    active =
+      Enum.find(backend_statuses, fn s -> s.available and s.result == :ok end)
+
+    source =
+      cond do
+        active != nil -> active.backend
+        env_present? -> :env
+        true -> nil
+      end
+
+    # Preserve backward-compat keys
+    keychain_status = Enum.find(backend_statuses, &(&1.module == Keychain))
+
+    keychain_available =
+      if keychain_status, do: keychain_status.available, else: false
+
+    keychain_error =
+      case keychain_status do
+        %{result: {:error, reason}} when reason not in [:missing, :unavailable] -> reason
+        _ -> nil
+      end
+
+    %{
+      configured: not is_nil(source),
+      source: source,
+      keychain_available: keychain_available,
+      env_fallback: env_present?,
+      keychain_error: keychain_error,
+      backends: backend_statuses
+    }
+  end
+
+  defp backend_available?(backend) do
+    Code.ensure_loaded?(backend) and
+      function_exported?(backend, :available?, 0) and
+      backend.available?()
+  end
+
+  # -------------------------------------------------------------------
+  # Legacy single-backend path (opts contain :keychain_module)
+  # -------------------------------------------------------------------
+
+  defp resolve_legacy(opts) do
+    keychain_module = Keyword.fetch!(opts, :keychain_module)
 
     case resolve_from_keychain(keychain_module, opts) do
       {:ok, _key, :keychain} = ok ->
@@ -41,9 +234,8 @@ defmodule LemonCore.Secrets.MasterKey do
     end
   end
 
-  @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
-  def init(opts \\ []) do
-    keychain_module = Keyword.get(opts, :keychain_module, Keychain)
+  defp init_legacy(opts) do
+    keychain_module = Keyword.fetch!(opts, :keychain_module)
     encoded = generate_encoded_key()
 
     case keychain_module.put_master_key(encoded, opts) do
@@ -58,9 +250,8 @@ defmodule LemonCore.Secrets.MasterKey do
     end
   end
 
-  @spec status(keyword()) :: map()
-  def status(opts \\ []) do
-    keychain_module = Keyword.get(opts, :keychain_module, Keychain)
+  defp status_legacy(opts) do
+    keychain_module = Keyword.fetch!(opts, :keychain_module)
 
     keychain_available =
       if Code.ensure_loaded?(keychain_module) and
@@ -107,14 +298,9 @@ defmodule LemonCore.Secrets.MasterKey do
     }
   end
 
-  @spec env_var() :: String.t()
-  def env_var, do: @env_var
-
-  @spec generate_encoded_key() :: String.t()
-  def generate_encoded_key do
-    :crypto.strong_rand_bytes(@master_key_bytes)
-    |> Base.encode64()
-  end
+  # -------------------------------------------------------------------
+  # Shared helpers
+  # -------------------------------------------------------------------
 
   defp resolve_from_keychain(keychain_module, opts) do
     if Code.ensure_loaded?(keychain_module) and

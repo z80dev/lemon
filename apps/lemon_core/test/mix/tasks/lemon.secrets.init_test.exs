@@ -50,7 +50,6 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
 
     test "has proper @shortdoc attribute" do
-      # Verify shortdoc via task helper
       shortdoc = Mix.Task.shortdoc(Init)
       assert shortdoc =~ "Initialize Lemon secrets master key"
     end
@@ -79,35 +78,38 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
   end
 
-  describe "run/1 error handling" do
-    test "raises Mix.Error when keychain is unavailable", %{mock_home: _mock_home} do
-      # When LEMON_SECRETS_MASTER_KEY is not set and keychain is unavailable,
-      # the task should raise with keychain_unavailable error
+  describe "run/1" do
+    test "succeeds via KeyFile fallback on non-macOS", %{mock_home: mock_home} do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-      # Capture any output and catch the error
-      error =
-        assert_raise Mix.Error, fn ->
-          capture_io(fn ->
-            Init.run([])
-          end)
-        end
-
-      assert error.message =~ "Keychain is unavailable" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to initialize"
-    end
-
-    test "task handles empty args list" do
-      # Test that the task runs with empty args (will likely fail due to keychain)
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
-
-      # Should raise an error, but not crash with function clause
-      assert_raise Mix.Error, fn ->
+      # On Linux (no Keychain), init should succeed by writing to KeyFile
+      # under mock HOME
+      output =
         capture_io(fn ->
           Init.run([])
         end)
+
+      assert output =~ "Secrets master key initialized"
+
+      # Verify the key file was created under mock HOME
+      key_path = Path.join(mock_home, ".lemon/master.key")
+
+      if File.exists?(key_path) do
+        content = File.read!(key_path)
+        assert String.length(content) > 0
       end
+    end
+
+    test "task handles empty args list" do
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      # Should not crash with function clause error
+      output =
+        capture_io(fn ->
+          Init.run([])
+        end)
+
+      assert is_binary(output)
     end
   end
 

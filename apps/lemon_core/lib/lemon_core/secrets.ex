@@ -238,7 +238,7 @@ defmodule LemonCore.Secrets do
     {:ok, entries} = list(opts)
     key_status = MasterKey.status(opts)
 
-    %{
+    base = %{
       configured: key_status.configured,
       source: key_status.source,
       keychain_available: key_status.keychain_available,
@@ -247,6 +247,12 @@ defmodule LemonCore.Secrets do
       owner: owner_from_opts(opts),
       count: length(entries)
     }
+
+    if Map.has_key?(key_status, :backends) do
+      Map.put(base, :backends, key_status.backends)
+    else
+      base
+    end
   end
 
   defp resolve_from_store(name, env_fallback, opts) do

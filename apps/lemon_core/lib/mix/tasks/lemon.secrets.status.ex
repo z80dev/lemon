@@ -27,6 +27,25 @@ defmodule Mix.Tasks.Lemon.Secrets.Status do
 
     Mix.shell().info("owner: #{status.owner}")
     Mix.shell().info("count: #{status.count}")
+
+    if backends = Map.get(status, :backends) do
+      Mix.shell().info("")
+      Mix.shell().info("Backends:")
+
+      for entry <- backends do
+        status_label =
+          case entry.result do
+            :ok -> "configured"
+            {:error, :missing} -> "empty"
+            {:error, :unavailable} -> "unavailable"
+            {:error, reason} -> "error: #{inspect(reason)}"
+          end
+
+        Mix.shell().info(
+          "  #{entry.backend}: available=#{entry.available} status=#{status_label}"
+        )
+      end
+    end
   end
 
   defp start_lemon_core! do
