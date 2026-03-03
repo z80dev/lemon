@@ -10,6 +10,7 @@ Core principles:
 - **Plain maps with string keys**: no Ecto schemas; storage via `LemonCore.Store` (ETS/JSONL/SQLite)
 - **Per-match global locks**: all mutating operations go through `:global.trans` for consistency
 - **Visibility policy**: match `visibility` must be one of `public`, `private`, or `unlisted`
+- **Dual broadcast on accepted moves**: `submit_move/4` publishes both per-match (`games:match:<id>`) and lobby (`games:lobby`) updates so spectator views can stay in sync.
 
 ## Key Files and Purposes
 

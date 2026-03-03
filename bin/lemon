@@ -195,7 +195,10 @@ case System.get_env("LEMON_WEB_PORT") do
         Application.put_env(:lemon_web, LemonWeb.Endpoint,
           Keyword.merge(
             Application.get_env(:lemon_web, LemonWeb.Endpoint, []),
-            http: [ip: {127, 0, 0, 1}, port: port]
+            [
+              server: true,
+              http: [ip: {127, 0, 0, 1}, port: port]
+            ]
           )
         )
       _ -> :ok

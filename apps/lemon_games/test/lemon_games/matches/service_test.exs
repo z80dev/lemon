@@ -86,6 +86,24 @@ defmodule LemonGames.Matches.ServiceTest do
     assert updated["turn_number"] > match["turn_number"]
   end
 
+  test "submit_move broadcasts lobby change event for active match" do
+    params = %{"game_type" => "connect4", "visibility" => "public"}
+    {:ok, pending} = Service.create_match(params, @actor)
+    {:ok, match} = Service.accept_match(pending["id"], @actor2)
+
+    :ok = LemonGames.Bus.subscribe_lobby()
+
+    move = %{"kind" => "drop", "column" => 3}
+
+    assert {:ok, _updated, _seq, false} =
+             Service.submit_move(match["id"], @actor, move, "key-lobby-1")
+
+    assert_receive %LemonCore.Event{type: :game_lobby_changed, payload: payload}, 500
+    assert payload["match_id"] == match["id"]
+    assert payload["status"] == "active"
+    assert payload["reason"] == "move_submitted"
+  end
+
   test "submit_move rejects illegal move" do
     {:ok, match} = create_bot_match("connect4")
 

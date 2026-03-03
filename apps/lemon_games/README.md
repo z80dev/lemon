@@ -142,6 +142,7 @@ A match progresses through these statuses: `pending_accept` -> `active` -> `fini
 - On success: appends `move_submitted` event, updates snapshot state, advances turn or finishes game
 - On failure: appends `move_rejected` event with the rejection reason
 - Broadcasts match event for real-time spectators
+- Broadcasts lobby change event on every accepted move (`reason: "move_submitted"` for active matches, `"game_over"` for terminal matches)
 - Triggers bot turn worker if the next player is a bot
 
 ### 4. Terminal States
