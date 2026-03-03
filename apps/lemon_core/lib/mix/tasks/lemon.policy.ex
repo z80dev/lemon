@@ -140,21 +140,18 @@ defmodule Mix.Tasks.Lemon.Policy do
     end
 
     route = %Route{
-      channel: channel,
-      account: opts[:account],
-      peer: opts[:peer],
-      thread: opts[:thread]
+      channel_id: channel,
+      account_id: opts[:account],
+      peer_id: opts[:peer],
+      thread_id: opts[:thread]
     }
 
-    policy = %ModelPolicy{
-      model_id: model,
-      thinking_level: thinking,
-      metadata: %{
+    policy =
+      ModelPolicy.new_policy(model,
+        thinking_level: thinking,
         reason: opts[:reason],
-        set_at: System.system_time(:second),
         set_by: "mix lemon.policy"
-      }
-    }
+      )
 
     case ModelPolicy.set(route, policy) do
       :ok ->
@@ -167,10 +164,10 @@ defmodule Mix.Tasks.Lemon.Policy do
 
   defp get_policy(channel, opts) do
     route = %Route{
-      channel: channel,
-      account: opts[:account],
-      peer: opts[:peer],
-      thread: opts[:thread]
+      channel_id: channel,
+      account_id: opts[:account],
+      peer_id: opts[:peer],
+      thread_id: opts[:thread]
     }
 
     case ModelPolicy.resolve(route) do
@@ -195,10 +192,10 @@ defmodule Mix.Tasks.Lemon.Policy do
       Mix.shell().info("Cleared #{count} policies for #{channel}")
     else
       route = %Route{
-        channel: channel,
-        account: opts[:account],
-        peer: opts[:peer],
-        thread: opts[:thread]
+        channel_id: channel,
+        account_id: opts[:account],
+        peer_id: opts[:peer],
+        thread_id: opts[:thread]
       }
 
       case ModelPolicy.clear(route) do
