@@ -272,6 +272,42 @@ defmodule LemonChannels.Telegram.API do
   end
 
   @doc """
+  Send a video to Telegram so it plays inline rather than as an attachment.
+
+  `file` may be:
+  - `{:path, "/abs/path/to/video.mp4"}`
+  - `{:binary, "video.mp4", "video/mp4", <<bytes>>}`
+  """
+  def send_video(token, chat_id, file, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    boundary = build_boundary("lemon-video")
+
+    {body, content_type} =
+      build_media_multipart(boundary, chat_id, "video", file, opts, "video/mp4")
+
+    url = "https://api.telegram.org/bot#{token}/sendVideo"
+    headers = [{~c"content-type", to_charlist(content_type)}]
+    http_opts = [timeout: 120_000, connect_timeout: 30_000]
+
+    case LemonCore.Httpc.request(
+           :post,
+           {to_charlist(url), headers, to_charlist(content_type), body},
+           http_opts,
+           body_format: :binary
+         ) do
+      {:ok, {{_, 200, _}, _headers, resp_body}} ->
+        Jason.decode(resp_body)
+
+      {:ok, {{_, status, _}, _headers, resp_body}} ->
+        {:error, {:http_error, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Send a photo media group to Telegram.
 
   `files` is a list of maps with:
@@ -570,6 +606,10 @@ defmodule LemonChannels.Telegram.API do
       ".webp" -> "image/webp"
       ".bmp" -> "image/bmp"
       ".svg" -> "image/svg+xml"
+      ".mp4" -> "video/mp4"
+      ".mov" -> "video/quicktime"
+      ".webm" -> "video/webm"
+      ".avi" -> "video/x-msvideo"
       _ -> default_mime
     end
   end

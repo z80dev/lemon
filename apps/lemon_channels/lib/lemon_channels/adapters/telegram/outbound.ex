@@ -549,6 +549,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       image_file?(path) and function_exported?(api_mod, :send_photo, 4) ->
         api_mod.send_photo(token, chat_id, {:path, path}, opts)
 
+      video_file?(path) and function_exported?(api_mod, :send_video, 4) ->
+        api_mod.send_video(token, chat_id, {:path, path}, opts)
+
       function_exported?(api_mod, :send_document, 4) ->
         api_mod.send_document(token, chat_id, {:path, path}, opts)
 
@@ -599,6 +602,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       ".tiff" -> true
       ".heic" -> true
       ".heif" -> true
+      _ -> false
+    end
+  end
+
+  defp video_file?(path) when is_binary(path) do
+    case Path.extname(path) |> String.downcase() do
+      ".mp4" -> true
+      ".mov" -> true
+      ".webm" -> true
+      ".avi" -> true
       _ -> false
     end
   end
