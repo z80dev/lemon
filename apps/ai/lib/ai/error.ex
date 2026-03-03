@@ -250,6 +250,35 @@ defmodule Ai.Error do
   def rate_limit_error?(_), do: false
 
   @doc """
+  Check if the error represents a context length exceeded error.
+
+  ## Examples
+
+      iex> Ai.Error.context_length_error?({:http_error, 400, %{"error" => %{"code" => "context_length_exceeded"}}})
+      true
+
+      iex> Ai.Error.context_length_error?({:http_error, 429, "Rate limited"})
+      false
+  """
+  @spec context_length_error?(term()) :: boolean()
+  def context_length_error?({:http_error, status, body}) when is_map(body) do
+    context_length_error_code?(body) or
+      context_length_error_message?(status, body)
+  end
+
+  def context_length_error?({:http_error, status, body}) when is_binary(body) do
+    context_length_error_string?(status, body)
+  end
+
+  def context_length_error?(:context_length_exceeded), do: true
+
+  def context_length_error?(error) when is_binary(error) do
+    context_length_error_string?(nil, error)
+  end
+
+  def context_length_error?(_), do: false
+
+  @doc """
   Format rate limit information for display.
 
   ## Examples
@@ -476,4 +505,53 @@ defmodule Ai.Error do
 
   defp parse_retry_after(value) when is_integer(value), do: value * 1000
   defp parse_retry_after(_), do: nil
+
+  # ============================================================================
+  # Context Length Error Helpers
+  # ============================================================================
+
+  defp context_length_error_code?(%{"error" => %{"code" => code}}) do
+    code in ["context_length_exceeded", "max_tokens_exceeded", "token_limit_exceeded"]
+  end
+
+  defp context_length_error_code?(%{"error" => %{"type" => type}}) do
+    type in ["context_length_exceeded", "max_tokens_exceeded"]
+  end
+
+  defp context_length_error_code?(_), do: false
+
+  defp context_length_error_message?(status, body) when status in [400, 413, 422] do
+    message = extract_message_text(body) || ""
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "context length") or
+      String.contains?(downcased, "maximum context") or
+      String.contains?(downcased, "token limit") or
+      String.contains?(downcased, "too many tokens") or
+      String.contains?(downcased, "exceeds maximum")
+  end
+
+  defp context_length_error_message?(_, _), do: false
+
+  defp context_length_error_string?(status, body) when is_binary(body) do
+    downcased = String.downcase(body)
+
+    String.contains?(downcased, "context_length_exceeded") or
+      String.contains?(downcased, "context length") or
+      (status in [400, 413, 422] and
+         (String.contains?(downcased, "maximum context") or
+            String.contains?(downcased, "token limit")))
+  end
+
+  defp context_length_error_string?(_, _), do: false
+
+  defp extract_message_text(%{"error" => %{"message" => message}}) when is_binary(message) do
+    message
+  end
+
+  defp extract_message_text(%{"message" => message}) when is_binary(message) do
+    message
+  end
+
+  defp extract_message_text(_), do: nil
 end

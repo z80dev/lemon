@@ -32,7 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — |
+| [PLN-20250308-auto-compact-context-retry](plans/PLN-20250308-auto-compact-context-retry.md) | Auto-Compact and Retry on ContextLengthExceeded | ready_to_land | janitor | feature/pln-20250308-auto-compact-context-retry | pending | - | 2026-03-08 |
 
 ## Ready for Review
 
