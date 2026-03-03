@@ -32,9 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| [PLN-20250308-rate-limit-session-self-healing](plans/PLN-20250308-rate-limit-session-self-healing.md) | Self-Healing Sessions for Persistent Rate-Limit Wedges | in_progress | janitor | feature/pln-20250308-rate-limit-session-self-healing | pending | - | 2026-03-08 |
-| [PLN-20250308-channel-capability-negotiation](plans/PLN-20250308-channel-capability-negotiation.md) | Channel Capability Negotiation (Attachments, Rich Blocks, Streaming) | in_progress | janitor | feature/pln-20250308-channel-capability-negotiation | pending | - | 2026-03-08 |
-| [PLN-20250308-per-channel-model-overrides](plans/PLN-20250308-per-channel-model-overrides.md) | Persistent Per-Channel Model Overrides | in_progress | janitor | feature/pln-20250308-per-channel-model-overrides | pending | - | 2026-03-08 |
+| — | — | — | — | — | — | — | — |
 
 ## Ready for Review
 
@@ -58,6 +56,9 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20250308-per-channel-model-overrides](plans/PLN-20250308-per-channel-model-overrides.md) | Persistent Per-Channel Model Overrides | `65f48c1b` | Route-based model policy, precedence rules, Mix task, 30 tests | 2026-03-08 |
+| [PLN-20250308-channel-capability-negotiation](plans/PLN-20250308-channel-capability-negotiation.md) | Channel Capability Negotiation (Attachments, Rich Blocks, Streaming) | `65f48c1b` | Capability registry, query API, graceful degradation, 29 tests | 2026-03-08 |
+| [PLN-20250308-rate-limit-session-self-healing](plans/PLN-20250308-rate-limit-session-self-healing.md) | Self-Healing Sessions for Persistent Rate-Limit Wedges | `65f48c1b` | RateLimitHealer, probe logic, recovery strategies, session fork, 20 tests | 2026-03-08 |
 | [PLN-20250308-auto-compact-context-retry](plans/PLN-20250308-auto-compact-context-retry.md) | Auto-Compact and Retry on ContextLengthExceeded | `84741ff3` | Context limit error detection, ContextCompactor strategies, CompactingClient retry, 18 tests | 2026-03-08 |
 | [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `62833edb` | Rate limit pause tracking, ResumeScheduler, RunGraph integration, 69 tests | 2026-03-06 |
 | [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `b49c9c72` | Core resolution enhancement, provider config integration, migration tooling | 2026-03-06 |

@@ -1,11 +1,12 @@
 ---
 id: PLN-20250308-channel-capability-negotiation
 title: Channel Capability Negotiation (Attachments, Rich Blocks, Streaming)
-status: planned
+status: landed
 owner: janitor
 workspace: feature/pln-20250308-channel-capability-negotiation
-change_id: pending
+change_id: dfd1cf5b
 created: 2026-03-08
+landed: 2026-03-08
 ---
 
 # Channel Capability Negotiation (Attachments, Rich Blocks, Streaming)

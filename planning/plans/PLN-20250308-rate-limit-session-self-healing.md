@@ -1,11 +1,12 @@
 ---
 id: PLN-20250308-rate-limit-session-self-healing
 title: Self-Healing Sessions for Persistent Rate-Limit Wedges
-status: in_progress
+status: landed
 owner: janitor
 workspace: feature/pln-20250308-rate-limit-session-self-healing
-change_id: pending
+change_id: dfd1cf5b
 created: 2026-03-08
+landed: 2026-03-08
 ---
 
 # Self-Healing Sessions for Persistent Rate-Limit Wedges
