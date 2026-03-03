@@ -23,6 +23,7 @@ defmodule CodingAgent.Application do
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
+      {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
       CodingAgent.Wasm.SidecarSupervisor,
