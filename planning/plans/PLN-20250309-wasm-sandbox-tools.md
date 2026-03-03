@@ -65,12 +65,12 @@ Lemon has robust WASM infrastructure:
 - [x] Add WASM tool metadata to MCP responses
 - [x] Write tests for MCP server integration (16 tests)
 
-### M2: WASM Module Registry
-- [ ] Create `CodingAgent.Wasm.Registry` module
-- [ ] Implement dynamic module loading
-- [ ] Add module caching and versioning
-- [ ] Support registry sources (local, HTTP, IPFS)
-- [ ] Write tests for registry operations
+### M2: WASM Module Registry ✅
+- [x] Create `CodingAgent.Wasm.Registry` module
+- [x] Implement dynamic module loading
+- [x] Add module caching and versioning
+- [x] Support registry sources (local, HTTP, IPFS)
+- [x] Write tests for registry operations (30 tests)
 
 ### M3: MCP Client for External Tools
 - [ ] Extend `LemonMCP.Client` to support tool consumption
@@ -106,6 +106,8 @@ Lemon has robust WASM infrastructure:
 | 2026-03-09 00:00 | janitor | Created plan | planned | - |
 | 2026-03-09 00:10 | janitor | Started M1: WASM MCP Server | in_progress | - |
 | 2026-03-09 00:30 | janitor | Completed M1: WASM MCP Server | completed | f0474b19, 4583cc68 |
+| 2026-03-09 01:00 | janitor | Started M2: WASM Module Registry | in_progress | - |
+| 2026-03-09 01:30 | janitor | Completed M2: WASM Module Registry | completed | 709aee00 |
 
 ### M1 Completed
 
@@ -120,6 +122,21 @@ Lemon has robust WASM infrastructure:
 **Files Added:**
 - `apps/lemon_mcp/lib/lemon_mcp/wasm_server.ex` - Main server implementation
 - `apps/lemon_mcp/test/lemon_mcp/wasm_server_test.exs` - Test suite
+
+### M2 Completed
+
+**CodingAgent.Wasm.Registry** module implemented:
+- GenServer-based registry for WASM module management
+- Support for multiple source types: local, HTTP, IPFS, embedded
+- Module caching with configurable TTL and versioning
+- Automatic cleanup of expired entries
+- Statistics and telemetry events
+- Entry struct for metadata tracking
+
+**Files Added:**
+- `apps/coding_agent/lib/coding_agent/wasm/registry.ex` - Main registry implementation
+- `apps/coding_agent/lib/coding_agent/wasm/registry/entry.ex` - Entry struct
+- `apps/coding_agent/test/coding_agent/wasm/registry_test.exs` - Test suite (30 tests)
 
 ## Related
 - Parent plan: -
