@@ -1,3 +1,63 @@
+### 2026-03-08 - Auto-Compact and Retry on ContextLengthExceeded
+**Work Area**: AI Provider Reliability / Context Management
+
+**Summary**:
+Implemented automatic context compaction and retry when AI provider calls fail with `ContextLengthExceeded` errors. This addresses a real production pain point where long coding sessions hit context limits and fail, forcing users to manually compact or start fresh.
+
+**Source**: IronClaw v0.13.0 (commit `6f21cfa`) - IDEA-20260306-ironclaw-auto-compact-context-retry
+
+**Changes Made**:
+
+1. **Error Detection** (`apps/ai/lib/ai/error.ex`):
+   - Added `context_length_error?/1` function to detect context limit errors
+   - Supports all major providers: Anthropic, OpenAI, Google, Bedrock
+   - Detects by error code, message content, or HTTP status patterns
+
+2. **Context Compactor** (`apps/ai/lib/ai/context_compactor.ex` - NEW):
+   - Truncation strategy: removes oldest messages while preserving recent context
+   - Hybrid strategy: combines truncation with different preservation thresholds
+   - Configurable via application environment
+   - Full telemetry support: `[:ai, :context_compactor, :compaction_started|succeeded|failed]`
+
+3. **Compacting Client** (`apps/ai/lib/ai/compacting_client.ex` - NEW):
+   - Drop-in replacement for direct provider calls
+   - Automatic retry with compacted context on ContextLengthExceeded
+   - Configurable max attempts and strategy selection
+   - Telemetry: `[:ai, :compacting_client, :request_started|compaction_retry|succeeded|failed]`
+
+4. **Tests** (`apps/ai/test/ai/context_compactor_test.exs` - NEW):
+   - 18 new tests, all passing
+   - Error detection tests for all provider formats
+   - Compaction strategy tests
+   - Telemetry event tests
+
+**Configuration**:
+```elixir
+# config/config.exs
+config :ai, Ai.ContextCompactor,
+  enabled: true,
+  default_strategy: :truncation,
+  max_compaction_attempts: 3,
+  preserve_recent_messages: 4
+
+config :ai, Ai.CompactingClient,
+  enabled: true,
+  max_compaction_attempts: 3
+```
+
+**Test Results**:
+- ContextCompactor tests: 18 tests, 0 failures
+- Error tests: 35 tests, 0 failures (existing)
+- Full AI app tests: all passing
+
+**Commits**:
+- `bbeaa896` - feat(ai): Auto-compact and retry on ContextLengthExceeded
+
+**Branch**: `feature/pln-20250308-auto-compact-context-retry`
+**Status**: Ready to land
+
+---
+
 ### 2026-03-06 - Planning Index Cleanup: Landed Plans Metadata
 **Work Area**: Planning System Maintenance
 
