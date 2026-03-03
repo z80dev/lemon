@@ -58,12 +58,12 @@ Lemon has robust WASM infrastructure:
 
 ## Milestones
 
-### M1: WASM MCP Server
-- [ ] Create `LemonMCP.WasmServer` module
-- [ ] Expose WASM tools via MCP tools/list endpoint
-- [ ] Implement MCP tools/call for WASM invocation
-- [ ] Add WASM tool metadata to MCP responses
-- [ ] Write tests for MCP server integration
+### M1: WASM MCP Server ✅
+- [x] Create `LemonMCP.WasmServer` module
+- [x] Expose WASM tools via MCP tools/list endpoint
+- [x] Implement MCP tools/call for WASM invocation
+- [x] Add WASM tool metadata to MCP responses
+- [x] Write tests for MCP server integration (16 tests)
 
 ### M2: WASM Module Registry
 - [ ] Create `CodingAgent.Wasm.Registry` module
@@ -105,6 +105,21 @@ Lemon has robust WASM infrastructure:
 |-----------|-----|------|--------|-------|
 | 2026-03-09 00:00 | janitor | Created plan | planned | - |
 | 2026-03-09 00:10 | janitor | Started M1: WASM MCP Server | in_progress | - |
+| 2026-03-09 00:30 | janitor | Completed M1: WASM MCP Server | completed | f0474b19, 4583cc68 |
+
+### M1 Completed
+
+**LemonMCP.WasmServer** module implemented:
+- MCP server that exposes WASM tools via Model Context Protocol
+- Tool discovery from WASM paths
+- Tool invocation with proper context
+- Telemetry events for execution tracking
+- Statistics and monitoring
+- 16 comprehensive tests, all passing
+
+**Files Added:**
+- `apps/lemon_mcp/lib/lemon_mcp/wasm_server.ex` - Main server implementation
+- `apps/lemon_mcp/test/lemon_mcp/wasm_server_test.exs` - Test suite
 
 ## Related
 - Parent plan: -
