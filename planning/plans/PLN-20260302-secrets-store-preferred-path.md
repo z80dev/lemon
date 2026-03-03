@@ -2,7 +2,7 @@
 
 ## Metadata
 - **Plan ID**: PLN-20260302-secrets-store-preferred-path
-- **Status**: in_progress
+- **Status**: landed
 - **Created**: 2026-03-02
 - **Author**: janitor
 - **Workspace**: feature/pln-20260302-secrets-store-preferred-path

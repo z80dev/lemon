@@ -1,3 +1,27 @@
+### 2026-03-06 - Planning Index Cleanup: Secrets Store Plans
+**Work Area**: Planning System Maintenance
+
+**Summary**:
+Cleaned up planning metadata for completed secrets store plans that were still showing as `in_progress` in INDEX.md despite being merged to main.
+
+**Changes Made**:
+1. **Updated `planning/INDEX.md`**:
+   - Removed PLN-20260223-secrets-store-preferred from Active Plans
+   - Removed PLN-20260302-secrets-store-preferred-path from Active Plans
+   - Added both plans to Recently Landed section with correct merge commits
+   - Updated last updated date to 2026-03-06
+
+2. **Updated plan documents**:
+   - Changed PLN-20260223-secrets-store-preferred status from `in_progress` to `landed`
+   - Changed PLN-20260302-secrets-store-preferred-path status from `in_progress` to `landed`
+
+**Commits**:
+- `302fa18a` - docs(planning): Clean up secrets-store plans - mark as landed in INDEX
+
+**Branch**: `fix/planning-index-secrets-cleanup`
+
+---
+
 ### 2026-03-02 - Tool Call Name Normalization
 **Work Area**: Reliability Hardening / Tool Dispatch
 
