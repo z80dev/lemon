@@ -62,6 +62,48 @@ defmodule LemonWeb.Games.Components.BoardComponent do
     """
   end
 
+  def board(%{game_type: "battleship"} = assigns) do
+    p1_shots = Map.get(assigns.game_state, "p1_shots", [])
+    p2_shots = Map.get(assigns.game_state, "p2_shots", [])
+    p1_ships = Map.get(assigns.game_state, "p1_ships", [])
+    p2_ships = Map.get(assigns.game_state, "p2_ships", [])
+    phase = Map.get(assigns.game_state, "phase", "placement")
+
+    assigns =
+      assigns
+      |> assign(:p1_shots, p1_shots)
+      |> assign(:p2_shots, p2_shots)
+      |> assign(:p1_ships, p1_ships)
+      |> assign(:p2_ships, p2_ships)
+      |> assign(:phase, phase)
+
+    ~H"""
+    <div id="battleship-board" class="flex flex-col gap-4">
+      <%= if @phase == "placement" do %>
+        <div class="rounded-xl bg-slate-100 p-4 text-center">
+          <p class="text-slate-600">🚢 Ships being placed...</p>
+        </div>
+      <% else %>
+        <div class="flex flex-wrap justify-center gap-4">
+          <div class="rounded-xl border-2 border-blue-300 bg-slate-900 p-2">
+            <p class="mb-2 text-center text-xs text-blue-300">P1 Shots</p>
+            <.battleship_grid shots={@p1_shots} ships={@p2_ships} />
+          </div>
+          <div class="rounded-xl border-2 border-rose-300 bg-slate-900 p-2">
+            <p class="mb-2 text-center text-xs text-rose-300">P2 Shots</p>
+            <.battleship_grid shots={@p2_shots} ships={@p1_ships} />
+          </div>
+        </div>
+        <div class="flex justify-center gap-6 text-xs text-slate-500">
+          <div class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-slate-700"></span> Miss</div>
+          <div class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-red-500"></span> Hit</div>
+          <div class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-emerald-600"></span> Sunk</div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
   def board(assigns) do
     ~H"""
     <p class="text-sm text-slate-600">Unsupported game type: {@game_type}</p>
@@ -102,4 +144,67 @@ defmodule LemonWeb.Games.Components.BoardComponent do
 
   defp tictactoe_cell_content(nil), do: ""
   defp tictactoe_cell_content(cell), do: cell
+
+  # Battleship grid component
+  attr :shots, :list, required: true
+  attr :ships, :list, required: true
+
+  def battleship_grid(assigns) do
+    # Build shot map: {r,c} -> :hit/:miss
+    shot_map =
+      for {r, c, hit?} <- assigns.shots, into: %{} do
+        {{r, c}, if(hit?, do: :hit, else: :miss)}
+      end
+
+    # Build sunk ship cells
+    sunk_cells =
+      for ship <- assigns.ships,
+          length(ship.hits) == ship.size,
+          cell <- ship.cells,
+          into: MapSet.new() do
+        cell
+      end
+
+    # Build hit ship cells (not sunk)
+    hit_cells =
+      for ship <- assigns.ships,
+          length(ship.hits) < ship.size,
+          {r, c} <- ship.hits,
+          into: MapSet.new() do
+        {r, c}
+      end
+
+    assigns =
+      assigns
+      |> assign(:shot_map, shot_map)
+      |> assign(:sunk_cells, sunk_cells)
+      |> assign(:hit_cells, hit_cells)
+
+    ~H"""
+    <div class="grid grid-cols-8 gap-0.5">
+      <%= for r <- 0..7, c <- 0..7 do %>
+        <div class={battleship_cell_class(r, c, @shot_map, @sunk_cells, @hit_cells)}></div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp battleship_cell_class(r, c, shot_map, sunk_cells, hit_cells) do
+    coord = {r, c}
+
+    case Map.get(shot_map, coord) do
+      :hit ->
+        cond do
+          MapSet.member?(sunk_cells, coord) -> "h-4 w-4 rounded-sm bg-emerald-600"
+          MapSet.member?(hit_cells, coord) -> "h-4 w-4 rounded-sm bg-red-500"
+          true -> "h-4 w-4 rounded-sm bg-red-500"
+        end
+
+      :miss ->
+        "h-4 w-4 rounded-sm bg-slate-700"
+
+      nil ->
+        "h-4 w-4 rounded-sm bg-slate-800"
+    end
+  end
 end
