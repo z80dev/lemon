@@ -293,6 +293,67 @@ defmodule CodingAgent.Config do
   def temp_dir, do: System.tmp_dir!()
 
   # ============================================================================
+  # Rate Limit Healing Configuration
+  # ============================================================================
+
+  @doc """
+  Get rate limit healing configuration.
+
+  Returns a map with configuration for automatic rate limit recovery:
+    * `:enabled` - Whether healing is enabled (default: true)
+    * `:max_probe_attempts` - Maximum probe attempts before giving up (default: 10)
+    * `:probe_interval_ms` - Base interval between probes in ms (default: 30_000)
+    * `:fallback_strategy` - Default fallback strategy (default: :reset_backoff)
+
+  Configuration can be set via:
+  - Application config: `config :coding_agent, :rate_limit_healing, [...]`
+  - Environment variables: `LEMON_RATE_LIMIT_HEALING_ENABLED`, etc.
+
+  ## Examples
+
+      iex> CodingAgent.Config.rate_limit_healing_config()
+      %{enabled: true, max_probe_attempts: 10, probe_interval_ms: 30000, fallback_strategy: :reset_backoff}
+  """
+  @spec rate_limit_healing_config() :: %{
+          enabled: boolean(),
+          max_probe_attempts: pos_integer(),
+          probe_interval_ms: pos_integer(),
+          fallback_strategy: atom()
+        }
+  def rate_limit_healing_config do
+    defaults = [
+      enabled: true,
+      max_probe_attempts: 10,
+      probe_interval_ms: 30_000,
+      fallback_strategy: :reset_backoff
+    ]
+
+    config = Application.get_env(:coding_agent, :rate_limit_healing, [])
+
+    %{
+      enabled: get_env("LEMON_RATE_LIMIT_HEALING_ENABLED", "1") == "1" or Keyword.get(config, :enabled, true),
+      max_probe_attempts:
+        get_env("LEMON_MAX_PROBE_ATTEMPTS", "10") |> String.to_integer() |> max(1),
+      probe_interval_ms:
+        get_env("LEMON_PROBE_INTERVAL_MS", "30000") |> String.to_integer() |> max(1000),
+      fallback_strategy: Keyword.get(config, :fallback_strategy, :reset_backoff)
+    }
+  end
+
+  @doc """
+  Check if rate limit healing is enabled.
+
+  ## Examples
+
+      iex> CodingAgent.Config.rate_limit_healing_enabled?()
+      true
+  """
+  @spec rate_limit_healing_enabled?() :: boolean()
+  def rate_limit_healing_enabled? do
+    rate_limit_healing_config().enabled
+  end
+
+  # ============================================================================
   # Directory Setup
   # ============================================================================
 
