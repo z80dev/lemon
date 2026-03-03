@@ -3,8 +3,8 @@ defmodule LemonWeb.Games.Components.BoardComponent do
 
   use Phoenix.Component
 
-  attr :game_type, :string, required: true
-  attr :game_state, :map, required: true
+  attr(:game_type, :string, required: true)
+  attr(:game_state, :map, required: true)
 
   def board(%{game_type: "connect4"} = assigns) do
     rows = Map.get(assigns.game_state, "board", [])
@@ -110,18 +110,25 @@ defmodule LemonWeb.Games.Components.BoardComponent do
     """
   end
 
-  def rps_throw(assigns) do
-    icon = case @throw do
-      "rock" -> "✊"
-      "paper" -> "✋"
-      "scissors" -> "✌️"
-      _ -> "❓"
-    end
+  attr(:player, :string, default: nil)
+  attr(:throw, :string, default: nil)
 
-    color = case @throw do
-      nil -> "bg-slate-200 text-slate-400"
-      _ -> "bg-white text-slate-900 shadow-md"
-    end
+  def rps_throw(assigns) do
+    throw = Map.get(assigns, :throw)
+
+    icon =
+      case throw do
+        "rock" -> "✊"
+        "paper" -> "✋"
+        "scissors" -> "✌️"
+        _ -> "❓"
+      end
+
+    color =
+      case throw do
+        nil -> "bg-slate-200 text-slate-400"
+        _ -> "bg-white text-slate-900 shadow-md"
+      end
 
     assigns = assign(assigns, icon: icon, color: color)
 
@@ -137,17 +144,27 @@ defmodule LemonWeb.Games.Components.BoardComponent do
   defp connect4_cell_class(2), do: "block h-10 w-10 rounded-full bg-yellow-400 shadow-md"
   defp connect4_cell_class(_), do: "block h-10 w-10 rounded-full bg-slate-400"
 
-  defp tictactoe_cell_class(nil), do: "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-slate-600 transition-all hover:bg-slate-600"
-  defp tictactoe_cell_class("X"), do: "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-blue-400 shadow-lg"
-  defp tictactoe_cell_class("O"), do: "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-rose-400 shadow-lg"
-  defp tictactoe_cell_class(_), do: "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold"
+  defp tictactoe_cell_class(nil),
+    do:
+      "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-slate-600 transition-all hover:bg-slate-600"
+
+  defp tictactoe_cell_class("X"),
+    do:
+      "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-blue-400 shadow-lg"
+
+  defp tictactoe_cell_class("O"),
+    do:
+      "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold text-rose-400 shadow-lg"
+
+  defp tictactoe_cell_class(_),
+    do: "flex h-16 w-16 items-center justify-center rounded-lg bg-slate-700 text-2xl font-bold"
 
   defp tictactoe_cell_content(nil), do: ""
   defp tictactoe_cell_content(cell), do: cell
 
   # Battleship grid component
-  attr :shots, :list, required: true
-  attr :ships, :list, required: true
+  attr(:shots, :list, required: true)
+  attr(:ships, :list, required: true)
 
   def battleship_grid(assigns) do
     # Build shot map: {r,c} -> :hit/:miss
