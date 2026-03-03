@@ -105,30 +105,12 @@ defmodule LemonCore.Secrets.SecretService do
   end
 
   # Execute secret-tool, piping stdin_data when needed (e.g. for `store`).
-  # Uses a temp file to avoid shell injection.
+  # Arguments are passed directly without shell interpolation.
   defp exec_secret_tool(args, nil) do
     System.cmd("secret-tool", args, stderr_to_stdout: true)
   end
 
   defp exec_secret_tool(args, stdin_data) do
-    tmp_path = Path.join(System.tmp_dir!(), "lemon_st_#{System.unique_integer([:positive])}")
-
-    try do
-      File.write!(tmp_path, stdin_data)
-      File.chmod!(tmp_path, 0o600)
-
-      executable = System.find_executable("secret-tool")
-
-      escaped_args =
-        Enum.map_join(args, " ", fn arg ->
-          "'" <> String.replace(arg, "'", "'\\''") <> "'"
-        end)
-
-      System.cmd("sh", ["-c", "#{executable} #{escaped_args} < '#{tmp_path}'"],
-        stderr_to_stdout: true
-      )
-    after
-      File.rm(tmp_path)
-    end
+    System.cmd("secret-tool", args, stderr_to_stdout: true, input: stdin_data)
   end
 end

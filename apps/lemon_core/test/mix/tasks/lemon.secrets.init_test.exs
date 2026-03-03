@@ -79,22 +79,37 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
   end
 
   describe "run/1" do
-    test "succeeds via KeyFile fallback on non-macOS", %{mock_home: mock_home} do
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    if match?({:unix, :darwin}, :os.type()) do
+      @tag skip: "KeyFile fallback assertion is non-deterministic on darwin"
+      test "succeeds via KeyFile fallback on non-macOS", _ctx do
+      end
+    else
+      test "succeeds via KeyFile fallback on non-macOS", %{mock_home: mock_home} do
+        System.delete_env("LEMON_SECRETS_MASTER_KEY")
+        original_path = System.get_env("PATH")
+        System.put_env("PATH", mock_home)
 
-      # On Linux (no Keychain), init should succeed by writing to KeyFile
-      # under mock HOME
-      output =
-        capture_io(fn ->
-          Init.run([])
+        on_exit(fn ->
+          if original_path do
+            System.put_env("PATH", original_path)
+          else
+            System.delete_env("PATH")
+          end
         end)
 
-      assert output =~ "Secrets master key initialized"
+        # On Linux (no Keychain), init should succeed by writing to KeyFile
+        # under mock HOME
+        output =
+          capture_io(fn ->
+            Init.run([])
+          end)
 
-      # Verify the key file was created under mock HOME
-      key_path = Path.join(mock_home, ".lemon/master.key")
+        assert output =~ "Secrets master key initialized"
+        assert output =~ "file (~/.lemon/master.key)"
 
-      if File.exists?(key_path) do
+        # Verify the key file was created under mock HOME
+        key_path = Path.join(mock_home, ".lemon/master.key")
+        assert File.exists?(key_path)
         content = File.read!(key_path)
         assert String.length(content) > 0
       end

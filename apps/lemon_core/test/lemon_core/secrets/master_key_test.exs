@@ -201,7 +201,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     test "resolves from first available backend" do
       env_getter = fn _ -> nil end
 
-      assert {:ok, key, :backend_ok} =
+      assert {:ok, key, BackendOk} =
                MasterKey.resolve(
                  backends: [BackendOk],
                  env_getter: env_getter
@@ -213,7 +213,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     test "skips unavailable backends" do
       env_getter = fn _ -> nil end
 
-      assert {:ok, _key, :backend_ok} =
+      assert {:ok, _key, BackendOk} =
                MasterKey.resolve(
                  backends: [BackendUnavailable, BackendOk],
                  env_getter: env_getter
@@ -223,7 +223,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     test "skips backends with :missing and tries next" do
       env_getter = fn _ -> nil end
 
-      assert {:ok, _key, :backend_ok} =
+      assert {:ok, _key, BackendOk} =
                MasterKey.resolve(
                  backends: [BackendMissing, BackendOk],
                  env_getter: env_getter
@@ -233,7 +233,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     test "skips backends that error and tries next" do
       env_getter = fn _ -> nil end
 
-      assert {:ok, _key, :backend_ok} =
+      assert {:ok, _key, BackendOk} =
                MasterKey.resolve(
                  backends: [BackendFailing, BackendOk],
                  env_getter: env_getter
@@ -264,7 +264,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   describe "multi-backend init" do
     test "writes to first available backend" do
-      assert {:ok, %{source: :backend_recorder, configured: true}} =
+      assert {:ok, %{source: BackendRecorder, configured: true}} =
                MasterKey.init(backends: [BackendRecorder])
 
       assert_receive {:backend_stored, value}
@@ -272,14 +272,14 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     end
 
     test "skips unavailable backends" do
-      assert {:ok, %{source: :backend_recorder, configured: true}} =
+      assert {:ok, %{source: BackendRecorder, configured: true}} =
                MasterKey.init(backends: [BackendUnavailable, BackendRecorder])
 
       assert_receive {:backend_stored, _}
     end
 
     test "skips backends that fail to write" do
-      assert {:ok, %{source: :backend_recorder, configured: true}} =
+      assert {:ok, %{source: BackendRecorder, configured: true}} =
                MasterKey.init(backends: [BackendFailing, BackendRecorder])
 
       assert_receive {:backend_stored, _}
@@ -304,7 +304,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       assert is_list(status.backends)
       assert length(status.backends) == 1
       [entry] = status.backends
-      assert entry.backend == :backend_ok
+      assert entry.backend == BackendOk
       assert entry.available
       assert entry.result == :ok
     end
@@ -318,7 +318,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
           env_getter: env_getter
         )
 
-      assert status.source == :backend_ok
+      assert status.source == BackendOk
       assert status.configured
     end
 
@@ -334,6 +334,20 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
       assert status.source == :env
       assert status.configured
+    end
+
+    test "does not report configured when env key is present but invalid" do
+      env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> "not-a-valid-key" end
+
+      status =
+        MasterKey.status(
+          backends: [BackendMissing],
+          env_getter: env_getter
+        )
+
+      assert status.env_fallback
+      refute status.configured
+      assert is_nil(status.source)
     end
 
     test "preserves keychain_available backward-compat field" do

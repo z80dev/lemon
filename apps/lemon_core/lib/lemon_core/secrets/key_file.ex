@@ -39,12 +39,25 @@ defmodule LemonCore.Secrets.KeyFile do
   def put_master_key(value, opts) when is_binary(value) do
     path = key_file_path(opts)
 
-    with :ok <- ensure_parent_dir(path),
-         :ok <- File.write(path, value),
-         :ok <- File.chmod(path, 0o600) do
-      :ok
+    with :ok <- ensure_parent_dir(path) do
+      case File.open(path, [:write, :binary, :create, :truncate, {:mode, 0o600}], fn file ->
+             IO.binwrite(file, value)
+           end) do
+        {:ok, :ok} ->
+          case File.chmod(path, 0o600) do
+            :ok -> :ok
+            {:error, reason} -> {:error, {:file_error, reason}}
+          end
+
+        {:ok, {:error, reason}} ->
+          {:error, {:file_error, reason}}
+
+        {:error, reason} ->
+          {:error, {:file_error, reason}}
+      end
     else
-      {:error, reason} -> {:error, {:file_error, reason}}
+      {:error, reason} ->
+        {:error, {:file_error, reason}}
     end
   end
 
@@ -64,7 +77,12 @@ defmodule LemonCore.Secrets.KeyFile do
   @doc false
   def key_file_path(opts \\ []) do
     Keyword.get_lazy(opts, :key_file_path, fn ->
-      Path.join(System.user_home!(), @default_relative_path)
+      home_dir =
+        System.get_env("HOME") ||
+          System.get_env("USERPROFILE") ||
+          System.user_home!()
+
+      Path.join(home_dir, @default_relative_path)
     end)
   end
 

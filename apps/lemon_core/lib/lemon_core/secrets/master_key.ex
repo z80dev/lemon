@@ -69,7 +69,7 @@ defmodule LemonCore.Secrets.MasterKey do
       Keychain -> :keychain
       SecretService -> :secret_service
       KeyFile -> :key_file
-      other -> other |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()
+      other -> other
     end
   end
 
@@ -140,6 +140,8 @@ defmodule LemonCore.Secrets.MasterKey do
         _ -> false
       end
 
+    env_valid? = match?({:ok, _decoded, :env}, resolve_from_env(opts))
+
     backend_statuses =
       Enum.map(backends, fn backend ->
         available = backend_available?(backend)
@@ -170,7 +172,7 @@ defmodule LemonCore.Secrets.MasterKey do
     source =
       cond do
         active != nil -> active.backend
-        env_present? -> :env
+        env_valid? -> :env
         true -> nil
       end
 
