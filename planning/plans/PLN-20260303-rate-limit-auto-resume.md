@@ -3,7 +3,7 @@ id: PLN-20260303-rate-limit-auto-resume
 title: Auto-Resume Runs After Rate-Limit Reset
 owner: janitor
 reviewer: codex
-status: in_progress
+status: landed
 workspace: feature/pln-20260303-rate-limit-auto-resume
 change_id: pending
 created: 2026-03-03
