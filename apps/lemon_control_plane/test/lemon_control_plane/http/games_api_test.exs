@@ -130,7 +130,9 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
     assert %{"match" => %{"game_type" => "connect4"}} = decode(conn)
   end
 
-  test "create_match accepts bearer auth scheme with multiple spaces before token", %{token1: token1} do
+  test "create_match accepts bearer auth scheme with multiple spaces before token", %{
+    token1: token1
+  } do
     conn =
       conn(
         :post,
@@ -161,7 +163,8 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
   end
 
   test "get_match accepts uppercase bearer auth scheme", %{token1: token1} do
-    {:ok, match_id} = create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
+    {:ok, match_id} =
+      create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
 
     conn =
       conn(:get, "/v1/games/matches/#{match_id}")
@@ -173,7 +176,8 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
   end
 
   test "list_events accepts mixed-case bearer auth scheme", %{token1: token1} do
-    {:ok, match_id} = create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
+    {:ok, match_id} =
+      create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
 
     conn =
       conn(:get, "/v1/games/matches/#{match_id}/events?after_seq=0&limit=20")
@@ -186,7 +190,8 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
   end
 
   test "get_match accepts bearer auth scheme with multiple spaces before token", %{token1: token1} do
-    {:ok, match_id} = create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
+    {:ok, match_id} =
+      create_match(@actor1, %{"game_type" => "connect4", "visibility" => "public"})
 
     conn =
       conn(:get, "/v1/games/matches/#{match_id}")
@@ -206,7 +211,13 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
       )
       |> put_req_header("content-type", "application/json")
       |> then(fn conn ->
-        %{conn | req_headers: [{"authorization", "Bearer token-one"}, {"authorization", "Bearer token-two"} | conn.req_headers]}
+        %{
+          conn
+          | req_headers: [
+              {"authorization", "Bearer token-one"},
+              {"authorization", "Bearer token-two"} | conn.req_headers
+            ]
+        }
       end)
       |> Router.call([])
 
@@ -810,6 +821,61 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
 
     assert final["match"]["status"] == "finished"
     assert final["match"]["result"]["winner"] == "p1"
+  end
+
+  test "external agents can finish a full tic-tac-toe match over REST", %{
+    token1: token1,
+    token2: token2
+  } do
+    create =
+      post_json(
+        "/v1/games/matches",
+        %{"game_type" => "tic_tac_toe", "visibility" => "public"},
+        token1
+      )
+
+    assert create.status == 201
+    %{"match" => %{"id" => match_id, "status" => "pending_accept"}} = decode(create)
+
+    accept = post_json("/v1/games/matches/#{match_id}/accept", %{}, token2)
+    assert accept.status == 200
+
+    assert_move(match_id, token1, %{"kind" => "place", "row" => 0, "col" => 0}, "ttt-p1-1")
+    assert_move(match_id, token2, %{"kind" => "place", "row" => 1, "col" => 0}, "ttt-p2-1")
+    assert_move(match_id, token1, %{"kind" => "place", "row" => 0, "col" => 1}, "ttt-p1-2")
+    assert_move(match_id, token2, %{"kind" => "place", "row" => 1, "col" => 1}, "ttt-p2-2")
+
+    final =
+      assert_move(match_id, token1, %{"kind" => "place", "row" => 0, "col" => 2}, "ttt-p1-3")
+
+    assert final["match"]["status"] == "finished"
+    assert final["match"]["result"]["winner"] == "p1"
+  end
+
+  test "external agents can progress battleship through placement over REST", %{
+    token1: token1,
+    token2: token2
+  } do
+    create =
+      post_json(
+        "/v1/games/matches",
+        %{"game_type" => "battleship", "visibility" => "public"},
+        token1
+      )
+
+    assert create.status == 201
+    %{"match" => %{"id" => match_id, "status" => "pending_accept"}} = decode(create)
+
+    accept = post_json("/v1/games/matches/#{match_id}/accept", %{}, token2)
+    assert accept.status == 200
+
+    p1_place = assert_move(match_id, token1, %{"kind" => "auto_place"}, "bs-p1-place")
+    assert p1_place["match"]["status"] == "active"
+    assert p1_place["match"]["game_state"]["phase"] == "placement"
+
+    p2_place = assert_move(match_id, token2, %{"kind" => "auto_place"}, "bs-p2-place")
+    assert p2_place["match"]["status"] == "active"
+    assert p2_place["match"]["game_state"]["phase"] == "battle"
   end
 
   defp create_active_match(actor1, actor2) do

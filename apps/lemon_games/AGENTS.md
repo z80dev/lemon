@@ -21,6 +21,8 @@ Core principles:
 | `lib/lemon_games/games/registry.ex` | Maps game type strings to engine modules | Registering new game engines |
 | `lib/lemon_games/games/connect4.ex` | Connect 4 engine: 7x6 board, gravity drops, 4-direction win check | Fixing Connect 4 rules or improving win detection |
 | `lib/lemon_games/games/rock_paper_scissors.ex` | RPS engine: simultaneous throws, redacted public state until resolved | Fixing RPS rules |
+| `lib/lemon_games/games/tic_tac_toe.ex` | Tic-Tac-Toe engine: 3x3 board with alternating turns and win/draw detection | Fixing Tic-Tac-Toe rules or turn handling |
+| `lib/lemon_games/games/battleship.ex` | Battleship engine: hidden ship placement + battle phase | Fixing placement/redaction/combat rules |
 
 ### Match Lifecycle Layer
 
@@ -39,6 +41,8 @@ Core principles:
 | `lib/lemon_games/bot/turn_worker.ex` | Async bot turn dispatcher; routes to game-specific strategy | Adding support for new game type bots |
 | `lib/lemon_games/bot/connect4_bot.ex` | Connect 4 heuristic: win > block > center > first legal | Improving bot intelligence |
 | `lib/lemon_games/bot/rock_paper_scissors_bot.ex` | RPS: uniform random | Improving bot strategy |
+| `lib/lemon_games/bot/tic_tac_toe_bot.ex` | Tic-Tac-Toe heuristic: win > block > center > corner | Improving Tic-Tac-Toe play |
+| `lib/lemon_games/bot/battleship_bot.ex` | Battleship placement + target/hunt shot logic | Improving Battleship accuracy |
 
 ### Auth and Infrastructure
 
@@ -103,6 +107,8 @@ Edit `lib/lemon_games/games/registry.ex` and add to the `@engines` map:
 @engines %{
   "rock_paper_scissors" => LemonGames.Games.RockPaperScissors,
   "connect4" => LemonGames.Games.Connect4,
+  "tic_tac_toe" => LemonGames.Games.TicTacToe,
+  "battleship" => LemonGames.Games.Battleship,
   "your_game" => LemonGames.Games.YourGame
 }
 ```
@@ -167,6 +173,8 @@ test/
     games/
       connect4_test.exs                         # Engine: all 4 win directions, draw, illegal moves
       rock_paper_scissors_test.exs              # Engine: all 9 outcomes, redaction, illegal moves
+      tic_tac_toe_test.exs                      # Engine: row/col/diag wins, draw, illegal moves
+      battleship_test.exs                       # Engine: placement/battle flow, redaction, sink win
     matches/
       service_test.exs                          # Full lifecycle: create, accept, move, forfeit, expire, idempotency
       projection_test.exs                       # Event replay and public view projection
@@ -264,7 +272,10 @@ All error returns from Service follow `{:error, atom_code, string_message}`:
 {:error, :not_found, "match not found"}
 {:error, :wrong_turn, "not your turn"}
 {:error, :invalid_state, "expected status active, got finished"}
+{:error, :storage_unavailable, "match store unavailable"}
 ```
+
+For persistence failures from `LemonCore.Store.put/3`, `LemonGames.Matches.Service` maps the backend/store error into `{:error, :storage_unavailable, "match store unavailable"}` instead of crashing the caller process.
 
 ### Move Format Convention
 

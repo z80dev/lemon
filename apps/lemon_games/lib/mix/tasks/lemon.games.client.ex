@@ -32,6 +32,7 @@ defmodule Mix.Tasks.Lemon.Games.Client do
   @default_api_base "http://localhost:4040"
   @default_web_base "http://localhost:4080"
   @default_game "connect4"
+  @supported_games ~w(connect4 rock_paper_scissors tic_tac_toe battleship)
   @poll_ms 1_000
 
   @impl true
@@ -74,8 +75,10 @@ defmodule Mix.Tasks.Lemon.Games.Client do
     agent_id = opts[:agent] || Mix.raise("missing required option --agent")
     game = opts[:game] || @default_game
 
-    unless game in ["connect4", "rock_paper_scissors"] do
-      Mix.raise("unsupported --game #{inspect(game)} (expected connect4 or rock_paper_scissors)")
+    unless game in @supported_games do
+      Mix.raise(
+        "unsupported --game #{inspect(game)} (expected one of: #{Enum.join(@supported_games, ", ")})"
+      )
     end
 
     %{
@@ -218,7 +221,7 @@ defmodule Mix.Tasks.Lemon.Games.Client do
 
   defp maybe_take_turn(match, state) do
     if state.slot && match["next_player"] == state.slot do
-      case prompt_move(match["game_type"]) do
+      case prompt_move(match["game_type"], match["game_state"] || %{}) do
         {:ok, move} ->
           submit_move(state, move)
           :ok
@@ -250,7 +253,7 @@ defmodule Mix.Tasks.Lemon.Games.Client do
     end
   end
 
-  defp prompt_move("connect4") do
+  defp prompt_move("connect4", _state) do
     case prompt("your move column [0-6] (or q)") do
       "q" ->
         :quit
@@ -262,12 +265,12 @@ defmodule Mix.Tasks.Lemon.Games.Client do
 
           _ ->
             Mix.shell().info("invalid column")
-            prompt_move("connect4")
+            prompt_move("connect4", %{})
         end
     end
   end
 
-  defp prompt_move("rock_paper_scissors") do
+  defp prompt_move("rock_paper_scissors", _state) do
     case prompt("your throw [rock|paper|scissors] (or q)") do
       "q" ->
         :quit
@@ -277,12 +280,60 @@ defmodule Mix.Tasks.Lemon.Games.Client do
 
       _ ->
         Mix.shell().info("invalid throw")
-        prompt_move("rock_paper_scissors")
+        prompt_move("rock_paper_scissors", %{})
     end
   end
 
-  defp prompt_move(_game_type) do
-    Mix.raise("unsupported game type")
+  defp prompt_move("tic_tac_toe", _state) do
+    case prompt("your move row,col [0-2,0-2] (or q)") do
+      "q" ->
+        :quit
+
+      value ->
+        case parse_position(value, 2) do
+          {:ok, row, col} ->
+            {:ok, %{"kind" => "place", "row" => row, "col" => col}}
+
+          :error ->
+            Mix.shell().info("invalid position")
+            prompt_move("tic_tac_toe", %{})
+        end
+    end
+  end
+
+  defp prompt_move("battleship", %{"phase" => "placement"}) do
+    case prompt("place ships [auto] (or q)") do
+      "q" ->
+        :quit
+
+      value when value in ["", "auto", "a"] ->
+        {:ok, %{"kind" => "auto_place"}}
+
+      _ ->
+        Mix.shell().info("invalid command (use auto)")
+        prompt_move("battleship", %{"phase" => "placement"})
+    end
+  end
+
+  defp prompt_move("battleship", _state) do
+    case prompt("your shot row,col [0-7,0-7] (or q)") do
+      "q" ->
+        :quit
+
+      value ->
+        case parse_position(value, 7) do
+          {:ok, row, col} ->
+            {:ok, %{"kind" => "fire", "row" => row, "col" => col}}
+
+          :error ->
+            Mix.shell().info("invalid position")
+            prompt_move("battleship", %{"phase" => "battle"})
+        end
+    end
+  end
+
+  defp prompt_move(game_type, _state) do
+    Mix.raise("unsupported game type #{inspect(game_type)}")
   end
 
   defp prompt(label) do
@@ -307,6 +358,12 @@ defmodule Mix.Tasks.Lemon.Games.Client do
       "rock_paper_scissors" ->
         render_rps(match["game_state"] || %{})
 
+      "tic_tac_toe" ->
+        render_tic_tac_toe(match["game_state"]["board"] || [])
+
+      "battleship" ->
+        render_battleship(match["game_state"] || %{}, state.slot)
+
       _ ->
         :ok
     end
@@ -327,10 +384,76 @@ defmodule Mix.Tasks.Lemon.Games.Client do
     Mix.shell().info("p1 throw=#{throws["p1"] || "?"} p2 throw=#{throws["p2"] || "?"}")
   end
 
+  defp render_tic_tac_toe(board) do
+    Enum.each(board, fn row ->
+      row
+      |> Enum.map_join(" ", &ttt_cell/1)
+      |> Mix.shell().info()
+    end)
+
+    Mix.shell().info("0 1 2")
+  end
+
+  defp render_battleship(state, slot) do
+    phase = state["phase"] || "placement"
+    Mix.shell().info("phase=#{phase}")
+
+    shots =
+      case slot do
+        "p1" -> state["p1_shots"] || []
+        "p2" -> state["p2_shots"] || []
+        _ -> []
+      end
+
+    if phase == "battle" and slot in ["p1", "p2"] do
+      render_battleship_shot_grid(shots)
+      Mix.shell().info("H=hit o=miss .=unknown")
+    end
+  end
+
+  defp render_battleship_shot_grid(shots) do
+    shot_map =
+      Enum.reduce(shots, %{}, fn shot, acc ->
+        case normalize_shot(shot) do
+          {row, col, hit?} -> Map.put(acc, {row, col}, hit?)
+          nil -> acc
+        end
+      end)
+
+    Enum.each(0..7, fn row ->
+      0..7
+      |> Enum.map_join(" ", fn col ->
+        case Map.get(shot_map, {row, col}) do
+          true -> "H"
+          false -> "o"
+          _ -> "."
+        end
+      end)
+      |> Mix.shell().info()
+    end)
+  end
+
+  defp normalize_shot({row, col, hit?})
+       when is_integer(row) and is_integer(col) and is_boolean(hit?) do
+    {row, col, hit?}
+  end
+
+  defp normalize_shot([row, col, hit?])
+       when is_integer(row) and is_integer(col) and is_boolean(hit?) do
+    {row, col, hit?}
+  end
+
+  defp normalize_shot(_), do: nil
+
   defp chip(0), do: "."
   defp chip(1), do: "X"
   defp chip(2), do: "O"
   defp chip(_), do: "?"
+
+  defp ttt_cell(nil), do: "."
+  defp ttt_cell("X"), do: "X"
+  defp ttt_cell("O"), do: "O"
+  defp ttt_cell(_), do: "?"
 
   defp detect_slot(match, agent_id) do
     case Enum.find(match["players"] || %{}, fn {_slot, p} -> p["agent_id"] == agent_id end) do
@@ -399,10 +522,29 @@ defmodule Mix.Tasks.Lemon.Games.Client do
 
   defp normalize_base(base), do: String.trim_trailing(base, "/")
 
+  defp parse_position(value, max) do
+    parts = String.split(value, ~r/[,\s]+/, trim: true)
+
+    case parts do
+      [row_str, col_str] ->
+        with {row, ""} <- Integer.parse(row_str),
+             {col, ""} <- Integer.parse(col_str),
+             true <- row in 0..max,
+             true <- col in 0..max do
+          {:ok, row, col}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
   defp print_help do
     Mix.shell().info("""
     Usage:
-      mix lemon.games.client --host --agent <AGENT_ID> [--game connect4|rock_paper_scissors]
+      mix lemon.games.client --host --agent <AGENT_ID> [--game connect4|rock_paper_scissors|tic_tac_toe|battleship]
       mix lemon.games.client --join <MATCH_ID> --agent <AGENT_ID>
 
     Options:
@@ -412,7 +554,7 @@ defmodule Mix.Tasks.Lemon.Games.Client do
       --host                Create a new match
       --join <MATCH_ID>     Join an existing pending match
       --game <TYPE>         Game type when hosting (default: connect4)
-      --visibility <MODE>   public|private (default: public)
+      --visibility <MODE>   public|private|unlisted (default: public)
       --token <TOKEN>       Use an existing lgm_ token instead of issuing one
       --api_base <URL>      Games API base URL (default: http://localhost:4040)
       --web_base <URL>      Spectator web base URL (default: http://localhost:4080)

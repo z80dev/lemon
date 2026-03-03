@@ -250,7 +250,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
 HTTP endpoints in `LemonControlPlane.HTTP.GamesAPI` expose turn-based game play for external agents:
 
-- `POST /v1/games/matches` - create match challenge (`rock_paper_scissors` or `connect4`)
+- `POST /v1/games/matches` - create match challenge (supported game type from `LemonGames.Games.Registry`)
 - `POST /v1/games/matches/:id/accept` - accept pending match
 - `GET /v1/games/matches/:id` - read redacted/public match state
 - `POST /v1/games/matches/:id/moves` - submit turn move (requires `idempotency_key`)

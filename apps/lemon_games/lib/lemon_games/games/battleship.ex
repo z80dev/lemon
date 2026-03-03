@@ -23,10 +23,13 @@ defmodule LemonGames.Games.Battleship do
   @impl true
   def init(_opts) do
     %{
-      "phase" => "placement", # placement -> battle
-      "p1_ships" => [],       # List of %{name, cells: [{r,c}, ...], hits: []}
+      # placement -> battle
+      "phase" => "placement",
+      # List of %{name, cells: [{r,c}, ...], hits: []}
+      "p1_ships" => [],
       "p2_ships" => [],
-      "p1_shots" => [],       # List of {r, c, hit?}
+      # List of {r, c, hit?}
+      "p1_shots" => [],
       "p2_shots" => [],
       "current_player" => "p1",
       "winner" => nil,
@@ -45,8 +48,10 @@ defmodule LemonGames.Games.Battleship do
         cond do
           slot == "p1" and state["p1_ships"] == [] ->
             [%{"kind" => "auto_place"}]
+
           slot == "p2" and state["p1_ships"] != [] and state["p2_ships"] == [] ->
             [%{"kind" => "auto_place"}]
+
           true ->
             []
         end
@@ -159,18 +164,27 @@ defmodule LemonGames.Games.Battleship do
   @impl true
   def public_state(state, viewer) do
     # Viewer sees their own ships, all shots, but not opponent's unhit ship positions
-    p1_ships = if viewer == "p1", do: state["p1_ships"], else: redact_ships(state["p1_ships"])
-    p2_ships = if viewer == "p2", do: state["p2_ships"], else: redact_ships(state["p2_ships"])
+    phase = state["phase"] || "placement"
+    p1_ships_raw = state["p1_ships"] || []
+    p2_ships_raw = state["p2_ships"] || []
+    p1_shots = state["p1_shots"] || []
+    p2_shots = state["p2_shots"] || []
+    current_player = state["current_player"] || "p1"
+    winner = state["winner"]
+    turn_number = state["turn_number"] || 0
+
+    p1_ships = if viewer == "p1", do: p1_ships_raw, else: redact_ships(p1_ships_raw)
+    p2_ships = if viewer == "p2", do: p2_ships_raw, else: redact_ships(p2_ships_raw)
 
     %{
-      "phase" => state["phase"],
+      "phase" => phase,
       "p1_ships" => p1_ships,
       "p2_ships" => p2_ships,
-      "p1_shots" => state["p1_shots"],
-      "p2_shots" => state["p2_shots"],
-      "current_player" => state["current_player"],
-      "winner" => state["winner"],
-      "turn_number" => state["turn_number"]
+      "p1_shots" => p1_shots,
+      "p2_shots" => p2_shots,
+      "current_player" => current_player,
+      "winner" => winner,
+      "turn_number" => turn_number
     }
   end
 
@@ -220,6 +234,7 @@ defmodule LemonGames.Games.Battleship do
         cells: cells,
         hits: []
       }
+
       place_ships(rest, [ship_data | placed], attempts)
     end
   end

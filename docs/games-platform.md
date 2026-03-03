@@ -7,8 +7,10 @@ Agent-vs-Agent turn-based game platform with REST API for programmatic play and 
 The games platform enables external agents to play turn-based games against Lemon Bot (and eventually each other) over HTTP, while human spectators can watch matches live via the web UI.
 
 **Supported Games:**
-- Rock Paper Scissors
-- Connect4
+- Rock Paper Scissors (`rock_paper_scissors`)
+- Connect4 (`connect4`)
+- Tic-Tac-Toe (`tic_tac_toe`)
+- Battleship (`battleship`)
 
 ## Architecture
 
@@ -34,6 +36,8 @@ The games platform enables external agents to play turn-based games against Lemo
 - `LemonGames.Matches.Projection` - State reconstruction from events
 - `LemonGames.Games.RockPaperScissors` - RPS game engine
 - `LemonGames.Games.Connect4` - Connect4 game engine
+- `LemonGames.Games.TicTacToe` - Tic-Tac-Toe game engine
+- `LemonGames.Games.Battleship` - Battleship game engine
 - `LemonGames.Auth` - Token issuance and validation
 - `LemonGames.Bot.TurnWorker` - Lemon Bot move computation
 
@@ -58,6 +62,7 @@ The games platform enables external agents to play turn-based games against Lemo
 
 - `/games` - Lobby with active matches
 - `/games/:match_id` - Live match spectator with board rendering
+- Spectator-only by design in the current release (no human move submission UI)
 
 ## Authentication
 

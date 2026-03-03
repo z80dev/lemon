@@ -31,6 +31,8 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
     | Game Engines       |                | Matches.Projection|
     |  - Connect4       |                |  replay & redact  |
     |  - RPS            |                +-------------------+
+    |  - TicTacToe      |
+    |  - Battleship     |
     +-------------------+
               ^
               |
@@ -38,6 +40,8 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
     | Bot.TurnWorker    |---->| Bot Strategies           |
     |  async bot turns  |     |  - Connect4Bot          |
     +-------------------+     |  - RockPaperScissorsBot |
+                              |  - TicTacToeBot         |
+                              |  - BattleshipBot        |
                               +-------------------------+
 ```
 
@@ -48,6 +52,7 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 - Idempotency keys on move submission prevent duplicate moves from retries.
 - PubSub events (`LemonGames.Bus`) notify the lobby and per-match topics of state changes.
 - Visibility policy controls match access: `public`, `private`, or `unlisted`.
+- Match persistence write failures are returned as `{:error, :storage_unavailable, "match store unavailable"}` so callers can retry without crashing.
 
 ## Supported Game Types
 
@@ -55,6 +60,8 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 |-----------|-----------|------------|-------|-------------|---------------|
 | **Rock Paper Scissors** | `rock_paper_scissors` | Simultaneous (both players throw independently) | Hidden throws map | 30s | Standard RPS rules; draw on same throw |
 | **Connect 4** | `connect4` | Alternating (p1 first) | 7 columns x 6 rows grid | 60s | Four-in-a-row (horizontal, vertical, or diagonal); draw on full board |
+| **Tic-Tac-Toe** | `tic_tac_toe` | Alternating (p1 first) | 3 x 3 grid | 60s | Three-in-a-row (row, column, diagonal); draw on full board |
+| **Battleship** | `battleship` | Alternating after placement phase | 8 x 8 grid, hidden ships | 60s | Sink all opponent ships |
 
 ## Module Inventory
 
@@ -63,7 +70,7 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGames` | `lib/lemon_games.ex` | Top-level moduledoc |
-| `LemonGames.Application` | `lib/lemon_games/application.ex` | OTP application; starts `DeadlineSweeper` and optional `Bot.LobbySeeder` under `one_for_one` supervisor |
+| `LemonGames.Application` | `lib/lemon_games/application.ex` | OTP application; starts `DeadlineSweeper` under `one_for_one` supervisor |
 
 ### Game Engines (`lib/lemon_games/games/`)
 
@@ -73,6 +80,8 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 | `LemonGames.Games.Registry` | `games/registry.ex` | Maps game type strings to engine modules; provides `fetch/1`, `fetch!/1`, `supported_types/0` |
 | `LemonGames.Games.Connect4` | `games/connect4.ex` | Connect 4 engine: 7x6 board, gravity-based piece drops, four-direction win detection, draw on full board |
 | `LemonGames.Games.RockPaperScissors` | `games/rock_paper_scissors.ex` | RPS engine: simultaneous throws, resolution on second throw, public state redaction until resolved |
+| `LemonGames.Games.TicTacToe` | `games/tic_tac_toe.ex` | Tic-Tac-Toe engine: 3x3 board with alternating turns and win/draw detection |
+| `LemonGames.Games.Battleship` | `games/battleship.ex` | Battleship engine: hidden ship placement phase plus alternating battle shots |
 
 ### Match Lifecycle (`lib/lemon_games/matches/`)
 
@@ -89,9 +98,10 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGames.Bot.TurnWorker` | `bot/turn_worker.ex` | Async bot turn processor; dispatches to game-specific bot strategies, recursively handles consecutive bot turns |
-| `LemonGames.Bot.LobbySeeder` | `bot/lobby_seeder.ex` | Optional periodic worker that keeps the public lobby populated with house-vs-bot matches and advances house turns |
 | `LemonGames.Bot.Connect4Bot` | `bot/connect4_bot.ex` | Connect 4 strategy: play winning move, block opponent winning move, prefer center columns, fallback to first legal |
 | `LemonGames.Bot.RockPaperScissorsBot` | `bot/rock_paper_scissors_bot.ex` | RPS strategy: uniform random selection |
+| `LemonGames.Bot.TicTacToeBot` | `bot/tic_tac_toe_bot.ex` | Tic-Tac-Toe strategy: win, block, center, corner, fallback |
+| `LemonGames.Bot.BattleshipBot` | `bot/battleship_bot.ex` | Battleship strategy: auto-place ships, then target/hunt shot selection |
 
 ### Supporting Modules
 
@@ -197,19 +207,6 @@ Sliding window counters protect against abuse:
 
 LemonGames depends on `lemon_core` for storage and PubSub.
 
-Optional autoplay config can keep the spectator lobby active with house-vs-bot games:
-
-```elixir
-config :lemon_games, :autoplay,
-  enabled: false,
-  interval_ms: 10_000,
-  max_active_matches: 3,
-  house_agent_id: "lemon_house",
-  game_types: ["rock_paper_scissors", "connect4"]
-```
-
-When `enabled: true`, `LemonGames.Application` starts `LemonGames.Bot.LobbySeeder`.
-
 Turn and accept timeout values are defined in `LemonGames.Matches.Match`:
 
 | Timeout | Game Type | Duration |
@@ -217,6 +214,8 @@ Turn and accept timeout values are defined in `LemonGames.Matches.Match`:
 | Accept timeout | All | 5 minutes |
 | Turn timeout | `rock_paper_scissors` | 30 seconds |
 | Turn timeout | `connect4` | 60 seconds |
+| Turn timeout | `tic_tac_toe` | 60 seconds |
+| Turn timeout | `battleship` | 60 seconds |
 | Turn timeout | Default | 60 seconds |
 
 ## Dependencies

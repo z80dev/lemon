@@ -326,11 +326,27 @@ defmodule LemonControlPlane.HTTP.GamesAPI do
   defp json(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> send_resp(status, Jason.encode!(json_compatible(body)))
     |> halt()
   end
 
   defp error(conn, status, code, message) do
     json(conn, status, %{"error" => %{"code" => code, "message" => message}})
   end
+
+  defp json_compatible(value) when is_map(value) do
+    Map.new(value, fn {k, v} -> {k, json_compatible(v)} end)
+  end
+
+  defp json_compatible(value) when is_list(value) do
+    Enum.map(value, &json_compatible/1)
+  end
+
+  defp json_compatible(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.map(&json_compatible/1)
+  end
+
+  defp json_compatible(value), do: value
 end
