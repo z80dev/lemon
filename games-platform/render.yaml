@@ -1,0 +1,31 @@
+# Render.com deployment configuration for games.zeebot.xyz
+# Alternative to Fly.io - deploys the same Docker container
+
+services:
+  - type: web
+    name: games-zeebot-xyz
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: MIX_ENV
+        value: prod
+      - key: PHX_SERVER
+        value: "true"
+      - key: PHX_HOST
+        value: games-zeebot-xyz.onrender.com
+      - key: PORT
+        value: "8080"
+      - key: LEMON_WEB_HOST
+        value: games-zeebot-xyz.onrender.com
+      - key: LEMON_WEB_PORT
+        value: "8080"
+      - key: LEMON_STORE_PATH
+        value: /data/store
+      - key: LEMON_WEB_SECRET_KEY_BASE
+        generateValue: true
+    disk:
+      name: games-data
+      mountPath: /data
+      sizeGB: 1
+    healthCheckPath: /healthz
+    autoDeploy: true
