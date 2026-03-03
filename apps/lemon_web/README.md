@@ -103,11 +103,11 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 
 ### GamesLobbyLive (`/games`)
 
-Displays a live list of public game matches. Subscribes to `LemonGames.Bus` lobby events and refreshes the match list automatically when matches are created, updated, or expire. Each match entry shows game type, status badge, and a "Watch" link.
+Displays a live list of public game matches. Subscribes to `LemonGames.Bus` lobby events and refreshes the match list automatically when matches are created, updated, or expire. Also runs a periodic refresh tick every 1.5 seconds as a fallback so the lobby still updates if an event is missed. Each match entry shows game type, status badge, and a "Watch" link.
 
 ### GameMatchLive (`/games/:id`)
 
-Spectator view for a single game match. Shows the current board state, match metadata, and a scrolling event timeline. Subscribes to per-match events via `LemonGames.Bus` and fetches incremental events in batches of 100.
+Spectator view for a single game match. Shows the current board state, match metadata, and a scrolling event timeline. Subscribes to per-match events via `LemonGames.Bus` and maintains a `last_event_seq` cursor. On each game event (and on a 1-second refresh tick), it calls `list_events/4` with `after_seq` to replay missed events from the persisted event log, then refreshes the projected match state. This gives reconnect-safe catch-up even when PubSub delivery is transient.
 
 This route is intentionally spectator-only in the current release. Move submission remains an API/client responsibility.
 

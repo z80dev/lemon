@@ -5,10 +5,14 @@ defmodule LemonWeb.Games.LobbyLive do
 
   alias LemonGames.{Bus, Matches.Service}
   alias LemonCore.Event
+  @refresh_ms 1_500
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Bus.subscribe_lobby()
+    if connected?(socket) do
+      Bus.subscribe_lobby()
+      Process.send_after(self(), :refresh_lobby, @refresh_ms)
+    end
 
     {:ok,
      socket
@@ -18,6 +22,11 @@ defmodule LemonWeb.Games.LobbyLive do
 
   @impl true
   def handle_info(%Event{type: :game_lobby_changed}, socket) do
+    {:noreply, assign(socket, :matches, Service.list_lobby())}
+  end
+
+  def handle_info(:refresh_lobby, socket) do
+    Process.send_after(self(), :refresh_lobby, @refresh_ms)
     {:noreply, assign(socket, :matches, Service.list_lobby())}
   end
 
@@ -109,12 +118,13 @@ defmodule LemonWeb.Games.LobbyLive do
   end
 
   def status_badge(assigns) do
-    {bg, text, label} = case @status do
-      "active" -> {"bg-emerald-100", "text-emerald-700", "Live"}
-      "pending_accept" -> {"bg-amber-100", "text-amber-700", "Waiting"}
-      "finished" -> {"bg-slate-100", "text-slate-600", "Finished"}
-      _ -> {"bg-slate-100", "text-slate-600", @status}
-    end
+    {bg, text, label} =
+      case assigns.status do
+        "active" -> {"bg-emerald-100", "text-emerald-700", "Live"}
+        "pending_accept" -> {"bg-amber-100", "text-amber-700", "Waiting"}
+        "finished" -> {"bg-slate-100", "text-slate-600", "Finished"}
+        _ -> {"bg-slate-100", "text-slate-600", assigns.status}
+      end
 
     assigns = assign(assigns, bg: bg, text: text, label: label)
 
@@ -126,11 +136,12 @@ defmodule LemonWeb.Games.LobbyLive do
   end
 
   def player_avatar(assigns) do
-    {name, avatar, bot} = case @player do
-      %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
-      %{"display_name" => name} -> {name, "👤", false}
-      _ -> {"Waiting...", "⏳", false}
-    end
+    {name, avatar, bot} =
+      case assigns.player do
+        %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
+        %{"display_name" => name} -> {name, "👤", false}
+        _ -> {"Waiting...", "⏳", false}
+      end
 
     assigns = assign(assigns, name: name, avatar: avatar, bot: bot)
 
