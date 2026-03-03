@@ -52,19 +52,19 @@ defmodule LemonGames.Matches.Service do
           match
         end
 
-      :ok = LemonCore.Store.put(@match_table, match["id"], match)
+      with :ok <- persist_match(match["id"], match) do
+        EventLog.append(match["id"], "match_created", %{"agent_id" => actor["agent_id"]}, %{
+          "game_type" => match["game_type"],
+          "players" => match["players"]
+        })
 
-      EventLog.append(match["id"], "match_created", %{"agent_id" => actor["agent_id"]}, %{
-        "game_type" => match["game_type"],
-        "players" => match["players"]
-      })
+        Bus.broadcast_lobby_changed(match["id"], match["status"], "match_created")
 
-      Bus.broadcast_lobby_changed(match["id"], match["status"], "match_created")
+        # Trigger bot turn if next player is a bot
+        Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
 
-      # Trigger bot turn if next player is a bot
-      Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
-
-      {:ok, match}
+        {:ok, match}
+      end
     end
   end
 
@@ -83,12 +83,12 @@ defmodule LemonGames.Matches.Service do
           })
           |> activate_match()
 
-        :ok = LemonCore.Store.put(@match_table, match_id, match)
+        with :ok <- persist_match(match_id, match) do
+          EventLog.append(match_id, "accepted", %{"agent_id" => actor["agent_id"]}, %{})
 
-        EventLog.append(match_id, "accepted", %{"agent_id" => actor["agent_id"]}, %{})
-
-        Bus.broadcast_lobby_changed(match_id, "active", "accepted")
-        {:ok, match}
+          Bus.broadcast_lobby_changed(match_id, "active", "accepted")
+          {:ok, match}
+        end
       end
     end)
   end
@@ -188,30 +188,30 @@ defmodule LemonGames.Matches.Service do
         winner = if slot == "p1", do: "p2", else: "p1"
         match = finish_match(match, winner, "forfeit: " <> reason)
 
-        :ok = LemonCore.Store.put(@match_table, match_id, match)
+        with :ok <- persist_match(match_id, match) do
+          EventLog.append(
+            match_id,
+            "finished",
+            %{"agent_id" => actor["agent_id"], "slot" => slot},
+            %{
+              "result" => match["result"],
+              "reason" => reason
+            }
+          )
 
-        EventLog.append(
-          match_id,
-          "finished",
-          %{"agent_id" => actor["agent_id"], "slot" => slot},
-          %{
-            "result" => match["result"],
-            "reason" => reason
-          }
-        )
+          Bus.broadcast_lobby_changed(match_id, "finished", "forfeit")
 
-        Bus.broadcast_lobby_changed(match_id, "finished", "forfeit")
+          Bus.broadcast_match_event(match_id, %{
+            "match_id" => match_id,
+            "seq" => EventLog.latest_seq(match_id),
+            "event_type" => "finished",
+            "status" => "finished",
+            "next_player" => nil,
+            "turn_number" => match["turn_number"]
+          })
 
-        Bus.broadcast_match_event(match_id, %{
-          "match_id" => match_id,
-          "seq" => EventLog.latest_seq(match_id),
-          "event_type" => "finished",
-          "status" => "finished",
-          "next_player" => nil,
-          "turn_number" => match["turn_number"]
-        })
-
-        {:ok, match}
+          {:ok, match}
+        end
       end
     end)
   end
@@ -227,12 +227,12 @@ defmodule LemonGames.Matches.Service do
           |> Map.put("result", %{"reason" => reason})
           |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
-        :ok = LemonCore.Store.put(@match_table, match_id, match)
+        with :ok <- persist_match(match_id, match) do
+          EventLog.append(match_id, "expired", %{"system" => true}, %{"reason" => reason})
 
-        EventLog.append(match_id, "expired", %{"system" => true}, %{"reason" => reason})
-
-        Bus.broadcast_lobby_changed(match_id, "expired", "expired")
-        {:ok, match}
+          Bus.broadcast_lobby_changed(match_id, "expired", "expired")
+          {:ok, match}
+        end
       end
     end)
   end
@@ -267,25 +267,25 @@ defmodule LemonGames.Matches.Service do
               |> Map.put("updated_at_ms", System.system_time(:millisecond))
               |> advance_turn(terminal, winner)
 
-            :ok = LemonCore.Store.put(@match_table, match_id, match)
+            with :ok <- persist_match(match_id, match) do
+              Bus.broadcast_match_event(match_id, %{
+                "match_id" => match_id,
+                "seq" => seq,
+                "event_type" => "move_submitted",
+                "status" => match["status"],
+                "next_player" => match["next_player"],
+                "turn_number" => match["turn_number"]
+              })
 
-            Bus.broadcast_match_event(match_id, %{
-              "match_id" => match_id,
-              "seq" => seq,
-              "event_type" => "move_submitted",
-              "status" => match["status"],
-              "next_player" => match["next_player"],
-              "turn_number" => match["turn_number"]
-            })
+              if terminal do
+                Bus.broadcast_lobby_changed(match_id, "finished", "game_over")
+              end
 
-            if terminal do
-              Bus.broadcast_lobby_changed(match_id, "finished", "game_over")
+              # Trigger bot turn if next player is a bot
+              Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
+
+              {:ok, match, seq}
             end
-
-            # Trigger bot turn if next player is a bot
-            Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)
-
-            {:ok, match, seq}
 
           {:error, code, message} ->
             EventLog.append(
@@ -423,6 +423,16 @@ defmodule LemonGames.Matches.Service do
 
   defp with_lock(match_id, fun) do
     :global.trans({:lemon_games_match_lock, match_id}, fun)
+  end
+
+  defp persist_match(match_id, match) do
+    case LemonCore.Store.put(@match_table, match_id, match) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        {:error, :storage_unavailable, "match store unavailable"}
+    end
   end
 
   defp viewer_identity(%{"agent_id" => agent_id}) when is_binary(agent_id), do: agent_id

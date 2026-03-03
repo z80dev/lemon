@@ -29,40 +29,39 @@
 
 ---
 
-## Parallel Work & jj Workspaces
+## Parallel Work & Git Worktrees
 
-When working on multiple tasks in parallel (either as the same agent or multiple agents), **use jj workspaces to avoid file editing conflicts**.
+When working on multiple tasks in parallel (either as the same agent or multiple agents), **use git worktrees to avoid file editing conflicts**.
 
 ### Workflow:
 
-1. **Create a workspace for each parallel task:**
+1. **Create a worktree for each parallel task:**
    ```bash
-   jj workspace add --name=task-name ../lemon-task-name
+   git worktree add ../lemon-task-name -b task-name
    cd ../lemon-task-name
    ```
 
-2. **Work in isolation** — Each workspace is an independent working directory backed by the same repo. Create a new change for your work:
+2. **Work in isolation** — Each worktree is an independent working directory backed by the same repo:
    ```bash
-   jj new main -m "Description of task"
+   git status
    ```
 
-3. **Clean up when complete** — After the change is merged/closed, remove the workspace:
+3. **Clean up when complete** — After the branch is merged/closed, remove the worktree:
    ```bash
    cd /path/to/main/lemon
-   jj workspace forget task-name
-   rm -rf ../lemon-task-name
+   git worktree remove ../lemon-task-name
+   git branch -d task-name
    ```
 
-### Why jj Workspaces?
+### Why git Worktrees?
 
-- **No file lock conflicts** — Multiple agents can edit different files simultaneously without stepping on each other
-- **Clean build contexts** — Each workspace maintains separate `_build/` and `deps/` (symlinked or independent)
-- **Easy cleanup** — Remove workspaces when done without affecting the main repo
-- **Native to this repo** — This repository uses Jujutsu (jj) for version control
+- **No file editing conflicts** — Multiple agents can edit different files simultaneously without stepping on each other
+- **Clean build contexts** — Each worktree maintains separate `_build/` and `deps/` as needed
+- **Easy cleanup** — Remove worktrees when done without affecting the main checkout
 
 ### Golden Rule:
 
-> **Never have multiple agents editing the same working directory simultaneously.** Always use jj workspaces for parallel tasks.
+> **Never have multiple agents editing the same working directory simultaneously.** Always use separate worktrees for parallel tasks.
 
 ---
 

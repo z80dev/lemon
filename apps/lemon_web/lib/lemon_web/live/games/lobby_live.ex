@@ -44,7 +44,7 @@ defmodule LemonWeb.Games.LobbyLive do
       <%= if @matches == [] do %>
         <div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center">
           <p class="text-slate-600">No active matches right now.</p>
-          <p class="mt-1 text-sm text-slate-500">Matches are created automatically — check back in a moment!</p>
+          <p class="mt-1 text-sm text-slate-500">Create a match via the Games API to see it here.</p>
         </div>
       <% else %>
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
