@@ -248,8 +248,13 @@ defmodule LemonMCP.WasmServer do
 
   @impl true
   def handle_call(:refresh_tools, _from, state) do
-    case discover_tools(state.sidecar_pid, state.wasm_paths, state.defaults) do
-      {:ok, discovered} ->
+    case CodingAgent.Wasm.SidecarSession.discover(state.sidecar_pid) do
+      {:ok, %{tools: tools}} ->
+        discovered =
+          tools
+          |> Enum.map(fn tool -> {tool.name, tool} end)
+          |> Map.new()
+
         new_stats = %{state.stats | tools_discovered: map_size(discovered)}
         {:reply, :ok, %{state | discovered_tools: discovered, stats: new_stats}}
 
@@ -307,40 +312,48 @@ defmodule LemonMCP.WasmServer do
   end
 
   defp start_sidecar(state) do
-    # Build runtime defaults for discovery
-    defaults = %{
-      default_memory_limit: state.defaults.memory_limit,
-      default_timeout_ms: state.defaults.timeout_ms,
-      default_fuel_limit: 10_000_000,
-      max_tool_invoke_depth: 4
+    cwd = File.cwd!()
+
+    # Build settings manager map for Config.load
+    settings = %{
+      tools: %{
+        wasm: %{
+          enabled: true,
+          tool_paths: state.wasm_paths,
+          default_memory_limit: state.defaults.memory_limit,
+          default_timeout_ms: state.defaults.timeout_ms,
+          default_fuel_limit: 10_000_000,
+          max_tool_invoke_depth: 4
+        }
+      }
     }
 
-    # Start sidecar session
-    case CodingAgent.Wasm.SidecarSession.start_link(defaults: defaults) do
+    # Load proper WASM config
+    wasm_config = CodingAgent.Wasm.Config.load(cwd, settings)
+
+    # Start sidecar session with required options
+    opts = [
+      cwd: cwd,
+      session_id: "wasm_mcp_server_#{System.unique_integer([:positive])}",
+      wasm_config: wasm_config
+    ]
+
+    case CodingAgent.Wasm.SidecarSession.start_link(opts) do
       {:ok, pid} ->
-        case discover_tools(pid, state.wasm_paths, defaults) do
-          {:ok, discovered} ->
+        # Trigger discovery
+        case CodingAgent.Wasm.SidecarSession.discover(pid) do
+          {:ok, %{tools: tools}} ->
+            discovered =
+              tools
+              |> Enum.map(fn tool -> {tool.name, tool} end)
+              |> Map.new()
+
             {:ok, pid, discovered}
 
           {:error, reason} ->
-            CodingAgent.Wasm.SidecarSession.shutdown(pid)
+            CodingAgent.Wasm.SidecarSession.stop(pid)
             {:error, reason}
         end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp discover_tools(sidecar_pid, paths, defaults) do
-    case CodingAgent.Wasm.SidecarSession.discover(sidecar_pid, paths, defaults) do
-      {:ok, %{tools: tools}} ->
-        discovered =
-          tools
-          |> Enum.map(fn tool -> {tool.name, tool} end)
-          |> Map.new()
-
-        {:ok, discovered}
 
       {:error, reason} ->
         {:error, reason}
