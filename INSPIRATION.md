@@ -1,5 +1,35 @@
 # INSPIRATION.md
 
+## 2026-03-07 Research Snapshot
+
+### Upstream repo deltas reviewed
+- **ironclaw**: v0.13.1, v0.13.0 released with auto-compact and retry on ContextLengthExceeded (`6f21cfa`) - automatic context management when hitting token limits
+- **oh-my-pi**: v13.5.8, v13.5.7 released with strict mode for OpenAI providers (`6c52f8cf6`, `3a9ff9720`) - stricter JSON schema validation for improved tool call reliability
+- **oh-my-pi**: v13.0+ with consolidated hashline edit operations, simplified developer role handling, in-memory todo phase management
+- **openclaw**: Synology Chat channel adapter added - self-hosted NAS messaging support for home-lab environments
+- **pi**: v0.55.4 with incremental highlight for streaming write tool calls - UX improvement for long outputs
+
+### Community/trend signals
+- **MCP is now official industry standard** - OpenAI adopted Model Context Protocol in March 2025; 12+ frameworks now compete on MCP-native support vs adapter layers
+- **Production readiness gaps** - 45% of engineering leaders cite accurate tool calling as top challenge; agents lack context window awareness and operational awareness (OS/environment state)
+- **"Agentic slop"** - Industry term emerging for poor quality AI outputs that require significant human cleanup
+- **Air-gapped deployment demand** - Enterprise adoption increasingly requires offline/air-gapped operational posture; self-hosted agents need deterministic bootstrap expectations
+- **MCP-native vs MCP-adopter** - Frameworks built for MCP (mcp-agent, PydanticAI, OpenAI SDK, Google ADK) work directly with protocol; adapter-based frameworks face compatibility gaps
+
+### New ideas added
+1. `IDEA-20260306-ironclaw-auto-compact-context-retry` - Automatic context compaction on limit errors
+2. `IDEA-20260306-oh-my-pi-strict-mode-openai` - OpenAI strict mode for tool schemas
+3. `IDEA-20260306-openclaw-synology-chat-adapter` - Synology Chat channel evaluation
+4. `IDEA-20260306-community-mcp-industry-standard` - MCP ecosystem positioning
+5. `IDEA-20260306-community-production-readiness-gaps` - Production readiness improvements
+
+### Strategic confirmations
+1. **MCP is table stakes** - Industry standard status means Lemon must ensure full MCP compatibility and promote it as a core feature
+2. **Context window management** - Automatic compaction/retry is becoming expected behavior for production agents
+3. **Production readiness** - Major enterprise differentiator opportunity; context awareness + operational awareness are gaps to fill
+4. **Air-gapped/offline** - Growing enterprise requirement; aligns with Lemon's local-first BEAM architecture
+5. **Strict mode** - Worth investigating for OpenAI tool call reliability improvements
+
 ## 2026-03-02 Research Snapshot
 
 ### Upstream repo deltas reviewed

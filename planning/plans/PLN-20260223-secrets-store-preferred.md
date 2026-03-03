@@ -1,6 +1,6 @@
 # PLN-20260223: Encrypted Secrets Store as Preferred Secret Access Path
 
-**Status:** in_progress
+**Status:** landed
 **Owner:** janitor
 **Branch:** `feature/pln-20260302-secrets-store-preferred`
 **Created:** 2026-02-23

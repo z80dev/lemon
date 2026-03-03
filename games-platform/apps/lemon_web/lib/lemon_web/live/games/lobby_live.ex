@@ -26,7 +26,7 @@ defmodule LemonWeb.Games.LobbyLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="mx-auto w-full max-w-6xl px-4 py-6">
+    <main class="mx-auto w-full max-w-5xl px-4 py-6">
       <div class="mb-6 flex items-center justify-between">
         <div>
           <h1 class="text-3xl font-bold text-slate-900">🎮 Games Lobby</h1>
@@ -42,22 +42,20 @@ defmodule LemonWeb.Games.LobbyLive do
       </div>
 
       <%= if @matches == [] do %>
-        <div class="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <div class="text-4xl mb-3">🎲</div>
-          <p class="text-slate-600">No matches yet. Games will appear here soon!</p>
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center">
+          <p class="text-slate-600">No active matches right now.</p>
+          <p class="mt-1 text-sm text-slate-500">Matches are created automatically — check back in a moment!</p>
         </div>
       <% else %>
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <%= for match <- @matches do %>
-            <.match_card match={match} />
-          <% end %>
+          <.match_card :for={match <- @matches} match={match} />
         </div>
       <% end %>
     </main>
     """
   end
 
-  defp match_card(assigns) do
+  def match_card(assigns) do
     ~H"""
     <.link navigate={~p"/games/#{@match["id"]}"} class="group block">
       <div class="rounded-xl border border-slate-200 bg-white p-4 transition-all hover:border-blue-300 hover:shadow-md">
@@ -70,9 +68,9 @@ defmodule LemonWeb.Games.LobbyLive do
         </div>
 
         <div class="mt-4 flex items-center justify-between">
-          <.player_avatar player={get_in(@match["players"], ["p1"])} fallback="🤖" />
+          <.player_avatar player={get_in(@match, ["players", "p1"])} slot="p1" />
           <div class="text-lg font-bold text-slate-400">VS</div>
-          <.player_avatar player={get_in(@match["players"], ["p2"])} fallback="⏳" />
+          <.player_avatar player={get_in(@match, ["players", "p2"])} slot="p2" />
         </div>
 
         <div class="mt-4 flex items-center justify-between text-xs text-slate-500">
@@ -84,77 +82,73 @@ defmodule LemonWeb.Games.LobbyLive do
     """
   end
 
-  defp game_icon(assigns) do
-    icon = case assigns.game_type do
-      "connect4" -> "🔴"
-      "rock_paper_scissors" -> "✊"
-      "tic_tac_toe" -> "⭕"
-      _ -> "🎮"
-    end
-
-    assigns = assign(assigns, :icon, icon)
-
+  def game_icon(assigns) do
     ~H"""
     <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-lg">
-      {@icon}
+      <%= case @game_type do %>
+        <% "rock_paper_scissors" -> %>✊
+        <% "connect4" -> %>🔴
+        <% "tic_tac_toe" -> %>⭕
+        <% "battleship" -> %>🚢
+        <% _ -> %>🎮
+      <% end %>
     </span>
     """
   end
 
-  defp game_name(assigns) do
-    name = case assigns.game_type do
-      "connect4" -> "Connect 4"
-      "rock_paper_scissors" -> "Rock Paper Scissors"
-      "tic_tac_toe" -> "Tic-Tac-Toe"
-      other -> String.capitalize(other)
-    end
-
-    assigns = assign(assigns, :name, name)
-
+  def game_name(assigns) do
     ~H"""
-    {@name}
+    <%= case @game_type do %>
+      <% "rock_paper_scissors" -> %>Rock Paper Scissors
+      <% "connect4" -> %>Connect 4
+      <% "tic_tac_toe" -> %>Tic-Tac-Toe
+      <% "battleship" -> %>Battleship
+      <% other -> %><%= other %>
+    <% end %>
     """
   end
 
-  defp status_badge(assigns) do
-    {bg_class, text_class, label} = case assigns.status do
-      "active" -> {"bg-emerald-100", "text-emerald-700", "Active"}
+  def status_badge(assigns) do
+    {bg, text, label} = case @status do
+      "active" -> {"bg-emerald-100", "text-emerald-700", "Live"}
+      "pending_accept" -> {"bg-amber-100", "text-amber-700", "Waiting"}
       "finished" -> {"bg-slate-100", "text-slate-600", "Finished"}
-      "expired" -> {"bg-amber-100", "text-amber-700", "Expired"}
-      _ -> {"bg-slate-100", "text-slate-600", String.capitalize(assigns.status)}
+      _ -> {"bg-slate-100", "text-slate-600", @status}
     end
 
-    assigns =
-      assigns
-      |> assign(:bg_class, bg_class)
-      |> assign(:text_class, text_class)
-      |> assign(:label, label)
+    assigns = assign(assigns, bg: bg, text: text, label: label)
 
     ~H"""
-    <span class={["rounded-full px-2 py-0.5 text-xs font-medium", @bg_class, @text_class]}>
+    <span class={["rounded-full px-2 py-0.5 text-xs font-medium", @bg, @text]}>
       {@label}
     </span>
     """
   end
 
-  defp player_avatar(assigns) do
-    name = get_in(assigns.player, ["display_name"]) || "Bot"
-    avatar = get_in(assigns.player, ["avatar"])
+  def player_avatar(assigns) do
+    {name, avatar, bot} = case @player do
+      %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
+      %{"display_name" => name} -> {name, "👤", false}
+      _ -> {"Waiting...", "⏳", false}
+    end
 
-    display = avatar || assigns.fallback
-
-    assigns =
-      assigns
-      |> assign(:display, display)
-      |> assign(:name, name)
+    assigns = assign(assigns, name: name, avatar: avatar, bot: bot)
 
     ~H"""
     <div class="flex flex-col items-center gap-1">
-      <div class="flex h-10 w-10 items-center justify-center rounded-full text-lg bg-blue-100">
-        {@display}
+      <div class={["flex h-10 w-10 items-center justify-center rounded-full text-lg", @bot && "bg-purple-100" || "bg-blue-100"]}>
+        {@avatar}
       </div>
       <span class="max-w-[80px] truncate text-xs text-slate-600">{@name}</span>
     </div>
     """
   end
+
+  defp players_label(players) when is_map(players) do
+    p1 = get_in(players, ["p1", "display_name"]) || "p1"
+    p2 = get_in(players, ["p2", "display_name"]) || "pending"
+    "#{p1} vs #{p2}"
+  end
+
+  defp players_label(_), do: "unknown"
 end

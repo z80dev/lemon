@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-03-01
+Last updated: 2026-03-07
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -32,9 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| [PLN-20260223-secrets-store-preferred](plans/PLN-20260223-secrets-store-preferred.md) | Encrypted Secrets Store as Preferred Secret Access Path | `in_progress` | `janitor` | `feature/pln-20260223-secrets-store-preferred` | `pending` | ROADMAP.md "Now" | 2026-03-02 |
-| [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `in_progress` | `janitor` | `feature/pln-20260302-secrets-store-preferred-path` | `pending` | ROADMAP.md | 2026-03-02 |
-| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `in_progress` | `janitor` | `feature/pln-20260303-rate-limit-auto-resume` | `pending` | — | 2026-03-03 |
+| — | — | — | — | — | — | — | — |
 
 ## Ready for Review
 
@@ -58,6 +56,9 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20260303-rate-limit-auto-resume](plans/PLN-20260303-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | `62833edb` | Rate limit pause tracking, ResumeScheduler, RunGraph integration, 69 tests | 2026-03-06 |
+| [PLN-20260302-secrets-store-preferred-path](plans/PLN-20260302-secrets-store-preferred-path.md) | Encrypted Secrets Store as Preferred Path | `b49c9c72` | Core resolution enhancement, provider config integration, migration tooling | 2026-03-06 |
+| [PLN-20260223-secrets-store-preferred](plans/PLN-20260223-secrets-store-preferred.md) | Encrypted Secrets Store as Preferred Secret Access Path | `cdd51b12` | Store-first resolution for AI providers, channels, skills; import/check tasks | 2026-03-06 |
 | [PLN-20260302-tool-call-name-normalization](plans/PLN-20260302-tool-call-name-normalization.md) | Normalize Whitespace-Padded Tool Call Names | `6f3d3ace` | Tool name normalization + telemetry in agent_core and coding_agent | 2026-03-02 |
 | [PLN-20260301-mcp-tool-integration](plans/PLN-20260301-mcp-tool-integration.md) | MCP Tool Integration | `d29fd4b7` | MCP client/server, tool registry integration, 54+ tests | 2026-03-01 |
 | [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `61e6c71e` | Merged with TicTacToe addition; 71 tests pass | 2026-03-01 |
@@ -147,6 +148,11 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260302-pi-skill-auto-discovery](ideas/IDEA-20260302-pi-skill-auto-discovery.md) | Auto-Discover Skills in .agents Paths by Default | pi | `completed` | S | H | **Already implemented** - Lemon has skill auto-discovery parity |
 | [IDEA-20260302-openclaw-mistral-provider-support](ideas/IDEA-20260302-openclaw-mistral-provider-support.md) | Full Mistral AI Provider Support | openclaw | `proposed` | M | M | **Investigate** - Add Mistral as a provider option |
 | [IDEA-20260302-community-ai-agent-production-readiness](ideas/IDEA-20260302-community-ai-agent-production-readiness.md) | AI Agent Production Readiness - Context Windows & Operational Awareness | community | `proposed` | L | H | **Proceed** - Address production deployment blockers |
+| [IDEA-20260306-ironclaw-auto-compact-context-retry](ideas/IDEA-20260306-ironclaw-auto-compact-context-retry.md) | Auto-Compact and Retry on ContextLengthExceeded | ironclaw | `proposed` | M | H | **Proceed** - Automatic recovery from context limit errors |
+| [IDEA-20260306-oh-my-pi-strict-mode-openai](ideas/IDEA-20260306-oh-my-pi-strict-mode-openai.md) | Tool Schema Strict Mode for OpenAI Providers | oh-my-pi | `proposed` | S | M | **Investigate** - May improve OpenAI tool call reliability |
+| [IDEA-20260306-openclaw-synology-chat-adapter](ideas/IDEA-20260306-openclaw-synology-chat-adapter.md) | Synology Chat Channel Adapter | openclaw | `proposed` | M | M | **Defer** - Niche self-hosted channel, lower priority |
+| [IDEA-20260306-community-mcp-industry-standard](ideas/IDEA-20260306-community-mcp-industry-standard.md) | MCP Now Industry Standard - Full Ecosystem Support | community | `proposed` | M | H | **Proceed** - MCP is now table stakes for AI frameworks |
+| [IDEA-20260306-community-production-readiness-gaps](ideas/IDEA-20260306-community-production-readiness-gaps.md) | Production Readiness Gaps - Context & Operational Awareness | community | `proposed` | L | H | **Proceed** - Major enterprise adoption differentiator |
 
 ### Summary
 
@@ -230,6 +236,28 @@ New community/industry signals captured:
 2. `IDEA-20260302-pi-skill-auto-discovery.md` - Skill discovery parity confirmation
 3. `IDEA-20260302-openclaw-mistral-provider-support.md` - Mistral provider evaluation
 4. `IDEA-20260302-community-ai-agent-production-readiness.md` - Production readiness improvements
+
+### Research Addendum (2026-03-07)
+
+New upstream deltas captured from inspiration research:
+- **IronClaw v0.13.1, v0.13.0**: Auto-compact and retry on ContextLengthExceeded (`6f21cfa`) - automatic context management
+- **Oh-My-Pi v13.5.8, v13.5.7**: Tool schema strict mode for OpenAI providers (`6c52f8cf6`, `3a9ff9720`) - stricter JSON schema validation
+- **Oh-My-Pi v13.0+**: Consolidated hashline edit operations, simplified developer role handling
+- **OpenClaw**: Synology Chat adapter added - self-hosted NAS messaging support
+- **Pi v0.55.4**: Incremental highlight for streaming write tool calls - UX improvement
+
+New community/industry signals captured:
+- **MCP is now official industry standard** - OpenAI adopted March 2025; 12+ frameworks now MCP-native
+- **Production readiness gaps** - 45% of engineering leaders cite tool calling accuracy as top challenge
+- **Context window blindness** - Agents don't track/manage context usage leading to failures
+- **Air-gapped deployment demand** - Enterprise increasingly requires offline/air-gapped operational posture
+
+**New Idea Artifacts Created:**
+1. `IDEA-20260306-ironclaw-auto-compact-context-retry.md` - Automatic context compaction on limit errors
+2. `IDEA-20260306-oh-my-pi-strict-mode-openai.md` - OpenAI strict mode for tool schemas
+3. `IDEA-20260306-openclaw-synology-chat-adapter.md` - Synology Chat channel evaluation
+4. `IDEA-20260306-community-mcp-industry-standard.md` - MCP ecosystem positioning
+5. `IDEA-20260306-community-production-readiness-gaps.md` - Production readiness improvements
 
 ## Templates
 
