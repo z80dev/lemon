@@ -36,6 +36,7 @@ native/wasm-tools/*/target/
 
 .agent/
 .claude/worktrees/
+.worktrees/
 
 # Environment files with secrets
 .env*

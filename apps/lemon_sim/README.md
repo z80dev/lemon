@@ -32,6 +32,8 @@ Phase 1 adds:
 | `LemonSim.Updater` | Behaviour for applying events and returning decision signals |
 | `LemonSim.ActionSpace` | Behaviour for dynamic legal tool generation |
 | `LemonSim.Projector` | Behaviour for state -> `Ai.Types.Context` projection |
+| `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
+| `LemonSim.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |
 | `LemonSim.Decider` | Behaviour for one constrained model decision |
 | `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
 | `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |

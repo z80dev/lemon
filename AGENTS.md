@@ -18,6 +18,7 @@
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
 | Play turn-based games against agents | `apps/lemon_games/` |
+| Build reusable simulation harnesses | `apps/lemon_sim/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills | `apps/lemon_skills/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
@@ -32,13 +33,15 @@
 ## Parallel Work & Git Worktrees
 
 When working on multiple tasks in parallel (either as the same agent or multiple agents), **use git worktrees to avoid file editing conflicts**.
+Store all worktrees under `.worktrees/` in the repository root.
 
 ### Workflow:
 
 1. **Create a worktree for each parallel task:**
    ```bash
-   git worktree add ../lemon-task-name -b task-name
-   cd ../lemon-task-name
+   mkdir -p .worktrees
+   git worktree add .worktrees/task-name -b task-name
+   cd .worktrees/task-name
    ```
 
 2. **Work in isolation** — Each worktree is an independent working directory backed by the same repo:
@@ -49,7 +52,7 @@ When working on multiple tasks in parallel (either as the same agent or multiple
 3. **Clean up when complete** — After the branch is merged/closed, remove the worktree:
    ```bash
    cd /path/to/main/lemon
-   git worktree remove ../lemon-task-name
+   git worktree remove .worktrees/task-name
    git branch -d task-name
    ```
 
@@ -148,6 +151,7 @@ apps/
 ├── lemon_games/         # Agent-vs-agent game platform (RPS, Connect4, event-sourced matches)
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
 ├── lemon_router/        # Message routing, agent directory, run orchestration
+├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
 ├── lemon_skills/        # Skill registry, discovery, installation
 ├── lemon_web/           # Phoenix LiveView web interface
@@ -264,6 +268,7 @@ lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
+lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
 lemon_games ──────────→ lemon_core
 lemon_web ────────────→ lemon_core, lemon_games, lemon_router
@@ -440,6 +445,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
+| lemon_sim | `apps/lemon_sim/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |
 | lemon_services | `apps/lemon_services/AGENTS.md` |
@@ -449,4 +455,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-02-27* (full documentation refresh — all app README.md and AGENTS.md files rewritten)
+*Last updated: 2026-03-04* (added lemon_sim app references and dependency boundary notes)

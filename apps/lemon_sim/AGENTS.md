@@ -18,6 +18,8 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 | `lib/lemon_sim/updater.ex` | `LemonSim.Updater` | Event -> state updater behaviour |
 | `lib/lemon_sim/action_space.ex` | `LemonSim.ActionSpace` | Dynamic legal tools behaviour |
 | `lib/lemon_sim/projector.ex` | `LemonSim.Projector` | Frame -> AI context behaviour |
+| `lib/lemon_sim/projectors/toolkit.ex` | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
+| `lib/lemon_sim/projectors/sectioned_projector.ex` | `LemonSim.Projectors.SectionedProjector` | Default sectioned projector with pluggable builders/overrides |
 | `lib/lemon_sim/decider.ex` | `LemonSim.Decider` | One-turn decision behaviour |
 | `lib/lemon_sim/deciders/tool_loop_decider.ex` | `LemonSim.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/runner.ex` | `LemonSim.Runner` | Ingest-until-decision and decide-once orchestration |
