@@ -680,6 +680,14 @@ lemon/
 │   │       ├── auth.ex          # Agent token issue/validate/revoke
 │   │       └── rate_limit.ex    # Read/move rate limiting
 │   │
+│   ├── lemon_sim/               # Reusable simulation harness primitives
+│   │   └── lib/lemon_sim/
+│   │       ├── state.ex         # World state + event window + intent
+│   │       ├── projector.ex     # Decision context projection behaviour
+│   │       ├── updater.ex       # Event -> state update behaviour
+│   │       ├── action_space.ex  # Dynamic legal tool generation behaviour
+│   │       └── runner.ex        # Ingest-until-decision + decide-once helpers
+│   │
 │   ├── lemon_skills/            # Skill registry and management
 │   │   └── lib/lemon_skills/
 │   │       ├── registry.ex      # In-memory skill cache
@@ -2748,6 +2756,7 @@ The umbrella structure separates concerns while maintaining tight integration:
 - **`lemon_automation`**: Cron scheduling, heartbeats, wake triggers
 - **`lemon_control_plane`**: HTTP/WebSocket server with 98+ RPC methods
 - **`lemon_games`**: Turn-based games platform (RPS/Connect4) with event-sourced matches
+- **`lemon_sim`**: Reusable simulation harness contracts and runner primitives
 - **`lemon_skills`**: Skill registry and lifecycle management
 - **`lemon_web`**: Phoenix web interface
 - **`market_intel`**: Market intelligence and commentary
