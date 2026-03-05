@@ -3,14 +3,64 @@ alias LemonSim.{Runner, State}
 alias LemonSim.Deciders.ToolLoopDecider
 alias LemonSim.Projectors.SectionedProjector
 
+defmodule TicTacToe.Events do
+  alias LemonSim.Event
+
+  def normalize(raw_event), do: Event.new(raw_event)
+
+  def place_mark(player, row, col) do
+    Event.new("place_mark", %{"player" => player, "row" => row, "col" => col})
+  end
+
+  def move_applied(player, row, col, move_count) do
+    Event.new("move_applied", %{
+      "player" => player,
+      "row" => row,
+      "col" => col,
+      "move_count" => move_count
+    })
+  end
+
+  def move_rejected(player, row, col, reason, message) do
+    Event.new("move_rejected", %{
+      "player" => player,
+      "row" => row,
+      "col" => col,
+      "reason" => to_string(reason),
+      "message" => message
+    })
+  end
+
+  def game_over(:won, winner) do
+    Event.new("game_over", %{
+      "status" => "won",
+      "winner" => winner,
+      "message" => "#{winner} wins"
+    })
+  end
+
+  def game_over(:draw) do
+    Event.new("game_over", %{
+      "status" => "draw",
+      "winner" => nil,
+      "message" => "draw"
+    })
+  end
+end
+
+defmodule TicTacToe.Outcome do
+  defstruct [:status, :winner, :next_player, events: []]
+end
+
 defmodule TicTacToeUpdater do
   @behaviour LemonSim.Updater
 
-  alias LemonSim.{Event, State}
+  alias LemonSim.State
+  alias TicTacToe.{Events, Outcome}
 
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
-    event = Event.new(raw_event)
+    event = Events.normalize(raw_event)
 
     case event.kind do
       "place_mark" -> apply_place_mark(state, event)
@@ -26,66 +76,21 @@ defmodule TicTacToeUpdater do
          :ok <- ensure_empty_cell(state.world, row, col) do
       board_after = put_in(state.world, [:board, Access.at(row), Access.at(col)], player)
       move_count = (state.world[:move_count] || 0) + 1
-
-      {status, winner, next_player, game_over_event} =
-        cond do
-          winner?(board_after, player) ->
-            {
-              "won",
-              player,
-              nil,
-              %{
-                kind: "game_over",
-                payload: %{
-                  "status" => "won",
-                  "winner" => player,
-                  "message" => "#{player} wins"
-                }
-              }
-            }
-
-          board_full?(board_after) ->
-            {
-              "draw",
-              nil,
-              nil,
-              %{
-                kind: "game_over",
-                payload: %{
-                  "status" => "draw",
-                  "winner" => nil,
-                  "message" => "draw"
-                }
-              }
-            }
-
-          true ->
-            {"in_progress", nil, other_player(player), nil}
-        end
-
-      next_world =
-        state.world
-        |> Map.put(:board, board_after[:board])
-        |> Map.put(:current_player, next_player)
-        |> Map.put(:status, status)
-        |> Map.put(:winner, winner)
-        |> Map.put(:move_count, move_count)
+      outcome = resolve_outcome(board_after, player)
 
       next_state =
         state
-        |> Map.put(:world, next_world)
-        |> State.append_event(%{
-          kind: "move_applied",
-          payload: %{
-            "player" => player,
-            "row" => row,
-            "col" => col,
-            "move_count" => move_count
-          }
+        |> State.put_world(%{
+          board: board_after[:board],
+          current_player: outcome.next_player,
+          status: outcome.status,
+          winner: outcome.winner,
+          move_count: move_count
         })
-        |> maybe_append_game_over(game_over_event)
+        |> State.append_event(Events.move_applied(player, row, col, move_count))
+        |> State.append_events(outcome.events)
 
-      signal = if status == "in_progress", do: {:decide, "next turn"}, else: :skip
+      signal = if outcome.status == "in_progress", do: {:decide, "next turn"}, else: :skip
       {:ok, next_state, signal}
     else
       {:error, reason} ->
@@ -96,16 +101,10 @@ defmodule TicTacToeUpdater do
   defp rejection_state(state, event, player, reason) do
     {row, col} = raw_coords(event.payload)
 
-    State.append_event(state, %{
-      kind: "move_rejected",
-      payload: %{
-        "player" => player,
-        "row" => row,
-        "col" => col,
-        "reason" => to_string(reason),
-        "message" => rejection_message(reason, player, row, col)
-      }
-    })
+    State.append_event(
+      state,
+      Events.move_rejected(player, row, col, reason, rejection_message(reason, player, row, col))
+    )
   end
 
   defp parse_coords(payload) when is_map(payload) do
@@ -159,10 +158,35 @@ defmodule TicTacToeUpdater do
     board |> List.flatten() |> Enum.all?(&(&1 != " "))
   end
 
-  defp at(board, row, col), do: get_in(board, [Access.at(row), Access.at(col)])
+  defp resolve_outcome(board_after, player) do
+    cond do
+      winner?(board_after, player) ->
+        %Outcome{
+          status: "won",
+          winner: player,
+          next_player: nil,
+          events: [Events.game_over(:won, player)]
+        }
 
-  defp maybe_append_game_over(state, nil), do: state
-  defp maybe_append_game_over(state, event), do: State.append_event(state, event)
+      board_full?(board_after) ->
+        %Outcome{
+          status: "draw",
+          winner: nil,
+          next_player: nil,
+          events: [Events.game_over(:draw)]
+        }
+
+      true ->
+        %Outcome{
+          status: "in_progress",
+          winner: nil,
+          next_player: other_player(player),
+          events: []
+        }
+    end
+  end
+
+  defp at(board, row, col), do: get_in(board, [Access.at(row), Access.at(col)])
 
   defp other_player("X"), do: "O"
   defp other_player("O"), do: "X"
@@ -208,19 +232,12 @@ defmodule TicTacToeActionSpace do
               {:error, "row/col out of bounds (expected 0..2)"}
 
             true ->
+              event = TicTacToe.Events.place_mark(player, row, col)
+
               {:ok,
                %AgentToolResult{
                  content: [AgentCore.text_content("proposed #{player} at (#{row}, #{col})")],
-                 details: %{
-                   "event" => %{
-                     "kind" => "place_mark",
-                     "payload" => %{
-                       "player" => player,
-                       "row" => row,
-                       "col" => col
-                     }
-                   }
-                 },
+                 details: %{"event" => event},
                  trust: :trusted
                }}
           end
@@ -378,7 +395,6 @@ opts =
   projector_opts ++
     [
       model: model,
-      include_memory_tools: false,
       stream_options: stream_options,
       max_driver_turns: 20
     ]

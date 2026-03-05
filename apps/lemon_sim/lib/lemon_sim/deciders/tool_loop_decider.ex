@@ -94,22 +94,18 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
       resolved_tool_calls,
       {:ok, %{context: context, decision: nil, executed_calls: []}},
       fn %{tool_call: tool_call, tool: tool}, {:ok, acc} ->
-        case execute_single_tool_call(tool_call, tool, acc.context, policy, opts) do
-          {:ok, result} ->
-            next = %{
-              context: result.context,
-              decision: result.decision,
-              executed_calls: acc.executed_calls ++ [result.executed_call]
-            }
+        {:ok, result} = execute_single_tool_call(tool_call, tool, acc.context, policy, opts)
 
-            if is_nil(result.decision) do
-              {:cont, {:ok, next}}
-            else
-              {:halt, {:ok, next}}
-            end
+        next = %{
+          context: result.context,
+          decision: result.decision,
+          executed_calls: acc.executed_calls ++ [result.executed_call]
+        }
 
-          {:error, _reason} = error ->
-            {:halt, error}
+        if is_nil(result.decision) do
+          {:cont, {:ok, next}}
+        else
+          {:halt, {:ok, next}}
         end
       end
     )
@@ -193,7 +189,8 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   defp fetch_policy(opts) do
     policy = Keyword.get(opts, :tool_policy, SingleTerminal)
 
-    if is_atom(policy) and function_exported?(policy, :validate_tool_calls, 2) and
+    if is_atom(policy) and Code.ensure_loaded?(policy) and
+         function_exported?(policy, :validate_tool_calls, 2) and
          function_exported?(policy, :decision_from_call, 4) do
       {:ok, policy}
     else

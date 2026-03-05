@@ -25,6 +25,36 @@ defmodule LemonSimTest do
     assert [%PlanStep{summary: "flank left"}] = next.plan_history
   end
 
+  test "event convenience builders normalize payload and meta" do
+    event = Event.new("move_applied", [row: 1, col: 2], source: :updater)
+
+    assert event.kind == "move_applied"
+    assert event.payload == %{row: 1, col: 2}
+    assert event.meta == %{source: :updater}
+  end
+
+  test "state convenience helpers append multiple events and update world" do
+    state = State.new(sim_id: "sim-helpers", world: %{board: [], status: "in_progress"})
+
+    next_state =
+      state
+      |> State.put_world(status: "won", winner: "X")
+      |> State.append_event("move_applied", %{player: "X", row: 0, col: 1})
+      |> State.append_events([
+        Event.new("game_over", %{status: "won", winner: "X"}),
+        %{kind: "summary", payload: %{message: "done"}}
+      ])
+
+    assert next_state.world.status == "won"
+    assert next_state.world.winner == "X"
+
+    assert Enum.map(next_state.recent_events, & &1.kind) == [
+             "move_applied",
+             "game_over",
+             "summary"
+           ]
+  end
+
   test "runner stops when updater requests a decision" do
     state = State.new(sim_id: "sim-2", world: %{"hp" => 100})
     events = [%{kind: "tick"}, %{kind: "enemy_visible"}]

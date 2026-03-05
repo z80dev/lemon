@@ -54,14 +54,86 @@ defmodule LemonSim.State do
   @doc """
   Appends one event and keeps the recent event window bounded.
   """
+  @spec append_event(t(), Event.t() | map()) :: t()
+  def append_event(%__MODULE__{} = state, event) do
+    append_event(state, event, 25)
+  end
+
+  @doc """
+  Appends one event and keeps the recent event window bounded.
+  """
   @spec append_event(t(), Event.t() | map(), pos_integer()) :: t()
-  def append_event(%__MODULE__{} = state, event, max_events \\ 25)
+  def append_event(%__MODULE__{} = state, event, max_events)
       when is_integer(max_events) and max_events > 0 do
     events =
       (state.recent_events ++ [Event.new(event)])
       |> Enum.take(-max_events)
 
     %{state | recent_events: events, version: state.version + 1}
+  end
+
+  @spec append_event(t(), Event.kind(), map() | keyword()) :: t()
+  def append_event(%__MODULE__{} = state, kind, payload)
+      when (is_atom(kind) or is_binary(kind)) and (is_map(payload) or is_list(payload)) do
+    append_event(state, Event.new(kind, payload))
+  end
+
+  @doc """
+  Appends an event using a `kind`, `payload`, and `meta`.
+  """
+  @spec append_event(t(), Event.kind(), map() | keyword(), map() | keyword()) :: t()
+  def append_event(%__MODULE__{} = state, kind, payload, meta)
+      when (is_atom(kind) or is_binary(kind)) and (is_map(payload) or is_list(payload)) and
+             (is_map(meta) or is_list(meta)) do
+    append_event(state, Event.new(kind, payload, meta))
+  end
+
+  @doc """
+  Appends an event using a `kind`, `payload`, `meta`, and bounded window size.
+  """
+  @spec append_event(t(), Event.kind(), map() | keyword(), map() | keyword(), pos_integer()) ::
+          t()
+  def append_event(%__MODULE__{} = state, kind, payload, meta, max_events)
+      when (is_atom(kind) or is_binary(kind)) and (is_map(payload) or is_list(payload)) and
+             (is_map(meta) or is_list(meta)) and is_integer(max_events) and max_events > 0 do
+    append_event(state, Event.new(kind, payload, meta), max_events)
+  end
+
+  @doc """
+  Appends multiple events in order while preserving the bounded event window.
+  """
+  @spec append_events(t(), [Event.t() | map()]) :: t()
+  def append_events(%__MODULE__{} = state, events) when is_list(events) do
+    append_events(state, events, 25)
+  end
+
+  @doc """
+  Appends multiple events in order while preserving the bounded event window.
+  """
+  @spec append_events(t(), [Event.t() | map()], pos_integer()) :: t()
+  def append_events(%__MODULE__{} = state, events, max_events)
+      when is_list(events) and is_integer(max_events) and max_events > 0 do
+    Enum.reduce(events, state, fn event, acc -> append_event(acc, event, max_events) end)
+  end
+
+  @doc """
+  Shallow-merges fields into the world state.
+  """
+  @spec put_world(t(), map() | keyword()) :: t()
+  def put_world(%__MODULE__{} = state, updates) when is_list(updates) do
+    put_world(state, Enum.into(updates, %{}))
+  end
+
+  def put_world(%__MODULE__{} = state, updates) when is_map(updates) do
+    %{state | world: Map.merge(state.world, updates)}
+  end
+
+  @doc """
+  Applies a transformation to the current world state.
+  """
+  @spec update_world(t(), (map() -> map())) :: t()
+  def update_world(%__MODULE__{} = state, updater) when is_function(updater, 1) do
+    %{state | world: updater.(state.world)}
   end
 
   @doc """

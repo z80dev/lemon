@@ -32,8 +32,35 @@ defmodule LemonSim.Event do
     }
   end
 
+  @doc """
+  Builds a new event from a kind and payload.
+  """
+  @spec new(kind(), map() | keyword()) :: t()
+  def new(kind, payload)
+      when (is_atom(kind) or is_binary(kind)) and (is_map(payload) or is_list(payload)) do
+    new(kind, payload, %{})
+  end
+
+  @doc """
+  Builds a new event from a kind, payload, and metadata.
+  """
+  @spec new(kind(), map() | keyword(), map() | keyword()) :: t()
+  def new(kind, payload, meta)
+      when (is_atom(kind) or is_binary(kind)) and (is_map(payload) or is_list(payload)) and
+             (is_map(meta) or is_list(meta)) do
+    %__MODULE__{
+      kind: kind,
+      ts_ms: System.system_time(:millisecond),
+      payload: normalize_map(payload),
+      meta: normalize_map(meta)
+    }
+  end
+
   defp fetch(map, atom_key, string_key, default) do
     map
     |> Map.get(atom_key, Map.get(map, string_key, default))
   end
+
+  defp normalize_map(value) when is_list(value), do: Enum.into(value, %{})
+  defp normalize_map(value) when is_map(value), do: value
 end
