@@ -24,7 +24,7 @@ defmodule LemonSim.Memory.ToolsTest do
                nil
              )
 
-    refute File.exists?(Path.join(root, "index.md"))
+    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
 
     assert {:ok, read_result} = read.execute.("r1", %{"path" => "notes/plan.md"}, nil, nil)
     assert AgentCore.get_text(read_result) == "flank left"

@@ -142,6 +142,7 @@ defmodule LemonSim.Memory.Tools do
         with {:ok, path} <- fetch_string(params, "path"),
              {:ok, content} <- fetch_string(params, "content"),
              true <- byte_size(content) <= max_bytes or {:error, :too_large},
+             :ok <- ensure_workspace(root),
              {:ok, abs_path} <- resolve_memory_path(root, path),
              :ok <- File.mkdir_p(Path.dirname(abs_path)),
              :ok <- write_file(abs_path, content, Map.get(params, "mode", "overwrite")) do
@@ -245,6 +246,7 @@ defmodule LemonSim.Memory.Tools do
       },
       execute: fn _id, params, _signal, _on_update ->
         with {:ok, rel_dir} <- fetch_optional_string(params, "path", "."),
+             :ok <- ensure_workspace(root),
              {:ok, abs_dir} <- resolve_memory_path(root, rel_dir),
              true <- File.dir?(abs_dir) or {:error, :not_directory},
              files <- list_files(abs_dir, Map.get(params, "recursive", false)),
@@ -309,6 +311,12 @@ defmodule LemonSim.Memory.Tools do
 
   defp ensure_memory_root!(root) do
     File.mkdir_p!(root)
+  end
+
+  defp ensure_workspace(root) do
+    ensure_memory_root!(root)
+    ensure_index!(root)
+    :ok
   end
 
   defp ensure_index!(root) do

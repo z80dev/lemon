@@ -70,8 +70,8 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
     assert decision["tool_name"] == "attack"
     assert decision["arguments"] == %{"target" => "goblin"}
 
-    assert [%{"tool_name" => "memory_write_file"}, %{"tool_name" => "attack"}] =
-             decision["executed_calls"]
+    assert ["memory_write_file", "attack"] =
+             Enum.map(decision["executed_calls"], & &1.tool_name)
 
     memory_file = Path.join([tmp_dir, namespace, "notes", "faction.md"])
     assert File.read!(memory_file) == "alliance pending"

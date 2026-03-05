@@ -8,16 +8,13 @@ defmodule LemonSim.Examples.TicTacToe do
 
   alias LemonSim.Examples.TicTacToe.{
     ActionSpace,
-    DecisionAdapter,
-    Driver,
-    OfflineComplete,
     Updater
   }
 
   alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.{State, Store}
+  alias LemonSim.{Runner, State, Store}
 
-  @default_max_driver_turns 20
+  @default_max_turns 20
 
   @spec initial_world() :: map()
   def initial_world do
@@ -50,8 +47,7 @@ defmodule LemonSim.Examples.TicTacToe do
       action_space: ActionSpace,
       projector: SectionedProjector,
       decider: ToolLoopDecider,
-      updater: Updater,
-      decision_adapter: DecisionAdapter
+      updater: Updater
     }
   end
 
@@ -104,18 +100,23 @@ defmodule LemonSim.Examples.TicTacToe do
   def default_opts(overrides \\ []) when is_list(overrides) do
     config = Modular.load(project_dir: File.cwd!())
     model = Keyword.get_lazy(overrides, :model, fn -> resolve_configured_model!(config) end)
-    runtime = resolve_runtime(model, config, overrides)
+
+    stream_options =
+      Keyword.get_lazy(overrides, :stream_options, fn ->
+        %{api_key: resolve_provider_api_key!(model.provider, config)}
+      end)
 
     projector_opts()
     |> Kernel.++(
       model: model,
-      stream_options: runtime.stream_options,
-      mode: runtime.mode,
-      max_driver_turns: @default_max_driver_turns,
-      persist?: true
+      stream_options: stream_options,
+      max_turns: @default_max_turns,
+      persist?: true,
+      terminal?: &terminal?/1,
+      on_before_step: &announce_turn/2,
+      on_after_step: &print_step/2
     )
-    |> maybe_put(:complete_fn, runtime.complete_fn)
-    |> maybe_put(:offline_reason, runtime.offline_reason)
+    |> maybe_put(:complete_fn, Keyword.get(overrides, :complete_fn))
   end
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
@@ -124,13 +125,7 @@ defmodule LemonSim.Examples.TicTacToe do
 
     IO.puts("Starting Tic Tac Toe self-play")
 
-    if run_opts[:mode] == :offline do
-      IO.puts(
-        "Using offline fallback player: #{format_offline_reason(run_opts[:offline_reason])}"
-      )
-    end
-
-    case Driver.run(initial_state(), modules(), run_opts) do
+    case Runner.run_until_terminal(initial_state(), modules(), run_opts) do
       {:ok, final_state} ->
         IO.puts("Final state:")
         IO.inspect(final_state.world)
@@ -146,6 +141,29 @@ defmodule LemonSim.Examples.TicTacToe do
         IO.inspect(reason)
         error
     end
+  end
+
+  defp terminal?(state), do: state.world[:status] in ["won", "draw"]
+
+  defp announce_turn(turn, state) do
+    IO.puts("Turn #{turn} | player=#{state.world[:current_player]}")
+  end
+
+  defp print_step(_turn, %{state: next_state}) do
+    print_board(next_state)
+  end
+
+  defp print_step(_turn, _result), do: :ok
+
+  defp print_board(state) do
+    board = state.world[:board]
+
+    IO.puts("Board:")
+    Enum.each(board, fn row -> IO.puts(Enum.join(row, " | ")) end)
+
+    IO.puts(
+      "status=#{state.world[:status]} winner=#{inspect(state.world[:winner])} next=#{inspect(state.world[:current_player])}"
+    )
   end
 
   defp resolve_configured_model!(config) do
@@ -212,69 +230,34 @@ defmodule LemonSim.Examples.TicTacToe do
     end
   end
 
-  defp resolve_runtime(%Ai.Types.Model{} = model, config, overrides) do
-    cond do
-      Keyword.has_key?(overrides, :complete_fn) ->
-        %{
-          mode: :offline,
-          stream_options: Keyword.get(overrides, :stream_options, %{}),
-          complete_fn: Keyword.fetch!(overrides, :complete_fn),
-          offline_reason: :custom_complete_fn
-        }
-
-      Keyword.get(overrides, :offline, false) ->
-        offline_runtime(:forced_offline)
-
-      true ->
-        case resolve_provider_api_key(model.provider, config) do
-          {:ok, api_key} ->
-            %{
-              mode: :live,
-              stream_options: Keyword.get(overrides, :stream_options, %{api_key: api_key}),
-              complete_fn: nil,
-              offline_reason: nil
-            }
-
-          {:error, reason} ->
-            offline_runtime(reason)
-        end
-    end
-  end
-
-  defp offline_runtime(reason) do
-    %{
-      mode: :offline,
-      stream_options: %{},
-      complete_fn: &OfflineComplete.complete/3,
-      offline_reason: reason
-    }
-  end
-
-  defp resolve_provider_api_key(provider, config) do
+  defp resolve_provider_api_key!(provider, config) do
     provider_name = provider_name(provider)
     provider_cfg = Providers.get_provider(config.providers, provider_name)
 
     cond do
       provider_name == "openai-codex" ->
         case Ai.Auth.OpenAICodexOAuth.resolve_access_token() do
-          token when is_binary(token) and token != "" -> {:ok, token}
-          _ -> {:error, {:provider_api_key_unavailable, provider_name, :missing_token}}
+          token when is_binary(token) and token != "" ->
+            token
+
+          _ ->
+            raise "tic tac toe sim requires an OpenAI Codex access token"
         end
 
       is_binary(provider_cfg[:api_key]) and provider_cfg[:api_key] != "" ->
-        {:ok, provider_cfg[:api_key]}
+        provider_cfg[:api_key]
 
       is_binary(provider_cfg[:api_key_secret]) ->
         case LemonCore.Secrets.resolve(provider_cfg[:api_key_secret], env_fallback: true) do
           {:ok, value, _source} when is_binary(value) and value != "" ->
-            {:ok, value}
+            value
 
           {:error, reason} ->
-            {:error, {:provider_api_key_unavailable, provider_name, reason}}
+            raise "tic tac toe sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
         end
 
       true ->
-        {:error, {:provider_api_key_unavailable, provider_name, :missing_api_key}}
+        raise "tic tac toe sim requires configured credentials for #{provider_name}"
     end
   end
 
@@ -283,15 +266,6 @@ defmodule LemonSim.Examples.TicTacToe do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp format_offline_reason(:forced_offline), do: "forced by options"
-  defp format_offline_reason(:custom_complete_fn), do: "custom complete function override"
-
-  defp format_offline_reason({:provider_api_key_unavailable, provider, reason}) do
-    "#{provider} credentials unavailable (#{inspect(reason)})"
-  end
-
-  defp format_offline_reason(other), do: inspect(other)
 
   defp normalize_provider(provider_name) do
     provider_name

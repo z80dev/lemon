@@ -17,8 +17,8 @@ defmodule LemonSim.Projectors.ToolkitTest do
     assert String.contains?(json, "\"b\": 3")
     assert String.contains?(json, "\"d\": true")
 
-    assert String.index(json, "\"a\"") < String.index(json, "\"m\"")
-    assert String.index(json, "\"m\"") < String.index(json, "\"z\"")
+    assert position(json, "\"a\"") < position(json, "\"m\"")
+    assert position(json, "\"m\"") < position(json, "\"z\"")
   end
 
   test "render_sections includes stable prompt version and json fences" do
@@ -34,5 +34,12 @@ defmodule LemonSim.Projectors.ToolkitTest do
     assert String.contains?(prompt, "\"hp\": 10")
     assert String.contains?(prompt, "## Note")
     assert String.contains?(prompt, "stay hidden")
+  end
+
+  defp position(haystack, needle) do
+    case :binary.match(haystack, needle) do
+      {index, _length} -> index
+      :nomatch -> flunk("expected #{inspect(needle)} to appear in #{inspect(haystack)}")
+    end
   end
 end

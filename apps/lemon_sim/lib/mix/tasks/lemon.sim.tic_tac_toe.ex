@@ -7,11 +7,17 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
   Runs the LemonSim Tic Tac Toe self-play example from the repo root.
 
       mix lemon.sim.tic_tac_toe
-      mix lemon.sim.tic_tac_toe --no-persist --max-driver-turns 10
+      mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
       mix lemon.sim.tic_tac_toe --model anthropic:claude-sonnet-4-20250514
   """
 
-  @switches [persist: :boolean, max_driver_turns: :integer, model: :string, help: :boolean]
+  @switches [
+    persist: :boolean,
+    max_turns: :integer,
+    max_driver_turns: :integer,
+    model: :string,
+    help: :boolean
+  ]
 
   @impl true
   def run(args) do
@@ -30,7 +36,7 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
         run_opts =
           []
           |> maybe_put(:persist?, opts[:persist])
-          |> maybe_put(:max_driver_turns, opts[:max_driver_turns])
+          |> maybe_put(:max_turns, opts[:max_turns] || opts[:max_driver_turns])
           |> maybe_put(:model, resolve_model(opts[:model]))
 
         case LemonSim.Examples.TicTacToe.run(run_opts) do
@@ -81,7 +87,8 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
 
     Options:
       --persist / --no-persist     Persist the final state (default: true)
-      --max-driver-turns N         Maximum turns before the driver stops
+      --max-turns N                Maximum turns before the sim stops
+      --max-driver-turns N         Deprecated alias for --max-turns
       --model PROVIDER:MODEL       Override the configured default model
       --help                       Show this help
     """)

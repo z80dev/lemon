@@ -7,6 +7,7 @@ defmodule LemonSim.Runner do
   """
 
   alias LemonSim.{DecisionFrame, DecisionSignal, EventCoalescer}
+  alias LemonSim.DecisionAdapters.ToolResultEvents
 
   @type decision_modules :: %{
           required(:action_space) => module(),
@@ -19,7 +20,7 @@ defmodule LemonSim.Runner do
           required(:projector) => module(),
           required(:decider) => module(),
           required(:updater) => module(),
-          required(:decision_adapter) => module()
+          optional(:decision_adapter) => module()
         }
 
   @doc """
@@ -84,17 +85,57 @@ defmodule LemonSim.Runner do
           action_space: action_space,
           projector: projector,
           decider: decider,
-          updater: updater,
-          decision_adapter: decision_adapter
+          updater: updater
         } = modules,
         opts \\ []
       )
-      when is_atom(action_space) and is_atom(projector) and is_atom(decider) and is_atom(updater) and
-             is_atom(decision_adapter) do
+      when is_atom(action_space) and is_atom(projector) and is_atom(decider) and is_atom(updater) do
+    decision_adapter = Map.get(modules, :decision_adapter, ToolResultEvents)
+
     with {:ok, decision, _state} <- decide_once(state, modules, opts),
          {:ok, events} <- adapt_events(decision_adapter, decision, state, opts),
          {:ok, next_state, signal} <- ingest_events(state, events, updater, opts) do
       {:ok, %{decision: decision, events: events, state: next_state, signal: signal}}
+    end
+  end
+
+  @doc """
+  Repeatedly runs composed steps until a terminal state is reached.
+  """
+  @spec run_until_terminal(LemonSim.State.t(), step_modules(), keyword()) ::
+          {:ok, LemonSim.State.t()} | {:error, term()}
+  def run_until_terminal(state, modules, opts \\ [])
+      when is_map(modules) and is_list(opts) do
+    terminal? = Keyword.get(opts, :terminal?, fn _state -> false end)
+
+    if is_function(terminal?, 1) do
+      do_run_until_terminal(state, modules, opts, terminal?, 0)
+    else
+      {:error, {:invalid_terminal_predicate, terminal?}}
+    end
+  end
+
+  defp do_run_until_terminal(state, modules, opts, terminal?, turn) do
+    max_turns = Keyword.get(opts, :max_turns, 50)
+
+    cond do
+      terminal?.(state) ->
+        {:ok, state}
+
+      turn >= max_turns ->
+        {:error, {:turn_limit_exceeded, max_turns}}
+
+      true ->
+        maybe_notify(Keyword.get(opts, :on_before_step), turn + 1, state)
+
+        case step(state, modules, opts) do
+          {:ok, result} ->
+            maybe_notify(Keyword.get(opts, :on_after_step), turn + 1, result)
+            do_run_until_terminal(result.state, modules, opts, terminal?, turn + 1)
+
+          {:error, reason} ->
+            {:error, {:step_failed, reason}}
+        end
     end
   end
 
@@ -133,4 +174,11 @@ defmodule LemonSim.Runner do
       {:error, {:invalid_decision_adapter, decision_adapter}}
     end
   end
+
+  defp maybe_notify(callback, turn, payload) when is_function(callback, 2) do
+    callback.(turn, payload)
+    :ok
+  end
+
+  defp maybe_notify(_callback, _turn, _payload), do: :ok
 end
