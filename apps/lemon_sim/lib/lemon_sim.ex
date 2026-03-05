@@ -9,7 +9,8 @@ defmodule LemonSim do
   - coalescing high-frequency event streams (`LemonSim.EventCoalescer`)
   - projecting state into per-decision context (`LemonSim.Projector`)
   - generating legal tool actions dynamically (`LemonSim.ActionSpace`)
-  - executing one decision turn (`LemonSim.Runner`)
+  - adapting decisions into simulation events (`LemonSim.DecisionAdapter`)
+  - executing one decision turn or a composed step (`LemonSim.Runner`)
 
   Phase 0 includes contracts and lightweight helpers only. Game/simulation-specific
   engines (turn management, chance systems, scoring) remain outside this app.

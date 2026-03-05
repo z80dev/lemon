@@ -14,6 +14,14 @@ defmodule LemonSim.Runner do
           required(:decider) => module()
         }
 
+  @type step_modules :: %{
+          required(:action_space) => module(),
+          required(:projector) => module(),
+          required(:decider) => module(),
+          required(:updater) => module(),
+          required(:decision_adapter) => module()
+        }
+
   @doc """
   Applies events in order and stops on the first `:decide` signal.
   """
@@ -58,6 +66,38 @@ defmodule LemonSim.Runner do
     end
   end
 
+  @doc """
+  Runs one composed turn: decide once, adapt decision to events, then ingest.
+  """
+  @spec step(LemonSim.State.t(), step_modules(), keyword()) ::
+          {:ok,
+           %{
+             decision: map(),
+             events: [LemonSim.Event.t() | map()],
+             state: LemonSim.State.t(),
+             signal: LemonSim.DecisionSignal.t()
+           }}
+          | {:error, term()}
+  def step(
+        state,
+        %{
+          action_space: action_space,
+          projector: projector,
+          decider: decider,
+          updater: updater,
+          decision_adapter: decision_adapter
+        } = modules,
+        opts \\ []
+      )
+      when is_atom(action_space) and is_atom(projector) and is_atom(decider) and is_atom(updater) and
+             is_atom(decision_adapter) do
+    with {:ok, decision, _state} <- decide_once(state, modules, opts),
+         {:ok, events} <- adapt_events(decision_adapter, decision, state, opts),
+         {:ok, next_state, signal} <- ingest_events(state, events, updater, opts) do
+      {:ok, %{decision: decision, events: events, state: next_state, signal: signal}}
+    end
+  end
+
   defp maybe_coalesce(events, opts) do
     case Keyword.get(opts, :coalescer) do
       nil ->
@@ -70,6 +110,26 @@ defmodule LemonSim.Runner do
           raise ArgumentError,
                 "coalescer #{inspect(coalescer)} must implement #{inspect(EventCoalescer)}"
         end
+    end
+  end
+
+  defp adapt_events(decision_adapter, decision, state, opts) do
+    if function_exported?(decision_adapter, :to_events, 3) do
+      case decision_adapter.to_events(decision, state, opts) do
+        {:ok, events} when is_list(events) ->
+          {:ok, events}
+
+        {:ok, events} ->
+          {:error, {:invalid_events, events}}
+
+        {:error, _reason} = error ->
+          error
+
+        other ->
+          {:error, {:invalid_decision_adapter_result, other}}
+      end
+    else
+      {:error, {:invalid_decision_adapter, decision_adapter}}
     end
   end
 end

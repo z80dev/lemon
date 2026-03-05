@@ -239,8 +239,25 @@ defmodule TicTacToeActionSpace do
   end
 end
 
+defmodule TicTacToeDecisionAdapter do
+  @behaviour LemonSim.DecisionAdapter
+
+  alias LemonSim.State
+
+  @impl true
+  def to_events(%{"type" => "tool_call", "result_details" => details}, %State{}, _opts)
+      when is_map(details) do
+    case Map.get(details, "event") || Map.get(details, :event) do
+      nil -> {:error, {:missing_event_in_decision, details}}
+      event -> {:ok, [event]}
+    end
+  end
+
+  def to_events(other, %State{}, _opts), do: {:error, {:unsupported_decision, other}}
+end
+
 defmodule TicTacToeDriver do
-  alias LemonSim.{Event, Runner, State}
+  alias LemonSim.{Runner, State}
 
   def run(%State{} = state, modules, opts) do
     do_run(state, modules, opts, 0)
@@ -259,30 +276,16 @@ defmodule TicTacToeDriver do
       true ->
         IO.puts("Turn #{turn + 1} | player=#{state.world[:current_player]}")
 
-        case Runner.decide_once(state, modules, opts) do
-          {:ok, decision, _} ->
-            with {:ok, event} <- decision_to_event(decision),
-                 {:ok, next_state, _signal} <-
-                   Runner.ingest_events(state, [event], TicTacToeUpdater, opts) do
-              print_board(next_state)
-              do_run(next_state, modules, opts, turn + 1)
-            end
+        case Runner.step(state, modules, opts) do
+          {:ok, %{state: next_state}} ->
+            print_board(next_state)
+            do_run(next_state, modules, opts, turn + 1)
 
           {:error, reason} ->
-            {:error, {:decide_failed, reason}}
+            {:error, {:step_failed, reason}}
         end
     end
   end
-
-  defp decision_to_event(%{"type" => "tool_call", "result_details" => details})
-       when is_map(details) do
-    case Map.get(details, "event") || Map.get(details, :event) do
-      nil -> {:error, {:missing_event_in_decision, details}}
-      event -> {:ok, Event.new(event)}
-    end
-  end
-
-  defp decision_to_event(other), do: {:error, {:unsupported_decision, other}}
 
   defp print_board(state) do
     board = state.world[:board]
@@ -366,7 +369,9 @@ stream_options = if api_key == "", do: %{}, else: %{api_key: api_key}
 modules = %{
   action_space: TicTacToeActionSpace,
   projector: SectionedProjector,
-  decider: ToolLoopDecider
+  decider: ToolLoopDecider,
+  updater: TicTacToeUpdater,
+  decision_adapter: TicTacToeDecisionAdapter
 }
 
 opts =

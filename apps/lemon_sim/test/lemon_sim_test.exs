@@ -50,6 +50,66 @@ defmodule LemonSimTest do
              )
   end
 
+  test "runner step composes decision, adapter, and ingest" do
+    state = State.new(sim_id: "sim-step-1", world: %{"hp" => 100})
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.StepDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: __MODULE__.DecisionAdapterStub
+               },
+               []
+             )
+
+    assert result.decision["type"] == "tool_call"
+    assert [%{"kind" => "enemy_visible"}] = result.events
+    assert {:decide, "enemy spotted"} = result.signal
+    assert [%Event{kind: "enemy_visible"}] = result.state.recent_events
+  end
+
+  test "runner step returns adapter error" do
+    state = State.new(sim_id: "sim-step-2", world: %{"hp" => 100})
+
+    assert {:error, :forced_error} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.StepDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: __MODULE__.DecisionAdapterErrorStub
+               },
+               []
+             )
+  end
+
+  test "runner step allows empty event adaptation" do
+    state = State.new(sim_id: "sim-step-3", world: %{"hp" => 100})
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.StepDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: __MODULE__.DecisionAdapterEmptyStub
+               },
+               []
+             )
+
+    assert result.events == []
+    assert result.signal == :skip
+    assert result.state == state
+  end
+
   defmodule UpdaterStub do
     @behaviour LemonSim.Updater
 
@@ -106,6 +166,41 @@ defmodule LemonSimTest do
       first_tool = tools |> List.first() |> Map.fetch!(:name)
       {:ok, %{"tool" => first_tool}}
     end
+  end
+
+  defmodule StepDeciderStub do
+    @behaviour LemonSim.Decider
+
+    @impl true
+    def decide(_context, _tools, _opts) do
+      {:ok,
+       %{
+         "type" => "tool_call",
+         "result_details" => %{"event" => %{"kind" => "enemy_visible"}}
+       }}
+    end
+  end
+
+  defmodule DecisionAdapterStub do
+    @behaviour LemonSim.DecisionAdapter
+
+    @impl true
+    def to_events(%{"result_details" => %{"event" => event}}, _state, _opts), do: {:ok, [event]}
+    def to_events(_decision, _state, _opts), do: {:error, :missing_event}
+  end
+
+  defmodule DecisionAdapterErrorStub do
+    @behaviour LemonSim.DecisionAdapter
+
+    @impl true
+    def to_events(_decision, _state, _opts), do: {:error, :forced_error}
+  end
+
+  defmodule DecisionAdapterEmptyStub do
+    @behaviour LemonSim.DecisionAdapter
+
+    @impl true
+    def to_events(_decision, _state, _opts), do: {:ok, []}
   end
 
   test "decision signal helper detects decide states" do

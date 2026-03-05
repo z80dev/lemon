@@ -7,10 +7,10 @@ Reusable simulation harness primitives for tool-first LLM agents.
 Phase 0 establishes the small reusable core:
 
 - normalized state structs (`State`, `Event`, `PlanStep`, `DecisionFrame`)
-- pluggable behaviours for projector/updater/action space/decider
+- pluggable behaviours for projector/updater/action space/decider/decision adapter
 - event coalescer contract for high-frequency feeds
 - minimal persistence and pubsub wrappers (`Store`, `Bus`)
-- lightweight runner for ingest + one decision turn (`Runner`)
+- lightweight runner for ingest + one decision turn + composed step helper (`Runner`)
 
 No turn manager, chance engine, scoring, or game-specific logic is included.
 
@@ -35,9 +35,10 @@ Phase 1 adds:
 | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
 | `LemonSim.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |
 | `LemonSim.Decider` | Behaviour for one constrained model decision |
+| `LemonSim.DecisionAdapter` | Behaviour for adapting decider output into simulation events |
 | `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
 | `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |
-| `LemonSim.Runner` | Ingest-until-decision + decide-once helpers |
+| `LemonSim.Runner` | Ingest-until-decision + decide-once + composed `step/3` helper |
 | `LemonSim.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider with intermediate tool support |
 | `LemonSim.Memory.Tools` | Scoped file-memory toolset for long-term notes |
 
