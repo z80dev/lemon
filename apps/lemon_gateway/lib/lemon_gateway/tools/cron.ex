@@ -433,7 +433,8 @@ defmodule LemonGateway.Tools.Cron do
     # channel/thread routing info, while an AI-supplied sessionKey may omit
     # the thread_id component, causing cron runs to route output to the wrong
     # Telegram chat/topic.
-    explicit = normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key"))
+    explicit =
+      normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key"))
 
     cond do
       is_binary(session_key) -> session_key

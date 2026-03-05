@@ -186,7 +186,10 @@ defmodule LemonSim.Projectors.Toolkit do
 
   defp encode_json(value, _indent) when is_binary(value), do: encode_string(value)
   defp encode_json(value, _indent) when is_integer(value), do: Integer.to_string(value)
-  defp encode_json(value, _indent) when is_float(value), do: :erlang.float_to_binary(value, [:compact, decimals: 16])
+
+  defp encode_json(value, _indent) when is_float(value),
+    do: :erlang.float_to_binary(value, [:compact, decimals: 16])
+
   defp encode_json(true, _indent), do: "true"
   defp encode_json(false, _indent), do: "false"
   defp encode_json(nil, _indent), do: "null"

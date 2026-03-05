@@ -104,7 +104,12 @@ defmodule LemonGateway.Scheduler do
         queue_mode: job.queue_mode,
         engine_id: job.engine_id,
         thread_key: inspect(thread_key)
-      }, run_id: job.run_id, session_key: job.session_key, engine: "lemon", provenance: :direct)
+      },
+      run_id: job.run_id,
+      session_key: job.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
 
     :ok = enqueue_job(thread_key, job)
 
@@ -196,7 +201,10 @@ defmodule LemonGateway.Scheduler do
       %{
         in_flight: map_size(state.in_flight),
         max: state.max
-      }, engine: "lemon", provenance: :direct)
+      },
+      engine: "lemon",
+      provenance: :direct
+    )
 
     emit_scheduler_telemetry(:slot_released, %{
       in_flight: map_size(state.in_flight),

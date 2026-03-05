@@ -71,7 +71,8 @@ defmodule LemonGames.Games.BattleshipTest do
 
     # p1's turn first in battle phase
     moves = Battleship.legal_moves(state, "p1")
-    assert length(moves) == 64  # 8x8 board
+    # 8x8 board
+    assert length(moves) == 64
     assert Enum.all?(moves, fn m -> m["kind"] == "fire" end)
   end
 
@@ -91,7 +92,8 @@ defmodule LemonGames.Games.BattleshipTest do
     # (unless game ended, in which case no moves)
     if state["winner"] == nil do
       # p2 fires somewhere
-      {:ok, state} = Battleship.apply_move(state, "p2", %{"kind" => "fire", "row" => 1, "col" => 1})
+      {:ok, state} =
+        Battleship.apply_move(state, "p2", %{"kind" => "fire", "row" => 1, "col" => 1})
 
       if state["winner"] == nil do
         # Now p1's turn again - p1 should have 63 moves (excluded their own shot at 0,0)
@@ -111,7 +113,8 @@ defmodule LemonGames.Games.BattleshipTest do
     {:ok, state} = Battleship.apply_move(state, "p1", %{"kind" => "auto_place"})
 
     ships = state["p1_ships"]
-    assert length(ships) == 3  # carrier, battleship, destroyer
+    # carrier, battleship, destroyer
+    assert length(ships) == 3
 
     # Check ship sizes
     sizes = Enum.map(ships, & &1.size) |> Enum.sort()
@@ -281,7 +284,11 @@ defmodule LemonGames.Games.BattleshipTest do
             p1_cells = Enum.flat_map(acc_state["p1_ships"], & &1.cells)
             {dummy_r, dummy_c} = List.first(p1_cells) || {0, 0}
 
-            case Battleship.apply_move(acc_state, "p2", %{"kind" => "fire", "row" => dummy_r, "col" => dummy_c}) do
+            case Battleship.apply_move(acc_state, "p2", %{
+                   "kind" => "fire",
+                   "row" => dummy_r,
+                   "col" => dummy_c
+                 }) do
               {:ok, new_state} -> new_state
               _ -> acc_state
             end

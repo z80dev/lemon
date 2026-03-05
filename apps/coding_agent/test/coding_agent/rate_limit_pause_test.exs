@@ -46,7 +46,9 @@ defmodule CodingAgent.RateLimitPauseTest do
       session_id = "session_#{System.unique_integer([:positive])}"
       metadata = %{error_message: "Rate limit exceeded", headers: %{"retry-after" => "60"}}
 
-      assert {:ok, pause} = RateLimitPause.create(session_id, :anthropic, 60_000, metadata: metadata)
+      assert {:ok, pause} =
+               RateLimitPause.create(session_id, :anthropic, 60_000, metadata: metadata)
+
       assert pause.metadata == metadata
     end
 
@@ -64,7 +66,9 @@ defmodule CodingAgent.RateLimitPauseTest do
 
       assert {:ok, _pause} = RateLimitPause.create(session_id, :anthropic, 60_000)
 
-      assert_receive {:telemetry, [:coding_agent, :rate_limit_pause, :paused], measurements, metadata}
+      assert_receive {:telemetry, [:coding_agent, :rate_limit_pause, :paused], measurements,
+                      metadata}
+
       assert measurements.retry_after_ms == 60_000
       assert metadata.session_id == session_id
       assert metadata.provider == :anthropic
@@ -147,7 +151,9 @@ defmodule CodingAgent.RateLimitPauseTest do
 
       assert {:ok, _} = RateLimitPause.resume(pause.id)
 
-      assert_receive {:telemetry, [:coding_agent, :rate_limit_pause, :resumed], measurements, metadata}
+      assert_receive {:telemetry, [:coding_agent, :rate_limit_pause, :resumed], measurements,
+                      metadata}
+
       assert measurements.retry_after_ms == 1
       assert metadata.session_id == session_id
       assert metadata.provider == :anthropic
@@ -181,6 +187,7 @@ defmodule CodingAgent.RateLimitPauseTest do
 
       # Resume one
       Process.sleep(1)
+
       :ets.insert(:coding_agent_rate_limit_pauses, {
         pause1.id,
         %{pause1 | status: :resumed, resumed_at: DateTime.utc_now()}
@@ -206,6 +213,7 @@ defmodule CodingAgent.RateLimitPauseTest do
 
       # Resume one
       Process.sleep(1)
+
       :ets.insert(:coding_agent_rate_limit_pauses, {
         pause1.id,
         %{pause1 | status: :resumed, resumed_at: DateTime.utc_now()}
@@ -247,6 +255,7 @@ defmodule CodingAgent.RateLimitPauseTest do
 
       # Manually make it old
       old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
+
       :ets.insert(:coding_agent_rate_limit_pauses, {
         pause.id,
         %{pause | paused_at: old_time}

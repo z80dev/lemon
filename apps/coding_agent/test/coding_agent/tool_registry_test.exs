@@ -162,7 +162,10 @@ defmodule CodingAgent.ToolRegistryTest do
     end
 
     test "emits telemetry when normalizing tool names", %{tmp_dir: tmp_dir} do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:coding_agent, :tool_call, :name_normalized]])
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:coding_agent, :tool_call, :name_normalized]
+        ])
 
       # Whitespace-padded name should trigger normalization telemetry
       assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "  read  ")
@@ -178,7 +181,10 @@ defmodule CodingAgent.ToolRegistryTest do
     end
 
     test "does not emit telemetry for already-normal names", %{tmp_dir: tmp_dir} do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:coding_agent, :tool_call, :name_normalized]])
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:coding_agent, :tool_call, :name_normalized]
+        ])
 
       # Normal name should not trigger telemetry
       assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "read")

@@ -165,7 +165,9 @@ defmodule CodingAgent.RateLimitHealerTest do
 
       RateLimitHealer.mark_healed(healer)
 
-      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :healed], _measurements, metadata}
+      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :healed], _measurements,
+                      metadata}
+
       assert metadata.session_id == session_id
       assert metadata.provider == :test_provider
     end
@@ -220,7 +222,9 @@ defmodule CodingAgent.RateLimitHealerTest do
 
       RateLimitHealer.mark_failed(healer, :test_reason)
 
-      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :failed], measurements, metadata}
+      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :failed], measurements,
+                      metadata}
+
       assert metadata.session_id == session_id
       assert measurements.reason == ":test_reason"
     end
@@ -252,7 +256,9 @@ defmodule CodingAgent.RateLimitHealerTest do
 
       RateLimitHealer.execute_probe(state)
 
-      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :probe_attempt], measurements, metadata}
+      assert_receive {:telemetry, [:coding_agent, :rate_limit_healer, :probe_attempt],
+                      measurements, metadata}
+
       assert measurements.probe_count == 1
       assert measurements.max_attempts == 5
       assert metadata.session_id == "test"

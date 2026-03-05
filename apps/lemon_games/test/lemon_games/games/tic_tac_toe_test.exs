@@ -8,7 +8,9 @@ defmodule LemonGames.Games.TicTacToeTest do
   # ---------------------------------------------------------------------------
 
   defp place(state, slot, row, col) do
-    {:ok, new_state} = TicTacToe.apply_move(state, slot, %{"kind" => "place", "row" => row, "col" => col})
+    {:ok, new_state} =
+      TicTacToe.apply_move(state, slot, %{"kind" => "place", "row" => row, "col" => col})
+
     new_state
   end
 
@@ -268,10 +270,14 @@ defmodule LemonGames.Games.TicTacToeTest do
     # O X O
     state =
       place_seq(state, [
-        {"p1", 0, 0}, {"p2", 0, 1},
-        {"p1", 0, 2}, {"p2", 1, 0},
-        {"p1", 1, 2}, {"p2", 2, 0},
-        {"p1", 2, 1}, {"p2", 2, 2},
+        {"p1", 0, 0},
+        {"p2", 0, 1},
+        {"p1", 0, 2},
+        {"p2", 1, 0},
+        {"p1", 1, 2},
+        {"p2", 2, 0},
+        {"p1", 2, 1},
+        {"p2", 2, 2},
         {"p1", 1, 1}
       ])
 

@@ -28,16 +28,16 @@ defmodule CodingAgent.RateLimitPause do
   @type provider :: atom()
 
   @type t :: %{
-    id: pause_id(),
-    session_id: session_id(),
-    provider: provider(),
-    status: :paused | :resumed | :expired,
-    paused_at: DateTime.t(),
-    retry_after_ms: non_neg_integer(),
-    resume_at: DateTime.t() | nil,
-    resumed_at: DateTime.t() | nil,
-    metadata: map()
-  }
+          id: pause_id(),
+          session_id: session_id(),
+          provider: provider(),
+          status: :paused | :resumed | :expired,
+          paused_at: DateTime.t(),
+          retry_after_ms: non_neg_integer(),
+          resume_at: DateTime.t() | nil,
+          resumed_at: DateTime.t() | nil,
+          metadata: map()
+        }
 
   # ETS table for in-memory pause tracking
   @table :coding_agent_rate_limit_pauses
@@ -49,7 +49,7 @@ defmodule CodingAgent.RateLimitPause do
     * `:metadata` - Additional context (error message, headers, etc.)
   """
   @spec create(session_id(), provider(), non_neg_integer(), keyword()) ::
-    {:ok, t()} | {:error, term()}
+          {:ok, t()} | {:error, term()}
   def create(session_id, provider, retry_after_ms, opts \\ []) when is_binary(session_id) do
     ensure_table()
 
@@ -73,7 +73,7 @@ defmodule CodingAgent.RateLimitPause do
 
     Logger.info(
       "Rate limit pause created for session #{session_id} on #{provider}. " <>
-      "Will resume at #{DateTime.to_iso8601(resume_at)}"
+        "Will resume at #{DateTime.to_iso8601(resume_at)}"
     )
 
     emit_telemetry(:paused, pause)
@@ -182,11 +182,11 @@ defmodule CodingAgent.RateLimitPause do
   Returns statistics for rate limit pauses.
   """
   @spec stats() :: %{
-    total_pauses: non_neg_integer(),
-    pending_pauses: non_neg_integer(),
-    resumed_pauses: non_neg_integer(),
-    by_provider: %{atom() => non_neg_integer()}
-  }
+          total_pauses: non_neg_integer(),
+          pending_pauses: non_neg_integer(),
+          resumed_pauses: non_neg_integer(),
+          by_provider: %{atom() => non_neg_integer()}
+        }
   def stats do
     ensure_table()
 
@@ -194,8 +194,8 @@ defmodule CodingAgent.RateLimitPause do
     pauses = for {id, pause} when is_binary(id) <- all, do: pause
 
     total = length(pauses)
-    pending = Enum.count(pauses, & &1.status == :paused)
-    resumed = Enum.count(pauses, & &1.status == :resumed)
+    pending = Enum.count(pauses, &(&1.status == :paused))
+    resumed = Enum.count(pauses, &(&1.status == :resumed))
 
     by_provider =
       pauses
@@ -277,6 +277,7 @@ defmodule CodingAgent.RateLimitPause do
   end
 
   defp time_until_resume(%{resume_at: nil}), do: nil
+
   defp time_until_resume(%{resume_at: resume_at}) do
     DateTime.diff(resume_at, DateTime.utc_now(), :millisecond)
   end

@@ -10,6 +10,7 @@ defmodule LemonGames.Games.TicTacToe do
   @impl true
   def init(_opts) do
     board = List.duplicate(List.duplicate(nil, @board_size), @board_size)
+
     %{
       "board" => board,
       "winner" => nil,
@@ -20,8 +21,12 @@ defmodule LemonGames.Games.TicTacToe do
   @impl true
   def legal_moves(state, slot) do
     cond do
-      state["winner"] != nil -> []
-      state["current_player"] != slot -> []
+      state["winner"] != nil ->
+        []
+
+      state["current_player"] != slot ->
+        []
+
       true ->
         for row <- 0..(@board_size - 1),
             col <- 0..(@board_size - 1),
@@ -51,11 +56,7 @@ defmodule LemonGames.Games.TicTacToe do
         winner = check_winner(board, slot)
 
         state =
-          %{state |
-            "board" => board,
-            "winner" => winner,
-            "current_player" => next_player(slot)
-          }
+          %{state | "board" => board, "winner" => winner, "current_player" => next_player(slot)}
 
         # Check for draw if no winner and board is full
         state =
@@ -115,26 +116,30 @@ defmodule LemonGames.Games.TicTacToe do
     piece = slot_to_piece(slot)
 
     # Check rows
-    row_win = Enum.any?(board, fn row ->
-      Enum.all?(row, &(&1 == piece))
-    end)
+    row_win =
+      Enum.any?(board, fn row ->
+        Enum.all?(row, &(&1 == piece))
+      end)
 
     # Check columns
-    col_win = Enum.any?(0..(@board_size - 1), fn col ->
-      Enum.all?(0..(@board_size - 1), fn row ->
-        board |> Enum.at(row) |> Enum.at(col) == piece
+    col_win =
+      Enum.any?(0..(@board_size - 1), fn col ->
+        Enum.all?(0..(@board_size - 1), fn row ->
+          board |> Enum.at(row) |> Enum.at(col) == piece
+        end)
       end)
-    end)
 
     # Check diagonal (top-left to bottom-right)
-    diag1_win = Enum.all?(0..(@board_size - 1), fn i ->
-      board |> Enum.at(i) |> Enum.at(i) == piece
-    end)
+    diag1_win =
+      Enum.all?(0..(@board_size - 1), fn i ->
+        board |> Enum.at(i) |> Enum.at(i) == piece
+      end)
 
     # Check anti-diagonal (top-right to bottom-left)
-    diag2_win = Enum.all?(0..(@board_size - 1), fn i ->
-      board |> Enum.at(i) |> Enum.at(@board_size - 1 - i) == piece
-    end)
+    diag2_win =
+      Enum.all?(0..(@board_size - 1), fn i ->
+        board |> Enum.at(i) |> Enum.at(@board_size - 1 - i) == piece
+      end)
 
     if row_win or col_win or diag1_win or diag2_win do
       slot

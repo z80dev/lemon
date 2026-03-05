@@ -331,7 +331,9 @@ defmodule CodingAgent.Config do
     config = Application.get_env(:coding_agent, :rate_limit_healing, [])
 
     %{
-      enabled: get_env("LEMON_RATE_LIMIT_HEALING_ENABLED", "1") == "1" or Keyword.get(config, :enabled, true),
+      enabled:
+        get_env("LEMON_RATE_LIMIT_HEALING_ENABLED", "1") == "1" or
+          Keyword.get(config, :enabled, true),
       max_probe_attempts:
         get_env("LEMON_MAX_PROBE_ATTEMPTS", "10") |> String.to_integer() |> max(1),
       probe_interval_ms:

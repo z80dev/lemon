@@ -172,11 +172,12 @@ defmodule Ai.ContextCompactor do
     {preserved, removed} = split_messages(messages, preserve_recent)
 
     # Create summary of removed messages if there are enough
-    summary = if length(removed) > 2 do
-      create_truncation_summary(removed)
-    else
-      nil
-    end
+    summary =
+      if length(removed) > 2 do
+        create_truncation_summary(removed)
+      else
+        nil
+      end
 
     # Build new message list
     new_messages = build_truncated_messages(preserved, summary)
@@ -207,7 +208,7 @@ defmodule Ai.ContextCompactor do
     # with a summary message indicating what would be summarized
     Logger.warning(
       "Summarization strategy requested but not yet fully implemented. " <>
-      "Falling back to truncation with summary."
+        "Falling back to truncation with summary."
     )
 
     do_compact(context, :truncation, opts)

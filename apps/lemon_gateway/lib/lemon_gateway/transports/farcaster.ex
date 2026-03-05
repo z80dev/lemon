@@ -74,7 +74,9 @@ defmodule LemonGateway.Transports.Farcaster do
 
   defp maybe_warn_missing_credentials(cfg) do
     api_key = normalize_blank(cfg[:api_key] || Secrets.fetch_value("FARCASTER_API_KEY"))
-    signer_uuid = normalize_blank(cfg[:signer_uuid] || Secrets.fetch_value("FARCASTER_SIGNER_UUID"))
+
+    signer_uuid =
+      normalize_blank(cfg[:signer_uuid] || Secrets.fetch_value("FARCASTER_SIGNER_UUID"))
 
     if is_nil(api_key) or is_nil(signer_uuid) do
       Logger.warning(

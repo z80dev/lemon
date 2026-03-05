@@ -163,8 +163,7 @@ defmodule LemonSim.Memory.Tools do
     %AgentTool{
       name: "memory_patch_file",
       label: "Memory Patch",
-      description:
-        "Patch text in a memory file by replacing target text with replacement text.",
+      description: "Patch text in a memory file by replacing target text with replacement text.",
       parameters: %{
         "type" => "object",
         "properties" => %{

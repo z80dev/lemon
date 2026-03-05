@@ -113,14 +113,30 @@ defmodule Ai.CompactingClient do
     case result do
       {:ok, stream} ->
         # Wait for the stream to complete to check for context length errors
-        handle_stream_result(stream, model, context, opts, max_attempts, attempt, compaction_enabled)
+        handle_stream_result(
+          stream,
+          model,
+          context,
+          opts,
+          max_attempts,
+          attempt,
+          compaction_enabled
+        )
 
       {:error, _reason} = error ->
         handle_error(error, model, context, opts, max_attempts, attempt, compaction_enabled)
     end
   end
 
-  defp handle_stream_result(stream, model, _context, _opts, _max_attempts, attempt, _compaction_enabled) do
+  defp handle_stream_result(
+         stream,
+         model,
+         _context,
+         _opts,
+         _max_attempts,
+         attempt,
+         _compaction_enabled
+       ) do
     # For now, we return the stream immediately and let the caller handle errors
     # A more sophisticated implementation would wrap the stream to intercept errors
     emit_telemetry(:request_succeeded, %{
@@ -132,7 +148,15 @@ defmodule Ai.CompactingClient do
     {:ok, stream}
   end
 
-  defp handle_error({:error, reason}, model, context, opts, max_attempts, attempt, compaction_enabled) do
+  defp handle_error(
+         {:error, reason},
+         model,
+         context,
+         opts,
+         max_attempts,
+         attempt,
+         compaction_enabled
+       ) do
     if compaction_enabled and
          attempt < max_attempts and
          Ai.ContextCompactor.context_length_error?(reason) do
@@ -199,7 +223,10 @@ defmodule Ai.CompactingClient do
   defp provider_module(_), do: Ai.Providers.Anthropic
 
   defp resolve_provider(%{provider: provider}) when is_atom(provider), do: provider
-  defp resolve_provider(%{provider: provider}) when is_binary(provider), do: String.to_atom(provider)
+
+  defp resolve_provider(%{provider: provider}) when is_binary(provider),
+    do: String.to_atom(provider)
+
   defp resolve_provider(_), do: :anthropic
 
   defp emit_telemetry(event, metadata) do

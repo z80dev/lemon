@@ -70,8 +70,8 @@ defmodule CodingAgent.RateLimitHealer do
           probe_timeout_ms: pos_integer(),
           next_probe_at: DateTime.t() | nil,
           probe_timer_ref: reference() | nil,
-          on_healed: (() -> :ok) | nil,
-          on_failed: (() -> :ok) | nil,
+          on_healed: (-> :ok) | nil,
+          on_failed: (-> :ok) | nil,
           fallback_strategy: :reset_backoff | :fallback_model | :fallback_provider | :fork,
           fallback_model: Ai.Types.Model.t() | nil,
           last_error: term() | nil,
@@ -357,7 +357,9 @@ defmodule CodingAgent.RateLimitHealer do
       max_attempts: state.max_probe_attempts
     })
 
-    Logger.debug("RateLimitHealer probe #{probe_count}/#{state.max_probe_attempts} for #{state.session_id}")
+    Logger.debug(
+      "RateLimitHealer probe #{probe_count}/#{state.max_probe_attempts} for #{state.session_id}"
+    )
 
     case do_probe_request(state) do
       :ok ->
@@ -425,7 +427,9 @@ defmodule CodingAgent.RateLimitHealer do
         duration_ms: DateTime.diff(healed_at, state.started_at, :millisecond)
       })
 
-      Logger.info("RateLimitHealer: Session #{state.session_id} healed after #{state.probe_count} probes")
+      Logger.info(
+        "RateLimitHealer: Session #{state.session_id} healed after #{state.probe_count} probes"
+      )
 
       # Execute callback if provided
       if state.on_healed do
@@ -448,7 +452,9 @@ defmodule CodingAgent.RateLimitHealer do
         fallback_strategy: state.fallback_strategy
       })
 
-      Logger.warning("RateLimitHealer: Session #{state.session_id} healing failed: #{inspect(reason)}")
+      Logger.warning(
+        "RateLimitHealer: Session #{state.session_id} healing failed: #{inspect(reason)}"
+      )
 
       # Execute callback if provided
       if state.on_failed do
@@ -541,8 +547,13 @@ defmodule CodingAgent.RateLimitHealer do
     * `[:coding_agent, :rate_limit_healer, :stopped]` - Healer stopped
   """
   @spec emit_telemetry(
-          :probe_attempt | :probe_success | :probe_rate_limited | :probe_error | :healed
-          | :failed | :stopped,
+          :probe_attempt
+          | :probe_success
+          | :probe_rate_limited
+          | :probe_error
+          | :healed
+          | :failed
+          | :stopped,
           t(),
           map()
         ) :: :ok

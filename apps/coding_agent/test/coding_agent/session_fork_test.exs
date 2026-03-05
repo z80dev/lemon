@@ -55,7 +55,9 @@ defmodule CodingAgent.SessionForkTest do
         nil
       )
 
-      SessionFork.emit_fork_telemetry(:fork_completed, "session-123", %{new_session_id: "session-456"})
+      SessionFork.emit_fork_telemetry(:fork_completed, "session-123", %{
+        new_session_id: "session-456"
+      })
 
       assert_receive {:telemetry_received, metadata}
       assert metadata.original_session_id == "session-123"

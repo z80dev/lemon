@@ -44,7 +44,8 @@ defmodule CodingAgent.SessionFork do
           preserve_message_count: preserve_messages
         )
 
-      summary = opts[:custom_summary] || fork_context.summary || generate_default_summary(fork_context)
+      summary =
+        opts[:custom_summary] || fork_context.summary || generate_default_summary(fork_context)
 
       fork_opts = [
         cwd: cwd,
@@ -131,7 +132,9 @@ defmodule CodingAgent.SessionFork do
         _ -> "unknown"
       end
 
-    Logger.info("SessionFork: Terminating original session #{original_id} (forked to #{new_session_id})")
+    Logger.info(
+      "SessionFork: Terminating original session #{original_id} (forked to #{new_session_id})"
+    )
 
     GenServer.stop(original_session, :normal)
 
@@ -172,7 +175,10 @@ defmodule CodingAgent.SessionFork do
     :telemetry.execute(
       [:coding_agent, :session_fork, event],
       %{},
-      Map.merge(metadata, %{original_session_id: original_session_id, timestamp: DateTime.utc_now()})
+      Map.merge(metadata, %{
+        original_session_id: original_session_id,
+        timestamp: DateTime.utc_now()
+      })
     )
   end
 

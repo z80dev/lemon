@@ -78,7 +78,10 @@ defmodule CodingAgent.Session.EventHandler do
       %{
         tool_name: name,
         tool_call_id: id
-      }, engine: "lemon", provenance: :direct)
+      },
+      engine: "lemon",
+      provenance: :direct
+    )
 
     callbacks.set_working_message.(state, "Running #{name}...")
     state

@@ -18,27 +18,30 @@ defmodule CodingAgent.RateLimitRecoveryTest do
 
   describe "select_strategy/1" do
     test "selects reset_backoff for first few failures" do
-      strategy = RateLimitRecovery.select_strategy(%{
-        current_model: @test_model,
-        failure_count: 0
-      })
+      strategy =
+        RateLimitRecovery.select_strategy(%{
+          current_model: @test_model,
+          failure_count: 0
+        })
 
       assert strategy == :reset_backoff
 
-      strategy = RateLimitRecovery.select_strategy(%{
-        current_model: @test_model,
-        failure_count: 2
-      })
+      strategy =
+        RateLimitRecovery.select_strategy(%{
+          current_model: @test_model,
+          failure_count: 2
+        })
 
       assert strategy == :reset_backoff
     end
 
     test "selects fallback after 3+ failures" do
-      strategy = RateLimitRecovery.select_strategy(%{
-        current_model: @test_model,
-        failure_count: 4,
-        available_providers: [:anthropic, :openai]
-      })
+      strategy =
+        RateLimitRecovery.select_strategy(%{
+          current_model: @test_model,
+          failure_count: 4,
+          available_providers: [:anthropic, :openai]
+        })
 
       assert strategy == :reset_backoff or
                match?({:fallback_model, _}, strategy) or
@@ -46,10 +49,11 @@ defmodule CodingAgent.RateLimitRecoveryTest do
     end
 
     test "selects give_up after max failures" do
-      strategy = RateLimitRecovery.select_strategy(%{
-        current_model: @test_model,
-        failure_count: 10
-      })
+      strategy =
+        RateLimitRecovery.select_strategy(%{
+          current_model: @test_model,
+          failure_count: 10
+        })
 
       assert strategy == :give_up
     end

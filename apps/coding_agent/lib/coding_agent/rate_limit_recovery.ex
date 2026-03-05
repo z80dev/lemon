@@ -174,7 +174,8 @@ defmodule CodingAgent.RateLimitRecovery do
   @doc """
   Create a fork notification message for the user.
   """
-  @spec fork_notification(%{fork_reason: atom(), summary: String.t() | nil, todos: list()}) :: String.t()
+  @spec fork_notification(%{fork_reason: atom(), summary: String.t() | nil, todos: list()}) ::
+          String.t()
   def fork_notification(context) do
     reason_msg =
       case context.fork_reason do
@@ -192,7 +193,7 @@ defmodule CodingAgent.RateLimitRecovery do
 
     todo_info =
       if context.todos != [] do
-        todo_list = Enum.map_join(context.todos, "\n", & "- #{&1.content}")
+        todo_list = Enum.map_join(context.todos, "\n", &"- #{&1.content}")
         "\n\nOutstanding items:\n#{todo_list}"
       else
         ""

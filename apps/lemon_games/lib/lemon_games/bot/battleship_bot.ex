@@ -68,7 +68,9 @@ defmodule LemonGames.Bot.BattleshipBot do
         end)
 
       case valid_adjacent do
-        [] -> nil
+        [] ->
+          nil
+
         cells ->
           {nr, nc} = List.first(cells)
           %{"kind" => "fire", "row" => nr, "col" => nc}

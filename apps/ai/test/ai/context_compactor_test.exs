@@ -15,7 +15,10 @@ defmodule Ai.ContextCompactorTest do
     end
 
     test "detects error by message content" do
-      error = {:http_error, 400, %{"error" => %{"message" => "This model's maximum context length is 8192 tokens"}}}
+      error =
+        {:http_error, 400,
+         %{"error" => %{"message" => "This model's maximum context length is 8192 tokens"}}}
+
       assert ContextCompactor.context_length_error?(error)
     end
 
@@ -47,16 +50,19 @@ defmodule Ai.ContextCompactorTest do
 
   describe "compact/2 with truncation strategy" do
     test "returns error when context has too few messages" do
-      context = Context.new()
-      |> Context.add_user_message("Hello")
+      context =
+        Context.new()
+        |> Context.add_user_message("Hello")
 
-      assert {:error, :insufficient_messages} = ContextCompactor.compact(context, strategy: :truncation)
+      assert {:error, :insufficient_messages} =
+               ContextCompactor.compact(context, strategy: :truncation)
     end
 
     test "truncates oldest messages while preserving recent ones" do
       context = build_test_context(10)
 
-      {:ok, compacted, metadata} = ContextCompactor.compact(context, strategy: :truncation, preserve_recent: 4)
+      {:ok, compacted, metadata} =
+        ContextCompactor.compact(context, strategy: :truncation, preserve_recent: 4)
 
       assert metadata.strategy == :truncation
       assert metadata.original_count == 10
@@ -70,14 +76,16 @@ defmodule Ai.ContextCompactorTest do
     end
 
     test "preserves system prompt when truncating" do
-      context = Context.new(system_prompt: "You are a helpful assistant")
-      |> Context.add_user_message("Message 1")
-      |> Context.add_user_message("Message 2")
-      |> Context.add_user_message("Message 3")
-      |> Context.add_user_message("Message 4")
-      |> Context.add_user_message("Message 5")
+      context =
+        Context.new(system_prompt: "You are a helpful assistant")
+        |> Context.add_user_message("Message 1")
+        |> Context.add_user_message("Message 2")
+        |> Context.add_user_message("Message 3")
+        |> Context.add_user_message("Message 4")
+        |> Context.add_user_message("Message 5")
 
-      {:ok, compacted, _metadata} = ContextCompactor.compact(context, strategy: :truncation, preserve_recent: 2)
+      {:ok, compacted, _metadata} =
+        ContextCompactor.compact(context, strategy: :truncation, preserve_recent: 2)
 
       assert compacted.system_prompt == "You are a helpful assistant"
     end
@@ -98,7 +106,8 @@ defmodule Ai.ContextCompactorTest do
     test "returns error for unknown strategy" do
       context = build_test_context(5)
 
-      assert {:error, {:unknown_strategy, :unknown}} = ContextCompactor.compact(context, strategy: :unknown)
+      assert {:error, {:unknown_strategy, :unknown}} =
+               ContextCompactor.compact(context, strategy: :unknown)
     end
   end
 
@@ -121,35 +130,50 @@ defmodule Ai.ContextCompactorTest do
 
   describe "telemetry" do
     test "emits compaction_started event" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:ai, :context_compactor, :compaction_started]])
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:ai, :context_compactor, :compaction_started]
+        ])
 
       context = build_test_context(5)
       ContextCompactor.compact(context, strategy: :truncation)
 
-      assert_received {[:ai, :context_compactor, :compaction_started], ^ref, _measurements, metadata}
+      assert_received {[:ai, :context_compactor, :compaction_started], ^ref, _measurements,
+                       metadata}
+
       assert metadata.strategy == :truncation
       assert metadata.original_message_count == 5
     end
 
     test "emits compaction_succeeded event on success" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:ai, :context_compactor, :compaction_succeeded]])
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:ai, :context_compactor, :compaction_succeeded]
+        ])
 
       context = build_test_context(5)
       ContextCompactor.compact(context, strategy: :truncation)
 
-      assert_received {[:ai, :context_compactor, :compaction_succeeded], ^ref, _measurements, metadata}
+      assert_received {[:ai, :context_compactor, :compaction_succeeded], ^ref, _measurements,
+                       metadata}
+
       assert metadata.strategy == :truncation
       assert metadata.original_count == 5
       assert is_integer(metadata.tokens_saved)
     end
 
     test "emits compaction_failed event on failure" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:ai, :context_compactor, :compaction_failed]])
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:ai, :context_compactor, :compaction_failed]
+        ])
 
       context = Context.new() |> Context.add_user_message("Hello")
       ContextCompactor.compact(context, strategy: :truncation)
 
-      assert_received {[:ai, :context_compactor, :compaction_failed], ^ref, _measurements, metadata}
+      assert_received {[:ai, :context_compactor, :compaction_failed], ^ref, _measurements,
+                       metadata}
+
       assert metadata.reason == :insufficient_messages
     end
   end
@@ -166,6 +190,7 @@ defmodule Ai.ContextCompactorTest do
           content: [%TextContent{type: :text, text: "Assistant response #{i}"}],
           timestamp: System.system_time(:millisecond)
         }
+
         Context.add_assistant_message(ctx, assistant_msg)
       end
     end)

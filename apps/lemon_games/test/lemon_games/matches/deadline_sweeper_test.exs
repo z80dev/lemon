@@ -12,7 +12,8 @@ defmodule LemonGames.Matches.DeadlineSweeperTest do
   end
 
   test "expires pending match when accept deadline has passed" do
-    {:ok, match} = Service.create_match(%{"game_type" => "connect4", "visibility" => "public"}, @actor)
+    {:ok, match} =
+      Service.create_match(%{"game_type" => "connect4", "visibility" => "public"}, @actor)
 
     expired_deadline_match =
       match
