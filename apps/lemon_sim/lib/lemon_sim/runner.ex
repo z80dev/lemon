@@ -114,7 +114,8 @@ defmodule LemonSim.Runner do
   end
 
   defp adapt_events(decision_adapter, decision, state, opts) do
-    if function_exported?(decision_adapter, :to_events, 3) do
+    if Code.ensure_loaded?(decision_adapter) and
+         function_exported?(decision_adapter, :to_events, 3) do
       case decision_adapter.to_events(decision, state, opts) do
         {:ok, events} when is_list(events) ->
           {:ok, events}
