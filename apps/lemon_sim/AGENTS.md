@@ -16,7 +16,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 | `lib/lemon_sim/decision_frame.ex` | `LemonSim.DecisionFrame` | Snapshot fed to projector |
 | `lib/lemon_sim/event_coalescer.ex` | `LemonSim.EventCoalescer` | Coalescing/filtering behaviour |
 | `lib/lemon_sim/updater.ex` | `LemonSim.Updater` | Event -> state updater behaviour |
-| `lib/lemon_sim/action_space.ex` | `LemonSim.ActionSpace` | Dynamic legal tools behaviour plus legal-action-map helpers |
+| `lib/lemon_sim/action_space.ex` | `LemonSim.ActionSpace` | Turn-scoped tool exposure behaviour |
 | `lib/lemon_sim/projector.ex` | `LemonSim.Projector` | Frame -> AI context behaviour |
 | `lib/lemon_sim/projectors/toolkit.ex` | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
 | `lib/lemon_sim/projectors/sectioned_projector.ex` | `LemonSim.Projectors.SectionedProjector` | Default sectioned projector with pluggable builders/overrides |
@@ -34,8 +34,8 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 ## Design Boundaries
 
 - Keep this app generic. Do not embed chess/poker/pokemon/vending-specific rules here.
-- Keep legal action gating in `ActionSpace` implementations, not in prompt text.
-- Prefer `LemonSim.ActionSpace.legal_action/3` + `to_tools/2` when the current action space is a finite set of exact moves.
+- Keep `ActionSpace` focused on which tools are exposed this turn.
+- Keep authoritative argument legality in updater logic, not prompt text or `ActionSpace`.
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
 - Keep memory policy out of the core harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.Memory.Tools`).
 
@@ -45,4 +45,4 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 mix test apps/lemon_sim
 ```
 
-Current tests cover state normalization/windowing, legal-action tool generation, runner orchestration, the default tool-result adapter, memory tool filesystem safety, and tool-loop decider behavior.
+Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, and tool-loop decider behavior.

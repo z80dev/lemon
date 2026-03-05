@@ -8,8 +8,8 @@ defmodule LemonSim do
   - ingesting events with decision gating (`LemonSim.Updater`)
   - coalescing high-frequency event streams (`LemonSim.EventCoalescer`)
   - projecting state into per-decision context (`LemonSim.Projector`)
-  - generating legal tool actions dynamically, including discrete legal-action
-    maps compiled into tools (`LemonSim.ActionSpace`)
+  - generating the tools exposed for the current decision turn
+    (`LemonSim.ActionSpace`)
   - adapting decisions into simulation events, with a default adapter for
     tool-result event payloads (`LemonSim.DecisionAdapter`)
   - executing one decision turn, a composed step, or a full loop until terminal

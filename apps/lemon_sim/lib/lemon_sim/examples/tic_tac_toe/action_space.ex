@@ -3,36 +3,47 @@ defmodule LemonSim.Examples.TicTacToe.ActionSpace do
 
   @behaviour LemonSim.ActionSpace
 
-  alias LemonSim.ActionSpace, as: SimActionSpace
+  alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.TicTacToe.Events
 
   @impl true
   def tools(state, _opts) do
     if state.world[:status] == "in_progress" do
       player = state.world[:current_player]
-
-      legal_actions =
-        for row <- 0..2,
-            col <- 0..2,
-            empty_cell?(state.world[:board], row, col) do
-          SimActionSpace.legal_action(
-            "place_mark",
-            %{"row" => row, "col" => col},
-            description:
-              "Place your mark (#{player}) on the board at the specified row and column.",
-            label: "Place Mark",
-            event: Events.place_mark(player, row, col),
-            result_text: "proposed #{player} at (#{row}, #{col})"
-          )
-        end
-
-      {:ok, SimActionSpace.to_tools(legal_actions)}
+      {:ok, [place_mark_tool(player)]}
     else
       {:ok, []}
     end
   end
 
-  defp empty_cell?(board, row, col) do
-    get_in(board, [Access.at(row), Access.at(col)]) == " "
+  defp place_mark_tool(player) do
+    %AgentTool{
+      name: "place_mark",
+      description: "Place your mark (#{player}) on the board at the specified row and column.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "row" => %{"type" => "integer", "description" => "Row index (0-2)"},
+          "col" => %{"type" => "integer", "description" => "Column index (0-2)"}
+        },
+        "required" => ["row", "col"],
+        "additionalProperties" => false
+      },
+      label: "Place Mark",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        row = Map.get(params || %{}, "row", Map.get(params || %{}, :row))
+        col = Map.get(params || %{}, "col", Map.get(params || %{}, :col))
+        event = Events.place_mark(player, row, col)
+
+        {:ok,
+         %AgentToolResult{
+           content: [
+             AgentCore.text_content("proposed #{player} at (#{inspect(row)}, #{inspect(col)})")
+           ],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
   end
 end

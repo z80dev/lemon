@@ -9,7 +9,6 @@ Phase 0 establishes the small reusable core:
 - normalized state structs (`State`, `Event`, `PlanStep`, `DecisionFrame`)
 - pluggable behaviours for projector/updater/action space/decider/decision adapter
 - event coalescer contract for high-frequency feeds
-- legal-action-map helpers for compiling discrete legal moves into tools
 - minimal persistence and pubsub wrappers (`Store`, `Bus`)
 - lightweight runner for ingest + one decision turn + composed step helper
   plus `run_until_terminal/3` (`Runner`)
@@ -32,7 +31,7 @@ Phase 1 adds:
 | `LemonSim.DecisionSignal` | `:skip` / `:decide` decision gating signal |
 | `LemonSim.EventCoalescer` | Behaviour for coalescing/filtering incoming events |
 | `LemonSim.Updater` | Behaviour for applying events and returning decision signals |
-| `LemonSim.ActionSpace` | Behaviour for dynamic legal tool generation plus legal-action-map helpers |
+| `LemonSim.ActionSpace` | Behaviour for deciding which tools are exposed on the current turn |
 | `LemonSim.Projector` | Behaviour for state -> `Ai.Types.Context` projection |
 | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
 | `LemonSim.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |

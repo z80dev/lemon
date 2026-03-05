@@ -1,7 +1,6 @@
 defmodule LemonSimTest do
   use ExUnit.Case
 
-  alias AgentCore.Types.AgentToolResult
   alias LemonSim.DecisionAdapters.ToolResultEvents
   alias LemonSim.{DecisionFrame, DecisionSignal, Event, PlanStep, Runner, State}
 
@@ -172,35 +171,6 @@ defmodule LemonSimTest do
                state,
                []
              )
-  end
-
-  test "action space helper compiles legal action maps into tools" do
-    actions = [
-      LemonSim.ActionSpace.legal_action(
-        "place_mark",
-        %{row: 0, col: 0},
-        event: %{kind: "move", payload: %{row: 0, col: 0}},
-        result_text: "move 0,0"
-      ),
-      LemonSim.ActionSpace.legal_action(
-        "place_mark",
-        %{row: 0, col: 1},
-        event: %{kind: "move", payload: %{row: 0, col: 1}},
-        result_text: "move 0,1"
-      )
-    ]
-
-    [tool] = LemonSim.ActionSpace.to_tools(actions)
-
-    assert {:ok, %AgentToolResult{details: %{"event" => %Event{kind: "move"} = event}}} =
-             tool.execute.("tc-1", %{"row" => 0, "col" => 1}, nil, fn _partial -> :ok end)
-
-    assert event.payload == %{row: 0, col: 1}
-
-    assert {:error, message} =
-             tool.execute.("tc-2", %{"row" => 2, "col" => 2}, nil, fn _ -> :ok end)
-
-    assert message =~ "illegal place_mark arguments"
   end
 
   defmodule UpdaterStub do
