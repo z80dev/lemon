@@ -16,8 +16,8 @@ No turn manager, chance engine, scoring, or game-specific logic is included.
 
 Phase 1 adds:
 
-- `ToolLoopDecider` for real model/tool-call decision execution
-- file-scoped memory tools (`index.md` + read/write/patch/list/delete)
+- `ToolLoopDecider` for real model/tool-call decision execution with pluggable tool policies
+- file-scoped memory tools (`index.md` + read/write/patch/list/delete) as an optional bundle
 
 ## Module Inventory
 
@@ -35,12 +35,14 @@ Phase 1 adds:
 | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
 | `LemonSim.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |
 | `LemonSim.Decider` | Behaviour for one constrained model decision |
+| `LemonSim.Deciders.ToolLoopPolicy` | Behaviour for tool-batch validation and terminal decision selection |
+| `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default policy: support-tool chaining + one terminal decision |
 | `LemonSim.DecisionAdapter` | Behaviour for adapting decider output into simulation events |
 | `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
 | `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |
 | `LemonSim.Runner` | Ingest-until-decision + decide-once + composed `step/3` helper |
-| `LemonSim.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider with intermediate tool support |
-| `LemonSim.Memory.Tools` | Scoped file-memory toolset for long-term notes |
+| `LemonSim.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider driven by a pluggable tool policy |
+| `LemonSim.Memory.Tools` | Optional scoped file-memory tool bundle for long-term notes |
 
 ## Dependency Rationale
 

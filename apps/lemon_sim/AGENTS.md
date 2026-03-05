@@ -21,6 +21,8 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 | `lib/lemon_sim/projectors/toolkit.ex` | `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
 | `lib/lemon_sim/projectors/sectioned_projector.ex` | `LemonSim.Projectors.SectionedProjector` | Default sectioned projector with pluggable builders/overrides |
 | `lib/lemon_sim/decider.ex` | `LemonSim.Decider` | One-turn decision behaviour |
+| `lib/lemon_sim/deciders/tool_loop_policy.ex` | `LemonSim.Deciders.ToolLoopPolicy` | Tool-batch validation + terminal decision policy behaviour |
+| `lib/lemon_sim/deciders/tool_policies/single_terminal.ex` | `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default support-tool + one-terminal-action policy |
 | `lib/lemon_sim/decision_adapter.ex` | `LemonSim.DecisionAdapter` | Decision -> event adaptation behaviour |
 | `lib/lemon_sim/deciders/tool_loop_decider.ex` | `LemonSim.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/runner.ex` | `LemonSim.Runner` | Ingest-until-decision, decide-once, and composed `step/3` orchestration |
@@ -33,7 +35,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 - Keep this app generic. Do not embed chess/poker/pokemon/vending-specific rules here.
 - Keep legal action gating in `ActionSpace` implementations, not in prompt text.
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
-- Keep memory policy out of the core harness; expose memory via tools in the decider layer (see `LemonSim.Memory.Tools`).
+- Keep memory policy out of the core harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.Memory.Tools`).
 
 ## Testing
 

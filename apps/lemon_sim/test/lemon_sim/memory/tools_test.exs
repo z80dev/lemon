@@ -6,6 +6,7 @@ defmodule LemonSim.Memory.ToolsTest do
   test "memory tools can write, read, patch, list, and delete files" do
     tmp_dir = System.tmp_dir!()
     namespace = "sim_mem_tools_#{System.unique_integer([:positive])}"
+    root = Path.join(tmp_dir, namespace)
 
     tools = Tools.build(memory_root: tmp_dir, memory_namespace: namespace)
 
@@ -22,6 +23,8 @@ defmodule LemonSim.Memory.ToolsTest do
                nil,
                nil
              )
+
+    refute File.exists?(Path.join(root, "index.md"))
 
     assert {:ok, read_result} = read.execute.("r1", %{"path" => "notes/plan.md"}, nil, nil)
     assert AgentCore.get_text(read_result) == "flank left"
@@ -55,6 +58,25 @@ defmodule LemonSim.Memory.ToolsTest do
 
     assert {:error, "Memory file not found"} =
              read.execute.("r3", %{"path" => "notes/plan.md"}, nil, nil)
+  end
+
+  test "setup creates the memory root and default index file" do
+    tmp_dir = System.tmp_dir!()
+    namespace = "sim_mem_setup_#{System.unique_integer([:positive])}"
+    root = Tools.setup!(memory_root: tmp_dir, memory_namespace: namespace)
+
+    assert File.dir?(root)
+    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
+  end
+
+  test "build does not mutate the filesystem" do
+    tmp_dir = System.tmp_dir!()
+    namespace = "sim_mem_build_#{System.unique_integer([:positive])}"
+    root = Path.join(tmp_dir, namespace)
+
+    _tools = Tools.build(memory_root: tmp_dir, memory_namespace: namespace)
+
+    refute File.exists?(root)
   end
 
   test "memory tools reject path traversal" do

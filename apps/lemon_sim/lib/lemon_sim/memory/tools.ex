@@ -27,8 +27,6 @@ defmodule LemonSim.Memory.Tools do
   @spec build(keyword()) :: [AgentTool.t()]
   def build(opts \\ []) do
     root = memory_root(opts)
-    ensure_memory_root!(root)
-    ensure_index!(root)
 
     [
       read_tool(root, opts),
@@ -37,6 +35,14 @@ defmodule LemonSim.Memory.Tools do
       list_tool(root, opts),
       delete_tool(root)
     ]
+  end
+
+  @spec setup!(keyword()) :: String.t()
+  def setup!(opts \\ []) do
+    root = memory_root(opts)
+    ensure_memory_root!(root)
+    ensure_index!(root)
+    root
   end
 
   @spec memory_root(keyword()) :: String.t()

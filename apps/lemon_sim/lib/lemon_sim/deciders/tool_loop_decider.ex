@@ -2,15 +2,15 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   @moduledoc """
   Concrete decider that executes a model/tool loop until a decision is produced.
 
-  The decider supports intermediate memory tool calls and can stop as soon as a
-  non-memory action tool is invoked.
+  The decider validates assistant tool-call batches with a pluggable policy and
+  stops once that policy selects a terminal decision.
   """
 
   @behaviour LemonSim.Decider
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage}
-  alias LemonSim.Memory.Tools, as: MemoryTools
+  alias LemonSim.Deciders.ToolPolicies.SingleTerminal
 
   @default_max_turns 8
   @default_max_tool_calls_per_turn 16
@@ -21,12 +21,14 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
              {:ok, AssistantMessage.t()} | {:error, term()})
 
   @impl true
-  def decide(%Context{} = context, tools, opts) when is_list(tools) and is_list(opts) do
+  def decide(%Context{} = context, tools, opts \\ []) when is_list(tools) and is_list(opts) do
     with {:ok, model} <- fetch_model(opts),
-         {:ok, merged_tools} <- merge_tools(tools, opts) do
+         {:ok, normalized_tools} <- normalize_tools(tools),
+         {:ok, policy} <- fetch_policy(opts) do
       loop_state = %{
-        context: with_llm_tools(context, merged_tools),
-        tools: merged_tools,
+        context: with_llm_tools(context, normalized_tools),
+        tools: normalized_tools,
+        policy: policy,
         decisions: [],
         executed_calls: []
       }
@@ -51,84 +53,92 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
       with {:ok, %AssistantMessage{} = assistant} <-
              complete_fn.(model, state.context, stream_options),
            context_with_assistant <- append_message(state.context, assistant) do
-        tool_calls =
-          assistant
-          |> Ai.get_tool_calls()
-          |> Enum.take(max_tool_calls_per_turn)
+        with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
+          case tool_calls do
+            [] ->
+              {:ok, text_decision(assistant, state.executed_calls)}
 
-        case tool_calls do
-          [] ->
-            {:ok, text_decision(assistant, state.executed_calls)}
+            calls ->
+              with {:ok, resolved_calls} <- resolve_tool_calls(calls, state.tools),
+                   :ok <- state.policy.validate_tool_calls(resolved_calls, opts),
+                   {:ok, step} <-
+                     execute_tool_calls(
+                       resolved_calls,
+                       context_with_assistant,
+                       state.policy,
+                       opts
+                     ) do
+                all_executed_calls = state.executed_calls ++ step.executed_calls
 
-          calls ->
-            with {:ok, step} <-
-                   execute_tool_calls(calls, context_with_assistant, state.tools, opts) do
-              decision = pick_decision(step.decisions)
+                if Keyword.get(opts, :stop_on_decision_tool, true) and not is_nil(step.decision) do
+                  {:ok, put_executed_calls(step.decision, all_executed_calls)}
+                else
+                  next_state = %{
+                    state
+                    | context: step.context,
+                      executed_calls: all_executed_calls,
+                      decisions: state.decisions ++ List.wrap(step.decision)
+                  }
 
-              if Keyword.get(opts, :stop_on_decision_tool, true) and not is_nil(decision) do
-                {:ok, decision}
-              else
-                next_state = %{
-                  state
-                  | context: step.context,
-                    executed_calls: state.executed_calls ++ step.executed_calls,
-                    decisions: state.decisions ++ step.decisions
-                }
-
-                run_loop(next_state, model, opts, turn + 1)
+                  run_loop(next_state, model, opts, turn + 1)
+                end
               end
-            end
+          end
         end
       end
     end
   end
 
-  defp execute_tool_calls(tool_calls, context, tools, opts) do
+  defp execute_tool_calls(resolved_tool_calls, context, policy, opts) do
     Enum.reduce_while(
-      tool_calls,
-      {:ok, %{context: context, decisions: [], executed_calls: []}},
-      fn tool_call, {:ok, acc} ->
-        {:ok, result} = execute_single_tool_call(tool_call, acc.context, tools, opts)
+      resolved_tool_calls,
+      {:ok, %{context: context, decision: nil, executed_calls: []}},
+      fn %{tool_call: tool_call, tool: tool}, {:ok, acc} ->
+        case execute_single_tool_call(tool_call, tool, acc.context, policy, opts) do
+          {:ok, result} ->
+            next = %{
+              context: result.context,
+              decision: result.decision,
+              executed_calls: acc.executed_calls ++ [result.executed_call]
+            }
 
-        next = %{
-          context: result.context,
-          decisions: acc.decisions ++ [result.decision],
-          executed_calls: acc.executed_calls ++ [result.executed_call]
-        }
+            if is_nil(result.decision) do
+              {:cont, {:ok, next}}
+            else
+              {:halt, {:ok, next}}
+            end
 
-        {:cont, {:ok, next}}
+          {:error, _reason} = error ->
+            {:halt, error}
+        end
       end
     )
   end
 
-  defp execute_single_tool_call(%ToolCall{} = tool_call, context, tools, opts) do
-    tool = find_tool(tools, tool_call.name)
+  defp execute_single_tool_call(
+         %ToolCall{} = tool_call,
+         %AgentTool{} = tool,
+         context,
+         policy,
+         opts
+       ) do
     {result, is_error} = execute_tool(tool, tool_call)
 
     tool_result_message = to_tool_result_message(tool_call, result, is_error)
     next_context = append_message(context, tool_result_message)
 
-    decision = decision_from_tool_call(tool_call, result, is_error, opts)
+    decision = decision_from_tool_call(policy, tool_call, tool, result, is_error, opts)
 
     executed_call = %{
       tool_name: tool_call.name,
       tool_call_id: tool_call.id,
       arguments: tool_call.arguments,
-      is_error: is_error
+      is_error: is_error,
+      result_text: AgentCore.get_text(result),
+      result_details: result.details
     }
 
     {:ok, %{context: next_context, decision: decision, executed_call: executed_call}}
-  end
-
-  defp execute_tool(nil, tool_call) do
-    result =
-      %AgentToolResult{
-        content: [AgentCore.text_content("Tool #{tool_call.name} not found")],
-        details: %{error: :tool_not_found},
-        trust: :trusted
-      }
-
-    {result, true}
   end
 
   defp execute_tool(%AgentTool{} = tool, %ToolCall{} = tool_call) do
@@ -151,16 +161,9 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
     end
   end
 
-  defp merge_tools(tools, opts) do
+  defp normalize_tools(tools) do
     if Enum.all?(tools, &match?(%AgentTool{}, &1)) do
-      memory_tools =
-        if Keyword.get(opts, :include_memory_tools, true) do
-          MemoryTools.build(opts)
-        else
-          []
-        end
-
-      {:ok, dedupe_tools(tools ++ memory_tools)}
+      {:ok, dedupe_tools(tools)}
     else
       {:error, :invalid_tools}
     end
@@ -187,11 +190,46 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
     %{context | messages: context.messages ++ [message]}
   end
 
+  defp fetch_policy(opts) do
+    policy = Keyword.get(opts, :tool_policy, SingleTerminal)
+
+    if is_atom(policy) and function_exported?(policy, :validate_tool_calls, 2) and
+         function_exported?(policy, :decision_from_call, 4) do
+      {:ok, policy}
+    else
+      {:error, {:invalid_tool_policy, policy}}
+    end
+  end
+
   defp fetch_model(opts) do
     case Keyword.get(opts, :model) do
       %Ai.Types.Model{} = model -> {:ok, model}
       _ -> {:error, :missing_model}
     end
+  end
+
+  defp fetch_tool_calls(%AssistantMessage{} = assistant, max_tool_calls_per_turn) do
+    tool_calls = Ai.get_tool_calls(assistant)
+
+    if length(tool_calls) > max_tool_calls_per_turn do
+      {:error,
+       {:max_tool_calls_per_turn_exceeded,
+        %{max_tool_calls_per_turn: max_tool_calls_per_turn, tool_calls: length(tool_calls)}}}
+    else
+      {:ok, tool_calls}
+    end
+  end
+
+  defp resolve_tool_calls(tool_calls, tools) do
+    Enum.reduce_while(tool_calls, {:ok, []}, fn %ToolCall{} = tool_call, {:ok, acc} ->
+      case find_tool(tools, tool_call.name) do
+        %AgentTool{} = tool ->
+          {:cont, {:ok, acc ++ [%{tool_call: tool_call, tool: tool}]}}
+
+        nil ->
+          {:halt, {:error, {:unknown_tool, tool_call.name}}}
+      end
+    end)
   end
 
   defp find_tool(tools, name) do
@@ -215,32 +253,18 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
     }
   end
 
-  defp decision_from_tool_call(%ToolCall{} = call, result, false, opts) do
-    case Keyword.get(opts, :decision_tool_matcher) do
-      matcher when is_function(matcher, 1) ->
-        if matcher.(call.name), do: tool_decision(call, result), else: nil
-
-      _ ->
-        if memory_tool?(call.name), do: nil, else: tool_decision(call, result)
-    end
+  defp decision_from_tool_call(
+         policy,
+         %ToolCall{} = call,
+         %AgentTool{} = tool,
+         result,
+         false,
+         opts
+       ) do
+    policy.decision_from_call(call, tool, result, opts)
   end
 
-  defp decision_from_tool_call(_call, _result, _is_error, _opts), do: nil
-
-  defp memory_tool?(name) when is_binary(name) do
-    normalize_name(name) in Enum.map(MemoryTools.tool_names(), &normalize_name/1)
-  end
-
-  defp tool_decision(%ToolCall{} = call, %AgentToolResult{} = result) do
-    %{
-      "type" => "tool_call",
-      "tool_name" => call.name,
-      "tool_call_id" => call.id,
-      "arguments" => call.arguments || %{},
-      "result_text" => AgentCore.get_text(result),
-      "result_details" => result.details
-    }
-  end
+  defp decision_from_tool_call(_policy, _call, _tool, _result, _is_error, _opts), do: nil
 
   defp text_decision(%AssistantMessage{} = assistant, executed_calls) do
     %{
@@ -250,10 +274,8 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
     }
   end
 
-  defp pick_decision(decisions) do
-    decisions
-    |> Enum.reject(&is_nil/1)
-    |> List.first()
+  defp put_executed_calls(%{} = decision, executed_calls) do
+    Map.put(decision, "executed_calls", executed_calls)
   end
 
   defp normalize_trust(:untrusted), do: :untrusted

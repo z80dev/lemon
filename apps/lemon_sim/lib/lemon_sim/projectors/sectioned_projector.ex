@@ -80,7 +80,8 @@ defmodule LemonSim.Projectors.SectionedProjector do
         format: :json,
         content: %{
           "index_file" => frame.memory_index_path,
-          "instruction" => "Read index.md first, then open linked files only if needed."
+          "instruction" =>
+            "Read #{frame.memory_index_path} first, then open linked files only if needed."
         }
       },
       available_actions: %{
