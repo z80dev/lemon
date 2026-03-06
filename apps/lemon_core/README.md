@@ -330,13 +330,14 @@ Store calls are fail-soft: if the GenServer is overloaded/unavailable, write API
 
 ### Specialized APIs
 
-The Store provides higher-level APIs for common domains:
+Shared-domain callers should prefer typed wrappers:
 
-- **Chat state**: `put_chat_state/2`, `get_chat_state/1`, `delete_chat_state/1` (24h TTL, auto-swept every 5 min)
-- **Run history**: `append_run_event/2`, `finalize_run/2`, `get_run_history/2`, `get_run/1`
-- **Policies**: `put_agent_policy/2`, `put_channel_policy/2`, `put_session_policy/2`, `put_runtime_policy/1`
-- **Progress mapping**: `put_progress_mapping/3`, `get_run_by_progress/2`
-- **Introspection**: `append_introspection_event/1`, `list_introspection_events/1`
+- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`
+- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
+- **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
+- **Progress mapping**: `LemonCore.ProgressStore.put_run/3`, `get_run/2`
+- **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
+- **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 
 ### ReadCache
 

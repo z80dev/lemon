@@ -577,9 +577,11 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 |--------|---------|
 | `LemonChannels` | Public API: `get_plugin/1`, `list_plugins/0`, `enqueue/1` |
 | `LemonChannels.Application` | OTP application, supervision tree, adapter lifecycle |
+| `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint |
 | `LemonChannels.Plugin` | Behaviour definition (6 callbacks) |
 | `LemonChannels.Registry` | GenServer plugin registry with status tracking |
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
+| `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
 | `LemonChannels.EngineRegistry` | Engine ID validation, resume token parsing |
@@ -610,6 +612,9 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.Telegram.Transport.FileOperations` | File put/get, document uploads |
 | `Adapters.Telegram.Transport.MediaGroups` | Media group coalescence |
 | `Adapters.Telegram.Transport.MessageBuffer` | Debounce buffering |
+| `Adapters.Telegram.Renderer` | Telegram semantic renderer for send-vs-edit delivery |
+| `Adapters.Telegram.StatusRenderer` | Telegram tool-status controls and text rendering |
+| `Adapters.Telegram.FileBatcher` | Telegram-specific file/media batching |
 | `Adapters.Telegram.Transport.UpdateProcessor` | Auth, dedup, routing pipeline |
 | `Adapters.Telegram.Inbound` | Normalize to InboundMessage |
 | `Adapters.Telegram.Outbound` | Deliver via Bot API |
@@ -617,6 +622,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Telegram.API` | Raw Bot API calls |
 | `Telegram.Delivery` | High-level enqueue helpers |
 | `Telegram.Formatter` | Markdown to entities |
+| `Telegram.KnownTargetStore` | Typed wrapper for Telegram known-target chat/topic metadata |
 | `Telegram.Markdown` | AST renderer for entities |
 | `Telegram.Truncate` | Message truncation |
 | `Telegram.TriggerMode` | Per-chat trigger mode |

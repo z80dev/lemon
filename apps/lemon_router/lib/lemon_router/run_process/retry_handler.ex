@@ -72,9 +72,10 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   defp build_zero_answer_retry_request(state, %LemonCore.Event{} = event) do
     {ok?, error} = CompactionTrigger.extract_completed_ok_and_error(event)
     answer = CompactionTrigger.extract_completed_answer(event)
-    meta = normalize_retry_meta(state.job.meta)
+    request = Map.get(state, :execution_request)
+    meta = normalize_retry_meta(request && request.meta)
     prior_attempt = retry_attempt_from_meta(meta)
-    prompt = state.job.prompt
+    prompt = request && request.prompt
 
     cond do
       ok? == true ->
@@ -111,9 +112,9 @@ defmodule LemonRouter.RunProcess.RetryHandler do
             agent_id: SessionKey.agent_id(state.session_key || "") || "default",
             prompt: retry_prompt,
             queue_mode: state.queue_mode,
-            engine_id: state.job.engine_id,
-            cwd: state.job.cwd,
-            tool_policy: state.job.tool_policy,
+            engine_id: request && request.engine_id,
+            cwd: request && request.cwd,
+            tool_policy: request && request.tool_policy,
             meta: retry_meta
           })
 

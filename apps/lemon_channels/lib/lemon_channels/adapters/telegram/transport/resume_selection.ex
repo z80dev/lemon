@@ -123,14 +123,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           state
 
         true ->
-          {selector, prompt_part} =
-            case String.split(args, ~r/\s+/, parts: 2) do
-              [a] -> {a, ""}
-              [a, rest] -> {a, String.trim(rest || "")}
-              _ -> {args, ""}
-            end
+          sessions = list_recent_sessions(session_key, limit: 50)
 
-          resume = resolve_resume_selector(selector, list_recent_sessions(session_key, limit: 50))
+          {resume, prompt_part} =
+            case parse_inline_resume_args(args) do
+              {%ResumeToken{} = inline_resume, inline_prompt} ->
+                {inline_resume, inline_prompt}
+
+              nil ->
+                {selector, selector_prompt} =
+                  case String.split(args, ~r/\s+/, parts: 2) do
+                    [a] -> {a, ""}
+                    [a, rest] -> {a, String.trim(rest || "")}
+                    _ -> {args, ""}
+                  end
+
+                {resolve_resume_selector(selector, sessions), selector_prompt}
+            end
 
           if match?(%ResumeToken{}, resume) do
             PerChatState.set_chat_resume(scope, session_key, resume)
@@ -146,11 +155,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
             if prompt_part != "" do
               inbound =
-                put_in(
-                  inbound,
-                  [Access.key!(:message), :text],
-                  String.trim("#{format_resume_line(resume)}\n#{prompt_part}")
-                )
+                inbound
+                |> put_in([Access.key!(:message), :text], prompt_part)
+                |> maybe_prefix_resume_to_prompt(resume)
 
               callbacks.submit_inbound_now.(state, inbound)
             else
@@ -172,6 +179,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     end
   rescue
     _ -> state
+  end
+
+  defp parse_inline_resume_args(args) when is_binary(args) do
+    case String.split(String.trim(args), ~r/\s+/, parts: 3) do
+      [engine_id, token] ->
+        build_inline_resume(engine_id, token, "")
+
+      [engine_id, token, prompt_part] ->
+        build_inline_resume(engine_id, token, String.trim(prompt_part || ""))
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp parse_inline_resume_args(_), do: nil
+
+  defp build_inline_resume(engine_id, token, prompt_part) do
+    normalized_engine_id = String.downcase(String.trim(engine_id || ""))
+    normalized_token = String.trim(token || "")
+
+    if normalized_engine_id != "" and normalized_token != "" and
+         EngineRegistry.get_engine(normalized_engine_id) do
+      {%ResumeToken{engine: normalized_engine_id, value: normalized_token}, prompt_part}
+    else
+      nil
+    end
   end
 
   @spec resolve_resume_selector(binary(), list()) :: ResumeToken.t() | nil

@@ -207,9 +207,9 @@ Use the generic table API only for backend/wrapper internals or explicitly app-l
 
 ```elixir
 # Chat state (with 24h TTL, auto-swept every 5 minutes)
-:ok = LemonCore.Store.put_chat_state(scope, state)
-state = LemonCore.Store.get_chat_state(scope)
-:ok = LemonCore.Store.delete_chat_state(scope)
+:ok = LemonCore.ChatStateStore.put(scope, state)
+state = LemonCore.ChatStateStore.get(scope)
+:ok = LemonCore.ChatStateStore.delete(scope)
 
 # Run history
 :ok = LemonCore.RunStore.append_event(run_id, event)
@@ -218,16 +218,16 @@ history = LemonCore.RunStore.history(session_key, limit: 10)
 run = LemonCore.RunStore.get(run_id)
 
 # Policies (agent, channel, session, runtime)
-:ok = LemonCore.Store.put_agent_policy(agent_id, policy)
-policy = LemonCore.Store.get_agent_policy(agent_id)
-:ok = LemonCore.Store.put_channel_policy(channel_id, policy)
-:ok = LemonCore.Store.put_session_policy(session_key, policy)
-:ok = LemonCore.Store.put_runtime_policy(policy)  # global override
-policy = LemonCore.Store.get_runtime_policy()
+:ok = LemonCore.PolicyStore.put_agent(agent_id, policy)
+policy = LemonCore.PolicyStore.get_agent(agent_id)
+:ok = LemonCore.PolicyStore.put_channel(channel_id, policy)
+:ok = LemonCore.PolicyStore.put_session(session_key, policy)
+:ok = LemonCore.PolicyStore.put_runtime(policy)  # global override
+policy = LemonCore.PolicyStore.get_runtime()
 
 # Progress mapping (scope + Telegram message ID -> run_id)
-:ok = LemonCore.Store.put_progress_mapping(scope, progress_msg_id, run_id)
-run_id = LemonCore.Store.get_run_by_progress(scope, progress_msg_id)
+:ok = LemonCore.ProgressStore.put_run(scope, progress_msg_id, run_id)
+run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
 :ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)
 
 # Introspection events (canonical envelope + filtered queries)

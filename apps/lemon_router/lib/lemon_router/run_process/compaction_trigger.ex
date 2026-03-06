@@ -131,11 +131,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     prompt =
       case Map.get(state, :execution_request) do
         %LemonGateway.ExecutionRequest{prompt: p} when is_binary(p) -> p
-        _ ->
-          case Map.get(state, :job) do
-            %LemonGateway.Types.Job{prompt: p} when is_binary(p) -> p
-            _ -> nil
-          end
+        _ -> nil
       end
 
     if is_binary(prompt) and byte_size(prompt) > 0 do
@@ -446,10 +442,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           fetch(meta, :model)
 
         _ ->
-          case Map.get(state, :job) do
-            %LemonGateway.Types.Job{meta: meta} when is_map(meta) -> fetch(meta, :model)
-            _ -> nil
-          end
+          nil
       end
 
     model_context_window(model)
@@ -520,10 +513,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
             request.engine_id
 
           _ ->
-            case Map.get(state, :job) do
-              %LemonGateway.Types.Job{} = job -> job.engine_id
-              _ -> nil
-            end
+            nil
         end
 
     engine_text = String.downcase(to_string(engine || ""))

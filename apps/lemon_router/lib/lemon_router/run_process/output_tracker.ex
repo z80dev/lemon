@@ -277,25 +277,17 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> []
   end
 
-  defp fanout_routes(%{job: %LemonGateway.Types.Job{meta: meta}}) when is_map(meta) do
-    fetch(meta, :fanout_routes) || []
-  rescue
-    _ -> []
-  end
-
   defp fanout_routes(_), do: []
 
   defp coalescer_meta(%{execution_request: %LemonGateway.ExecutionRequest{} = request}),
     do: ChannelContext.coalescer_meta_from_job(request)
 
-  defp coalescer_meta(%{job: job}), do: ChannelContext.coalescer_meta_from_job(job)
   defp coalescer_meta(_), do: %{}
 
   defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
        when is_binary(cwd) and cwd != "",
        do: cwd
 
-  defp request_cwd(%{job: %{cwd: cwd}}) when is_binary(cwd) and cwd != "", do: cwd
   defp request_cwd(_), do: nil
 
   defp primary_route_signature(session_key) when is_binary(session_key) do

@@ -111,6 +111,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
+| `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
 | `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id resume/session index tables. |
 | `telegram/state_store.ex` | Typed wrapper for Telegram session/topic preference and generation state. |
@@ -583,7 +584,7 @@ end
 |-----|-------------|
 | `lemon_core` | Shared types (`InboundMessage`, `ChatScope`, `Binding`), `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry`, `GatewayConfig`, `BindingResolver` |
 | `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
-| `agent_core` | Consumes `InboundMessage` for session processing. Sends results back through `OutboundPayload` → Outbox. |
+| `agent_core` | Provides CLI runner infrastructure used indirectly by engines; channels never hand it `OutboundPayload` structs directly. |
 | `coding_agent` | Session engine that interacts through the router; channels deliver its output. |
 | `lemon_control_plane` | Gateway methods from adapters (e.g., `x_api.post_tweet`) are exposed through the control plane. |
 

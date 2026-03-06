@@ -521,7 +521,7 @@ LemonGateway.Config.get(:auto_resume)
 
 **Auto-resume not working**:
 - Verify `auto_resume = true` in config
-- Check `LemonCore.Store.get_chat_state(session_key)` for stored resume token
+- Check `LemonCore.ChatStateStore.get(session_key)` for stored resume token
 - Resume only applies if engine matches (or no engine_id set on job)
 
 **Context overflow**:

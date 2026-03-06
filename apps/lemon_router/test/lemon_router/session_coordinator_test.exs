@@ -81,7 +81,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:started, "run2", _}, 500
   end
 
-  test "followup submissions merge while queued behind an active run", %{run_supervisor: run_supervisor} do
+  test "followup submissions merge while queued behind an active run", %{
+    run_supervisor: run_supervisor
+  } do
     key = {:session, unique_session_key()}
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
@@ -116,6 +118,48 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:started, "run2", _}, 500
   end
 
+  test "abort_session/2 clears queued work for the matching session", %{
+    run_supervisor: run_supervisor
+  } do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+
+    :ok = submit(key, "run2", "two", :collect, run_supervisor)
+    refute_receive {:started, "run2", _}, 100
+
+    :ok = SessionCoordinator.abort_session(session_key, :user_requested)
+
+    assert_receive {:aborted, "run1", :user_requested}, 500
+    refute_receive {:started, "run2", _}, 300
+  end
+
+  test "SessionCoordinator owns SessionRegistry entries for the active session", %{
+    run_supervisor: run_supervisor
+  } do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+
+    assert eventually(fn ->
+             case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+               [{_pid, %{run_id: "run1"}}] -> true
+               _ -> false
+             end
+           end)
+
+    SessionCoordinator.cancel(session_key, :user_requested)
+    assert_receive {:aborted, "run1", :user_requested}, 500
+
+    assert eventually(fn ->
+             Registry.lookup(LemonRouter.SessionRegistry, session_key) == []
+           end)
+  end
+
   defp submit(key, run_id, prompt, queue_mode, run_supervisor) do
     request = %ExecutionRequest{
       run_id: run_id,
@@ -141,6 +185,24 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
   defp unique_session_key do
     "agent:test:main:#{System.unique_integer([:positive])}"
+  end
+
+  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
+    end
   end
 
   defp start_if_needed(name, fun) do

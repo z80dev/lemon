@@ -39,11 +39,26 @@ defmodule LemonRouter.SessionCoordinator do
     do: cancel_conversation(conversation_key, reason)
 
   def cancel(session_key, reason) when is_binary(session_key) do
-    case active_run_for_session(session_key) do
-      {:ok, run_id} -> LemonRouter.RunProcess.abort(run_id, reason)
-      :none -> :ok
-    end
+    coordinator_entries()
+    |> Enum.each(fn {_conversation_key, pid, _meta} ->
+      if is_pid(pid) do
+        GenServer.cast(pid, {:cancel_session, session_key, reason})
+      end
+    end)
 
+    :ok
+  end
+
+  @spec abort_session(binary(), term()) :: :ok
+  def abort_session(session_key, reason \\ :user_requested) when is_binary(session_key) do
+    coordinator_entries()
+    |> Enum.each(fn {_conversation_key, pid, _meta} ->
+      if is_pid(pid) do
+        GenServer.cast(pid, {:abort_session, session_key, reason})
+      end
+    end)
+
+    maybe_cancel_resume_conversation(session_key, reason)
     :ok
   end
 
@@ -104,7 +119,37 @@ defmodule LemonRouter.SessionCoordinator do
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    state = maybe_cancel_active(state, reason)
+    state =
+      state
+      |> clear_queue()
+      |> clear_pending_steers()
+      |> maybe_cancel_active(reason)
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:cancel_session, session_key, reason}, state) do
+    state =
+      if session_present?(state, session_key) do
+        maybe_cancel_active_for_session(state, session_key, reason)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:abort_session, session_key, reason}, state) do
+    state =
+      if session_present?(state, session_key) do
+        state
+        |> drop_session_queue(session_key)
+        |> drop_session_pending_steers(session_key)
+        |> maybe_cancel_active_for_session(session_key, reason)
+      else
+        state
+      end
+
     {:noreply, state}
   end
 
@@ -172,15 +217,6 @@ defmodule LemonRouter.SessionCoordinator do
     end
 
     :ok
-  end
-
-  defp active_run_for_session(session_key) do
-    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
-      [{_pid, %{run_id: run_id}} | _] when is_binary(run_id) -> {:ok, run_id}
-      _ -> :none
-    end
-  rescue
-    _ -> :none
   end
 
   defp normalize_submission(submission) do
@@ -380,6 +416,17 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_cancel_active(state, _reason), do: state
 
+  defp maybe_cancel_active_for_session(
+         %{active: %{session_key: session_key}} = state,
+         session_key,
+         reason
+       )
+       when is_binary(session_key) do
+    maybe_cancel_active(state, reason)
+  end
+
+  defp maybe_cancel_active_for_session(state, _session_key, _reason), do: state
+
   defp put_active_session_registry(%{session_key: session_key, run_id: run_id}) do
     if is_binary(session_key) do
       _ = Registry.unregister(LemonRouter.SessionRegistry, session_key)
@@ -506,6 +553,90 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp gateway_run_pid(_), do: nil
 
+  defp coordinator_entries do
+    Registry.select(LemonRouter.ConversationRegistry, [
+      {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
+    ])
+  rescue
+    _ -> []
+  end
+
+  defp maybe_cancel_resume_conversation(session_key, reason) do
+    case resume_conversation_key(session_key) do
+      nil -> :ok
+      conversation_key -> cancel_conversation(conversation_key, reason)
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp resume_conversation_key(session_key) when is_binary(session_key) do
+    case LemonCore.ChatStateStore.get(session_key) do
+      %LemonGateway.ChatState{last_engine: engine, last_resume_token: token}
+      when is_binary(engine) and is_binary(token) ->
+        {:resume, engine, token}
+
+      %{} = state ->
+        engine = fetch(state, :last_engine)
+        token = fetch(state, :last_resume_token)
+
+        if is_binary(engine) and is_binary(token), do: {:resume, engine, token}, else: nil
+
+      _ ->
+        nil
+    end
+  end
+
+  defp resume_conversation_key(_), do: nil
+
+  defp session_present?(state, session_key) do
+    active_session?(state.active, session_key) or
+      Enum.any?(state.queue, &(&1.session_key == session_key)) or
+      pending_steer_session?(state.pending_steers, session_key)
+  end
+
+  defp active_session?(%{session_key: session_key}, session_key) when is_binary(session_key),
+    do: true
+
+  defp active_session?(_, _), do: false
+
+  defp pending_steer_session?(pending_steers, session_key) do
+    Enum.any?(pending_steers, fn {_run_id, entries} ->
+      Enum.any?(entries, fn {submission, _mode} -> submission.session_key == session_key end)
+    end)
+  end
+
+  defp clear_queue(state), do: %{state | queue: []}
+
+  defp clear_pending_steers(state), do: %{state | pending_steers: %{}}
+
+  defp drop_session_queue(state, session_key) do
+    %{state | queue: Enum.reject(state.queue, &(&1.session_key == session_key))}
+  end
+
+  defp drop_session_pending_steers(state, session_key) do
+    pending_steers =
+      state.pending_steers
+      |> Enum.reduce(%{}, fn {active_run_id, entries}, acc ->
+        kept =
+          Enum.reject(entries, fn {submission, _mode} ->
+            submission.session_key == session_key
+          end)
+
+        if kept == [] do
+          acc
+        else
+          Map.put(acc, active_run_id, kept)
+        end
+      end)
+
+    %{state | pending_steers: pending_steers}
+  end
+
+  defp fetch(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
   defp merge_prompt(nil, right), do: right || ""
   defp merge_prompt(left, nil), do: left
   defp merge_prompt(left, right), do: left <> "\n" <> right
@@ -570,8 +701,4 @@ defmodule LemonRouter.SessionCoordinator do
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts
   defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)
   defp normalize_run_process_opts(_), do: %{}
-
-  defp fetch(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
 end

@@ -142,7 +142,9 @@ defmodule LemonRouter.Router do
   """
   @spec abort(session_key :: binary(), reason :: term()) :: :ok
   def abort(session_key, reason \\ :user_requested) do
-    # Find active run for session
+    LemonRouter.SessionCoordinator.abort_session(session_key, reason)
+
+    # Compatibility fallback for any legacy run registrations still present.
     LemonRouter.SessionRegistry
     |> Registry.lookup(session_key)
     |> Enum.reduce(MapSet.new(), fn

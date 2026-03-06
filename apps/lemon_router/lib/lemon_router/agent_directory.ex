@@ -10,6 +10,7 @@ defmodule LemonRouter.AgentDirectory do
   to provide a "phonebook" for agent/session addressing.
   """
 
+  alias LemonChannels.Telegram.KnownTargetStore
   alias LemonCore.SessionKey
 
   @registry_select_spec [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}]
@@ -423,7 +424,7 @@ defmodule LemonRouter.AgentDirectory do
   end
 
   defp known_telegram_targets do
-    LemonCore.Store.list(:telegram_known_targets)
+    KnownTargetStore.list()
     |> Enum.map(&known_telegram_target_entry/1)
     |> Enum.reject(&is_nil/1)
   rescue

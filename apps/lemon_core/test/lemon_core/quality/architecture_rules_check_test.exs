@@ -135,6 +135,53 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags project binding store bypasses outside typed wrappers" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_project.ex",
+        """
+        defmodule LemonControlPlane.Methods.BadProject do
+          def bad(project_id), do: LemonCore.Store.get(:project_overrides, project_id)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :shared_domain_store_wrapper_bypass and
+                 issue.path ==
+                   "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_project.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows typed project binding wrapper to use raw store internally" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/project_binding_store.ex",
+        """
+        defmodule LemonCore.ProjectBindingStore do
+          def get(project_id), do: LemonCore.Store.get(:project_overrides, project_id)
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "flags scheduler-side conversation key fallback" do
     tmp_dir = tmp_repo!()
 
@@ -260,6 +307,52 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
                issue.code == :core_telegram_resume_index_leak and
                  issue.path == "apps/lemon_core/lib/lemon_core/bad.ex"
              end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags raw telegram known-target access outside the channels wrapper" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_targets.ex",
+        """
+        defmodule LemonRouter.BadTargets do
+          def bad, do: LemonCore.Store.list(:telegram_known_targets)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :telegram_known_targets_wrapper_bypass and
+                 issue.path == "apps/lemon_router/lib/lemon_router/bad_targets.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows the telegram known-target typed wrapper" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/telegram/known_target_store.ex",
+        """
+        defmodule LemonChannels.Telegram.KnownTargetStore do
+          def list, do: LemonCore.Store.list(:telegram_known_targets)
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
     after
       File.rm_rf!(tmp_dir)
     end

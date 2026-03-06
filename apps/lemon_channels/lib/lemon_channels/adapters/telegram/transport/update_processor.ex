@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
   alias LemonCore.MapHelpers
-  alias LemonCore.Store, as: CoreStore
+  alias LemonChannels.Telegram.KnownTargetStore
 
   @known_target_write_interval_ms 30_000
 
@@ -77,7 +77,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
          chat_id when is_integer(chat_id) <- parse_int(chat["id"]) do
       topic_id = parse_int(message["message_thread_id"])
       key = {account_id, chat_id, topic_id}
-      existing = CoreStore.get(:telegram_known_targets, key) || %{}
+      existing = KnownTargetStore.get(key) || %{}
       now = System.system_time(:millisecond)
 
       entry =
@@ -104,7 +104,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
         )
 
       if should_persist_known_target?(existing, entry, now) do
-        _ = CoreStore.put(:telegram_known_targets, key, entry)
+        _ = KnownTargetStore.put(key, entry)
       end
 
       state

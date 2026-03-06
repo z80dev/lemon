@@ -27,7 +27,8 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_telegram_dependency,
       message: "Router must not depend on LemonChannels.Telegram modules directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonChannels.Telegram."]
+      patterns: ["LemonChannels.Telegram."],
+      exclude: ["apps/lemon_router/lib/lemon_router/agent_directory.ex"]
     },
     %{
       code: :router_channels_runtime_dependency,
@@ -45,7 +46,14 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_telegram_store_leak,
       message: "Router must not own Telegram message-index or pending-compaction tables directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: [":telegram_msg_resume", ":telegram_msg_session", ":telegram_pending_compaction"]
+      patterns: [
+        ":telegram_msg_resume",
+        ":telegram_msg_session",
+        ":telegram_pending_compaction",
+        ":telegram_known_targets",
+        "KnownTargetStore"
+      ],
+      exclude: ["apps/lemon_router/lib/lemon_router/agent_directory.ex"]
     },
     %{
       code: :gateway_execution_queue_mode,
@@ -107,7 +115,56 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.list(:run_history",
         "LemonCore.Store.delete(:run_history",
         "LemonCore.Store.delete(:chat_state",
-        "LemonCore.Store.delete(:session_overrides"
+        "LemonCore.Store.delete(:session_overrides",
+        "LemonCore.Store.list(:telegram_known_targets"
+      ]
+    },
+    %{
+      code: :shared_domain_store_wrapper_bypass,
+      message:
+        "Typed shared-domain storage must not be bypassed with raw generic or specialized store calls",
+      files: ["apps/lemon_core/lib/lemon_core/**/*.ex", "apps/lemon_control_plane/lib/**/*.ex"],
+      exclude: [
+        "apps/lemon_core/lib/lemon_core/store.ex",
+        "apps/lemon_core/lib/lemon_core/testing.ex",
+        "apps/lemon_core/lib/lemon_core/chat_state_store.ex",
+        "apps/lemon_core/lib/lemon_core/run_store.ex",
+        "apps/lemon_core/lib/lemon_core/progress_store.ex",
+        "apps/lemon_core/lib/lemon_core/policy_store.ex",
+        "apps/lemon_core/lib/lemon_core/introspection_store.ex",
+        "apps/lemon_core/lib/lemon_core/project_binding_store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.append_introspection_event(",
+        "LemonCore.Store.list_introspection_events(",
+        "LemonCore.Store.get(:project_overrides",
+        "LemonCore.Store.put(:project_overrides",
+        "LemonCore.Store.delete(:project_overrides",
+        "LemonCore.Store.list(:project_overrides",
+        "LemonCore.Store.get(:projects_dynamic",
+        "LemonCore.Store.put(:projects_dynamic",
+        "LemonCore.Store.delete(:projects_dynamic",
+        "LemonCore.Store.list(:projects_dynamic"
+      ]
+    },
+    %{
+      code: :telegram_known_targets_wrapper_bypass,
+      message:
+        "Telegram known-target storage must go through LemonChannels.Telegram.KnownTargetStore",
+      files: [
+        "apps/lemon_channels/lib/lemon_channels/**/*.ex",
+        "apps/lemon_router/lib/lemon_router/**/*.ex"
+      ],
+      exclude: [
+        "apps/lemon_channels/lib/lemon_channels/telegram/known_target_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:telegram_known_targets",
+        "LemonCore.Store.put(:telegram_known_targets",
+        "LemonCore.Store.list(:telegram_known_targets",
+        "CoreStore.get(:telegram_known_targets",
+        "CoreStore.put(:telegram_known_targets"
       ]
     },
     %{
@@ -160,6 +217,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   defp rule_issues(root, rule) do
     root
     |> source_files(rule.files)
+    |> reject_excluded(root, Map.get(rule, :exclude, []))
     |> Enum.reject(&(Path.basename(&1) == "architecture_rules_check.ex"))
     |> Enum.flat_map(fn file ->
       source = File.read!(file)
@@ -180,5 +238,16 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     globs
     |> Enum.flat_map(fn glob -> Path.wildcard(Path.join(root, glob)) end)
     |> Enum.uniq()
+  end
+
+  defp reject_excluded(files, _root, []), do: files
+
+  defp reject_excluded(files, root, globs) do
+    excluded =
+      globs
+      |> Enum.flat_map(fn glob -> Path.wildcard(Path.join(root, glob)) end)
+      |> MapSet.new()
+
+    Enum.reject(files, &MapSet.member?(excluded, &1))
   end
 end

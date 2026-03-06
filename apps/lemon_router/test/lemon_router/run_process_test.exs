@@ -200,7 +200,7 @@ defmodule LemonRouter.RunProcessTest do
       assert is_pid(pid)
     end
 
-    test "registers session_key -> run_id only when the gateway run starts" do
+    test "does not own SessionRegistry entries directly" do
       run_id = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
 
@@ -226,17 +226,14 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
 
-      assert eventually(fn ->
-               case Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) do
-                 [{_pid, %{run_id: ^run_id}}] -> true
-                 _ -> false
-               end
+      refute eventually(fn ->
+               Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) != []
              end)
 
       GenServer.stop(pid)
     end
 
-    test "single-flight contention does not cancel the new run; it retries registration until released" do
+    test "single-flight registration is no longer retried in RunProcess" do
       run_id1 = "run_#{System.unique_integer()}"
       run_id2 = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
@@ -261,12 +258,7 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id1), ev1)
 
-      assert eventually(fn ->
-               case Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) do
-                 [{_pid, %{run_id: ^run_id1}}] -> true
-                 _ -> false
-               end
-             end)
+      assert [] == Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
 
       assert {:ok, pid2} =
                RunProcess.start_link(%{
@@ -287,20 +279,9 @@ defmodule LemonRouter.RunProcessTest do
 
       # pid2 stays alive (the run is not cancelled).
       assert eventually(fn -> Process.alive?(pid2) end)
-
-      # Still held by pid1 until it stops/unregisters.
-      assert [{_pid, %{run_id: ^run_id1}}] =
-               Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
+      assert [] == Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
 
       GenServer.stop(pid1)
-
-      assert eventually(fn ->
-               case Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) do
-                 [{_pid, %{run_id: ^run_id2}}] -> true
-                 _ -> false
-               end
-             end)
-
       GenServer.stop(pid2)
     end
   end
@@ -357,6 +338,7 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive {:test_scheduler_submit, %LemonGateway.ExecutionRequest{run_id: ^run_id}},
                      1_500
+
       refute_receive {:test_scheduler_submit, _job}, 300
 
       GenServer.stop(pid)
@@ -562,9 +544,7 @@ defmodule LemonRouter.RunProcessTest do
         %{make_test_job(run_id, %{origin: :channel}) | prompt: "Collect the latest status report"}
 
       {:ok, _} =
-        start_supervised(
-          {__MODULE__.TestRunOrchestrator, [notify_pid: self()]}
-        )
+        start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -609,9 +589,7 @@ defmodule LemonRouter.RunProcessTest do
       job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
-        start_supervised(
-          {__MODULE__.TestRunOrchestrator, [notify_pid: self()]}
-        )
+        start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -652,9 +630,7 @@ defmodule LemonRouter.RunProcessTest do
         }
 
       {:ok, _} =
-        start_supervised(
-          {__MODULE__.TestRunOrchestrator, [notify_pid: self()]}
-        )
+        start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -690,9 +666,7 @@ defmodule LemonRouter.RunProcessTest do
       job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
-        start_supervised(
-          {__MODULE__.TestRunOrchestrator, [notify_pid: self()]}
-        )
+        start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -730,7 +704,12 @@ defmodule LemonRouter.RunProcessTest do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
 
-      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
+      _ =
+        ChatStateStore.put(session_key, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
 
       job = make_test_job(run_id, %{origin: :channel})
 
@@ -973,10 +952,20 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
+      _ =
+        ChatStateStore.put(session_key, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
 
       _ = StateStore.put_selected_resume(selected_key, stale_resume)
-      _ = ResumeIndexStore.put_session("botx", 12_345, 777, 9_001, session_key <> ":sub:old", generation: 0)
+
+      _ =
+        ResumeIndexStore.put_session("botx", 12_345, 777, 9_001, session_key <> ":sub:old",
+          generation: 0
+        )
+
       _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_001, stale_resume, generation: 0)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
@@ -1044,10 +1033,20 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
+      _ =
+        ChatStateStore.put(session_key, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
 
       _ = StateStore.put_selected_resume(selected_key, stale_resume)
-      _ = ResumeIndexStore.put_session("botx", 12_345, 777, 9_002, session_key <> ":sub:old", generation: 0)
+
+      _ =
+        ResumeIndexStore.put_session("botx", 12_345, 777, 9_002, session_key <> ":sub:old",
+          generation: 0
+        )
+
       _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_002, stale_resume, generation: 0)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
@@ -1561,17 +1560,33 @@ defmodule LemonRouter.RunProcessTest do
 
   describe "estimate_input_tokens_from_prompt/1" do
     test "returns char-based estimate for valid prompt" do
-      state = %{job: %LemonGateway.Types.Job{prompt: String.duplicate("a", 400)}}
+      state = %{
+        execution_request: %LemonGateway.ExecutionRequest{
+          run_id: "run-estimate",
+          session_key: "session-estimate",
+          prompt: String.duplicate("a", 400),
+          engine_id: "codex"
+        }
+      }
+
       assert RunProcess.estimate_input_tokens_from_prompt(state) == 100
     end
 
     test "returns nil when prompt is nil" do
-      state = %{job: %LemonGateway.Types.Job{prompt: nil}}
+      state = %{
+        execution_request: %LemonGateway.ExecutionRequest{
+          run_id: "run-estimate-nil",
+          session_key: "session-estimate-nil",
+          prompt: nil,
+          engine_id: "codex"
+        }
+      }
+
       assert RunProcess.estimate_input_tokens_from_prompt(state) == nil
     end
 
-    test "returns nil when job is missing" do
-      state = %{job: nil}
+    test "returns nil when execution_request is missing" do
+      state = %{execution_request: nil}
       assert RunProcess.estimate_input_tokens_from_prompt(state) == nil
     end
   end
