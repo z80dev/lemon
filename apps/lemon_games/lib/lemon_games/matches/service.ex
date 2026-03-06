@@ -277,9 +277,9 @@ defmodule LemonGames.Matches.Service do
                 "turn_number" => match["turn_number"]
               })
 
-              if terminal do
-                Bus.broadcast_lobby_changed(match_id, "finished", "game_over")
-              end
+              lobby_status = if terminal, do: "finished", else: match["status"]
+              lobby_reason = if terminal, do: "game_over", else: "move_submitted"
+              Bus.broadcast_lobby_changed(match_id, lobby_status, lobby_reason)
 
               # Trigger bot turn if next player is a bot
               Task.start(fn -> LemonGames.Bot.TurnWorker.maybe_play_bot_turn(match) end)

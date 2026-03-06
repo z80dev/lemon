@@ -84,8 +84,8 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 
 ### Games LiveViews
 
-- `LemonWeb.GamesLobbyLive` (`/games`) shows public matches and live lobby refreshes via `LemonGames.Bus.subscribe_lobby/0`.
-- `LemonWeb.GameMatchLive` (`/games/:id`) renders match state + event timeline and subscribes to per-match events via `LemonGames.Bus.subscribe_match/1`.
+- `LemonWeb.Games.LobbyLive` (`/games`) shows public matches via `LemonGames.Bus.subscribe_lobby/0` and also performs a periodic refresh tick (1.5s) as a fallback.
+- `LemonWeb.Games.MatchLive` (`/games/:id`) renders match state + event timeline via `LemonGames.Bus.subscribe_match/1`, tracks a `last_event_seq` cursor, and performs catch-up via `LemonGames.Matches.Service.list_events/4` (`after_seq`) on each event and on a periodic refresh tick (1s).
 
 ### Message Structure
 

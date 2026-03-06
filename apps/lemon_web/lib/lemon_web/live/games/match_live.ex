@@ -7,20 +7,33 @@ defmodule LemonWeb.Games.MatchLive do
   alias LemonGames.{Bus, Matches.Service}
   alias LemonWeb.Games.Components.BoardComponent
 
+  @refresh_ms 1_000
+  @event_batch_limit 200
+  @max_catch_up_batches 5
+
   @impl true
   def mount(%{"match_id" => match_id}, _session, socket) do
-    if connected?(socket), do: Bus.subscribe_match(match_id)
+    if connected?(socket) do
+      Bus.subscribe_match(match_id)
+      Process.send_after(self(), :refresh_match, @refresh_ms)
+    end
 
     {:ok,
      socket
      |> assign(:page_title, "Game Match")
      |> assign(:match_id, match_id)
+     |> assign(:last_event_seq, 0)
      |> load_match()}
   end
 
   @impl true
   def handle_info(%Event{type: :game_match_event}, socket) do
-    {:noreply, load_match(socket)}
+    {:noreply, catch_up_match(socket)}
+  end
+
+  def handle_info(:refresh_match, socket) do
+    Process.send_after(self(), :refresh_match, @refresh_ms)
+    {:noreply, catch_up_match(socket)}
   end
 
   def handle_info(_, socket), do: {:noreply, socket}
@@ -91,12 +104,13 @@ defmodule LemonWeb.Games.MatchLive do
   end
 
   def status_indicator(assigns) do
-    {color, label} = case @status do
-      "active" -> {"bg-emerald-500", "Live"}
-      "pending_accept" -> {"bg-amber-500", "Waiting"}
-      "finished" -> {"bg-slate-400", "Finished"}
-      _ -> {"bg-slate-400", "Unknown"}
-    end
+    {color, label} =
+      case assigns.status do
+        "active" -> {"bg-emerald-500", "Live"}
+        "pending_accept" -> {"bg-amber-500", "Waiting"}
+        "finished" -> {"bg-slate-400", "Finished"}
+        _ -> {"bg-slate-400", "Unknown"}
+      end
 
     assigns = assign(assigns, color: color, label: label)
 
@@ -109,11 +123,12 @@ defmodule LemonWeb.Games.MatchLive do
   end
 
   def player_card(assigns) do
-    {name, avatar, bot} = case @player do
-      %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
-      %{"display_name" => name} -> {name, "👤", false}
-      _ -> {"Unknown", "❓", false}
-    end
+    {name, avatar, bot} =
+      case assigns.player do
+        %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
+        %{"display_name" => name} -> {name, "👤", false}
+        _ -> {"Unknown", "❓", false}
+      end
 
     assigns = assign(assigns, name: name, avatar: avatar, bot: bot)
 
@@ -158,12 +173,87 @@ defmodule LemonWeb.Games.MatchLive do
 
     case Service.get_match(match_id, "spectator") do
       {:ok, match} ->
-        {:ok, events, _next, _more} = Service.list_events(match_id, 0, 200, "spectator")
-        assign(socket, :match, match) |> assign(:events, events)
+        case fetch_events_since(match_id, 0, "spectator") do
+          {:ok, events, next_after_seq} ->
+            socket
+            |> assign(:match, match)
+            |> assign(:events, events)
+            |> assign(:last_event_seq, next_after_seq)
+
+          {:error, :not_found, _} ->
+            assign(socket, :match, nil)
+            |> assign(:events, [])
+            |> assign(:last_event_seq, 0)
+        end
 
       {:error, :not_found, _} ->
-        assign(socket, :match, nil) |> assign(:events, [])
+        assign(socket, :match, nil)
+        |> assign(:events, [])
+        |> assign(:last_event_seq, 0)
     end
+  end
+
+  defp catch_up_match(socket) do
+    match_id = socket.assigns.match_id
+    after_seq = socket.assigns.last_event_seq || 0
+
+    case fetch_events_since(match_id, after_seq, "spectator") do
+      {:ok, [], _next_after_seq} ->
+        socket
+
+      {:ok, new_events, next_after_seq} ->
+        case Service.get_match(match_id, "spectator") do
+          {:ok, match} ->
+            socket
+            |> assign(:match, match)
+            |> assign(:events, append_events(socket.assigns.events || [], new_events))
+            |> assign(:last_event_seq, next_after_seq)
+
+          {:error, :not_found, _} ->
+            socket
+            |> assign(:match, nil)
+            |> assign(:events, [])
+            |> assign(:last_event_seq, 0)
+        end
+
+      {:error, :not_found, _} ->
+        socket
+        |> assign(:match, nil)
+        |> assign(:events, [])
+        |> assign(:last_event_seq, 0)
+    end
+  end
+
+  defp fetch_events_since(match_id, after_seq, viewer, depth \\ 0, acc \\ [])
+
+  defp fetch_events_since(_match_id, after_seq, _viewer, depth, acc)
+       when depth >= @max_catch_up_batches do
+    {:ok, acc, after_seq}
+  end
+
+  defp fetch_events_since(match_id, after_seq, viewer, depth, acc) do
+    case Service.list_events(match_id, after_seq, @event_batch_limit, viewer) do
+      {:ok, events, next_after_seq, true} ->
+        fetch_events_since(match_id, next_after_seq, viewer, depth + 1, acc ++ events)
+
+      {:ok, events, next_after_seq, false} ->
+        {:ok, acc ++ events, next_after_seq}
+
+      {:error, _code, _message} = error ->
+        error
+    end
+  end
+
+  defp append_events(existing, new_events) do
+    existing_seqs = existing |> Enum.map(& &1["seq"]) |> MapSet.new()
+
+    merged =
+      existing ++
+        Enum.reject(new_events, fn event -> MapSet.member?(existing_seqs, event["seq"]) end)
+
+    keep = 400
+    drop_count = max(length(merged) - keep, 0)
+    Enum.drop(merged, drop_count)
   end
 
   defp players_label(players) when is_map(players) do

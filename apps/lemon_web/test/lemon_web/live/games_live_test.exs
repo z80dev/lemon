@@ -39,6 +39,18 @@ defmodule LemonWeb.Live.GamesLiveTest do
     assert render(view) =~ "Connect 4"
   end
 
+  test "lobby updates on refresh tick without lobby bus event" do
+    {:ok, view, html} = live(build_conn(), "/games")
+    assert html =~ "No active matches"
+
+    {:ok, match} =
+      Service.create_match(%{"game_type" => "connect4", "visibility" => "public"}, @actor1)
+
+    send(view.pid, :refresh_lobby)
+
+    assert render(view) =~ match["id"]
+  end
+
   test "GET /games/:match_id renders match details" do
     {:ok, match_id} = create_active_match()
 
@@ -59,11 +71,62 @@ defmodule LemonWeb.Live.GamesLiveTest do
     assert html =~ "Turn #1"
 
     assert {:ok, _updated, _seq, false} =
-             Service.submit_move(match_id, @actor1, %{"kind" => "drop", "column" => 0}, "lv-move-1")
+             Service.submit_move(
+               match_id,
+               @actor1,
+               %{"kind" => "drop", "column" => 0},
+               "lv-move-1"
+             )
 
     send(view.pid, Event.new(:game_match_event, %{}))
 
     assert render(view) =~ "Turn #2"
+  end
+
+  test "match live updates on refresh tick without match bus event" do
+    {:ok, match_id} = create_active_match()
+    {:ok, view, html} = live(build_conn(), "/games/#{match_id}")
+
+    assert html =~ "Turn #1"
+
+    assert {:ok, _updated, _seq, false} =
+             Service.submit_move(
+               match_id,
+               @actor1,
+               %{"kind" => "drop", "column" => 0},
+               "lv-move-2"
+             )
+
+    send(view.pid, :refresh_match)
+
+    assert render(view) =~ "Turn #2"
+  end
+
+  test "match live catches up multiple missed events from event log cursor" do
+    {:ok, match_id} = create_active_match()
+    {:ok, view, html} = live(build_conn(), "/games/#{match_id}")
+
+    assert html =~ "Turn #1"
+
+    assert {:ok, _updated, _seq, false} =
+             Service.submit_move(
+               match_id,
+               @actor1,
+               %{"kind" => "drop", "column" => 0},
+               "lv-move-catchup-1"
+             )
+
+    assert {:ok, _updated, _seq, false} =
+             Service.submit_move(
+               match_id,
+               @actor2,
+               %{"kind" => "drop", "column" => 1},
+               "lv-move-catchup-2"
+             )
+
+    send(view.pid, :refresh_match)
+
+    assert render(view) =~ "Turn #3"
   end
 
   test "unknown match shows not found message" do
@@ -72,7 +135,8 @@ defmodule LemonWeb.Live.GamesLiveTest do
   end
 
   defp create_active_match do
-    with {:ok, pending} <- Service.create_match(%{"game_type" => "connect4", "visibility" => "public"}, @actor1),
+    with {:ok, pending} <-
+           Service.create_match(%{"game_type" => "connect4", "visibility" => "public"}, @actor1),
          {:ok, active} <- Service.accept_match(pending["id"], @actor2) do
       {:ok, active["id"]}
     end
