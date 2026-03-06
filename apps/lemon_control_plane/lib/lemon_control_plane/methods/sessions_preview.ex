@@ -32,7 +32,7 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   end
 
   defp get_session_history(session_key, limit) do
-    LemonCore.Store.get_run_history(session_key, limit: limit)
+    LemonCore.RunStore.history(session_key, limit: limit)
     |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data) end)
   rescue
     _ -> []

@@ -48,13 +48,12 @@ defmodule LemonRouter.ChannelContextTest do
       assert ChannelContext.compact_meta(nil) == %{}
     end
 
-    test "coalescer_meta_from_job/1 returns expected ids" do
+    test "coalescer_meta_from_job/1 returns semantic metadata only" do
       job = %{meta: %{progress_msg_id: 10, status_msg_id: 11, user_msg_id: 12, ignore: "x"}}
 
       assert ChannelContext.coalescer_meta_from_job(job) == %{
-               progress_msg_id: 10,
-               status_msg_id: 11,
-               user_msg_id: 12
+               user_msg_id: 12,
+               show_running_prefix?: true
              }
     end
 

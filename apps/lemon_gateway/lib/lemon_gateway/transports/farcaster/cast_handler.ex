@@ -7,13 +7,10 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   require Logger
 
-  alias LemonGateway.{BindingResolver, Runtime}
-  alias LemonCore.{Store, Secrets}
-  alias LemonGateway.Transports.Farcaster.HubClient
-  alias LemonCore.Store
+  alias LemonGateway.BindingResolver
+  alias LemonCore.{ChatStateStore, RouterBridge, RunRequest, Secrets, Store}
   alias LemonGateway.Transports.Farcaster.HubClient
   alias LemonCore.ChatScope
-  alias LemonGateway.Types.Job
   alias LemonCore.SessionKey
 
   @default_action_path "/frames/farcaster/actions"
@@ -158,27 +155,32 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
     run_id = LemonCore.Id.run_id()
     engine_id = BindingResolver.resolve_engine(scope, engine_hint, nil)
 
-    job = %Job{
-      run_id: run_id,
-      session_key: session_key,
-      prompt: prompt,
-      engine_id: engine_id,
-      cwd: BindingResolver.resolve_cwd(scope),
-      queue_mode: BindingResolver.resolve_queue_mode(scope) || :collect,
-      meta: %{
+    request =
+      RunRequest.new(%{
         origin: :farcaster,
-        farcaster: %{
-          fid: scope.chat_id,
-          button_index: action.button_index,
-          cast_hash: action.cast_hash,
-          session_ref: session_ref,
-          session_key: session_key
+        run_id: run_id,
+        session_key: session_key,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        prompt: prompt,
+        queue_mode: BindingResolver.resolve_queue_mode(scope),
+        engine_id: engine_id,
+        cwd: BindingResolver.resolve_cwd(scope),
+        meta: %{
+          farcaster: %{
+            fid: scope.chat_id,
+            button_index: action.button_index,
+            cast_hash: action.cast_hash,
+            session_ref: session_ref,
+            session_key: session_key
+          }
         }
-      }
-    }
+      })
 
-    Runtime.submit(job)
-    {:ok, run_id}
+    case RouterBridge.submit_run(request) do
+      {:ok, ^run_id} -> {:ok, run_id}
+      {:ok, submitted_run_id} when is_binary(submitted_run_id) -> {:ok, submitted_run_id}
+      {:error, reason} -> {:error, reason}
+    end
   rescue
     error ->
       Logger.warning("farcaster submit failed: #{inspect(error)}")
@@ -243,7 +245,7 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   defp delete_session(scope, session_ref) do
     old_key = build_session_key(scope, session_ref)
-    Store.delete_chat_state(old_key)
+    ChatStateStore.delete(old_key)
   rescue
     _ -> :ok
   end

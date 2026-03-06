@@ -9,12 +9,21 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
   """
   use ExUnit.Case, async: false
 
+  alias LemonGateway.Config
   alias LemonGateway.Scheduler
 
   # We need to test internal GenServer state, so we use :sys.get_state
   # These tests exercise the monitor lifecycle through the public API.
 
   setup do
+    # Scheduler reads limits from LemonGateway.Config during init.
+    if is_nil(Process.whereis(Config)) do
+      case start_supervised({Config, []}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
     # Ensure scheduler is running even if a prior test/app shutdown stopped it.
     if is_nil(Process.whereis(Scheduler)) do
       case start_supervised({Scheduler, []}) do
@@ -23,6 +32,7 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
       end
     end
 
+    assert Process.whereis(Config) != nil
     assert Process.whereis(Scheduler) != nil
     :ok
   end

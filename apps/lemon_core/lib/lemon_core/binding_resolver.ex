@@ -11,10 +11,7 @@ defmodule LemonCore.BindingResolver do
 
   alias LemonCore.Binding
   alias LemonCore.ChatScope
-  alias LemonCore.Store
-
-  @project_overrides_table :project_overrides
-  @dynamic_projects_table :projects_dynamic
+  alias LemonCore.ProjectBindingStore
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -143,7 +140,7 @@ defmodule LemonCore.BindingResolver do
   """
   @spec get_project_override(ChatScope.t()) :: String.t() | nil
   def get_project_override(%ChatScope{} = scope) do
-    Store.get(@project_overrides_table, scope)
+    ProjectBindingStore.get_override(scope)
   rescue
     _ -> nil
   end
@@ -159,7 +156,7 @@ defmodule LemonCore.BindingResolver do
   def lookup_project(project_id, config_provider \\ nil)
 
   def lookup_project(project_id, config_provider) when is_binary(project_id) do
-    dynamic = Store.get(@dynamic_projects_table, project_id)
+    dynamic = ProjectBindingStore.get_dynamic(project_id)
 
     cond do
       is_map(dynamic) and is_binary(dynamic[:root] || dynamic["root"]) ->
@@ -192,14 +189,6 @@ defmodule LemonCore.BindingResolver do
   end
 
   def lookup_project(_, _), do: nil
-
-  @doc "Returns the canonical project-overrides ETS table name."
-  @spec project_overrides_table() :: atom()
-  def project_overrides_table, do: @project_overrides_table
-
-  @doc "Returns the canonical dynamic-projects ETS table name."
-  @spec dynamic_projects_table() :: atom()
-  def dynamic_projects_table, do: @dynamic_projects_table
 
   # ---------------------------------------------------------------------------
   # Private helpers

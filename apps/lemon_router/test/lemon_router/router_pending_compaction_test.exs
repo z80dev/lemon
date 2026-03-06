@@ -5,14 +5,14 @@ defmodule LemonRouter.RouterPendingCompactionTest do
   Covers:
   - Generic marker consumption and deletion
   - Stale marker behavior
-  - auto_compacted guard (no double-injection)
   """
   use ExUnit.Case, async: false
 
   alias LemonRouter.Router
   alias LemonCore.InboundMessage
+  alias LemonRouter.PendingCompactionStore
 
-  defmodule RunOrchestratorStub do
+  defmodule RunOrchestratorStubPendingCompaction do
     def submit(request) do
       if pid = Process.get(:router_test_pid) do
         send(pid, {:orchestrator_submit, request})
@@ -32,7 +32,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
     end)
 
     previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
-    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStub)
+    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubPendingCompaction)
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
@@ -82,7 +82,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       )
 
       # Set a fresh pending compaction marker
-      LemonCore.Store.put(:pending_compaction, session_key, %{
+      PendingCompactionStore.put(session_key, %{
         reason: "near_limit",
         session_key: session_key,
         set_at_ms: System.system_time(:millisecond),
@@ -94,10 +94,9 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
 
       # Marker should be deleted
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
-
-      # Meta should be marked as auto_compacted
-      assert new_meta[:auto_compacted] == true
+      assert PendingCompactionStore.get(session_key) == nil
+      refute Map.has_key?(new_meta, :auto_compacted)
+      refute Map.has_key?(new_meta, "auto_compacted")
 
       # Prompt should contain the compaction context
       assert new_msg.message.text =~ "previous conversation"
@@ -116,7 +115,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       # Set a stale marker (13 hours ago)
       stale_ms = System.system_time(:millisecond) - 13 * 60 * 60 * 1000
 
-      LemonCore.Store.put(:pending_compaction, session_key, %{
+      PendingCompactionStore.put(session_key, %{
         reason: "near_limit",
         session_key: session_key,
         set_at_ms: stale_ms,
@@ -128,62 +127,12 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
 
       # Stale marker should be deleted
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+      assert PendingCompactionStore.get(session_key) == nil
 
       # Prompt should NOT be modified
       assert new_msg.message.text == "hi"
-      assert new_meta[:auto_compacted] != true
-    end
-
-    test "skips compaction when meta already has auto_compacted=true" do
-      session_key = "agent:test-agent:api:default:dm:guard_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "guard_test", "hello")
-      meta = Map.put(msg.meta || %{}, :auto_compacted, true)
-
-      # Set a fresh marker
-      LemonCore.Store.put(:pending_compaction, session_key, %{
-        reason: "near_limit",
-        session_key: session_key,
-        set_at_ms: System.system_time(:millisecond),
-        input_tokens: 100_000,
-        threshold_tokens: 90_000,
-        context_window_tokens: 128_000
-      })
-
-      {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
-
-      # Generic marker should be deleted to avoid double-injection on later turns.
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
-
-      # Prompt should be unmodified
-      assert new_msg.message.text == "hello"
-      assert new_meta[:auto_compacted] == true
-
-      # Marker should be deleted to avoid repeated futile attempts.
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
-    end
-
-    test "skips compaction when meta has string key auto_compacted=true" do
-      session_key = "agent:test-agent:api:default:dm:strg_#{System.unique_integer([:positive])}"
-      msg = make_inbound("api", "strg_test", "hello")
-      meta = Map.put(msg.meta || %{}, "auto_compacted", true)
-
-      LemonCore.Store.put(:pending_compaction, session_key, %{
-        reason: "near_limit",
-        session_key: session_key,
-        set_at_ms: System.system_time(:millisecond),
-        input_tokens: 100_000,
-        threshold_tokens: 90_000,
-        context_window_tokens: 128_000
-      })
-
-      {new_msg, _new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
-
-      # Prompt should be unmodified
-      assert new_msg.message.text == "hello"
-
-      # Generic marker should be deleted to avoid double-injection on later turns.
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+      refute Map.has_key?(new_meta, :auto_compacted)
+      refute Map.has_key?(new_meta, "auto_compacted")
     end
 
     test "passes through cleanly when no marker exists" do
@@ -194,7 +143,8 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       {new_msg, new_meta} = Router.maybe_apply_pending_compaction(msg, meta, session_key)
 
       assert new_msg.message.text == "hello"
-      assert new_meta[:auto_compacted] != true
+      refute Map.has_key?(new_meta, :auto_compacted)
+      refute Map.has_key?(new_meta, "auto_compacted")
     end
 
     test "handles empty run history gracefully (no compaction applied)" do
@@ -202,7 +152,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       msg = make_inbound("api", "empty_test", "hello")
       meta = msg.meta || %{}
 
-      LemonCore.Store.put(:pending_compaction, session_key, %{
+      PendingCompactionStore.put(session_key, %{
         reason: "near_limit",
         session_key: session_key,
         set_at_ms: System.system_time(:millisecond),
@@ -215,10 +165,11 @@ defmodule LemonRouter.RouterPendingCompactionTest do
 
       # With empty history, no compaction should be applied
       assert new_msg.message.text == "hello"
-      assert new_meta[:auto_compacted] != true
+      refute Map.has_key?(new_meta, :auto_compacted)
+      refute Map.has_key?(new_meta, "auto_compacted")
 
       # Clean up
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = PendingCompactionStore.delete(session_key)
     end
   end
 
@@ -235,7 +186,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
         %{summary: %{prompt: "previous task", answer: "I completed the task"}}
       )
 
-      LemonCore.Store.put(:pending_compaction, session_key, %{
+      PendingCompactionStore.put(session_key, %{
         reason: "near_limit",
         session_key: session_key,
         set_at_ms: System.system_time(:millisecond),
@@ -252,10 +203,11 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       assert request.prompt =~ "previous conversation"
       assert request.prompt =~ "previous task"
       assert request.prompt =~ "continue please"
-      assert request.meta[:auto_compacted] == true
+      refute Map.has_key?(request.meta, :auto_compacted)
+      refute Map.has_key?(request.meta, "auto_compacted")
 
       # Marker should be consumed
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+      assert PendingCompactionStore.get(session_key) == nil
 
       # Clean up — run_history keys are tuple-keyed; deleting all matching entries
       # isn't critical for test isolation since session_keys are unique per test.

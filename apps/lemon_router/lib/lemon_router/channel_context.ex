@@ -62,21 +62,6 @@ defmodule LemonRouter.ChannelContext do
     MapSet.member?(@internal_channel_ids, channel_id)
   end
 
-  def channel_supports_edit?(channel_id) when is_binary(channel_id) do
-    if is_pid(Process.whereis(LemonChannels.Registry)) do
-      case LemonChannels.Registry.get_capabilities(channel_id) do
-        %{edit_support: true} -> true
-        _ -> false
-      end
-    else
-      false
-    end
-  rescue
-    _ -> false
-  end
-
-  def channel_supports_edit?(_), do: false
-
   def compact_meta(meta) when is_map(meta) do
     Map.reject(meta, fn {_k, v} -> is_nil(v) end)
   end
@@ -85,13 +70,17 @@ defmodule LemonRouter.ChannelContext do
 
   def coalescer_meta_from_job(%{meta: meta}) when is_map(meta) do
     %{
-      progress_msg_id: meta[:progress_msg_id],
-      status_msg_id: meta[:status_msg_id],
-      user_msg_id: meta[:user_msg_id]
+      user_msg_id: meta[:user_msg_id],
+      show_running_prefix?:
+        present_progress_reference?(meta[:progress_msg_id] || meta["progress_msg_id"])
     }
   end
 
   def coalescer_meta_from_job(_), do: %{}
+
+  defp present_progress_reference?(value) when is_integer(value), do: true
+  defp present_progress_reference?(value) when is_binary(value), do: value != ""
+  defp present_progress_reference?(_), do: false
 
   def parse_int(nil), do: nil
   def parse_int(v) when is_integer(v), do: v

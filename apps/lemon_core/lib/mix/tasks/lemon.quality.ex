@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Lemon.Quality do
   use Mix.Task
 
   alias LemonCore.Config.Modular
-  alias LemonCore.Quality.{ArchitectureCheck, DocsCheck}
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureRulesCheck, DocsCheck}
 
   @shortdoc "Run docs and architecture quality checks"
   @moduledoc """
@@ -43,7 +43,8 @@ defmodule Mix.Tasks.Lemon.Quality do
 
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
-      {:architecture, fn -> ArchitectureCheck.run(root: root) end}
+      {:architecture, fn -> ArchitectureCheck.run(root: root) end},
+      {:architecture_rules, fn -> ArchitectureRulesCheck.run(root: root) end}
     ]
 
     failures =

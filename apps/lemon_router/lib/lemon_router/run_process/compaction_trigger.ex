@@ -129,9 +129,13 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   @spec estimate_input_tokens_from_prompt(map()) :: non_neg_integer() | nil
   def estimate_input_tokens_from_prompt(state) do
     prompt =
-      case Map.get(state, :job) do
-        %LemonGateway.Types.Job{prompt: p} when is_binary(p) -> p
-        _ -> nil
+      case Map.get(state, :execution_request) do
+        %LemonGateway.ExecutionRequest{prompt: p} when is_binary(p) -> p
+        _ ->
+          case Map.get(state, :job) do
+            %LemonGateway.Types.Job{prompt: p} when is_binary(p) -> p
+            _ -> nil
+          end
       end
 
     if is_binary(prompt) and byte_size(prompt) > 0 do
@@ -179,15 +183,16 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           _ = safe_delete_chat_state(state.session_key)
 
           # Mark a generic pending compaction for any channel type.
-          LemonCore.Store.put(:pending_compaction, state.session_key, %{
+          LemonRouter.PendingCompactionStore.put(state.session_key, %{
             reason: "overflow",
             session_key: state.session_key,
             set_at_ms: System.system_time(:millisecond)
           })
 
-          # Telegram-specific: reset resume state and mark Telegram pending compaction.
+          # Telegram-specific: clear selected resume/index state so the next turn
+          # starts fresh, but leave prompt rewriting to the router-owned
+          # pending-compaction path.
           reset_telegram_resume_state(state.session_key)
-          mark_telegram_pending_compaction(state.session_key, :overflow)
         end
 
       _ ->
@@ -238,14 +243,8 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
             "threshold=#{threshold} context_window=#{context_window} source=#{source}"
         )
 
-        compaction_details = %{
-          input_tokens: effective_tokens,
-          threshold_tokens: threshold,
-          context_window_tokens: context_window
-        }
-
         # Generic compaction marker for all session types
-        LemonCore.Store.put(:pending_compaction, state.session_key, %{
+        LemonRouter.PendingCompactionStore.put(state.session_key, %{
           reason: "near_limit",
           session_key: state.session_key,
           set_at_ms: System.system_time(:millisecond),
@@ -254,13 +253,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           context_window_tokens: context_window,
           token_source: to_string(source)
         })
-
-        # Telegram-specific compaction marker (preserves existing behavior)
-        mark_telegram_pending_compaction(
-          state.session_key,
-          :near_limit,
-          compaction_details
-        )
       end
     else
       _ -> :ok
@@ -336,22 +328,8 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   defp explicit_completed_ok_true?(_), do: false
 
   defp preemptive_compaction_config(session_key) when is_binary(session_key) do
-    channel_cfg =
-      case ChannelContext.parse_session_key(session_key) do
-        %{channel_id: channel_id} when is_binary(channel_id) and channel_id != "" ->
-          try do
-            channel_atom = String.to_existing_atom(channel_id)
-            LemonChannels.GatewayConfig.get(channel_atom, %{}) || %{}
-          rescue
-            _ -> %{}
-          end
-
-        _ ->
-          %{}
-      end
-
-    channel_cfg = normalize_map(channel_cfg)
-    cfg = fetch(channel_cfg, :compaction) |> normalize_map()
+    _session_key = session_key
+    cfg = resolve_compaction_config()
 
     enabled =
       case fetch(cfg, :enabled) do
@@ -381,11 +359,24 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   end
 
   defp preemptive_compaction_config(_session_key) do
+    cfg = resolve_compaction_config()
+
+    enabled =
+      case fetch(cfg, :enabled) do
+        nil -> true
+        value -> truthy?(value)
+      end
+
     %{
-      enabled: true,
-      context_window_tokens: nil,
-      reserve_tokens: default_compaction_reserve_tokens(),
-      trigger_ratio: @default_preemptive_compaction_trigger_ratio
+      enabled: enabled,
+      context_window_tokens: positive_int_or(fetch(cfg, :context_window_tokens), nil),
+      reserve_tokens:
+        positive_int_or(fetch(cfg, :reserve_tokens), default_compaction_reserve_tokens()),
+      trigger_ratio:
+        compaction_trigger_ratio_or(
+          fetch(cfg, :trigger_ratio),
+          @default_preemptive_compaction_trigger_ratio
+        )
     }
   rescue
     _ ->
@@ -395,6 +386,33 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
         reserve_tokens: @default_compaction_reserve_tokens,
         trigger_ratio: @default_preemptive_compaction_trigger_ratio
       }
+  end
+
+  defp resolve_compaction_config do
+    router_cfg =
+      Application.get_env(:lemon_router, :compaction, %{})
+      |> normalize_map()
+
+    config_cfg =
+      case LemonCore.Config.cached() do
+        %{runtime: runtime} when is_map(runtime) ->
+          runtime
+          |> fetch(:compaction)
+          |> normalize_map()
+
+        %{agent: agent_cfg} when is_map(agent_cfg) ->
+          agent_cfg
+          |> fetch(:compaction)
+          |> normalize_map()
+
+        _ ->
+          %{}
+      end
+
+    # Prefer app-level overrides in tests/runtime, then fall back to config file.
+    Map.merge(config_cfg, router_cfg)
+  rescue
+    _ -> %{}
   end
 
   defp default_compaction_reserve_tokens do
@@ -423,11 +441,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp resolve_context_window_from_model(state) when is_map(state) do
     model =
-      state
-      |> Map.get(:job)
-      |> case do
-        %LemonGateway.Types.Job{meta: meta} when is_map(meta) -> fetch(meta, :model)
-        _ -> nil
+      case Map.get(state, :execution_request) do
+        %LemonGateway.ExecutionRequest{meta: meta} when is_map(meta) ->
+          fetch(meta, :model)
+
+        _ ->
+          case Map.get(state, :job) do
+            %LemonGateway.Types.Job{meta: meta} when is_map(meta) -> fetch(meta, :model)
+            _ -> nil
+          end
       end
 
     model_context_window(model)
@@ -493,12 +515,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   defp resolve_context_window_from_engine(state, event) do
     engine =
       extract_completed_engine(event) ||
-        case Map.get(state, :job) do
-          %LemonGateway.Types.Job{} = job ->
-            job.engine_id
+        case Map.get(state, :execution_request) do
+          %LemonGateway.ExecutionRequest{} = request ->
+            request.engine_id
 
           _ ->
-            nil
+            case Map.get(state, :job) do
+              %LemonGateway.Types.Job{} = job -> job.engine_id
+              _ -> nil
+            end
         end
 
     engine_text = String.downcase(to_string(engine || ""))
@@ -547,21 +572,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp compaction_trigger_ratio_or(_value, default), do: default
 
-  defp compaction_marker_details(details) when is_map(details) do
-    Enum.reduce(details, %{}, fn
-      {_key, nil}, acc ->
-        acc
-
-      {key, value}, acc when is_atom(key) or is_binary(key) ->
-        Map.put(acc, key, value)
-
-      _, acc ->
-        acc
-    end)
-  end
-
-  defp compaction_marker_details(_), do: %{}
-
   defp reset_telegram_resume_state(session_key) when is_binary(session_key) do
     with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
            ChannelContext.parse_session_key(session_key) do
@@ -573,9 +583,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       _ = safe_delete_chat_state(session_key)
 
       if is_integer(chat_id) do
-        _ = safe_delete_selected_resume(account_id, chat_id, thread_id)
-        _ = safe_clear_thread_index(:telegram_msg_session, account_id, chat_id, thread_id)
-        _ = safe_clear_thread_index(:telegram_msg_resume, account_id, chat_id, thread_id)
+        _ = LemonChannels.Runtime.clear_telegram_thread_state(account_id, chat_id, thread_id)
       end
 
       Logger.warning(
@@ -592,48 +600,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp reset_telegram_resume_state(_), do: :ok
 
-  defp mark_telegram_pending_compaction(session_key, reason) when is_binary(session_key) do
-    mark_telegram_pending_compaction(session_key, reason, %{})
-  end
-
-  defp mark_telegram_pending_compaction(_session_key, _reason), do: :ok
-
-  defp mark_telegram_pending_compaction(session_key, reason, details)
-       when is_binary(session_key) and is_map(details) do
-    with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
-           ChannelContext.parse_session_key(session_key) do
-      account_id = normalize_telegram_account_id(parsed)
-
-      chat_id = ChannelContext.parse_int(parsed.peer_id)
-      thread_id = ChannelContext.parse_int(parsed.thread_id)
-
-      if is_integer(chat_id) and Code.ensure_loaded?(LemonCore.Store) and
-           function_exported?(LemonCore.Store, :put, 3) do
-        payload =
-          %{
-            reason: to_string(reason || "unknown"),
-            session_key: session_key,
-            set_at_ms: System.system_time(:millisecond)
-          }
-          |> Map.merge(compaction_marker_details(details))
-
-        LemonCore.Store.put(
-          :telegram_pending_compaction,
-          {account_id, chat_id, thread_id},
-          payload
-        )
-      end
-    else
-      _ -> :ok
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp mark_telegram_pending_compaction(_session_key, _reason, _details), do: :ok
-
   defp normalize_telegram_account_id(parsed) do
     case parsed.account_id do
       account when is_binary(account) and account != "" -> account
@@ -641,37 +607,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
   end
 
-  defp safe_delete_chat_state(key), do: LemonCore.Store.delete_chat_state(key)
-
-  defp safe_delete_selected_resume(account_id, chat_id, thread_id)
-       when is_binary(account_id) and is_integer(chat_id) do
-    LemonCore.Store.delete(:telegram_selected_resume, {account_id, chat_id, thread_id})
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_delete_selected_resume(_account_id, _chat_id, _thread_id), do: :ok
-
-  defp safe_clear_thread_index(table, account_id, chat_id, thread_id)
-       when is_atom(table) and is_binary(account_id) and is_integer(chat_id) do
-    LemonCore.Store.list(table)
-    |> Enum.each(fn
-      {{acc, cid, tid, _msg_id} = key, _value}
-      when acc == account_id and cid == chat_id and tid == thread_id ->
-        _ = LemonCore.Store.delete(table, key)
-
-      _ ->
-        :ok
-    end)
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_clear_thread_index(_table, _account_id, _chat_id, _thread_id), do: :ok
+  defp safe_delete_chat_state(key), do: LemonCore.ChatStateStore.delete(key)
 
   # ---- Shared utility helpers ----
 

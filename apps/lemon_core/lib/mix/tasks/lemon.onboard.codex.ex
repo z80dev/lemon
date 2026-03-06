@@ -31,7 +31,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Codex do
       default_secret_name: "llm_openai_codex_api_key",
       default_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
-      oauth_module: Module.concat([Ai, Auth, OpenAICodexOAuth]),
+      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :OpenAICodexOAuth]),
       preferred_models: [
         "gpt-5.2",
         "gpt-5",

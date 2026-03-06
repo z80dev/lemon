@@ -33,23 +33,25 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
   end
 
   describe "RateLimiter graceful degradation" do
-    test "check returns :ok when process is unavailable" do
+    test "check returns fallback rate_limited tuple when process is unavailable" do
       with_process_unavailable(RateLimiter, fn ->
-        # GenServer.call will exit with :noproc because the name is unregistered.
-        # The catch :exit clause must return :ok (fail-open).
-        assert RateLimiter.check("ch1", "acc1") == :ok
+        # GenServer.call exits with :noproc when the name is unregistered.
+        # The catch :exit clause returns a conservative fallback.
+        assert RateLimiter.check("ch1", "acc1") == {:rate_limited, 1_000}
       end)
 
       # Verify the process is still functional after re-registration
-      assert RateLimiter.check("ch1", "acc1") == :ok
+      restored_check = RateLimiter.check("ch1", "acc1")
+      assert match?(:ok, restored_check) or match?({:rate_limited, _}, restored_check)
     end
 
-    test "consume returns :ok when process is unavailable" do
+    test "consume returns fallback rate_limited tuple when process is unavailable" do
       with_process_unavailable(RateLimiter, fn ->
-        assert RateLimiter.consume("ch1", "acc1") == :ok
+        assert RateLimiter.consume("ch1", "acc1") == {:rate_limited, 1_000}
       end)
 
-      assert RateLimiter.consume("ch1-after", "acc1") == :ok
+      restored_consume = RateLimiter.consume("ch1-after", "acc1")
+      assert match?(:ok, restored_consume) or match?({:rate_limited, _}, restored_consume)
     end
   end
 
@@ -65,7 +67,7 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
   end
 
   describe "Outbox graceful degradation" do
-    test "enqueue returns {:error, :timeout} when process is unavailable" do
+    test "enqueue returns {:error, :enqueue_timeout} when process is unavailable" do
       payload = %OutboundPayload{
         channel_id: "test-channel",
         kind: :text,
@@ -75,8 +77,9 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
       }
 
       with_process_unavailable(Outbox, fn ->
-        # The catch :exit clause must return {:error, :timeout}.
-        assert Outbox.enqueue(payload) == {:error, :timeout}
+        # The catch :exit clause returns :enqueue_timeout to signal
+        # delivery status is ambiguous (message may still be processed).
+        assert Outbox.enqueue(payload) == {:error, :enqueue_timeout}
       end)
     end
   end

@@ -1,6 +1,6 @@
 defmodule LemonGateway do
   @moduledoc """
-  Public API for submitting jobs to the Lemon Gateway.
+  Public API for submitting execution requests to the Lemon Gateway.
 
   The gateway orchestrates AI agent runs across multiple transport channels
   (Telegram, Discord, Email, Farcaster, XMTP, Webhooks) and engine backends
@@ -8,23 +8,23 @@ defmodule LemonGateway do
 
   ## Usage
 
-      job = %LemonGateway.Types.Job{
+      request = %LemonGateway.ExecutionRequest{
         prompt: "Fix the failing test",
         engine_id: "lemon",
         session_key: "telegram:12345"
       }
 
-      LemonGateway.submit(job)
+      LemonGateway.submit(request)
   """
 
-  alias LemonGateway.Types.Job
+  alias LemonGateway.ExecutionRequest
 
   @doc """
-  Submits a job for execution.
+  Submits an execution request for execution.
 
-  The job is routed through the scheduler, which handles auto-resume,
-  session threading, and concurrency limiting.
+  The request is routed through the scheduler, which handles concurrency
+  limiting per conversation key.
   """
-  @spec submit(Job.t()) :: :ok
-  def submit(%Job{} = job), do: LemonGateway.Runtime.submit(job)
+  @spec submit(ExecutionRequest.t()) :: :ok
+  def submit(%ExecutionRequest{} = request), do: LemonGateway.Runtime.submit_execution(request)
 end

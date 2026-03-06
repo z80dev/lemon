@@ -29,8 +29,8 @@ defmodule LemonGateway.Run do
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonCore.Store
-  alias LemonGateway.{ChatState, Cwd, Event}
+  alias LemonCore.{ChatStateStore, ProgressStore, RunStore}
+  alias LemonGateway.{ChatState, Cwd, Event, ExecutionRequest}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
 
@@ -49,10 +49,11 @@ defmodule LemonGateway.Run do
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
-    # process under LemonGateway.RunRegistry when job.run_id is present.
+    # process under LemonGateway.RunRegistry when run_id is present.
     name =
       case args do
-        %{job: %Job{run_id: run_id}} when is_binary(run_id) and run_id != "" ->
+        %{execution_request: %ExecutionRequest{run_id: run_id}}
+        when is_binary(run_id) and run_id != "" ->
           {:via, Registry, {LemonGateway.RunRegistry, run_id}}
 
         _ ->
@@ -64,7 +65,12 @@ defmodule LemonGateway.Run do
   end
 
   @impl true
-  def init(%{job: %Job{} = job, slot_ref: slot_ref, worker_pid: worker_pid} = args) do
+  def init(args) when is_map(args) do
+    normalized_args = normalize_init_args(args)
+
+    %{job: job, execution_request: request, slot_ref: slot_ref, worker_pid: worker_pid} =
+      normalized_args
+
     # Acquire engine lock based on thread_key (derived from resume/session_key)
     lock_result = maybe_acquire_lock(job)
 
@@ -72,7 +78,7 @@ defmodule LemonGateway.Run do
       {:ok, release_fn} ->
         Logger.debug(
           "Gateway run init lock acquired run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
-            "engine=#{inspect(engine_id_for(job))} queue_mode=#{inspect(job.queue_mode)}"
+            "engine=#{inspect(engine_id_for(job))}"
         )
 
         # Generate run_id if not provided
@@ -81,6 +87,7 @@ defmodule LemonGateway.Run do
 
         state = %{
           submitted_job: job,
+          submitted_execution_request: request,
           job: %{job | run_id: run_id, session_key: session_key},
           run_id: run_id,
           session_key: session_key,
@@ -102,7 +109,7 @@ defmodule LemonGateway.Run do
           first_token_emitted: false
         }
 
-        {:ok, state, {:continue, {:start_run, args}}}
+        {:ok, state, {:continue, {:start_run, normalized_args}}}
 
       {:error, :timeout} ->
         # Lock acquisition timed out - fail fast
@@ -146,6 +153,14 @@ defmodule LemonGateway.Run do
 
         {:stop, :normal}
     end
+  end
+
+  defp normalize_init_args(%{execution_request: %ExecutionRequest{} = request} = args) do
+    job = ExecutionRequest.to_job(request)
+
+    args
+    |> Map.put(:execution_request, request)
+    |> Map.put(:job, job)
   end
 
   defp generate_run_id do
@@ -306,7 +321,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
-    LemonCore.Store.append_run_event(run_ref, event)
+    RunStore.append_event(run_ref, event)
 
     cond do
       is_started(event) ->
@@ -405,74 +420,14 @@ defmodule LemonGateway.Run do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def handle_cast({:steer, %Job{} = job, worker_pid}, state) do
-    steer_text = job.prompt || ""
-
-    cond do
-      # Run already completed - reject steer
-      state.completed ->
-        send(worker_pid, {:steer_rejected, job})
-        {:noreply, state}
-
-      # Engine not yet initialized - reject steer
-      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
-        send(worker_pid, {:steer_rejected, job})
-        {:noreply, state}
-
-      # Engine doesn't support steering - reject steer
-      not state.engine.supports_steer?() ->
-        send(worker_pid, {:steer_rejected, job})
-        {:noreply, state}
-
-      # Engine supports steering - attempt to steer
-      true ->
-        case state.engine.steer(state.cancel_ctx, steer_text) do
-          :ok ->
-            # Steering succeeded - notify worker so it can clear pending steer
-            send(worker_pid, {:steer_accepted, job})
-            {:noreply, state}
-
-          {:error, _reason} ->
-            # Steering failed - reject so it can be re-enqueued as followup
-            send(worker_pid, {:steer_rejected, job})
-            {:noreply, state}
-        end
-    end
+  def handle_cast({:steer, request_or_job, worker_pid}, state) do
+    {request, reply_request} = normalize_steer_request(request_or_job)
+    {:noreply, handle_steer(:steer, request, reply_request, worker_pid, state)}
   end
 
-  def handle_cast({:steer_backlog, %Job{} = job, worker_pid}, state) do
-    steer_text = job.prompt || ""
-
-    cond do
-      # Run already completed - reject steer_backlog
-      state.completed ->
-        send(worker_pid, {:steer_backlog_rejected, job})
-        {:noreply, state}
-
-      # Engine not yet initialized - reject steer_backlog
-      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
-        send(worker_pid, {:steer_backlog_rejected, job})
-        {:noreply, state}
-
-      # Engine doesn't support steering - reject steer_backlog
-      not state.engine.supports_steer?() ->
-        send(worker_pid, {:steer_backlog_rejected, job})
-        {:noreply, state}
-
-      # Engine supports steering - attempt to steer
-      true ->
-        case state.engine.steer(state.cancel_ctx, steer_text) do
-          :ok ->
-            # Steering succeeded - notify worker so it can clear pending steer
-            send(worker_pid, {:steer_backlog_accepted, job})
-            {:noreply, state}
-
-          {:error, _reason} ->
-            # Steering failed - reject so it can be re-enqueued as collect
-            send(worker_pid, {:steer_backlog_rejected, job})
-            {:noreply, state}
-        end
-    end
+  def handle_cast({:steer_backlog, request_or_job, worker_pid}, state) do
+    {request, reply_request} = normalize_steer_request(request_or_job)
+    {:noreply, handle_steer(:steer_backlog, request, reply_request, worker_pid, state)}
   end
 
   @impl true
@@ -505,6 +460,51 @@ defmodule LemonGateway.Run do
       {:stop, :normal, %{state | completed: true}}
     end
   end
+
+  defp handle_steer(kind, %ExecutionRequest{} = request, reply_request, worker_pid, state) do
+    steer_text = request.prompt || ""
+
+    cond do
+      state.completed ->
+        notify_steer_result(kind, :rejected, worker_pid, reply_request)
+        state
+
+      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
+        notify_steer_result(kind, :rejected, worker_pid, reply_request)
+        state
+
+      not state.engine.supports_steer?() ->
+        notify_steer_result(kind, :rejected, worker_pid, reply_request)
+        state
+
+      true ->
+        case state.engine.steer(state.cancel_ctx, steer_text) do
+          :ok ->
+            notify_steer_result(kind, :accepted, worker_pid, reply_request)
+            state
+
+          {:error, _reason} ->
+            notify_steer_result(kind, :rejected, worker_pid, reply_request)
+            state
+        end
+    end
+  end
+
+  defp normalize_steer_request(%ExecutionRequest{} = request) do
+    {request, request}
+  end
+
+  defp notify_steer_result(:steer, :accepted, worker_pid, request),
+    do: send(worker_pid, {:steer_accepted, request})
+
+  defp notify_steer_result(:steer, :rejected, worker_pid, request),
+    do: send(worker_pid, {:steer_rejected, request})
+
+  defp notify_steer_result(:steer_backlog, :accepted, worker_pid, request),
+    do: send(worker_pid, {:steer_backlog_accepted, request})
+
+  defp notify_steer_result(:steer_backlog, :rejected, worker_pid, request),
+    do: send(worker_pid, {:steer_backlog_rejected, request})
 
   defp engine_id_for(%Job{} = job) do
     cond do
@@ -578,7 +578,7 @@ defmodule LemonGateway.Run do
     if state.run_ref do
       prompt = state.job.prompt
 
-      LemonCore.Store.finalize_run(state.run_ref, %{
+      RunStore.finalize(state.run_ref, %{
         completed: completed,
         session_key: state.session_key,
         run_id: state.run_id,
@@ -789,7 +789,7 @@ defmodule LemonGateway.Run do
     run_id = Map.get(completed, :run_id)
 
     if ok != true and context_length_exceeded_error?(error) do
-      Store.delete_chat_state(session_key)
+      ChatStateStore.delete(session_key)
 
       Logger.warning(
         "Gateway run reset chat state after context overflow run_id=#{inspect(run_id)} " <>
@@ -829,7 +829,7 @@ defmodule LemonGateway.Run do
       updated_at: System.system_time(:millisecond)
     }
 
-    Store.put_chat_state(key, chat_state)
+    ChatStateStore.put(key, chat_state)
   end
 
   defp register_progress_mapping(%Job{} = job, run_id) do
@@ -839,10 +839,9 @@ defmodule LemonGateway.Run do
     status_msg_id = meta && meta[:status_msg_id]
 
     Enum.each(keys, fn key ->
-      if progress_msg_id,
-        do: LemonCore.Store.put_progress_mapping(key, progress_msg_id, run_id)
+      if progress_msg_id, do: ProgressStore.put(key, progress_msg_id, run_id)
 
-      if status_msg_id, do: LemonCore.Store.put_progress_mapping(key, status_msg_id, run_id)
+      if status_msg_id, do: ProgressStore.put(key, status_msg_id, run_id)
     end)
   end
 
@@ -853,8 +852,8 @@ defmodule LemonGateway.Run do
     status_msg_id = meta && meta[:status_msg_id]
 
     Enum.each(keys, fn key ->
-      if progress_msg_id, do: LemonCore.Store.delete_progress_mapping(key, progress_msg_id)
-      if status_msg_id, do: LemonCore.Store.delete_progress_mapping(key, status_msg_id)
+      if progress_msg_id, do: ProgressStore.delete(key, progress_msg_id)
+      if status_msg_id, do: ProgressStore.delete(key, status_msg_id)
     end)
   end
 

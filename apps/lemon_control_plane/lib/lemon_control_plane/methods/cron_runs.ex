@@ -122,7 +122,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
   end
 
   defp fetch_run_record(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       nil -> nil
       record when is_map(record) -> serialize_term(record)
       _ -> nil

@@ -4,6 +4,9 @@ defmodule LemonGateway.Transports.Discord do
 
   Discord is implemented by `LemonChannels.Adapters.Discord`. The legacy gateway
   transport is intentionally disabled.
+
+  Compatibility shim only: Discord transport ownership lives in `lemon_channels`;
+  do not add behavior here.
   """
 
   use LemonGateway.Transport

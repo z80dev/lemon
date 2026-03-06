@@ -9,9 +9,11 @@ defmodule LemonRouter.RunProcessTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.{RunRequest, SessionKey}
+  alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
+  alias LemonCore.{ChatStateStore, RunRequest, SessionKey}
   alias LemonCore.ResumeToken
   alias Elixir.LemonRouter.RunProcess
+  alias LemonRouter.PendingCompactionStore
 
   defmodule RunProcessTestOutboxAPI do
     @moduledoc false
@@ -78,16 +80,16 @@ defmodule LemonRouter.RunProcessTest do
       GenServer.start_link(__MODULE__, %{notify_pid: notify_pid}, name: __MODULE__)
     end
 
-    def submit(%LemonGateway.Types.Job{} = job) do
-      GenServer.cast(__MODULE__, {:submit, job})
+    def submit_execution(%LemonGateway.ExecutionRequest{} = request) do
+      GenServer.cast(__MODULE__, {:submit, request})
     end
 
     @impl true
     def init(state), do: {:ok, state}
 
     @impl true
-    def handle_cast({:submit, job}, state) do
-      if is_pid(state.notify_pid), do: send(state.notify_pid, {:test_scheduler_submit, job})
+    def handle_cast({:submit, request}, state) do
+      if is_pid(state.notify_pid), do: send(state.notify_pid, {:test_scheduler_submit, request})
       {:noreply, state}
     end
   end
@@ -175,7 +177,6 @@ defmodule LemonRouter.RunProcessTest do
       run_id: run_id,
       session_key: nil,
       prompt: "test",
-      queue_mode: :collect,
       engine_id: "echo",
       meta: meta
     }
@@ -354,7 +355,8 @@ defmodule LemonRouter.RunProcessTest do
 
       {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
 
-      assert_receive {:test_scheduler_submit, %LemonGateway.Types.Job{run_id: ^run_id}}, 1_500
+      assert_receive {:test_scheduler_submit, %LemonGateway.ExecutionRequest{run_id: ^run_id}},
+                     1_500
       refute_receive {:test_scheduler_submit, _job}, 300
 
       GenServer.stop(pid)
@@ -389,7 +391,8 @@ defmodule LemonRouter.RunProcessTest do
 
       {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
 
-      refute_receive {:test_scheduler_submit, %LemonGateway.Types.Job{run_id: ^run_id}}, 400
+      refute_receive {:test_scheduler_submit, %LemonGateway.ExecutionRequest{run_id: ^run_id}},
+                     400
 
       GenServer.stop(pid)
     end
@@ -727,12 +730,7 @@ defmodule LemonRouter.RunProcessTest do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
 
-      _ =
-        LemonCore.Store.put_chat_state(session_key, %{
-          last_engine: "codex",
-          last_resume_token: "thread_old",
-          updated_at: System.system_time(:millisecond)
-        })
+      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
 
       job = make_test_job(run_id, %{origin: :channel})
 
@@ -764,7 +762,7 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
-      assert eventually(fn -> LemonCore.Store.get_chat_state(session_key) == nil end)
+      assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
     end
   end
 
@@ -837,23 +835,27 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
-                        meta: %{run_id: ^run_id, fanout: true} = meta_a
+                        meta: %{run_id: ^run_id, intent_meta: intent_meta_a} = meta_a
                       } = payload_a},
                      3_000
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
-                        meta: %{run_id: ^run_id, fanout: true} = meta_b
+                        meta: %{run_id: ^run_id, intent_meta: intent_meta_b} = meta_b
                       } = payload_b},
                      3_000
 
       refute_receive {:delivered,
-                      %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id, fanout: true}}},
+                      %LemonChannels.OutboundPayload{
+                        meta: %{run_id: ^run_id, intent_meta: %{fanout: true}}
+                      }},
                      500
 
-      assert meta_a[:fanout_index] in [1, 2]
-      assert meta_b[:fanout_index] in [1, 2]
-      assert meta_a[:fanout_index] != meta_b[:fanout_index]
+      assert intent_meta_a[:fanout] == true
+      assert intent_meta_b[:fanout] == true
+      assert intent_meta_a[:fanout_index] in [1, 2]
+      assert intent_meta_b[:fanout_index] in [1, 2]
+      assert intent_meta_a[:fanout_index] != intent_meta_b[:fanout_index]
 
       assert payload_a.content == "Fanout answer"
       assert payload_b.content == "Fanout answer"
@@ -909,8 +911,7 @@ defmodule LemonRouter.RunProcessTest do
           peer_id: "12345"
         })
 
-      store_key = {"botx", 12_345, nil, 101}
-      _ = LemonCore.Store.delete(:telegram_msg_resume, store_key)
+      _ = ResumeIndexStore.delete_thread("botx", 12_345, nil, generation: 0)
 
       job =
         make_test_job(run_id, %{
@@ -945,7 +946,7 @@ defmodule LemonRouter.RunProcessTest do
       assert eventually(fn -> not Process.alive?(pid) end)
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_msg_resume, store_key) do
+               case ResumeIndexStore.get_resume("botx", 12_345, nil, 101, generation: 0) do
                  %ResumeToken{engine: "codex", value: "thread_abc"} -> true
                  _ -> false
                end
@@ -968,22 +969,15 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       selected_key = {"botx", 12_345, 777}
-      index_key = {"botx", 12_345, 777, 9_001}
-      pending_compaction_key = {"botx", 12_345, 777}
       stale_resume = %ResumeToken{engine: "codex", value: "thread_old"}
 
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
-      _ =
-        LemonCore.Store.put_chat_state(session_key, %{
-          last_engine: "codex",
-          last_resume_token: "thread_old",
-          updated_at: System.system_time(:millisecond)
-        })
+      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
 
-      _ = LemonCore.Store.put(:telegram_selected_resume, selected_key, stale_resume)
-      _ = LemonCore.Store.put(:telegram_msg_session, index_key, session_key <> ":sub:old")
-      _ = LemonCore.Store.put(:telegram_msg_resume, index_key, stale_resume)
+      _ = StateStore.put_selected_resume(selected_key, stale_resume)
+      _ = ResumeIndexStore.put_session("botx", 12_345, 777, 9_001, session_key <> ":sub:old", generation: 0)
+      _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_001, stale_resume, generation: 0)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
@@ -1015,13 +1009,13 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
-      assert eventually(fn -> LemonCore.Store.get_chat_state(session_key) == nil end)
-      assert LemonCore.Store.get(:telegram_selected_resume, selected_key) == nil
-      assert LemonCore.Store.get(:telegram_msg_session, index_key) == nil
-      assert LemonCore.Store.get(:telegram_msg_resume, index_key) == nil
+      assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
+      assert StateStore.get_selected_resume(selected_key) == nil
+      assert ResumeIndexStore.get_session("botx", 12_345, 777, 9_001, generation: 0) == nil
+      assert ResumeIndexStore.get_resume("botx", 12_345, 777, 9_001, generation: 0) == nil
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{reason: "overflow", session_key: ^session_key, set_at_ms: ts}
                  when is_integer(ts) ->
                    true
@@ -1046,22 +1040,15 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       selected_key = {"botx", 12_345, 777}
-      index_key = {"botx", 12_345, 777, 9_002}
-      pending_compaction_key = {"botx", 12_345, 777}
       stale_resume = %ResumeToken{engine: "codex", value: "thread_old"}
 
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
-      _ =
-        LemonCore.Store.put_chat_state(session_key, %{
-          last_engine: "codex",
-          last_resume_token: "thread_old",
-          updated_at: System.system_time(:millisecond)
-        })
+      _ = ChatStateStore.put(session_key, %{last_engine: "codex", last_resume_token: "thread_old", updated_at: System.system_time(:millisecond)})
 
-      _ = LemonCore.Store.put(:telegram_selected_resume, selected_key, stale_resume)
-      _ = LemonCore.Store.put(:telegram_msg_session, index_key, session_key <> ":sub:old")
-      _ = LemonCore.Store.put(:telegram_msg_resume, index_key, stale_resume)
+      _ = StateStore.put_selected_resume(selected_key, stale_resume)
+      _ = ResumeIndexStore.put_session("botx", 12_345, 777, 9_002, session_key <> ":sub:old", generation: 0)
+      _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_002, stale_resume, generation: 0)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
@@ -1088,13 +1075,13 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
-      assert eventually(fn -> LemonCore.Store.get_chat_state(session_key) == nil end)
-      assert LemonCore.Store.get(:telegram_selected_resume, selected_key) == nil
-      assert LemonCore.Store.get(:telegram_msg_session, index_key) == nil
-      assert LemonCore.Store.get(:telegram_msg_resume, index_key) == nil
+      assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
+      assert StateStore.get_selected_resume(selected_key) == nil
+      assert ResumeIndexStore.get_session("botx", 12_345, 777, 9_002, generation: 0) == nil
+      assert ResumeIndexStore.get_resume("botx", 12_345, 777, 9_002, generation: 0) == nil
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{reason: "overflow", session_key: ^session_key, set_at_ms: ts}
                  when is_integer(ts) ->
                    true
@@ -1118,27 +1105,24 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      pending_compaction_key = {"botx", 12_345, 777}
-      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+      old_compaction_env = Application.get_env(:lemon_router, :compaction)
 
-      Application.put_env(:lemon_channels, :telegram, %{
-        compaction: %{
-          enabled: true,
-          context_window_tokens: 1_000,
-          reserve_tokens: 100,
-          trigger_ratio: 0.95
-        }
+      Application.put_env(:lemon_router, :compaction, %{
+        enabled: true,
+        context_window_tokens: 1_000,
+        reserve_tokens: 100,
+        trigger_ratio: 0.95
       })
 
       on_exit(fn ->
-        if is_nil(old_telegram_env) do
-          Application.delete_env(:lemon_channels, :telegram)
+        if is_nil(old_compaction_env) do
+          Application.delete_env(:lemon_router, :compaction)
         else
-          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+          Application.put_env(:lemon_router, :compaction, old_compaction_env)
         end
       end)
 
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
@@ -1168,7 +1152,7 @@ defmodule LemonRouter.RunProcessTest do
       assert eventually(fn -> not Process.alive?(pid) end)
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{
                    reason: "near_limit",
                    input_tokens: 950,
@@ -1198,27 +1182,24 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      pending_compaction_key = {"botx", 12_345, 777}
-      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+      old_compaction_env = Application.get_env(:lemon_router, :compaction)
 
-      Application.put_env(:lemon_channels, :telegram, %{
-        compaction: %{
-          enabled: true,
-          context_window_tokens: 1_000,
-          reserve_tokens: 100,
-          trigger_ratio: 0.95
-        }
+      Application.put_env(:lemon_router, :compaction, %{
+        enabled: true,
+        context_window_tokens: 1_000,
+        reserve_tokens: 100,
+        trigger_ratio: 0.95
       })
 
       on_exit(fn ->
-        if is_nil(old_telegram_env) do
-          Application.delete_env(:lemon_channels, :telegram)
+        if is_nil(old_compaction_env) do
+          Application.delete_env(:lemon_router, :compaction)
         else
-          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+          Application.put_env(:lemon_router, :compaction, old_compaction_env)
         end
       end)
 
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
@@ -1248,7 +1229,7 @@ defmodule LemonRouter.RunProcessTest do
       assert eventually(fn -> not Process.alive?(pid) end)
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{
                    reason: "near_limit",
                    input_tokens: 950,
@@ -1278,27 +1259,24 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      pending_compaction_key = {"botx", 12_345, 777}
-      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+      old_compaction_env = Application.get_env(:lemon_router, :compaction)
 
-      Application.put_env(:lemon_channels, :telegram, %{
-        compaction: %{
-          enabled: true,
-          context_window_tokens: 1_000,
-          reserve_tokens: 100,
-          trigger_ratio: 0.95
-        }
+      Application.put_env(:lemon_router, :compaction, %{
+        enabled: true,
+        context_window_tokens: 1_000,
+        reserve_tokens: 100,
+        trigger_ratio: 0.95
       })
 
       on_exit(fn ->
-        if is_nil(old_telegram_env) do
-          Application.delete_env(:lemon_channels, :telegram)
+        if is_nil(old_compaction_env) do
+          Application.delete_env(:lemon_router, :compaction)
         else
-          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+          Application.put_env(:lemon_router, :compaction, old_compaction_env)
         end
       end)
 
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
@@ -1328,7 +1306,7 @@ defmodule LemonRouter.RunProcessTest do
       assert eventually(fn -> not Process.alive?(pid) end)
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{
                    reason: "near_limit",
                    input_tokens: 950,
@@ -1360,30 +1338,26 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      pending_compaction_key = {"botx", 12_345, 777}
-      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+      old_compaction_env = Application.get_env(:lemon_router, :compaction)
 
       # context_window=100, reserve=10, trigger_ratio=0.9 → threshold=min(90,90)=90
       # A prompt with 400 chars → 400/4 = 100 estimated tokens → 100 >= 90 → should mark
-      Application.put_env(:lemon_channels, :telegram, %{
-        compaction: %{
-          enabled: true,
-          context_window_tokens: 100,
-          reserve_tokens: 10,
-          trigger_ratio: 0.9
-        }
+      Application.put_env(:lemon_router, :compaction, %{
+        enabled: true,
+        context_window_tokens: 100,
+        reserve_tokens: 10,
+        trigger_ratio: 0.9
       })
 
       on_exit(fn ->
-        if is_nil(old_telegram_env) do
-          Application.delete_env(:lemon_channels, :telegram)
+        if is_nil(old_compaction_env) do
+          Application.delete_env(:lemon_router, :compaction)
         else
-          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+          Application.put_env(:lemon_router, :compaction, old_compaction_env)
         end
       end)
 
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       # Create a job with a long prompt (400 chars → ~100 estimated tokens)
       long_prompt = String.duplicate("a", 400)
@@ -1392,7 +1366,6 @@ defmodule LemonRouter.RunProcessTest do
         run_id: run_id,
         session_key: session_key,
         prompt: long_prompt,
-        queue_mode: :collect,
         engine_id: "echo",
         meta: %{progress_msg_id: 111, user_msg_id: 222}
       }
@@ -1425,7 +1398,7 @@ defmodule LemonRouter.RunProcessTest do
 
       # Should have set the generic pending_compaction marker via char estimate
       assert eventually(fn ->
-               case LemonCore.Store.get(:pending_compaction, session_key) do
+               case PendingCompactionStore.get(session_key) do
                  %{
                    reason: "near_limit",
                    input_tokens: estimated,
@@ -1441,8 +1414,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
 
       # Clean up
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
-      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+      _ = PendingCompactionStore.delete(session_key)
     end
 
     test "does not mark when char estimate is below threshold" do
@@ -1479,13 +1451,12 @@ defmodule LemonRouter.RunProcessTest do
         end
       end)
 
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       job = %LemonGateway.Types.Job{
         run_id: run_id,
         session_key: session_key,
         prompt: "short prompt",
-        queue_mode: :collect,
         engine_id: "echo",
         meta: %{progress_msg_id: 111, user_msg_id: 222}
       }
@@ -1516,7 +1487,7 @@ defmodule LemonRouter.RunProcessTest do
 
       # Short prompt → below threshold → no marker
       Process.sleep(100)
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+      assert PendingCompactionStore.get(session_key) == nil
     end
 
     test "does not mark when completion payload omits explicit ok=true" do
@@ -1551,13 +1522,12 @@ defmodule LemonRouter.RunProcessTest do
         end
       end)
 
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = PendingCompactionStore.delete(session_key)
 
       job = %LemonGateway.Types.Job{
         run_id: run_id,
         session_key: session_key,
         prompt: String.duplicate("a", 400),
-        queue_mode: :collect,
         engine_id: "echo",
         meta: %{progress_msg_id: 111, user_msg_id: 222}
       }
@@ -1585,7 +1555,7 @@ defmodule LemonRouter.RunProcessTest do
 
       assert eventually(fn -> not Process.alive?(pid) end)
       Process.sleep(100)
-      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+      assert PendingCompactionStore.get(session_key) == nil
     end
   end
 

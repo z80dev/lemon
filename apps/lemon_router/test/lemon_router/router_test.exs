@@ -4,7 +4,7 @@ defmodule LemonRouter.RouterTest do
   alias LemonRouter.Router
   alias LemonCore.InboundMessage
 
-  defmodule RunOrchestratorStub do
+  defmodule RunOrchestratorStubRouter do
     def submit(request) do
       if pid = Process.get(:router_test_pid) do
         send(pid, {:orchestrator_submit, request})
@@ -24,7 +24,7 @@ defmodule LemonRouter.RouterTest do
     end)
 
     previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
-    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStub)
+    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)

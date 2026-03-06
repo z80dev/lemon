@@ -31,20 +31,9 @@ defmodule LemonControlPlane.Methods.SessionsReset do
   end
 
   defp reset_session(session_key) do
-    # Delete session history entries.
-    LemonCore.Store.list(:run_history)
-    |> Enum.each(fn
-      {{^session_key, _ts, _run_id} = key, _value} ->
-        LemonCore.Store.delete(:run_history, key)
-
-      _ ->
-        :ok
-    end)
-
-    LemonCore.Store.delete_chat_state(session_key)
-
-    # Reset session overrides
-    LemonCore.Store.delete(:session_overrides, session_key)
+    LemonCore.RunStore.delete_history(session_key)
+    LemonCore.ChatStateStore.delete(session_key)
+    LemonCore.PolicyStore.delete_session(session_key)
 
     :ok
   rescue

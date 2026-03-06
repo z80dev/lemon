@@ -20,14 +20,9 @@ defmodule LemonControlPlane.Methods.SessionsDelete do
     if is_nil(session_key) do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      # Delete session index
-      LemonCore.Store.delete(:sessions_index, session_key)
-
-      # Delete run history
-      LemonCore.Store.delete(:run_history, session_key)
-
-      # Delete chat state if exists
-      LemonCore.Store.delete(:chat_state, session_key)
+      LemonCore.RunStore.delete_session(session_key)
+      LemonCore.ChatStateStore.delete(session_key)
+      LemonCore.PolicyStore.delete_session(session_key)
 
       {:ok, %{"deleted" => true, "sessionKey" => session_key}}
     end

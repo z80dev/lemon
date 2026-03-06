@@ -34,6 +34,10 @@ defmodule LemonCore.ConfigReloaderTest do
       {:ok, _pid} = LemonCore.ConfigCache.start_link([])
     end
 
+    if Process.whereis(LemonCore.PubSub) == nil do
+      start_supervised!({Phoenix.PubSub, name: LemonCore.PubSub})
+    end
+
     on_exit(fn ->
       if original_home do
         System.put_env("HOME", original_home)

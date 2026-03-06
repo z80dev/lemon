@@ -14,7 +14,7 @@ defmodule LemonGateway.Binding do
           project: String.t() | nil,
           agent_id: String.t() | nil,
           default_engine: String.t() | nil,
-          queue_mode: LemonGateway.Types.queue_mode() | nil
+          queue_mode: atom() | nil
         }
 end
 
@@ -76,7 +76,7 @@ defmodule LemonGateway.BindingResolver do
   # Defensive fallback for non-ChatScope callers.
   def resolve_cwd(_scope), do: nil
 
-  @spec resolve_queue_mode(ChatScope.t()) :: LemonGateway.Types.queue_mode() | nil
+  @spec resolve_queue_mode(ChatScope.t()) :: atom() | nil
   def resolve_queue_mode(%ChatScope{} = scope) do
     scope
     |> to_core_scope()

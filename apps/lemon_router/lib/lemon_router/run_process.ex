@@ -20,7 +20,9 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
+  alias LemonGateway.ExecutionRequest
   alias LemonCore.{Bus, Introspection}
+  alias LemonRouter.ConversationKey
   alias LemonRouter.RunProcess.{CompactionTrigger, OutputTracker, RetryHandler, Watchdog}
 
   @gateway_submit_retry_base_ms 100
@@ -100,6 +102,29 @@ defmodule LemonRouter.RunProcess do
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
     run_watchdog_confirm_timeout_ms = Watchdog.resolve_run_watchdog_confirm_timeout_ms(opts)
 
+    execution_request =
+      opts[:execution_request] ||
+        case job do
+          %LemonGateway.Types.Job{} = legacy_job -> ExecutionRequest.from_job(legacy_job)
+          _ -> nil
+        end
+
+    execution_request =
+      normalize_execution_request(
+        execution_request,
+        session_key,
+        opts[:conversation_key]
+      )
+
+    queue_mode = opts[:queue_mode] || :collect
+
+    manage_session_registry? =
+      case opts do
+        kw when is_list(kw) -> Keyword.get(kw, :manage_session_registry?, true)
+        map when is_map(map) -> Map.get(map, :manage_session_registry?, true)
+        _ -> true
+      end
+
     # For tests and partial-boot scenarios, allow skipping gateway submission.
     submit_to_gateway? =
       case opts[:submit_to_gateway?] do
@@ -114,11 +139,14 @@ defmodule LemonRouter.RunProcess do
       run_id: run_id,
       session_key: session_key,
       job: job,
+      execution_request: execution_request,
+      queue_mode: queue_mode,
       start_ts_ms: LemonCore.Clock.now_ms(),
       aborted: false,
       completed: false,
       saw_delta: false,
-      session_registered?: false,
+      session_registered?: not manage_session_registry?,
+      manage_session_registry?: manage_session_registry?,
       run_started_at_ms: nil,
       run_last_activity_at_ms: nil,
       run_watchdog_timeout_ms: run_watchdog_timeout_ms,
@@ -136,13 +164,17 @@ defmodule LemonRouter.RunProcess do
       gateway_submitted?: false,
       gateway_run_pid: nil,
       gateway_run_ref: nil,
+      coordinator_pid: opts[:coordinator_pid],
+      conversation_key:
+        opts[:conversation_key] ||
+          match_conversation_key(execution_request),
       generated_image_paths: [],
       requested_send_files: []
     }
 
     Logger.debug(
       "RunProcess init run_id=#{inspect(run_id)} session_key=#{inspect(session_key)} " <>
-        "engine=#{inspect(job && job.engine_id)} queue_mode=#{inspect(job && job.queue_mode)} " <>
+        "engine=#{inspect(job && job.engine_id)} queue_mode=#{inspect(queue_mode)} " <>
         "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
     )
 
@@ -151,7 +183,7 @@ defmodule LemonRouter.RunProcess do
       :run_started,
       %{
         engine_id: job && job.engine_id,
-        queue_mode: job && job.queue_mode
+        queue_mode: queue_mode
       },
       run_id: run_id,
       session_key: session_key,
@@ -174,7 +206,7 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
 
       scheduler_available?(state.gateway_scheduler) ->
-        state.gateway_scheduler.submit(state.job)
+        submit_gateway_execution(state.gateway_scheduler, state)
 
         Logger.debug(
           "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
@@ -198,47 +230,59 @@ defmodule LemonRouter.RunProcess do
 
   # Handle run events from Bus
   def handle_info(%LemonCore.Event{type: :run_started} = event, state) do
-    # Mark this run as the currently active run for the session.
-    if state.session_registered? do
-      Bus.broadcast(Bus.session_topic(state.session_key), event)
-      {:noreply, state}
-    else
-      case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{
-             run_id: state.run_id
-           }) do
-        {:ok, _pid} ->
-          Logger.debug(
-            "RunProcess session registered run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
-          )
+    cond do
+      state.manage_session_registry? == false ->
+        Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-          Bus.broadcast(Bus.session_topic(state.session_key), event)
+        state =
+          state
+          |> Map.put(:session_registered?, true)
+          |> Watchdog.schedule_run_watchdog()
+          |> maybe_monitor_gateway_run()
 
-          state =
-            state
-            |> Map.put(:session_registered?, true)
-            |> Watchdog.schedule_run_watchdog()
-            |> maybe_monitor_gateway_run()
+        {:noreply, state}
 
-          {:noreply, state}
+      state.session_registered? ->
+        Bus.broadcast(Bus.session_topic(state.session_key), event)
+        {:noreply, state}
 
-        {:error, {:already_registered, _pid}} ->
-          {active_pid, active_run_id} = lookup_active_session(state.session_key)
+      true ->
+        case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{
+               run_id: state.run_id
+             }) do
+          {:ok, _pid} ->
+            Logger.debug(
+              "RunProcess session registered run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
+            )
 
-          Logger.debug(
-            "SessionRegistry already has an active run for session_key=#{inspect(state.session_key)}; " <>
-              "active_run_id=#{inspect(active_run_id)} active_pid=#{inspect(active_pid)}; " <>
-              "deferring registration for run_id=#{inspect(state.run_id)}"
-          )
+            Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-          state =
-            state
-            |> Watchdog.schedule_run_watchdog()
-            |> maybe_monitor_gateway_run()
-            |> put_pending_run_started(event)
-            |> schedule_session_register_retry()
+            state =
+              state
+              |> Map.put(:session_registered?, true)
+              |> Watchdog.schedule_run_watchdog()
+              |> maybe_monitor_gateway_run()
 
-          {:noreply, state}
-      end
+            {:noreply, state}
+
+          {:error, {:already_registered, _pid}} ->
+            {active_pid, active_run_id} = lookup_active_session(state.session_key)
+
+            Logger.debug(
+              "SessionRegistry already has an active run for session_key=#{inspect(state.session_key)}; " <>
+                "active_run_id=#{inspect(active_run_id)} active_pid=#{inspect(active_pid)}; " <>
+                "deferring registration for run_id=#{inspect(state.run_id)}"
+            )
+
+            state =
+              state
+              |> Watchdog.schedule_run_watchdog()
+              |> maybe_monitor_gateway_run()
+              |> put_pending_run_started(event)
+              |> schedule_session_register_retry()
+
+            {:noreply, state}
+        end
     end
   end
 
@@ -272,9 +316,10 @@ defmodule LemonRouter.RunProcess do
       provenance: :direct
     )
 
-    # Free the session key ASAP so the next queued run can become active without
-    # tripping the SessionRegistry single-flight guard.
-    _ = Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+    # Free the session key ASAP when this process owns session-registry updates.
+    if state.manage_session_registry? do
+      _ = Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+    end
 
     # If we were monitoring the gateway run process, stop monitoring it before we exit so
     # we don't race a :DOWN message and emit a synthetic completion.
@@ -530,8 +575,13 @@ defmodule LemonRouter.RunProcess do
 
   @impl true
   def terminate(reason, state) do
-    # Unregister from session registry
-    Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+    if state.manage_session_registry? do
+      Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+    end
+
+    if is_pid(state.coordinator_pid) do
+      send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
+    end
 
     # If not completed normally, emit failure event and attempt abort
     if reason != :normal and not state.completed do
@@ -653,6 +703,35 @@ defmodule LemonRouter.RunProcess do
   # ---------------------------------------------------------------------------
   # Utility helpers
   # ---------------------------------------------------------------------------
+
+  defp submit_gateway_execution(scheduler, state) do
+    if is_map(state.execution_request) and function_exported?(scheduler, :submit_execution, 1) do
+      scheduler.submit_execution(ExecutionRequest.ensure_conversation_key(state.execution_request))
+    else
+      :ok
+    end
+  end
+
+  defp match_conversation_key(%ExecutionRequest{conversation_key: conversation_key}),
+    do: conversation_key
+
+  defp match_conversation_key(_request), do: nil
+
+  defp normalize_execution_request(%ExecutionRequest{} = request, session_key, conversation_key) do
+    normalized_session_key = request.session_key || session_key
+    normalized_conversation_key =
+      request.conversation_key ||
+        conversation_key ||
+        ConversationKey.resolve(normalized_session_key, request.resume)
+
+    %{
+      request
+      | session_key: normalized_session_key,
+        conversation_key: normalized_conversation_key
+    }
+  end
+
+  defp normalize_execution_request(request, _session_key, _conversation_key), do: request
 
   defp fetch(map, key) when is_map(map) do
     case Map.fetch(map, key) do

@@ -658,7 +658,7 @@ defmodule CodingAgent.PromptBuilderTest do
       result =
         PromptBuilder.build(tmp_dir, %{
           base_prompt: "Base.",
-          context: "definitelynomatchtokenxyz123",
+          context: "zxvbnmprtklgjhfdscqwy",
           include_skills: true,
           include_commands: false,
           include_mentions: false

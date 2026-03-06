@@ -19,6 +19,8 @@ defmodule LemonGateway.RunSupervisor do
   Starts a new `LemonGateway.Run` process as a temporary child of this supervisor.
   """
   def start_run(args) do
+    args = normalize_run_args(args)
+
     spec =
       Supervisor.child_spec({LemonGateway.Run, args},
         restart: :temporary
@@ -26,4 +28,14 @@ defmodule LemonGateway.RunSupervisor do
 
     DynamicSupervisor.start_child(__MODULE__, spec)
   end
+
+  defp normalize_run_args(%{execution_request: %LemonGateway.ExecutionRequest{}} = args), do: args
+
+  defp normalize_run_args(%{job: %LemonGateway.Types.Job{} = job} = args) do
+    args
+    |> Map.put(:execution_request, LemonGateway.ExecutionRequest.from_job(job))
+    |> Map.delete(:job)
+  end
+
+  defp normalize_run_args(args), do: args
 end

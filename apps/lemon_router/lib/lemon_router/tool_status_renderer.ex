@@ -10,11 +10,9 @@ defmodule LemonRouter.ToolStatusRenderer do
       ✓ grep: pattern
       ✗ `npm test` (exit 1)
 
-  Channel-specific formatting (action limits, extra metadata) is delegated to
-  `LemonRouter.ChannelAdapter`.
+  Rendering is semantic and channel-agnostic; channel presentation is handled
+  by `:lemon_channels`.
   """
-
-  alias LemonRouter.ChannelAdapter
 
   @doc """
   Render with default opts (no elapsed/engine/action_count).
@@ -33,14 +31,15 @@ defmodule LemonRouter.ToolStatusRenderer do
   end
 
   def render(channel_id, actions, order, opts) when is_map(actions) and is_list(order) do
-    adapter = ChannelAdapter.for(channel_id)
-    {display_order, omitted_count} = adapter.limit_order(order)
+    _channel_id = channel_id
+    display_order = order
+    omitted_count = 0
 
     lines =
       Enum.map(display_order, fn id ->
         case Map.get(actions, id) do
           nil -> nil
-          action -> format_action_line(adapter, action)
+          action -> format_action_line(action)
         end
       end)
       |> Enum.reject(&is_nil/1)
@@ -112,9 +111,9 @@ defmodule LemonRouter.ToolStatusRenderer do
   defp tool_word(1), do: "tool"
   defp tool_word(_n), do: "tools"
 
-  defp format_action_line(adapter, action) when is_map(action) do
+  defp format_action_line(action) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
-    extra = adapter.format_action_extra(action, title)
+    extra = nil
 
     case action[:phase] || action["phase"] do
       :started ->

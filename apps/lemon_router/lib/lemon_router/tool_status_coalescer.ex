@@ -5,15 +5,17 @@ defmodule LemonRouter.ToolStatusCoalescer do
   This is intentionally separate from StreamCoalescer (answer streaming). Tool actions can
   run without producing output deltas, so we want a dedicated status surface.
 
-  Channel-specific output strategies are handled by `LemonRouter.ChannelAdapter`.
+  Channel-specific presentation is handled by `LemonChannels.Dispatcher`.
   """
 
   use GenServer
 
   require Logger
 
-  alias LemonRouter.ChannelAdapter
+  alias LemonChannels.Dispatcher
+  alias LemonCore.DeliveryIntent
   alias LemonRouter.ChannelContext
+  alias LemonRouter.DeliveryRouteResolver
 
   @default_idle_ms 400
   @default_max_latency_ms 1200
@@ -33,8 +35,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :meta,
     :seq,
     :finalized,
-    :status_create_ref,
-    :deferred_text,
     :run_started_at,
     :engine
   ]
@@ -54,7 +54,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   Ingest an action event into the tool status coalescer.
 
   Options:
-  - `:meta` - may include `:status_msg_id` for edit mode
+  - `:meta` - semantic delivery metadata (for example `:user_msg_id`)
   """
   def ingest_action(session_key, channel_id, run_id, action_event, opts \\ []) do
     meta = Keyword.get(opts, :meta, %{})
@@ -150,8 +150,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       meta: Keyword.get(opts, :meta, %{}),
       seq: 0,
       finalized: false,
-      status_create_ref: nil,
-      deferred_text: nil,
       run_started_at: nil,
       engine: nil
     }
@@ -178,8 +176,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
             seq: 0,
             finalized: false,
             meta: compact_meta(meta),
-            status_create_ref: nil,
-            deferred_text: nil,
             run_started_at: now,
             engine: nil
         }
@@ -240,8 +236,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
               flush_timer: nil,
               seq: 0,
               finalized: false,
-              status_create_ref: nil,
-              deferred_text: nil,
               run_started_at: nil,
               engine: nil
           }
@@ -260,8 +254,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
               seq: 0,
               finalized: false,
               meta: compact_meta(meta),
-              status_create_ref: nil,
-              deferred_text: nil,
               run_started_at: nil,
               engine: nil
           }
@@ -285,40 +277,15 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:outbox_delivered, ref, result}, state) when is_reference(ref) do
-    state =
-      if state.status_create_ref == ref do
-        case extract_message_id_from_delivery(result) do
-          nil ->
-            %{state | status_create_ref: nil}
-
-          msg_id ->
-            meta = Map.put(state.meta || %{}, :status_msg_id, msg_id)
-            state = %{state | meta: meta, status_create_ref: nil}
-
-            case state.deferred_text do
-              text when is_binary(text) and text != "" ->
-                state = %{state | deferred_text: nil, seq: state.seq + 1}
-                state = emit_output(state, text)
-                %{state | last_text: text}
-
-              _ ->
-                state
-            end
-        end
-      else
-        state
-      end
-
-    {:noreply, state}
-  end
-
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ---- Internal ----
 
   defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
+
+  defp dispatcher do
+    Application.get_env(:lemon_router, :dispatcher, Dispatcher)
+  end
 
   defp maybe_flush(state, now) do
     time_since_first = now - (state.first_event_ts || now)
@@ -384,46 +351,44 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp emit_output(state, text) do
-    adapter = ChannelAdapter.for(state.channel_id)
-    snapshot = build_snapshot(state)
+    kind = if state.finalized == true, do: :tool_status_finalize, else: :tool_status_snapshot
 
-    case adapter.emit_tool_status(snapshot, text) do
-      {:ok, updates} -> apply_updates(state, updates)
-      :skip -> state
+    case build_intent(state, kind, text) do
+      {:ok, intent} ->
+        _ = dispatcher().dispatch(intent)
+        state
+
+      :error ->
+        state
     end
   rescue
     _ -> state
   end
 
-  defp build_snapshot(state) do
-    %{
-      session_key: state.session_key,
-      channel_id: state.channel_id,
-      run_id: state.run_id,
-      meta: state.meta || %{},
-      seq: state.seq,
-      finalized: state.finalized,
-      status_create_ref: state.status_create_ref,
-      deferred_text: state.deferred_text
-    }
+  defp build_intent(state, kind, text) do
+    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      {:ok,
+       %DeliveryIntent{
+         intent_id: "#{state.run_id}:status:#{state.seq}:#{Atom.to_string(kind)}",
+         run_id: state.run_id,
+         session_key: state.session_key,
+         route: route,
+         kind: kind,
+         body: %{text: text, seq: state.seq},
+         controls: %{allow_cancel?: state.finalized != true},
+         meta: Map.put(state.meta || %{}, :surface, :status)
+       }}
+    else
+      _ -> :error
+    end
   end
-
-  defp apply_updates(state, updates) when is_map(updates) do
-    Enum.reduce(updates, state, fn {key, value}, acc ->
-      if Map.has_key?(acc, key) do
-        Map.put(acc, key, value)
-      else
-        acc
-      end
-    end)
-  end
-
-  defp apply_updates(state, _), do: state
 
   defp maybe_prefix_running(text, %__MODULE__{} = state) when is_binary(text) do
-    progress_msg_id = (state.meta || %{})[:progress_msg_id]
+    show_running_prefix? =
+      (state.meta || %{})[:show_running_prefix?] == true or
+        (state.meta || %{})["show_running_prefix?"] == true
 
-    if is_integer(progress_msg_id) and any_running_action?(state) do
+    if show_running_prefix? and any_running_action?(state) do
       "Running…\n\n" <> text
     else
       text
@@ -522,28 +487,4 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(timer), do: Process.cancel_timer(timer)
 
-  defp extract_message_id_from_delivery({:ok, result}),
-    do: extract_message_id_from_delivery(result)
-
-  defp extract_message_id_from_delivery({:error, _}), do: nil
-
-  defp extract_message_id_from_delivery(result) when is_integer(result), do: result
-
-  defp extract_message_id_from_delivery(result) when is_binary(result) do
-    case Integer.parse(result) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp extract_message_id_from_delivery(%{message_id: id}),
-    do: extract_message_id_from_delivery(id)
-
-  defp extract_message_id_from_delivery(%{"message_id" => id}),
-    do: extract_message_id_from_delivery(id)
-
-  defp extract_message_id_from_delivery(%{"result" => %{"message_id" => id}}),
-    do: extract_message_id_from_delivery(id)
-
-  defp extract_message_id_from_delivery(_), do: nil
 end

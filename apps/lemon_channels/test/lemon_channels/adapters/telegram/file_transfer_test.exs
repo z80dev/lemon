@@ -2,6 +2,8 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  alias LemonCore.ProjectBindingStore
+
   defmodule FileTransferMockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
@@ -105,12 +107,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   defp bind_project!(chat_id, root) do
     scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    LemonCore.Store.put(:projects_dynamic, "testproj", %{
+    ProjectBindingStore.put_dynamic("testproj", %{
       root: root,
       default_engine: nil
     })
 
-    LemonCore.Store.put(:project_overrides, scope, "testproj")
+    ProjectBindingStore.put_override(scope, "testproj")
   end
 
   defp document_update(chat_id, caption) do
@@ -461,7 +463,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
         "media_group_id" => media_group_id,
         "photo" => [
-          %{"file_id" => "photo-mg-#{System.unique_integer([:positive])}", "width" => 800, "height" => 600, "file_size" => 50_000}
+          %{
+            "file_id" => "photo-mg-#{System.unique_integer([:positive])}",
+            "width" => 800,
+            "height" => 600,
+            "file_size" => 50_000
+          }
         ]
       }
     }

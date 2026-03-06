@@ -55,13 +55,14 @@ defmodule LemonGateway.IntrospectionTest do
         session_key: session_key,
         prompt: "introspection thread worker test",
         engine_id: "echo",
-        queue_mode: :collect,
         meta: %{origin: :test, notify_pid: self()}
       }
 
       # Submit through the real Scheduler, which creates a ThreadWorker and
       # enqueues the job. The Echo engine will complete quickly.
-      LemonGateway.Scheduler.submit(job)
+      LemonGateway.Scheduler.submit_execution(
+        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
+      )
 
       # Wait until the dispatcher event for this run is persisted.
       wait_for(fn ->
@@ -92,7 +93,6 @@ defmodule LemonGateway.IntrospectionTest do
       assert length(dispatched_events) >= 1
       [disp_evt | _] = dispatched_events
       assert disp_evt.engine == "lemon"
-      assert disp_evt.payload.queue_mode == :collect
       assert is_integer(disp_evt.payload.queue_len)
       assert disp_evt.session_key == session_key
     end
@@ -106,11 +106,12 @@ defmodule LemonGateway.IntrospectionTest do
         session_key: session_key,
         prompt: "introspection terminate test",
         engine_id: "echo",
-        queue_mode: :collect,
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit(job)
+      LemonGateway.Scheduler.submit_execution(
+        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
+      )
 
       # Wait for thread termination event for this worker key.
       wait_for(fn ->
@@ -153,11 +154,12 @@ defmodule LemonGateway.IntrospectionTest do
         session_key: session_key,
         prompt: "introspection scheduler test",
         engine_id: "echo",
-        queue_mode: :collect,
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit(job)
+      LemonGateway.Scheduler.submit_execution(
+        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
+      )
 
       wait_for(fn ->
         Introspection.list(run_id: run_id, limit: 20)
@@ -170,7 +172,6 @@ defmodule LemonGateway.IntrospectionTest do
       assert length(triggered) >= 1
       [evt | _] = triggered
       assert evt.engine == "lemon"
-      assert evt.payload.queue_mode == :collect
       assert evt.payload.engine_id == "echo"
       assert is_binary(evt.payload.thread_key)
     end
@@ -179,38 +180,36 @@ defmodule LemonGateway.IntrospectionTest do
       token = unique_token()
       run_id = "introspect_sched_done_#{token}"
       session_key = "agent:gw_introspection_done:#{token}:main"
-      submitted_at = System.system_time(:millisecond)
+      expected_thread_key = "{:session, #{inspect(session_key)}}"
 
       job = %Job{
         run_id: run_id,
         session_key: session_key,
         prompt: "introspection scheduler complete test",
         engine_id: "echo",
-        queue_mode: :collect,
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit(job)
+      LemonGateway.Scheduler.submit_execution(
+        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
+      )
 
-      # Wait for a scheduler completion event after this submission timestamp.
       wait_for(fn ->
         Introspection.list(limit: 200)
         |> Enum.any?(fn evt ->
           evt.event_type == :scheduled_job_completed and
-            evt.ts_ms >= submitted_at and
+            evt.payload.thread_key == expected_thread_key and
             is_integer(evt.payload.in_flight) and
             is_integer(evt.payload.max)
         end)
       end)
 
-      # scheduled_job_completed doesn't carry run_id (it's a scheduler-level event),
-      # so search broadly and look for recent events
       all_events = Introspection.list(limit: 200)
 
       completed =
         Enum.filter(all_events, fn evt ->
           evt.event_type == :scheduled_job_completed and
-            evt.ts_ms >= submitted_at and
+            evt.payload.thread_key == expected_thread_key and
             is_integer(evt.payload.in_flight) and
             is_integer(evt.payload.max)
         end)

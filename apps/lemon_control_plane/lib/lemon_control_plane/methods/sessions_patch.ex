@@ -42,9 +42,9 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
 
   defp apply_session_patch(session_key, patch) do
     # Store session policies (router reads from :session_policies, not :session_overrides)
-    existing = LemonCore.Store.get_session_policy(session_key) || %{}
+    existing = LemonCore.PolicyStore.get_session(session_key) || %{}
     updated = Map.merge(existing, patch)
-    LemonCore.Store.put_session_policy(session_key, updated)
+    LemonCore.PolicyStore.put_session(session_key, updated)
     :ok
   rescue
     e -> {:error, Exception.message(e)}

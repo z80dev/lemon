@@ -201,6 +201,8 @@ items = LemonCore.Store.list(:my_table)
 
 Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
 
+Use the generic table API only for backend/wrapper internals or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, and `LemonCore.IntrospectionStore`.
+
 ### Specialized APIs
 
 ```elixir
@@ -210,10 +212,10 @@ state = LemonCore.Store.get_chat_state(scope)
 :ok = LemonCore.Store.delete_chat_state(scope)
 
 # Run history
-:ok = LemonCore.Store.append_run_event(run_id, event)
-:ok = LemonCore.Store.finalize_run(run_id, summary)
-history = LemonCore.Store.get_run_history(session_key, limit: 10)
-run = LemonCore.Store.get_run(run_id)
+:ok = LemonCore.RunStore.append_event(run_id, event)
+:ok = LemonCore.RunStore.finalize(run_id, summary)
+history = LemonCore.RunStore.history(session_key, limit: 10)
+run = LemonCore.RunStore.get(run_id)
 
 # Policies (agent, channel, session, runtime)
 :ok = LemonCore.Store.put_agent_policy(agent_id, policy)
@@ -241,15 +243,7 @@ run_id = LemonCore.Store.get_run_by_progress(scope, progress_msg_id)
 events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
 
-### Telegram Resume Indexing
-
-When `LemonCore.Store.finalize_run/2` processes Telegram-origin summaries, it indexes
-resume tokens for reply-based session switching in `:telegram_msg_resume`.
-
-- Key shape: `{account_id, chat_id, thread_id, thread_generation, msg_id}`
-- `thread_generation` comes from run summary `meta.thread_generation` (defaults to `0`)
-- This generation field lets transports invalidate stale reply mappings by bumping
-  generation per chat/thread, without synchronously scanning and deleting all old rows.
+Telegram reply/session indices are channels-owned state. Use `LemonChannels.Telegram.ResumeIndexStore` for `:telegram_msg_resume` / `:telegram_msg_session`; `LemonCore.Store.finalize_run/2` no longer writes those tables.
 
 ## Event Bus Usage Patterns
 

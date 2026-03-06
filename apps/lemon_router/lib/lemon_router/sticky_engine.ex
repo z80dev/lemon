@@ -98,7 +98,7 @@ defmodule LemonRouter.StickyEngine do
   end
 
   defp engine_known?(engine_id) do
-    LemonChannels.EngineRegistry.engine_known?(engine_id)
+    not is_nil(LemonGateway.EngineRegistry.get_engine(engine_id))
   rescue
     _ -> false
   catch

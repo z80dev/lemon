@@ -9,11 +9,10 @@ defmodule LemonGateway.Transports.Email.Inbound do
 
   require Logger
 
-  alias LemonGateway.{BindingResolver, Runtime}
-  alias LemonCore.Store
+  alias LemonGateway.BindingResolver
   alias LemonGateway.Transports.Email
   alias LemonCore.ChatScope
-  alias LemonGateway.Types.Job
+  alias LemonCore.{RouterBridge, RunRequest, Store}
 
   @default_port 4045
   @default_path "/webhooks/email/inbound"
@@ -188,16 +187,22 @@ defmodule LemonGateway.Transports.Email.Inbound do
         email_reply: reply_meta
       }
 
-      job = %Job{
-        session_key: session_key,
-        prompt: prompt,
-        engine_id: BindingResolver.resolve_engine(scope, engine_hint, nil),
-        cwd: BindingResolver.resolve_cwd(scope),
-        queue_mode: BindingResolver.resolve_queue_mode(scope) || :collect,
-        meta: meta
-      }
+      run_id = LemonCore.Id.run_id()
 
-      Runtime.submit(job)
+      request =
+        RunRequest.new(%{
+          origin: :email,
+          run_id: run_id,
+          session_key: session_key,
+          agent_id: BindingResolver.resolve_agent_id(scope),
+          prompt: prompt,
+          queue_mode: BindingResolver.resolve_queue_mode(scope),
+          engine_id: BindingResolver.resolve_engine(scope, engine_hint, nil),
+          cwd: BindingResolver.resolve_cwd(scope),
+          meta: meta
+        })
+
+      {:ok, _submitted_run_id} = RouterBridge.submit_run(request)
 
       {:ok,
        %{

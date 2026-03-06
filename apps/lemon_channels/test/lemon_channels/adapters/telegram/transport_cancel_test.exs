@@ -2,7 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  alias LemonCore.Store
+  alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
 
   defmodule CancelTestRouter do
     def handle_inbound(msg) do
@@ -142,7 +142,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    _ = Store.put(:telegram_msg_session, {"default", chat_id, nil, progress_msg_id}, session_key)
+    _ = ResumeIndexStore.put_session("default", chat_id, nil, progress_msg_id, session_key)
 
     CancelMockAPI.set_updates([
       cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")
@@ -265,7 +265,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert text =~ "Model set to"
     assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
-    stored = Store.get(:telegram_session_model, session_key)
+    stored = StateStore.get_session_model(session_key)
     assert is_binary(stored)
     assert String.starts_with?(stored, provider_choice <> ":")
 

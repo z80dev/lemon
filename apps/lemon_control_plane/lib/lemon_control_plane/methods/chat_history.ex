@@ -28,7 +28,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   end
 
   defp get_chat_history(session_key, limit, before_id) do
-    runs = LemonCore.Store.get_run_history(session_key, limit: limit * 2)
+    runs = LemonCore.RunStore.history(session_key, limit: limit * 2)
 
     runs
     |> Enum.flat_map(fn {run_id, data} ->

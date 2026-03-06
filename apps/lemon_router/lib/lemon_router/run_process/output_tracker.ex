@@ -11,9 +11,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   require Logger
 
-  alias LemonCore.SessionKey
-  alias LemonChannels.OutboundPayload
-  alias LemonRouter.{ChannelAdapter, ChannelContext, ChannelsDelivery}
+  alias LemonCore.{DeliveryIntent, DeliveryRoute, SessionKey}
+  alias LemonRouter.ChannelContext
   alias LemonRouter.RunProcess.CompactionTrigger
 
   @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
@@ -24,7 +23,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   def ingest_delta_to_coalescer(state, delta) do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
-        meta = ChannelContext.coalescer_meta_from_job(state.job)
+        meta = coalescer_meta(state)
 
         seq = Map.get(delta, :seq)
         text = Map.get(delta, :text)
@@ -57,22 +56,16 @@ defmodule LemonRouter.RunProcess.OutputTracker do
          answer when is_binary(answer) and answer != "" <-
            CompactionTrigger.extract_completed_answer(event),
          {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
-      adapter = ChannelAdapter.for(channel_id)
+      meta = coalescer_meta(state)
 
-      if adapter.skip_non_streaming_final_emit?() do
-        :ok
-      else
-        meta = ChannelContext.coalescer_meta_from_job(state.job)
-
-        LemonRouter.StreamCoalescer.ingest_delta(
-          state.session_key,
-          channel_id,
-          state.run_id,
-          1,
-          answer,
-          meta: meta
-        )
-      end
+      LemonRouter.StreamCoalescer.ingest_delta(
+        state.session_key,
+        channel_id,
+        state.run_id,
+        1,
+        answer,
+        meta: meta
+      )
     else
       _ -> :ok
     end
@@ -82,10 +75,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   @spec maybe_finalize_stream_output(map(), LemonCore.Event.t()) :: :ok
   def maybe_finalize_stream_output(state, %LemonCore.Event{} = event) do
-    with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
-         adapter = ChannelAdapter.for(channel_id),
-         true <- adapter.should_finalize_stream?() do
-      meta = ChannelContext.coalescer_meta_from_job(state.job)
+    with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
+      meta = coalescer_meta(state)
 
       resume =
         event
@@ -108,7 +99,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         end
 
       meta = if resume, do: Map.put(meta, :resume, resume), else: meta
-      meta = maybe_add_auto_send_generated_files(meta, state, adapter)
+      meta = maybe_add_auto_send_generated_files(meta, state, channel_id)
 
       LemonRouter.StreamCoalescer.finalize_run(
         state.session_key,
@@ -117,8 +108,6 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         meta: meta,
         final_text: final_text
       )
-    else
-      _ -> :ok
     end
 
     :ok
@@ -139,7 +128,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
             _ -> false
           end
 
-        meta = ChannelContext.coalescer_meta_from_job(state.job)
+        meta = coalescer_meta(state)
 
         LemonRouter.ToolStatusCoalescer.finalize_run(
           state.session_key,
@@ -162,7 +151,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   def ingest_action_to_tool_status_coalescer(state, action_ev) do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
-        meta = ChannelContext.coalescer_meta_from_job(state.job)
+        meta = coalescer_meta(state)
 
         LemonRouter.ToolStatusCoalescer.ingest_action(
           state.session_key,
@@ -212,7 +201,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   def maybe_fanout_final_output(state, %LemonCore.Event{} = event) do
     with answer when is_binary(answer) <- CompactionTrigger.extract_completed_answer(event),
          true <- String.trim(answer) != "",
-         routes when is_list(routes) and routes != [] <- fanout_routes_from_job(state.job) do
+         routes when is_list(routes) and routes != [] <- fanout_routes(state) do
       primary_signature = primary_route_signature(state.session_key)
 
       routes
@@ -222,20 +211,25 @@ defmodule LemonRouter.RunProcess.OutputTracker do
       |> Enum.reject(&(fanout_route_signature(&1) == primary_signature))
       |> Enum.with_index()
       |> Enum.each(fn {route, idx} ->
-        payload = fanout_payload(route, state, answer, idx + 1)
+        route = to_delivery_route(route)
 
-        case ChannelsDelivery.enqueue(payload,
-               context: %{component: :run_process, phase: :fanout_final_output}
-             ) do
-          {:ok, _ref} ->
-            :ok
+        intent = %DeliveryIntent{
+          intent_id: "#{state.run_id}:fanout:#{idx + 1}",
+          run_id: state.run_id,
+          session_key: state.session_key,
+          route: route,
+          kind: :final_text,
+          body: %{text: answer, seq: idx + 1},
+          meta: %{surface: :answer, fanout: true, fanout_index: idx + 1}
+        }
 
-          {:error, :duplicate} ->
+        case dispatcher().dispatch(intent) do
+          :ok ->
             :ok
 
           {:error, reason} ->
             Logger.warning(
-              "Failed to enqueue fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
+              "Failed to dispatch fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
             )
         end
       end)
@@ -276,13 +270,33 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   # ---- Private helpers ----
 
-  defp fanout_routes_from_job(%LemonGateway.Types.Job{meta: meta}) when is_map(meta) do
+  defp fanout_routes(%{execution_request: %LemonGateway.ExecutionRequest{meta: meta}})
+       when is_map(meta) do
     fetch(meta, :fanout_routes) || []
   rescue
     _ -> []
   end
 
-  defp fanout_routes_from_job(_), do: []
+  defp fanout_routes(%{job: %LemonGateway.Types.Job{meta: meta}}) when is_map(meta) do
+    fetch(meta, :fanout_routes) || []
+  rescue
+    _ -> []
+  end
+
+  defp fanout_routes(_), do: []
+
+  defp coalescer_meta(%{execution_request: %LemonGateway.ExecutionRequest{} = request}),
+    do: ChannelContext.coalescer_meta_from_job(request)
+
+  defp coalescer_meta(%{job: job}), do: ChannelContext.coalescer_meta_from_job(job)
+  defp coalescer_meta(_), do: %{}
+
+  defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
+       when is_binary(cwd) and cwd != "",
+       do: cwd
+
+  defp request_cwd(%{job: %{cwd: cwd}}) when is_binary(cwd) and cwd != "", do: cwd
+  defp request_cwd(_), do: nil
 
   defp primary_route_signature(session_key) when is_binary(session_key) do
     case SessionKey.parse(session_key) do
@@ -357,24 +371,13 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     {route.channel_id, route.account_id, route.peer_kind, route.peer_id, route.thread_id}
   end
 
-  defp fanout_payload(route, state, answer, index) do
-    %OutboundPayload{
+  defp to_delivery_route(route) do
+    %DeliveryRoute{
       channel_id: route.channel_id,
       account_id: route.account_id,
-      peer: %{
-        kind: route.peer_kind,
-        id: route.peer_id,
-        thread_id: route.thread_id
-      },
-      kind: :text,
-      content: answer,
-      idempotency_key: "#{state.run_id}:fanout:#{index}",
-      meta: %{
-        run_id: state.run_id,
-        session_key: state.session_key,
-        fanout: true,
-        fanout_index: index
-      }
+      peer_kind: route.peer_kind,
+      peer_id: route.peer_id,
+      thread_id: route.thread_id
     }
   end
 
@@ -506,21 +509,14 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   defp image_path?(_), do: false
 
-  defp maybe_add_auto_send_generated_files(meta, state, adapter) when is_map(meta) do
+  defp maybe_add_auto_send_generated_files(meta, state, _channel_id) when is_map(meta) do
     explicit_files =
       state.requested_send_files
-      |> resolve_explicit_send_files(state.job && state.job.cwd, adapter)
-
-    cfg = adapter.auto_send_config()
+      |> resolve_explicit_send_files(request_cwd(state))
 
     generated_files =
-      if cfg.enabled do
-        state.generated_image_paths
-        |> select_recent_paths(cfg.max_files)
-        |> resolve_generated_files(state.job && state.job.cwd, cfg.max_bytes)
-      else
-        []
-      end
+      state.generated_image_paths
+      |> resolve_generated_files(request_cwd(state))
 
     files = merge_files(explicit_files, generated_files)
 
@@ -531,44 +527,32 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     end
   end
 
-  defp maybe_add_auto_send_generated_files(meta, _state, _adapter), do: meta
+  defp maybe_add_auto_send_generated_files(meta, _state, _channel_id), do: meta
 
-  defp select_recent_paths(paths, max_files) when is_list(paths) and is_integer(max_files) do
-    if max_files > 0 and length(paths) > max_files do
-      Enum.take(paths, -max_files)
-    else
-      paths
-    end
-  end
-
-  defp select_recent_paths(paths, _max_files), do: paths
-
-  defp resolve_generated_files(paths, cwd, max_bytes) when is_list(paths) do
+  defp resolve_generated_files(paths, cwd) when is_list(paths) do
     paths
     |> Enum.map(&resolve_generated_path(&1, cwd))
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.flat_map(fn path ->
-      case file_within_limit(path, max_bytes) do
-        {:ok, file} -> [file]
+      case existing_file(path) do
+        {:ok, file} -> [Map.put(file, :source, :generated)]
         _ -> []
       end
     end)
   end
 
-  defp resolve_generated_files(_, _cwd, _max_bytes), do: []
+  defp resolve_generated_files(_, _cwd), do: []
 
-  defp resolve_explicit_send_files(files, cwd, adapter) when is_list(files) do
-    max_bytes = adapter.files_max_download_bytes()
-
+  defp resolve_explicit_send_files(files, cwd) when is_list(files) do
     files
-    |> Enum.map(&resolve_explicit_send_file(&1, cwd, max_bytes))
+    |> Enum.map(&resolve_explicit_send_file(&1, cwd))
     |> Enum.reject(&is_nil/1)
   end
 
-  defp resolve_explicit_send_files(_, _cwd, _adapter), do: []
+  defp resolve_explicit_send_files(_, _cwd), do: []
 
-  defp resolve_explicit_send_file(file, cwd, max_bytes) when is_map(file) do
+  defp resolve_explicit_send_file(file, cwd) when is_map(file) do
     path = fetch(file, :path)
     caption = fetch(file, :caption)
     filename = fetch(file, :filename)
@@ -577,7 +561,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
     with path when is_binary(path) and path != "" <- path,
          resolved when is_binary(resolved) <- resolved_path,
-         {:ok, %{path: valid_path}} <- file_within_limit(resolved, max_bytes) do
+         {:ok, %{path: valid_path}} <- existing_file(resolved) do
       %{
         path: valid_path,
         filename:
@@ -589,14 +573,15 @@ defmodule LemonRouter.RunProcess.OutputTracker do
           case caption do
             x when is_binary(x) and x != "" -> x
             _ -> nil
-          end
+          end,
+        source: :explicit
       }
     else
       _ -> nil
     end
   end
 
-  defp resolve_explicit_send_file(_, _cwd, _max_bytes), do: nil
+  defp resolve_explicit_send_file(_, _cwd), do: nil
 
   defp resolve_file_path(path, cwd) do
     cond do
@@ -660,17 +645,16 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     rel == "." or not String.starts_with?(rel, "..")
   end
 
-  defp file_within_limit(path, max_bytes) when is_binary(path) and is_integer(max_bytes) do
+  defp existing_file(path) when is_binary(path) do
     with true <- File.regular?(path),
-         {:ok, %File.Stat{size: size}} <- File.stat(path),
-         true <- size <= max_bytes do
+         {:ok, %File.Stat{}} <- File.stat(path) do
       {:ok, %{path: path, filename: Path.basename(path), caption: nil}}
     else
       _ -> :error
     end
   end
 
-  defp file_within_limit(_path, _max_bytes), do: :error
+  defp existing_file(_path), do: :error
 
   # ---- Shared utility helpers ----
 
@@ -685,4 +669,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp fetch(_, _), do: nil
+
+  defp dispatcher do
+    Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
+  end
 end

@@ -625,29 +625,6 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_cast({:append_introspection_event, event}, state) do
-    case normalize_introspection_event(event) do
-      {:ok, event} ->
-        key = {event.ts_ms, event.event_id}
-
-        case state.backend.put(state.backend_state, :introspection_log, key, event) do
-          {:ok, backend_state} ->
-            {:noreply, %{state | backend_state: backend_state}}
-
-          {:error, reason} ->
-            log_backend_error(:put, :introspection_log, key, reason)
-            {:noreply, state}
-
-          other ->
-            log_backend_unexpected(:put, :introspection_log, key, other)
-            {:noreply, state}
-        end
-
-      {:error, _reason} ->
-        {:noreply, state}
-    end
-  end
-
   def handle_call({:list_introspection_events, opts}, _from, state) do
     limit =
       normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
@@ -695,8 +672,6 @@ defmodule LemonCore.Store do
         {:reply, [], state}
     end
   end
-
-  # Generic table handlers
 
   def handle_call({:generic_put, table, key, value}, _from, state) do
     case state.backend.put(state.backend_state, table, key, value) do
@@ -763,6 +738,29 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:list, table, :all, other)
         {:reply, [], state}
+    end
+  end
+
+  def handle_cast({:append_introspection_event, event}, state) do
+    case normalize_introspection_event(event) do
+      {:ok, event} ->
+        key = {event.ts_ms, event.event_id}
+
+        case state.backend.put(state.backend_state, :introspection_log, key, event) do
+          {:ok, backend_state} ->
+            {:noreply, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:put, :introspection_log, key, reason)
+            {:noreply, state}
+
+          other ->
+            log_backend_unexpected(:put, :introspection_log, key, other)
+            {:noreply, state}
+        end
+
+      {:error, _reason} ->
+        {:noreply, state}
     end
   end
 
@@ -877,10 +875,7 @@ defmodule LemonCore.Store do
                          history_data
                        ) do
                     {:ok, bs} ->
-                      bs =
-                        update_sessions_index(state.backend, bs, session_key, summary, started_at)
-
-                      maybe_index_telegram_message_resume(state.backend, bs, summary)
+                      update_sessions_index(state.backend, bs, session_key, summary, started_at)
 
                     {:error, reason} ->
                       log_backend_error(:put, :run_history, history_key, reason)
@@ -997,122 +992,6 @@ defmodule LemonCore.Store do
 
   # Index Telegram message IDs to resume tokens so replying to an old message can
   # explicitly switch sessions, even if the replied-to text doesn't include a resume line.
-  defp maybe_index_telegram_message_resume(backend, backend_state, summary)
-       when is_map(summary) do
-    completed = summary[:completed] || summary["completed"]
-    session_key = summary[:session_key] || summary["session_key"]
-    meta = summary[:meta] || summary["meta"] || %{}
-
-    resume =
-      cond do
-        is_map(completed) and is_struct(completed) and Map.has_key?(completed, :resume) ->
-          Map.get(completed, :resume)
-
-        is_map(completed) ->
-          completed[:resume] || completed["resume"]
-
-        true ->
-          nil
-      end
-
-    with true <- resume_token_like?(resume),
-         %{kind: :channel_peer, channel_id: "telegram", account_id: account_id} <-
-           parse_session_key(session_key),
-         {chat_id, topic_id} <- telegram_ids_from_meta(meta),
-         true <- is_integer(chat_id) do
-      progress_msg_id = meta[:progress_msg_id] || meta["progress_msg_id"]
-      user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
-
-      thread_generation =
-        normalize_thread_generation(meta[:thread_generation] || meta["thread_generation"])
-
-      msg_ids =
-        [progress_msg_id, user_msg_id]
-        |> Enum.map(&normalize_msg_id/1)
-        |> Enum.filter(&is_integer/1)
-        |> Enum.uniq()
-
-      Enum.reduce(msg_ids, backend_state, fn msg_id, bs ->
-        key = {account_id || "default", chat_id, topic_id, thread_generation, msg_id}
-
-        case backend.put(bs, :telegram_msg_resume, key, resume) do
-          {:ok, bs2} -> bs2
-          _ -> bs
-        end
-      end)
-    else
-      _ -> backend_state
-    end
-  rescue
-    _ -> backend_state
-  end
-
-  defp maybe_index_telegram_message_resume(_backend, backend_state, _summary), do: backend_state
-
-  defp normalize_msg_id(nil), do: nil
-  defp normalize_msg_id(i) when is_integer(i), do: i
-
-  defp normalize_msg_id(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp normalize_msg_id(_), do: nil
-
-  defp normalize_thread_generation(value) when is_integer(value) and value >= 0, do: value
-
-  defp normalize_thread_generation(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {generation, _} when generation >= 0 -> generation
-      _ -> 0
-    end
-  end
-
-  defp normalize_thread_generation(_), do: 0
-
-  # We persist resume tokens as-is (often a struct from another app). To avoid
-  # compile-time coupling, detect by shape.
-  defp resume_token_like?(resume) when is_map(resume) do
-    engine = MapHelpers.get_key(resume, :engine)
-    value = MapHelpers.get_key(resume, :value)
-    is_binary(engine) and is_binary(value)
-  rescue
-    _ -> false
-  end
-
-  defp resume_token_like?(_), do: false
-
-  defp parse_session_key(session_key) when is_binary(session_key) do
-    case LemonCore.SessionKey.parse(session_key) do
-      {:error, _} -> :error
-      parsed -> parsed
-    end
-  rescue
-    _ -> :error
-  end
-
-  defp parse_session_key(_), do: :error
-
-  defp telegram_ids_from_meta(meta) when is_map(meta) do
-    chat_id =
-      meta[:chat_id] ||
-        meta["chat_id"] ||
-        get_in(meta, [:peer, :id]) ||
-        get_in(meta, ["peer", "id"])
-
-    topic_id =
-      meta[:topic_id] ||
-        meta["topic_id"] ||
-        get_in(meta, [:peer, :thread_id]) ||
-        get_in(meta, ["peer", "thread_id"])
-
-    {normalize_msg_id(chat_id), normalize_msg_id(topic_id)}
-  rescue
-    _ -> {nil, nil}
-  end
-
   defp parse_agent_id(nil), do: "default"
 
   defp parse_agent_id(session_key) when is_binary(session_key) do

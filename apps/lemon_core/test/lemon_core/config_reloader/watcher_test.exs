@@ -96,28 +96,27 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
     end
 
     test "registers with module name via start_link/1" do
-      # Ensure no existing registered process
-      if pid = Process.whereis(Watcher), do: GenServer.stop(pid)
-
       result =
         Watcher.start_link(debounce_ms: @short_debounce_ms, poll_interval_ms: @short_poll_ms)
 
-      pid =
+      {pid, started_here?} =
         case result do
           {:ok, pid} ->
-            pid
+            {pid, true}
 
           {:error, {:already_started, pid}} ->
-            pid
+            {pid, false}
         end
 
-      on_exit(fn ->
-        try do
-          if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000)
-        catch
-          :exit, _ -> :ok
-        end
-      end)
+      if started_here? do
+        on_exit(fn ->
+          try do
+            if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000)
+          catch
+            :exit, _ -> :ok
+          end
+        end)
+      end
 
       assert Process.whereis(Watcher) == pid
       assert Process.alive?(pid)

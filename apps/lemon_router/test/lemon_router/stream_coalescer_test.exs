@@ -2,9 +2,9 @@ defmodule LemonRouter.StreamCoalescerTest do
   alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
-
   alias LemonCore.ResumeToken
+  alias LemonCore.DeliveryIntent
+  alias LemonCore.DeliveryRoute
   alias Elixir.LemonRouter.StreamCoalescer
 
   defmodule StreamCoalescerTestTelegramPlugin do
@@ -78,6 +78,19 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
+  defmodule IntentDispatcherStub do
+    @moduledoc false
+
+    def dispatch(%DeliveryIntent{} = intent) do
+      case :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        pid when is_pid(pid) -> send(pid, {:dispatched_intent, intent})
+        _ -> :ok
+      end
+
+      :ok
+    end
+  end
+
   setup do
     # Start the coalescer registry and supervisor if not running
     if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerRegistry)) do
@@ -106,6 +119,10 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.PresentationState)) do
+      {:ok, _} = LemonChannels.PresentationState.start_link([])
     end
 
     :persistent_term.put({__MODULE__.StreamCoalescerTestTelegramPlugin, :test_pid}, self())
@@ -265,6 +282,52 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
+  describe "semantic delivery boundary" do
+    test "finalize emits a semantic delivery intent via configurable dispatcher" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, IntentDispatcherStub)
+      :persistent_term.put({IntentDispatcherStub, :test_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({IntentDispatcherStub, :test_pid})
+
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      session_key = "agent:test:telegram:bot:group:12345:thread:777"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 9},
+                 final_text: "Final answer"
+               )
+
+      assert_receive {:dispatched_intent,
+                      %DeliveryIntent{
+                        intent_id: ^run_id <> ":stream:0:stream_finalize",
+                        run_id: ^run_id,
+                        session_key: ^session_key,
+                        kind: :stream_finalize,
+                        route: %DeliveryRoute{
+                          channel_id: "telegram",
+                          account_id: "bot",
+                          peer_kind: :group,
+                          peer_id: "12345",
+                          thread_id: "777"
+                        },
+                        body: %{text: "Final answer", seq: 0},
+                        meta: %{surface: :answer, user_msg_id: 9}
+                      }},
+                     1_000
+    end
+  end
+
   describe "atom exhaustion protection" do
     test "does not create new atoms for invalid peer_kind values in fallback parsing" do
       # Verify that safe_to_atom returns :unknown for invalid peer kinds
@@ -380,7 +443,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                  meta: %{progress_msg_id: 123}
                )
 
-      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] =
+        Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
       state = :sys.get_state(pid)
       assert state.meta[:progress_msg_id] == 123
 
@@ -460,12 +525,12 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       # Outbox can be shared across tests; filter by idempotency key so we don't
       # accidentally assert against an unrelated pending delivery.
-      send_key = "#{run_id}:final:send"
+      send_key = "#{run_id}:stream:0:stream_finalize"
 
       assert_receive {:delivered, %{idempotency_key: ^send_key} = payload}, 1_000
 
       assert payload.kind == :text
-      assert payload.reply_to == 222
+      assert payload.reply_to == "222"
       assert payload.content == "Final answer"
     end
 
@@ -491,14 +556,14 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      send_key = "#{run_id}:final:send"
-      file_key = "#{run_id}:final:file:0"
+      send_key = "#{run_id}:stream:0:stream_finalize"
+      file_key = "#{send_key}:file:0"
 
       assert_receive {:delivered, %{idempotency_key: ^send_key, kind: :text}}, 1_000
 
       assert_receive {:delivered, %{idempotency_key: ^file_key} = payload}, 1_000
       assert payload.kind == :file
-      assert payload.reply_to == 222
+      assert payload.reply_to == "222"
       assert payload.content.path == path
       assert payload.content.caption == "Generated image"
     end
@@ -533,14 +598,14 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      send_key = "#{run_id}:final:send"
-      file_key = "#{run_id}:final:file:0"
+      send_key = "#{run_id}:stream:0:stream_finalize"
+      file_key = "#{send_key}:file:0"
 
       assert_receive {:delivered, %{idempotency_key: ^send_key, kind: :text}}, 1_000
       assert_receive {:delivered, %{idempotency_key: ^file_key} = payload}, 1_000
 
       assert payload.kind == :file
-      assert payload.reply_to == 222
+      assert payload.reply_to == "222"
       assert is_list(payload.content.files)
       assert Enum.map(payload.content.files, & &1.path) == [path1, path2]
       assert Enum.map(payload.content.files, & &1.caption) == ["First", "Second"]
@@ -560,14 +625,17 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: ""
                )
 
+      send_key = "#{run_id}:stream:0:stream_finalize"
+
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
                         channel_id: "telegram",
                         kind: :text,
+                        idempotency_key: ^send_key,
                         content: "Done",
                         peer: %{id: "12340"},
-                        reply_to: 222,
-                        meta: %{run_id: ^run_id, final: true}
+                        reply_to: "222",
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
                       }},
                      1_000
     end
@@ -585,15 +653,25 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
+      first_key = "#{run_id}:stream:1:stream_snapshot"
+
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
                         channel_id: "telegram",
                         kind: :text,
+                        idempotency_key: ^first_key,
                         content: "Hello",
                         peer: %{id: "12345"},
-                        meta: %{run_id: ^run_id}
+                        meta: %{run_id: ^run_id, intent_kind: :stream_snapshot}
                       }},
                      1_000
+
+      route = telegram_route("bot", :dm, "12345", nil)
+
+      assert eventually(fn ->
+               LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+                 101
+             end)
 
       StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, " world",
         meta: %{progress_msg_id: 999}
@@ -601,16 +679,20 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
+      second_key = "#{run_id}:stream:2:stream_snapshot"
+
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
                         channel_id: "telegram",
                         kind: :edit,
+                        idempotency_key: ^second_key,
                         peer: %{id: "12345"},
-                        content: %{text: text},
-                        meta: %{run_id: ^run_id}
+                        content: %{message_id: message_id, text: text},
+                        meta: %{run_id: ^run_id, intent_kind: :stream_snapshot}
                       }},
                      1_000
 
+      assert message_id in ["101", 101]
       assert String.contains?(text, "Hello world")
     end
 
@@ -618,25 +700,30 @@ defmodule LemonRouter.StreamCoalescerTest do
       session_key = "agent:test:telegram:bot:dm:12355"
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer([:positive])}"
-      create_key = "#{run_id}:answer:create"
+      create_key = "#{run_id}:stream:1:stream_snapshot"
 
       StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Hello")
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
       assert_receive {:delivered, %{idempotency_key: ^create_key}}, 1_000
 
-      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
-
-      :sys.replace_state(pid, fn state ->
-        meta = Map.delete(state.meta || %{}, :answer_msg_id)
-        %{state | meta: meta, answer_create_ref: nil, last_sent_text: nil}
-      end)
-
-      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, " world")
-      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+      route = telegram_route("bot", :dm, "12355", nil)
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
-               is_nil(state.answer_create_ref)
+               is_nil(
+                 LemonChannels.PresentationState.get(route, run_id, :answer).pending_create_ref
+               )
+             end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 222},
+                 final_text: "Hello"
+               )
+
+      assert eventually(fn ->
+               is_nil(
+                 LemonChannels.PresentationState.get(route, run_id, :answer).pending_create_ref
+               )
              end)
     end
 
@@ -647,8 +734,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       resume = %ResumeToken{engine: "codex", value: "thread_abc"}
 
-      store_key = {"botx", 12_345, 777, 101}
-      _ = LemonCore.Store.delete(:telegram_msg_resume, store_key)
+      _ = LemonChannels.Telegram.ResumeIndexStore.delete_thread("botx", 12_345, 777)
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id,
@@ -661,14 +747,14 @@ defmodule LemonRouter.StreamCoalescerTest do
                         channel_id: "telegram",
                         kind: :text,
                         content: "Final answer",
-                        reply_to: 222,
+                        reply_to: "222",
                         peer: %{id: "12345", thread_id: "777"},
-                        meta: %{run_id: ^run_id, final: true}
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
                       }},
                      1_000
 
       assert eventually(fn ->
-               case LemonCore.Store.get(:telegram_msg_resume, store_key) do
+               case LemonChannels.Telegram.ResumeIndexStore.get_resume("botx", 12_345, 777, 101) do
                  %ResumeToken{engine: "codex", value: "thread_abc"} -> true
                  _ -> false
                end
@@ -691,7 +777,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                         channel_id: "telegram",
                         kind: :text,
                         peer: %{id: "12346"},
-                        meta: %{run_id: ^run_id, final: true}
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
                       }},
                      1_000
     end
@@ -714,8 +800,8 @@ defmodule LemonRouter.StreamCoalescerTest do
                         kind: :text,
                         content: "first-final",
                         peer: %{id: "12348"},
-                        reply_to: 222,
-                        meta: %{run_id: ^run_id_1, final: true}
+                        reply_to: "222",
+                        meta: %{run_id: ^run_id_1, intent_kind: :stream_finalize}
                       }},
                      1_000
 
@@ -731,12 +817,14 @@ defmodule LemonRouter.StreamCoalescerTest do
                         kind: :text,
                         content: "second-final",
                         peer: %{id: "12348"},
-                        reply_to: 333,
-                        meta: %{run_id: ^run_id_2, final: true}
+                        reply_to: "333",
+                        meta: %{run_id: ^run_id_2, intent_kind: :stream_finalize}
                       }},
                      1_000
 
-      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] =
+        Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
       state = :sys.get_state(pid)
       assert state.run_id == run_id_2
     end
@@ -746,7 +834,8 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer([:positive])}"
       resume = %ResumeToken{engine: "codex", value: "thread_duplicate"}
-      idempotency_key = "#{run_id}:final:send"
+      idempotency_key = "#{run_id}:stream:0:stream_finalize"
+      route = telegram_route("botx", :group, "12350", "779")
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id,
@@ -754,11 +843,10 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
-
       assert eventually(fn ->
-               state = :sys.get_state(pid)
-               map_size(state.pending_resume_indices) == 0
+               is_nil(
+                 LemonChannels.PresentationState.get(route, run_id, :answer).pending_create_ref
+               )
              end)
 
       assert eventually(fn ->
@@ -771,61 +859,21 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      state = :sys.get_state(pid)
-      assert map_size(state.pending_resume_indices) == 0
+      assert eventually(fn ->
+               is_nil(
+                 LemonChannels.PresentationState.get(route, run_id, :answer).pending_create_ref
+               )
+             end)
     end
+  end
 
-    test "stale pending resume index is cleaned up when delivery notify never arrives" do
-      session_key = "agent:test:telegram:botx:group:12349:thread:778"
-      channel_id = "telegram"
-      run_id = "run_#{System.unique_integer([:positive])}"
-
-      assert :ok =
-               StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "hello world")
-
-      assert :ok = StreamCoalescer.flush(session_key, channel_id)
-
-      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
-      ref = make_ref()
-
-      :sys.replace_state(pid, fn state ->
-        pending =
-          (state.pending_resume_indices || %{})
-          |> Map.put(ref, %{
-            kind: :final_send,
-            account_id: "botx",
-            chat_id: 12_349,
-            thread_id: 778,
-            inserted_at_ms: System.system_time(:millisecond) - 500
-          })
-
-        %{state | pending_resume_indices: pending}
-      end)
-
-      state = :sys.get_state(pid)
-      assert map_size(state.pending_resume_indices) == 1
-
-      retry_log =
-        capture_log(fn ->
-          send(pid, {:pending_resume_cleanup_timeout, ref, 1})
-          Process.sleep(20)
-        end)
-
-      assert retry_log =~ "Timed out waiting for :outbox_delivered for pending resume index"
-      state = :sys.get_state(pid)
-      assert Map.has_key?(state.pending_resume_indices, ref)
-
-      cleanup_log =
-        capture_log(fn ->
-          send(pid, {:pending_resume_cleanup_timeout, ref, 99})
-
-          assert eventually(fn ->
-                   state = :sys.get_state(pid)
-                   map_size(state.pending_resume_indices) == 0
-                 end)
-        end)
-
-      assert cleanup_log =~ "Cleaning stale pending resume index after missing :outbox_delivered"
-    end
+  defp telegram_route(account_id, peer_kind, peer_id, thread_id) do
+    %DeliveryRoute{
+      channel_id: "telegram",
+      account_id: account_id,
+      peer_kind: peer_kind,
+      peer_id: peer_id,
+      thread_id: thread_id
+    }
   end
 end

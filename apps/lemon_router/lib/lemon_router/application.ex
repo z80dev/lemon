@@ -16,6 +16,8 @@ defmodule LemonRouter.Application do
         {Registry, keys: :unique, name: LemonRouter.RunRegistry},
         # Strict single-flight: at most one *active* run per session_key.
         {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
+        # Per-conversation coordinator registry (conversation_key => coordinator pid)
+        {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
         # Coalescer registry - required for StreamCoalescer to work
         {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},
         # Tool status coalescer registry
@@ -27,6 +29,8 @@ defmodule LemonRouter.Application do
           name: LemonRouter.RunSupervisor,
           max_children: run_process_limit()
         },
+        # Session coordinator supervisor (router-owned queue semantics)
+        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
         # Stream coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor},
         # Tool status coalescer supervisor

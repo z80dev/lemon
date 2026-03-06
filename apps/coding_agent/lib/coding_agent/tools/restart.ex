@@ -57,7 +57,15 @@ defmodule CodingAgent.Tools.Restart do
     # Safety: In non-TUI contexts (e.g. gateway/Telegram), halting the VM would take down the node.
     # Allow only when running under the DebugRPC UI (TUI) unless explicitly enabled via env var.
     allow_env? = System.get_env("LEMON_ALLOW_RESTART_TOOL") == "1"
-    allow_debug_ui? = match?(%UIContext{module: CodingAgent.UI.DebugRPC}, ui_context)
+
+    allow_debug_ui? =
+      case ui_context do
+        %UIContext{module: module} when is_atom(module) ->
+          Atom.to_string(module) == "Elixir.CodingAgent.UI.DebugRPC"
+
+        _ ->
+          false
+      end
 
     reason_text =
       case reason do

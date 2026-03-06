@@ -4,6 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
   alias LemonCore.Store, as: CoreStore
   alias LemonCore.SessionKey
+  alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
 
   defmodule ParallelTestRouter do
     def handle_inbound(msg) do
@@ -152,7 +153,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     on_exit(fn -> safe_unregister_session(base_session_key) end)
 
     resume = %LemonCore.ResumeToken{engine: "lemon", value: "tok"}
-    _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, nil}, resume)
+    _ = StateStore.put_selected_resume({"default", chat_id, nil}, resume)
 
     ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
 
@@ -199,7 +200,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     # The user's message ID should be stored in telegram_msg_session for reply routing
     # (reactions are set on the user's message, not on a separate progress message)
     stored_session =
-      CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, 0, user_msg_id1})
+      ResumeIndexStore.get_session("default", chat_id, nil, user_msg_id1, generation: 0)
 
     assert stored_session == fork_session_key
 
@@ -234,25 +235,26 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     stale_session_key = base_session_key <> ":sub:legacy"
     stale_resume = %LemonCore.ResumeToken{engine: "codex", value: "thread_old"}
 
+    _ = StateStore.put_selected_resume({"default", chat_id, topic_id}, stale_resume)
+
     _ =
-      CoreStore.put(
-        :telegram_selected_resume,
-        {"default", chat_id, topic_id},
-        stale_resume
+      ResumeIndexStore.put_session(
+        "default",
+        chat_id,
+        topic_id,
+        reply_to_id,
+        stale_session_key,
+        generation: 0
       )
 
     _ =
-      CoreStore.put(
-        :telegram_msg_session,
-        {"default", chat_id, topic_id, 0, reply_to_id},
-        stale_session_key
-      )
-
-    _ =
-      CoreStore.put(
-        :telegram_msg_resume,
-        {"default", chat_id, topic_id, 0, reply_to_id},
-        stale_resume
+      ResumeIndexStore.put_resume(
+        "default",
+        chat_id,
+        topic_id,
+        reply_to_id,
+        stale_resume,
+        generation: 0
       )
 
     ParallelMockAPI.set_updates([
@@ -271,15 +273,17 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert msg.meta[:session_key] == base_session_key
     refute msg.meta[:session_key] == stale_session_key
 
-    assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
+    assert StateStore.get_selected_resume({"default", chat_id, topic_id}) == nil
 
     assert eventually(fn ->
-             CoreStore.get(:telegram_msg_session, {"default", chat_id, topic_id, 0, reply_to_id}) ==
+             ResumeIndexStore.get_session("default", chat_id, topic_id, reply_to_id,
+               generation: 0
+             ) ==
                nil
            end)
 
     assert eventually(fn ->
-             CoreStore.get(:telegram_msg_resume, {"default", chat_id, topic_id, 0, reply_to_id}) ==
+             ResumeIndexStore.get_resume("default", chat_id, topic_id, reply_to_id, generation: 0) ==
                nil
            end)
   end
@@ -327,7 +331,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         }
       )
 
-    _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, topic_id}, stale_resume)
+    _ = StateStore.put_selected_resume({"default", chat_id, topic_id}, stale_resume)
 
     ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
@@ -353,14 +357,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert followup_msg.message.text == "after new"
     refute followup_msg.message.text =~ "thread_old"
 
-    assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
+    assert StateStore.get_selected_resume({"default", chat_id, topic_id}) == nil
   end
 
-  test "auto-compacts the next prompt after an overflow marker is set" do
+  test "ignores legacy telegram pending compaction markers and leaves prompt unchanged" do
     chat_id = System.unique_integer([:positive])
     user_msg_id = System.unique_integer([:positive])
-    run_id = "run_#{System.unique_integer([:positive])}"
-    started_at = System.system_time(:millisecond) - 1
 
     session_key =
       SessionKey.channel_peer(%{
@@ -370,29 +372,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_kind: :dm,
         peer_id: Integer.to_string(chat_id)
       })
-
-    scope = %LemonCore.ChatScope{
-      transport: :telegram,
-      chat_id: chat_id,
-      topic_id: nil
-    }
-
-    _ =
-      CoreStore.put(
-        :run_history,
-        {session_key, started_at, run_id},
-        %{
-          events: [],
-          summary: %{
-            prompt: "Please build a parser",
-            completed: %{answer: "Implemented parser and tests."}
-          },
-          scope: scope,
-          session_key: session_key,
-          run_id: run_id,
-          started_at: started_at
-        }
-      )
 
     pending_key = {"default", chat_id, nil}
 
@@ -419,12 +398,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     assert_receive {:inbound, msg}, 1_200
 
-    assert msg.meta[:auto_compacted] == true
-    assert msg.message.text =~ "<previous_conversation>"
-    assert msg.message.text =~ "Please build a parser"
-    assert msg.message.text =~ "Implemented parser and tests."
-    assert msg.message.text =~ "User:\ncontinue and polish output"
-    assert CoreStore.get(:telegram_pending_compaction, pending_key) == nil
+    refute msg.meta[:auto_compacted] == true
+    assert msg.message.text == "continue and polish output"
+    assert CoreStore.get(:telegram_pending_compaction, pending_key) != nil
   end
 
   test "approval requests for topic sessions are posted in the same topic" do

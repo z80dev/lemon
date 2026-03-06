@@ -2,6 +2,7 @@ defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
+  alias Elixir.LemonGateway.ExecutionRequest
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.Application startup, supervision tree,
   and configuration loading.
@@ -30,7 +31,7 @@ defmodule LemonGateway.ApplicationTest do
     Elixir.LemonGateway.Scheduler
   ]
 
-  defmodule MockTelegramTransport do
+  defmodule MockTelegramTransportApp do
     use Elixir.LemonGateway.Transport
 
     @impl true
@@ -496,7 +497,7 @@ defmodule LemonGateway.ApplicationTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
-      Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransport])
+      Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportApp])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1036,7 +1037,10 @@ defmodule LemonGateway.ApplicationTest do
       }
 
       # Submit should succeed
-      assert :ok = Elixir.LemonGateway.Scheduler.submit(job)
+      assert :ok =
+               job
+               |> ExecutionRequest.from_job(conversation_key: {:session, session_key})
+               |> Elixir.LemonGateway.Scheduler.submit_execution()
     end
 
     test "Store persists data across operations" do

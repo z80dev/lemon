@@ -11,19 +11,19 @@ defmodule LemonRouter.StreamCoalescer do
 
   ## Output
 
-  Produces outbound payloads to channels with:
-  - Kind `:edit` if channel supports edits
-  - Kind `:text` chunks otherwise
-
-  Channel-specific output strategies are handled by `LemonRouter.ChannelAdapter`.
+  Produces semantic `LemonCore.DeliveryIntent` snapshots/finalization and
+  hands them to `LemonChannels.Dispatcher`. Channel-specific presentation lives
+  entirely in `lemon_channels`.
   """
 
   use GenServer
 
   require Logger
 
-  alias LemonRouter.ChannelAdapter
+  alias LemonChannels.Dispatcher
+  alias LemonCore.DeliveryIntent
   alias LemonRouter.ChannelContext
+  alias LemonRouter.DeliveryRouteResolver
 
   @default_min_chars 48
   @default_idle_ms 400
@@ -42,9 +42,6 @@ defmodule LemonRouter.StreamCoalescer do
     :config,
     :meta,
     :last_sent_text,
-    :answer_create_ref,
-    :deferred_answer_text,
-    :pending_resume_indices,
     :finalized
   ]
 
@@ -91,7 +88,7 @@ defmodule LemonRouter.StreamCoalescer do
   @doc """
   Finalize a run for a session/channel.
 
-  Delegates to the channel adapter for finalization strategy.
+  Delegates semantic finalization to the channels dispatcher.
   """
   @spec finalize_run(
           session_key :: binary(),
@@ -170,9 +167,6 @@ defmodule LemonRouter.StreamCoalescer do
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
       last_sent_text: nil,
-      answer_create_ref: nil,
-      deferred_answer_text: nil,
-      pending_resume_indices: %{},
       finalized: false
     }
 
@@ -198,9 +192,6 @@ defmodule LemonRouter.StreamCoalescer do
             flush_timer: nil,
             meta: compact_meta(meta),
             last_sent_text: nil,
-            answer_create_ref: nil,
-            deferred_answer_text: nil,
-            pending_resume_indices: state.pending_resume_indices || %{},
             finalized: false
         }
       else
@@ -250,8 +241,6 @@ defmodule LemonRouter.StreamCoalescer do
             state
             | run_id: run_id,
               meta: compact_meta(meta),
-              answer_create_ref: nil,
-              deferred_answer_text: nil,
               finalized: false
           }
 
@@ -268,9 +257,6 @@ defmodule LemonRouter.StreamCoalescer do
               flush_timer: nil,
               meta: compact_meta(meta),
               last_sent_text: nil,
-              answer_create_ref: nil,
-              deferred_answer_text: nil,
-              pending_resume_indices: state.pending_resume_indices || %{},
               finalized: false
           }
 
@@ -285,39 +271,6 @@ defmodule LemonRouter.StreamCoalescer do
   @impl true
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
-    {:noreply, state}
-  end
-
-  def handle_info({:outbox_delivered, ref, result}, state) when is_reference(ref) do
-    adapter = ChannelAdapter.for(state.channel_id)
-    snapshot = build_snapshot(state)
-    updates = adapter.handle_delivery_ack(snapshot, ref, result)
-    state = apply_updates(state, updates)
-
-    {:noreply, state}
-  end
-
-  def handle_info({:pending_resume_cleanup_timeout, ref, attempt}, state)
-      when is_reference(ref) and is_integer(attempt) and attempt > 0 do
-    pending = state.pending_resume_indices || %{}
-
-    state =
-      case Map.get(pending, ref) do
-        %{kind: :final_send} = entry ->
-          new_pending =
-            LemonRouter.ChannelAdapter.Telegram.handle_pending_resume_cleanup(
-              pending,
-              ref,
-              entry,
-              attempt
-            )
-
-          %{state | pending_resume_indices: new_pending}
-
-        _ ->
-          state
-      end
-
     {:noreply, state}
   end
 
@@ -379,64 +332,69 @@ defmodule LemonRouter.StreamCoalescer do
       )
     end
 
-    adapter = ChannelAdapter.for(state.channel_id)
-    snapshot = build_snapshot(state)
+    case build_intent(state, :stream_snapshot, state.full_text) do
+      {:ok, intent} ->
+        case dispatcher().dispatch(intent) do
+          :ok -> %{state | last_sent_text: state.full_text}
+          {:error, _} -> state
+        end
 
-    case adapter.emit_stream_output(snapshot) do
-      {:ok, updates} -> apply_updates(state, updates)
-      :skip -> state
+      :error ->
+        state
     end
   end
 
   defp do_finalize(state, final_text) do
-    adapter = ChannelAdapter.for(state.channel_id)
-    snapshot = build_snapshot(state)
+    text =
+      cond do
+        is_binary(final_text) and final_text != "" -> final_text
+        is_binary(state.full_text) and state.full_text != "" -> state.full_text
+        is_binary(state.buffer) and state.buffer != "" -> state.buffer
+        true -> "Done"
+      end
 
-    case adapter.finalize_stream(snapshot, final_text) do
-      {:ok, updates} ->
-        state = apply_updates(state, updates)
-        cancel_timer(state.flush_timer)
-        state
+    state =
+      case build_intent(state, :stream_finalize, text) do
+        {:ok, intent} ->
+          _ = dispatcher().dispatch(intent)
+          %{state | last_sent_text: text, finalized: true}
 
-      :skip ->
-        state
-    end
+        :error ->
+          %{state | finalized: true}
+      end
+
+    cancel_timer(state.flush_timer)
+    state
   rescue
     _ -> state
   end
 
-  defp build_snapshot(state) do
-    %{
-      session_key: state.session_key,
-      channel_id: state.channel_id,
-      run_id: state.run_id,
-      buffer: state.buffer,
-      full_text: state.full_text,
-      last_seq: state.last_seq,
-      meta: state.meta || %{},
-      last_sent_text: state.last_sent_text,
-      answer_create_ref: state.answer_create_ref,
-      deferred_answer_text: state.deferred_answer_text,
-      pending_resume_indices: state.pending_resume_indices || %{},
-      finalized: state.finalized,
-      config: state.config
-    }
+  defp build_intent(state, kind, text) when is_binary(text) do
+    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      {:ok,
+       %DeliveryIntent{
+         intent_id: "#{state.run_id}:stream:#{state.last_seq}:#{Atom.to_string(kind)}",
+         run_id: state.run_id,
+         session_key: state.session_key,
+         route: route,
+         kind: kind,
+         body: %{
+           text: text,
+           seq: state.last_seq
+         },
+         meta: Map.put(state.meta || %{}, :surface, :answer)
+       }}
+    else
+      _ -> :error
+    end
   end
-
-  defp apply_updates(state, updates) when is_map(updates) do
-    Enum.reduce(updates, state, fn {key, value}, acc ->
-      if Map.has_key?(acc, key) do
-        Map.put(acc, key, value)
-      else
-        acc
-      end
-    end)
-  end
-
-  defp apply_updates(state, _), do: state
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(timer), do: Process.cancel_timer(timer)
+
+  defp dispatcher do
+    Application.get_env(:lemon_router, :dispatcher, Dispatcher)
+  end
 
   @max_full_text 100_000
   defp cap_full_text(text) when is_binary(text) and byte_size(text) > @max_full_text do

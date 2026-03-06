@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization to a canonical `LemonCore.InboundMessage` struct.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization to a canonical `LemonCore.InboundMessage` struct.
 
 This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
 
@@ -16,7 +16,16 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
    etc.)      |                                      |
               +--------------------------------------+
 
-                         Outbound Path
+                    Semantic Outbound Path
+              +--------------------------------------+
+              |                                      |
+  [Router]  ->|  Dispatcher -> Renderer ->           |
+              |  PresentationState -> Outbox         |
+              |                                      |
+              |          ->  deliver()               |  -> [Platform]
+              +--------------------------------------+
+
+                       Direct Outbound Path
               +--------------------------------------+
               |                                      |
   [Caller]  ->|  Outbox  ->  Chunker  ->  Dedupe  -> |
@@ -29,7 +38,9 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
 
 **Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs, and routes them (via `LemonCore.RouterBridge`) to the session engine.
 
-**Outbound**: Callers enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
+**Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids and pending creates per `{route, run, surface}`.
+
+**Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
 
 ### Delivery Groups
 
@@ -40,6 +51,7 @@ The Outbox preserves FIFO ordering within each "delivery group" while allowing f
 ```
 LemonChannels.Application
 +-- LemonChannels.Registry                (GenServer - plugin registry)
++-- LemonChannels.PresentationState       (GenServer - message-id/send-vs-edit state)
 +-- LemonChannels.Outbox.RateLimiter      (GenServer - token bucket rate limiter)
 +-- LemonChannels.Outbox.Dedupe           (GenServer - ETS-based deduplication)
 +-- Outbox.WorkerSupervisor               (Task.Supervisor)
@@ -160,6 +172,12 @@ LemonChannels.list_plugins()            # Registry.list_plugins/0
 LemonChannels.enqueue(payload)          # Outbox.enqueue/1
 ```
 
+## Semantic Rendering
+
+`LemonChannels.Dispatcher` is the router-facing entrypoint for semantic delivery. It selects a renderer from `DeliveryIntent.route.channel_id`, lets that renderer turn semantic output into platform operations, and relies on `LemonChannels.PresentationState` to keep platform message-id tracking inside `lemon_channels`.
+
+This ownership boundary matters: channels own truncation, send-vs-edit behavior, tool-status rendering, file/media batching, and Telegram message-id indices. Router owns run semantics and prompt rewriting. In particular, pending compaction prompt mutation must happen in router, not in channel transports.
+
 ## Outbox Pipeline
 
 The Outbox (`LemonChannels.Outbox`) is a GenServer-based delivery queue.
@@ -254,11 +272,16 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram` (plugin) | Plugin behaviour implementation, id/meta/child_spec/deliver |
 | `Telegram.Supervisor` | Starts `AsyncSupervisor` (Task.Supervisor) and `Transport` |
 | `Telegram.Transport` | Long-polling GenServer via `getUpdates`, command handling, inbound routing |
+| `Telegram.Transport.Poller` | Poll loop and update dispatch extracted from `Transport` |
+| `Telegram.Transport.CommandRouter` | Command/message decision tree extracted from `Transport` |
 | `Telegram.Transport.Commands` | Pure functions for command detection, scope keys, message joining |
 | `Telegram.Transport.FileOperations` | `/file put`/`get` commands, auto-put for document uploads, media group file handling |
 | `Telegram.Transport.MediaGroups` | Media group coalescence with debounce timer |
 | `Telegram.Transport.MessageBuffer` | Debounce buffering for rapid-fire user messages |
 | `Telegram.Transport.UpdateProcessor` | Authorization, dedup, routing pipeline, known-target indexing, engine directive parsing |
+| `Telegram.Renderer` | Telegram semantic renderer for stream snapshots, finals, edits, and presentation-state-aware delivery |
+| `Telegram.StatusRenderer` | Telegram-specific tool-status formatting and controls rendering |
+| `Telegram.FileBatcher` | Telegram media/file batching strategy for renderer-owned outbound UX |
 | `Telegram.Inbound` | Normalizes raw Telegram updates to `InboundMessage` |
 | `Telegram.Outbound` | Delivers via Bot API with retry for rate limits and transient errors |
 | `Telegram.VoiceTranscriber` | OpenAI-compatible audio transcription |
@@ -271,6 +294,8 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Delivery` | High-level enqueue helpers: `enqueue_send/3`, `enqueue_edit/3` backed by Outbox |
 | `Telegram.Formatter` | Converts markdown to plain text + Telegram entities (avoids fragile MarkdownV2 escaping) |
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
+| `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id resume/session indices |
+| `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
 | `Telegram.Truncate` | Truncates messages to 4096 chars preserving resume lines |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
@@ -298,6 +323,10 @@ Session and resume indices are scoped by a generation counter. `/new` increments
 #### `/model` Picker Behavior
 
 `/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`.
+
+#### Ownership Note
+
+Telegram transport owns Telegram-specific command UX, buffering, auth, and routing preparation. It does not own pending-compaction prompt mutation; router is the sole owner of rewriting the next inbound prompt for compaction recovery.
 
 #### Delivery Helpers
 
@@ -506,7 +535,7 @@ Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `ki
 
 ### Runtime Bridge
 
-`LemonChannels.Runtime` provides thin wrappers to interact with `LemonRouter` without a hard compile-time dependency:
+`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency:
 
 ```elixir
 LemonChannels.Runtime.cancel_by_run_id(run_id)
@@ -555,7 +584,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
 | `LemonChannels.EngineRegistry` | Engine ID validation, resume token parsing |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
-| `LemonChannels.Runtime` | Bridge to `LemonRouter` (cancel, busy check) |
+| `LemonChannels.Runtime` | Runtime bridge for cancel / keepalive / busy checks via `LemonCore.RouterBridge` |
 | `LemonChannels.Cwd` | Working directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
 
@@ -575,6 +604,8 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.Telegram` | Plugin behaviour implementation |
 | `Adapters.Telegram.Supervisor` | Starts AsyncSupervisor and Transport |
 | `Adapters.Telegram.Transport` | Long-polling GenServer, command handling |
+| `Adapters.Telegram.Transport.Poller` | Poll loop + update dispatch |
+| `Adapters.Telegram.Transport.CommandRouter` | Command/message routing tree |
 | `Adapters.Telegram.Transport.Commands` | Command detection, scope keys |
 | `Adapters.Telegram.Transport.FileOperations` | File put/get, document uploads |
 | `Adapters.Telegram.Transport.MediaGroups` | Media group coalescence |
@@ -687,7 +718,7 @@ end
 - The Outbox preserves per-delivery-group FIFO ordering; chunked messages from the same payload share a group and are never delivered concurrently
 - `GatewayConfig` is a thin delegation to `LemonCore.GatewayConfig`; new code should use the core module directly
 - `BindingResolver` delegates to `LemonCore.BindingResolver` after struct conversion
-- `Runtime` uses `LemonCore.RouterBridge` and falls back to direct `LemonRouter.Router` calls; returns `:ok` silently when the router is unavailable
+- `Runtime` uses `LemonCore.RouterBridge` for router interaction and returns `:ok`/`false` gracefully when the router is unavailable
 - Adapter status is derived from live `DynamicSupervisor` children, not stored state
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload

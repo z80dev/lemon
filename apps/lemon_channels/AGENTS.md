@@ -4,17 +4,20 @@ Channel adapter application for external messaging platforms (Telegram, Discord,
 
 ## Quick Orientation
 
-LemonChannels sits between external messaging platforms and the Lemon session engine. It has two jobs:
+LemonChannels sits between external messaging platforms and the Lemon session engine. It has three jobs:
 
 1. **Inbound**: Receive messages from platforms, normalize them to `LemonCore.InboundMessage`, and route to `LemonRouter` via `LemonCore.RouterBridge`.
-2. **Outbound**: Accept `OutboundPayload` structs, chunk/dedupe/rate-limit them, and deliver to the target platform with retry.
+2. **Semantic outbound rendering**: Accept router-owned `LemonCore.DeliveryIntent` values, render channel-specific UX, and keep platform presentation state inside `lemon_channels`.
+3. **Direct outbound delivery**: Accept `OutboundPayload` structs from adapter helpers and other low-level callers, chunk/dedupe/rate-limit them, and deliver to the target platform with retry.
 
 The app lives at `apps/lemon_channels/` in the umbrella. It depends on `lemon_core` for shared types and delegates config to `LemonCore.GatewayConfig`. It bridges to `lemon_router` at runtime without a compile-time dependency (via `LemonChannels.Runtime` and `LemonCore.RouterBridge`).
 
 ### Key Entry Points
 
 - **Top-level API**: `LemonChannels.enqueue/1`, `LemonChannels.get_plugin/1`, `LemonChannels.list_plugins/0`
-- **Outbox**: `LemonChannels.Outbox.enqueue/1` -- the primary way to send outbound messages
+- **Dispatcher**: `LemonChannels.Dispatcher.dispatch/1` -- router-facing semantic delivery entrypoint
+- **Presentation state**: `LemonChannels.PresentationState` -- channels-owned message-id and send-vs-edit state
+- **Outbox**: `LemonChannels.Outbox.enqueue/1` -- low-level payload queue used by renderers and adapter helpers
 - **Registry**: `LemonChannels.Registry` -- register, lookup, and manage adapter lifecycle
 - **Application**: `LemonChannels.Application` -- supervision tree, `register_and_start_adapter/2`, `stop_adapter/1`
 
@@ -23,6 +26,8 @@ The app lives at `apps/lemon_channels/` in the umbrella. It depends on `lemon_co
 LemonChannels provides:
 
 - **Channel Plugin System**: Pluggable adapters for messaging platforms via `LemonChannels.Plugin` behaviour
+- **Semantic Rendering**: Converts `LemonCore.DeliveryIntent` into channel-specific payloads and controls
+- **Presentation State**: Tracks message ids, pending creates, deferred edits, and related delivery state per route/run/surface
 - **Outbox Queue**: Reliable outbound message delivery with per-group FIFO ordering, retry, and concurrency
 - **Message Processing**: Chunking (sentence/word boundary splitting), deduplication (ETS, 1h TTL), rate limiting (token bucket)
 - **Inbound Normalization**: Converts raw channel data to `LemonCore.InboundMessage`
@@ -33,7 +38,10 @@ LemonChannels provides:
                     Inbound
 [Platform] → Transport → normalize_inbound() → RouterBridge → [LemonRouter]
 
-                    Outbound
+               Semantic Outbound
+[Router] → Dispatcher → Renderer → PresentationState → Outbox → deliver() → [Platform]
+
+                Direct Outbound
 [Caller] → Outbox → Chunker → Dedupe → RateLimiter → deliver() → [Platform]
 ```
 
@@ -49,6 +57,8 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|--------|-------------|
 | `lib/lemon_channels.ex` | `LemonChannels` | Public API facade, delegates to Registry and Outbox |
 | `lib/lemon_channels/application.ex` | `LemonChannels.Application` | Supervision tree, adapter lifecycle (`register_and_start_adapter/2`, `start_adapter/2`, `stop_adapter/1`) |
+| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint. Picks a channel renderer from `DeliveryIntent.route.channel_id`. |
+| `lib/lemon_channels/presentation_state.ex` | `LemonChannels.PresentationState` | Channels-owned presentation state: message ids, pending creates, deferred edits, and surface tracking. |
 | `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
 | `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
@@ -75,12 +85,21 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
 | `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | **Largest file (~1200 lines)**. Long-polling GenServer via getUpdates. Command handling, inbound routing, session management. State includes message indices, active runs, picker state. |
+| `adapters/telegram/transport.ex` | Long-polling GenServer shell via getUpdates. Coordinates polling, command dispatch, router forwarding, and high-level Telegram UX state. Router owns pending-compaction prompt rewriting; transport must not mutate inbound prompts for that concern. |
+| `adapters/telegram/transport/poller.ex` | Poll loop + update dispatch extracted from `Transport`. Owns getUpdates cadence, webhook-conflict recovery, and callback/inbound fanout. |
+| `adapters/telegram/transport/command_router.ex` | Command/message decision tree extracted from `Transport`. Keeps command routing out of the GenServer shell. |
 | `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/3`, `join_messages/1`. No side effects. |
 | `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
+| `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
 | `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing. |
+| `adapters/telegram/transport/model_preferences.ex` | Session/chat/topic model and thinking preference helpers. |
+| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, resume index, and generation bookkeeping helpers. |
+| `adapters/telegram/transport/resume_selection.ex` | Explicit resume parsing, recent-session lookup, and resume formatting helpers. |
 | `adapters/telegram/transport/update_processor.ex` | Authorization, dedup, routing pipeline, known-target indexing (`LemonCore.Store` with 30s throttle), engine directive parsing. |
+| `adapters/telegram/renderer.ex` | Telegram semantic renderer for send-vs-edit behavior, truncation, and presentation-state-aware delivery. |
+| `adapters/telegram/status_renderer.ex` | Telegram tool-status rendering and controls presentation. |
+| `adapters/telegram/file_batcher.ex` | Telegram-specific media/file batching for renderer-owned outbound UX. |
 | `adapters/telegram/inbound.ex` | Normalizes Telegram updates to InboundMessage. |
 | `adapters/telegram/outbound.ex` | Delivers via Bot API with retry for 429s and transient errors. |
 | `adapters/telegram/voice_transcriber.ex` | OpenAI-compatible audio transcription (configurable base_url, model, mime_type). |
@@ -93,6 +112,8 @@ share a group and are never delivered concurrently to prevent reordering.
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
+| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id resume/session index tables. |
+| `telegram/state_store.ex` | Typed wrapper for Telegram session/topic preference and generation state. |
 | `telegram/truncate.ex` | Truncates to 4096 chars preserving resume lines at the end. |
 | `telegram/trigger_mode.ex` | Per-chat/topic `:all` vs `:mentions` trigger mode stored in ETS. |
 | `telegram/offset_store.ex` | Persists getUpdates offset via `LemonCore.Store`. |
@@ -206,6 +227,11 @@ Defined in `LemonChannels.Capabilities`:
 - Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
 - Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities and preserves markdown table column boundaries
 - Truncation: `telegram/truncate.ex` -- preserves resume lines at end
+
+### Ownership boundary to preserve
+
+- Router owns prompt rewriting for pending compaction and any other conversation-text mutation.
+- `lemon_channels` owns platform UX and rendering only: truncation, send-vs-edit behavior, buttons, media batching, message-id tracking, and Telegram-specific indices.
 
 ### Adding a new outbound payload kind
 

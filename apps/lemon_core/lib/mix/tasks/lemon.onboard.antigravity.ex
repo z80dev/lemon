@@ -31,7 +31,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Antigravity do
       default_secret_name: "llm_google_antigravity_api_key",
       default_secret_provider: "onboarding_google_antigravity",
       oauth_secret_provider: "onboarding_google_antigravity_oauth",
-      oauth_module: Module.concat([Ai, Auth, GoogleAntigravityOAuth]),
+      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :GoogleAntigravityOAuth]),
       preferred_models: [
         "gemini-3-pro-high",
         "gemini-3-pro-low",

@@ -10,6 +10,8 @@ defmodule LemonChannels.Application do
     children = [
       # Plugin registry
       LemonChannels.Registry,
+      # Channels-owned delivery presentation state (message ids / send-vs-edit)
+      LemonChannels.PresentationState,
       # Rate limiter
       LemonChannels.Outbox.RateLimiter,
       # Dedupe

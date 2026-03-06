@@ -15,11 +15,19 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess, StickyEngine}
+  alias LemonGateway.ExecutionRequest
+  alias LemonRouter.{
+    AgentProfiles,
+    ConversationKey,
+    ModelSelection,
+    Policy,
+    ResumeResolver,
+    RunProcess,
+    SessionCoordinator,
+    StickyEngine
+  }
   alias LemonCore.{Introspection, RunRequest, SessionKey}
-  alias LemonCore.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
-  alias LemonChannels.EngineRegistry
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -66,6 +74,23 @@ defmodule LemonRouter.RunOrchestrator do
   def submit(server, request) when is_map(request) or is_list(request) do
     normalized = RunRequest.new(request)
     submit(server, normalized)
+  end
+
+  @doc """
+  Start a run process from a prepared submission.
+
+  This entrypoint is used by `LemonRouter.SessionCoordinator`, which owns
+  queue semantics and decides when a submission should become an active run.
+  """
+  @spec start_run_process(GenServer.server(), map(), pid(), term()) ::
+          {:ok, pid()} | {:error, term()}
+  def start_run_process(server, submission, coordinator_pid, conversation_key)
+      when is_map(submission) and is_pid(coordinator_pid) do
+    GenServer.call(
+      server,
+      {:start_run_process, submission, coordinator_pid, conversation_key},
+      15_000
+    )
   end
 
   @doc """
@@ -118,6 +143,15 @@ defmodule LemonRouter.RunOrchestrator do
   @impl true
   def handle_call({:submit, %RunRequest{} = params}, _from, state) do
     result = do_submit(params, state)
+    {:reply, result, state}
+  end
+
+  def handle_call(
+        {:start_run_process, submission, coordinator_pid, conversation_key},
+        _from,
+        state
+      ) do
+    result = do_start_run_process(submission, coordinator_pid, conversation_key, state)
     {:reply, result, state}
   end
 
@@ -193,11 +227,6 @@ defmodule LemonRouter.RunOrchestrator do
       # Resolve cwd: operator override > meta cwd > gateway default
       cwd = resolve_effective_cwd(cwd_override, meta)
 
-      # Extract explicit resume token from prompt or reply-to (Telegram) context.
-      # If a resume token is present, prefer its engine and strip strict resume lines
-      # from the prompt so we don't send `codex resume ...` as the user prompt.
-      {resume, prompt} = extract_resume_and_strip_prompt(prompt, meta)
-
       prompt =
         if meta[:voice_transcribed] do
           base = prompt || ""
@@ -244,7 +273,7 @@ defmodule LemonRouter.RunOrchestrator do
           default_model: default_model,
           explicit_engine_id: effective_engine_id,
           profile_default_engine: profile_default_engine,
-          resume_engine: resume && resume.engine
+          resume_engine: params.resume && params.resume.engine
         })
 
       resolved_model = selection.model
@@ -258,9 +287,11 @@ defmodule LemonRouter.RunOrchestrator do
         )
       end
 
-      resolved_engine_id = selection.engine_id
+      {resolved_resume, resolved_engine_id} =
+        ResumeResolver.resolve(params.resume, session_key, selection.engine_id, meta)
 
-      # Build gateway job
+      conversation_key = ConversationKey.resolve(session_key, resolved_resume)
+
       enriched_meta =
         meta
         |> Map.merge(%{
@@ -272,30 +303,40 @@ defmodule LemonRouter.RunOrchestrator do
         |> maybe_put(:model_resolution_warning, selection.warning)
         |> maybe_put(:system_prompt, resolved_system_prompt)
 
-      job = %LemonGateway.Types.Job{
+      execution_request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
         prompt: prompt,
         engine_id: resolved_engine_id,
         cwd: cwd,
-        resume: resume,
-        queue_mode: queue_mode,
+        resume: resolved_resume,
         lane: meta[:lane] || :main,
         tool_policy: tool_policy,
+        meta: enriched_meta,
+        conversation_key: conversation_key
+      }
+
+      submission = %{
+        run_id: run_id,
+        session_key: session_key,
+        queue_mode: queue_mode,
+        execution_request: execution_request,
+        run_supervisor: orchestrator_state.run_supervisor,
+        run_process_module: orchestrator_state.run_process_module,
+        run_process_opts: orchestrator_state.run_process_opts,
         meta: enriched_meta
       }
 
-      # Start run process
-      case start_run_process(orchestrator_state, run_id, session_key, job) do
-        {:ok, _pid} ->
-          # Subscribe control-plane EventBridge to run events for WS delivery
+      case SessionCoordinator.submit(conversation_key, submission) do
+        :ok ->
           subscribe_event_bridge(run_id)
 
           Introspection.record(
             :orchestration_resolved,
             %{
               engine_id: resolved_engine_id,
-              model: resolved_model
+              model: resolved_model,
+              conversation_key: inspect(conversation_key)
             },
             run_id: run_id,
             session_key: session_key,
@@ -304,7 +345,6 @@ defmodule LemonRouter.RunOrchestrator do
             provenance: :direct
           )
 
-          # Emit telemetry
           LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
           {:ok, run_id}
 
@@ -321,23 +361,30 @@ defmodule LemonRouter.RunOrchestrator do
             provenance: :direct
           )
 
-          if reason == :run_capacity_reached do
-            Logger.warning(
-              "Run admission control rejected run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}: #{inspect(reason)}"
-            )
-          else
-            Logger.error("Failed to start run process: #{inspect(reason)}")
-          end
-
+          Logger.error("Failed to submit run to session coordinator: #{inspect(reason)}")
           {:error, reason}
       end
     end
   end
 
-  defp start_run_process(state, run_id, session_key, job) do
+  defp do_start_run_process(submission, coordinator_pid, conversation_key, state)
+       when is_map(submission) do
+    run_id = map_get(submission, :run_id)
+    session_key = map_get(submission, :session_key)
+    queue_mode = map_get(submission, :queue_mode) || :collect
+    execution_request = map_get(submission, :execution_request)
+
     run_opts =
       state.run_process_opts
-      |> Map.merge(%{run_id: run_id, session_key: session_key, job: job})
+      |> Map.merge(%{
+        run_id: run_id,
+        session_key: session_key,
+        queue_mode: queue_mode,
+        execution_request: execution_request,
+        coordinator_pid: coordinator_pid,
+        conversation_key: conversation_key,
+        manage_session_registry?: false
+      })
 
     spec = {state.run_process_module, run_opts}
 
@@ -372,9 +419,9 @@ defmodule LemonRouter.RunOrchestrator do
   defp persist_sticky_engine(_session_key, updates) when map_size(updates) == 0, do: :ok
 
   defp persist_sticky_engine(session_key, updates) do
-    existing = LemonCore.Store.get_session_policy(session_key) || %{}
+    existing = LemonCore.PolicyStore.get_session(session_key) || %{}
     updated = Map.merge(existing, updates)
-    LemonCore.Store.put_session_policy(session_key, updated)
+    LemonCore.PolicyStore.put_session(session_key, updated)
   rescue
     e ->
       Logger.warning(
@@ -386,7 +433,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp get_session_config(nil), do: %{}
 
   defp get_session_config(session_key) do
-    case LemonCore.Store.get_session_policy(session_key) do
+    case LemonCore.PolicyStore.get_session(session_key) do
       nil -> %{}
       config when is_map(config) -> config
     end
@@ -463,61 +510,6 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp normalize_cwd(_), do: nil
-
-  @doc false
-  @spec extract_resume_and_strip_prompt(String.t() | nil, map()) ::
-          {ResumeToken.t() | nil, String.t()}
-  def extract_resume_and_strip_prompt(prompt, meta) do
-    prompt = prompt || ""
-
-    reply_to_text =
-      meta[:reply_to_text] || meta["reply_to_text"] ||
-        get_in(meta, [:raw, "message", "reply_to_message", "text"]) ||
-        get_in(meta, [:raw, "message", "reply_to_message", "caption"])
-
-    resume =
-      case EngineRegistry.extract_resume(prompt) do
-        {:ok, token} ->
-          token
-
-        :none ->
-          extract_resume_from_reply(reply_to_text)
-      end
-
-    stripped = strip_strict_resume_lines(prompt)
-
-    stripped =
-      if stripped == "" and not is_nil(resume) do
-        # Many CLIs require a prompt even when resuming.
-        "Continue."
-      else
-        stripped
-      end
-
-    {resume, stripped}
-  rescue
-    _ -> {nil, prompt}
-  end
-
-  @spec extract_resume_from_reply(binary() | nil) :: ResumeToken.t() | nil
-  defp extract_resume_from_reply(text) when is_binary(text) and text != "" do
-    case EngineRegistry.extract_resume(text) do
-      {:ok, token} -> token
-      :none -> nil
-    end
-  end
-
-  defp extract_resume_from_reply(_), do: nil
-
-  defp strip_strict_resume_lines(text) when is_binary(text) do
-    text
-    |> String.split("\n")
-    |> Enum.reject(fn line -> ResumeToken.is_resume_line(line) end)
-    |> Enum.join("\n")
-    |> String.trim()
-  end
-
-  defp strip_strict_resume_lines(_), do: ""
 
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts
   defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)

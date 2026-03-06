@@ -183,8 +183,7 @@ defmodule LemonRouter.Policy do
   defp get_agent_policy(nil), do: %{}
 
   defp get_agent_policy(agent_id) do
-    # Try loading from LemonCore.Store
-    case LemonCore.Store.get_agent_policy(agent_id) do
+    case LemonCore.PolicyStore.get_agent(agent_id) do
       nil ->
         # Fall back to application config
         Application.get_env(:lemon_router, :agent_policies, %{})
@@ -206,7 +205,7 @@ defmodule LemonRouter.Policy do
 
     # Load channel base policy
     channel_policy =
-      case LemonCore.Store.get_channel_policy(channel_id) do
+      case LemonCore.PolicyStore.get_channel(channel_id) do
         nil -> %{}
         policy -> policy
       end
@@ -235,7 +234,7 @@ defmodule LemonRouter.Policy do
   defp get_session_policy(nil), do: %{}
 
   defp get_session_policy(session_key) do
-    case LemonCore.Store.get_session_policy(session_key) do
+    case LemonCore.PolicyStore.get_session(session_key) do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
@@ -245,8 +244,7 @@ defmodule LemonRouter.Policy do
 
   # Load operator runtime overrides from config or store
   defp get_runtime_policy do
-    # Check store first (allows dynamic updates)
-    case LemonCore.Store.get_runtime_policy() do
+    case LemonCore.PolicyStore.get_runtime() do
       nil ->
         # Fall back to application config
         Application.get_env(:lemon_router, :runtime_policy, %{})

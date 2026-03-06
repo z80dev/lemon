@@ -2,6 +2,7 @@ defmodule LemonGateway.EngineLockTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
+  alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ResumeToken
 
@@ -1009,7 +1010,7 @@ defmodule LemonGateway.EngineLockTest do
       meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
-    Elixir.LemonGateway.submit(job)
+    submit_job(job)
     assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 1_000
 
     # Wait a bit for lock release to propagate (cast is async)
@@ -1024,7 +1025,7 @@ defmodule LemonGateway.EngineLockTest do
       meta: %{notify_pid: self(), user_msg_id: 2}
     }
 
-    Elixir.LemonGateway.submit(job2)
+    submit_job(job2)
 
     assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
                    1_000
@@ -1050,9 +1051,9 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     # Submit both concurrently
-    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
+    Task.async(fn -> submit_job(job1) end)
     Process.sleep(10)
-    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
+    Task.async(fn -> submit_job(job2) end)
 
     # Jobs should complete in order due to locking
     completions = collect_completions(2, 2_000)
@@ -1086,8 +1087,8 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
-    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
+    Task.async(fn -> submit_job(job1) end)
+    Task.async(fn -> submit_job(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1123,9 +1124,9 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
+    Task.async(fn -> submit_job(job1) end)
     Process.sleep(10)
-    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
+    Task.async(fn -> submit_job(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1177,9 +1178,9 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     # Submit crash job first, then ok job
-    Elixir.LemonGateway.submit(crash_job)
+    submit_job(crash_job)
     Process.sleep(50)
-    Elixir.LemonGateway.submit(ok_job)
+    submit_job(ok_job)
 
     # The ok_job should complete even after crash_job's process dies
     # because EngineLock monitors the process and releases on :DOWN
@@ -1225,8 +1226,8 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
-    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
+    Task.async(fn -> submit_job(job1) end)
+    Task.async(fn -> submit_job(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1251,4 +1252,17 @@ defmodule LemonGateway.EngineLockTest do
       timeout -> Enum.reverse(acc)
     end
   end
+
+  defp submit_job(%Job{} = job) do
+    LemonGateway.submit(
+      ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
+    )
+  end
+
+  defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
+       when is_binary(engine) and is_binary(value),
+       do: {:resume, engine, value}
+
+  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
+    do: {:session, session_key}
 end

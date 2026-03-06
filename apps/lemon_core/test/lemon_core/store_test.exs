@@ -3,6 +3,11 @@ defmodule LemonCore.StoreTest do
 
   alias LemonCore.Store
 
+  setup do
+    assert {:ok, _} = Application.ensure_all_started(:lemon_core)
+    :ok
+  end
+
   defmodule BusyBackend do
     @behaviour LemonCore.Store.Backend
 

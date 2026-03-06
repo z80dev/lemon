@@ -139,7 +139,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Copilot do
   end
 
   defp run_oauth_flow!(opts) do
-    oauth_module = Module.concat([Ai, Auth, GitHubCopilotOAuth])
+    oauth_module = Module.concat([:"Elixir.Ai", :Auth, :GitHubCopilotOAuth])
 
     unless Code.ensure_loaded?(oauth_module) and
              function_exported?(oauth_module, :login_device_flow, 1) do
@@ -280,7 +280,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Copilot do
   end
 
   defp available_model_ids do
-    models_module = Module.concat([Ai, Models])
+    models_module = Module.concat([:"Elixir.Ai", :Models])
 
     if Code.ensure_loaded?(models_module) and function_exported?(models_module, :get_models, 1) do
       models_module

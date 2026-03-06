@@ -9,6 +9,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   """
   use ExUnit.Case, async: false
 
+  alias LemonGateway.ExecutionRequest
   alias LemonGateway.Run
   alias LemonGateway.Types.Job
   alias LemonCore.ResumeToken
@@ -120,7 +121,6 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     %Job{
       session_key: session_key,
       prompt: Keyword.get(opts, :text, Keyword.get(opts, :prompt, "test message")),
-      queue_mode: Keyword.get(opts, :queue_mode, :collect),
       engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "delta_test")),
       resume: Keyword.get(opts, :resume),
       meta: meta
@@ -129,7 +129,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
   defp start_run_direct(job, slot_ref \\ make_ref()) do
     args = %{
-      job: job,
+      execution_request: ExecutionRequest.from_job(job),
       slot_ref: slot_ref,
       worker_pid: self()
     }
@@ -235,7 +235,6 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         session_key: scope,
         run_id: run_id,
         prompt: "test",
-        queue_mode: :collect,
         engine_id: "echo",
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
@@ -269,7 +268,6 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         session_key: scope,
         run_id: run_id,
         prompt: "test",
-        queue_mode: :collect,
         engine_id: "echo",
         meta: %{notify_pid: self(), user_msg_id: 1}
       }

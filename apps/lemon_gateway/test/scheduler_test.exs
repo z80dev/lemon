@@ -2,6 +2,7 @@ defmodule LemonGateway.SchedulerTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
+  alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Scheduler
   alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ChatScope
@@ -63,8 +64,6 @@ defmodule LemonGateway.SchedulerTest do
     @moduledoc false
     use GenServer
 
-    alias Elixir.LemonGateway.Types.Job
-
     def start_link(opts) do
       GenServer.start_link(__MODULE__, opts)
     end
@@ -81,22 +80,22 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     @impl true
-    def handle_cast({:enqueue, %Job{} = job}, state) do
+    def handle_cast({:enqueue, %ExecutionRequest{} = request}, state) do
       Process.sleep(state.delay_ms)
-      send(state.notify_pid, {:blocking_worker_enqueue_cast, job})
+      send(state.notify_pid, {:blocking_worker_enqueue_cast, request})
       {:noreply, state}
     end
 
     @impl true
-    def handle_call({:enqueue, %Job{} = job}, _from, state) do
+    def handle_call({:enqueue, %ExecutionRequest{} = request}, _from, state) do
       Process.sleep(state.delay_ms)
-      send(state.notify_pid, {:blocking_worker_enqueue_call, job})
+      send(state.notify_pid, {:blocking_worker_enqueue_call, request})
       {:reply, :ok, state}
     end
   end
 
-  # Test helper to create a minimal job
-  defp make_job(opts \\ []) do
+  # Test helper to create a minimal execution request
+  defp make_request(opts \\ []) do
     scope = Keyword.get(opts, :scope, %ChatScope{transport: :test, chat_id: 1, topic_id: nil})
     session_key = Keyword.get(opts, :session_key, scope_to_session_key(scope))
     prompt = Keyword.get(opts, :text, Keyword.get(opts, :prompt, "test message"))
@@ -104,10 +103,17 @@ defmodule LemonGateway.SchedulerTest do
     user_msg_id = Keyword.get(opts, :user_msg_id, 1)
     meta = Map.merge(%{user_msg_id: user_msg_id}, Keyword.get(opts, :meta, %{}))
 
-    %Job{
+    %ExecutionRequest{
+      run_id: "run_#{System.unique_integer([:positive])}",
       session_key: session_key,
       prompt: prompt,
       resume: resume,
+      conversation_key:
+        Keyword.get(
+          opts,
+          :conversation_key,
+          if(resume, do: {:resume, resume.engine, resume.value}, else: {:session, session_key})
+        ),
       engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "echo")),
       meta: meta
     }
@@ -233,16 +239,16 @@ defmodule LemonGateway.SchedulerTest do
         worker_counts: %{}
       }
 
-      job = make_job(session_key: session_key)
+      request = make_request(session_key: session_key)
 
       {elapsed_us, {:noreply, new_state}} =
         :timer.tc(fn ->
-          Scheduler.handle_cast({:submit, job}, state)
+          Scheduler.handle_cast({:submit_execution, request}, state)
         end)
 
       assert new_state == state
       assert elapsed_us < 100_000
-      assert_receive {:blocking_worker_enqueue_cast, %Job{}}, 1_000
+      assert_receive {:blocking_worker_enqueue_cast, %ExecutionRequest{}}, 1_000
       refute_receive {:blocking_worker_enqueue_call, _}
     end
 
@@ -691,16 +697,16 @@ defmodule LemonGateway.SchedulerTest do
       :ok
     end
 
-    test "submit/1 accepts a valid job" do
-      job = make_job()
-      assert :ok == Scheduler.submit(job)
+    test "submit_execution/1 accepts a valid request" do
+      request = make_request()
+      assert :ok == Scheduler.submit_execution(request)
     end
 
-    test "submit/1 returns :ok immediately (async)" do
-      job = make_job()
+    test "submit_execution/1 returns :ok immediately (async)" do
+      request = make_request()
 
       # Submit should return immediately, not block
-      {time_us, result} = :timer.tc(fn -> Scheduler.submit(job) end)
+      {time_us, result} = :timer.tc(fn -> Scheduler.submit_execution(request) end)
 
       assert result == :ok
       # Should complete in under 10ms (accounting for test overhead)
@@ -709,16 +715,16 @@ defmodule LemonGateway.SchedulerTest do
 
     test "submit with resume token uses engine/value as thread_key" do
       resume = %ResumeToken{engine: "test_engine", value: "session_123"}
-      job = make_job(resume: resume, text: "resumed message")
+      request = make_request(resume: resume, text: "resumed message")
 
-      assert :ok == Scheduler.submit(job)
+      assert :ok == Scheduler.submit_execution(request)
     end
 
     test "submit without resume uses scope as thread_key" do
       scope = %ChatScope{transport: :telegram, chat_id: 42, topic_id: nil}
-      job = make_job(scope: scope, resume: nil)
+      request = make_request(scope: scope, resume: nil)
 
-      assert :ok == Scheduler.submit(job)
+      assert :ok == Scheduler.submit_execution(request)
     end
   end
 
@@ -1007,21 +1013,24 @@ defmodule LemonGateway.SchedulerTest do
       :ok
     end
 
-    test "job with resume token creates thread_key from engine and value" do
+    test "request uses router-supplied resume conversation key" do
       resume = %ResumeToken{engine: "claude", value: "session-abc"}
 
-      job = %Job{
+      request = %ExecutionRequest{
+        run_id: "run_#{System.unique_integer([:positive])}",
+        session_key: "session_#{System.unique_integer([:positive])}",
         prompt: "test",
         resume: resume,
+        conversation_key: {:resume, resume.engine, resume.value},
         engine_id: "echo",
         meta: %{user_msg_id: 1}
       }
 
       # Submit should succeed
-      assert :ok == Scheduler.submit(job)
+      assert :ok == Scheduler.submit_execution(request)
     end
 
-    test "job with session_key and resume token creates thread_key from session_key" do
+    test "request can use a router-supplied session conversation key even with resume metadata" do
       session_key = "session_#{System.unique_integer([:positive])}"
 
       resume = %ResumeToken{
@@ -1029,15 +1038,17 @@ defmodule LemonGateway.SchedulerTest do
         value: "resume_#{System.unique_integer([:positive])}"
       }
 
-      job = %Job{
+      request = %ExecutionRequest{
+        run_id: "run_#{System.unique_integer([:positive])}",
         session_key: session_key,
         prompt: "test",
         resume: resume,
+        conversation_key: {:session, session_key},
         engine_id: Elixir.LemonGateway.SchedulerTest.SlowEngine.id(),
         meta: %{delay_ms: 200}
       }
 
-      assert :ok == Scheduler.submit(job)
+      assert :ok == Scheduler.submit_execution(request)
 
       assert eventually(fn ->
                is_pid(Elixir.LemonGateway.ThreadRegistry.whereis({:session, session_key}))
@@ -1046,18 +1057,20 @@ defmodule LemonGateway.SchedulerTest do
       assert Elixir.LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
     end
 
-    test "job without resume token creates thread_key from session_key" do
+    test "request without resume token uses router-supplied session conversation key" do
       session_key = "test:888:42"
 
-      job = %Job{
+      request = %ExecutionRequest{
+        run_id: "run_#{System.unique_integer([:positive])}",
         session_key: session_key,
         prompt: "test",
         resume: nil,
+        conversation_key: {:session, session_key},
         engine_id: "echo",
         meta: %{user_msg_id: 1}
       }
 
-      assert :ok == Scheduler.submit(job)
+      assert :ok == Scheduler.submit_execution(request)
     end
   end
 

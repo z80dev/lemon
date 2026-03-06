@@ -50,6 +50,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
       :lemon_channels,
       :lemon_core
     ],
+    lemon_mcp: [:agent_core, :coding_agent],
     lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core, :lemon_gateway],
     lemon_sim: [:agent_core, :ai, :lemon_core],
     lemon_services: [],
@@ -62,13 +63,14 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     agent_core: ["AgentCore"],
     ai: ["Ai"],
     coding_agent: ["CodingAgent"],
-    coding_agent_ui: ["CodingAgentUI"],
+    coding_agent_ui: ["CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_core: ["LemonCore"],
     lemon_games: ["LemonGames"],
     lemon_gateway: ["LemonGateway"],
+    lemon_mcp: ["LemonMCP"],
     lemon_router: ["LemonRouter"],
     lemon_sim: ["LemonSim"],
     lemon_services: ["LemonServices"],
@@ -76,6 +78,20 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_web: ["LemonWeb"],
     market_intel: ["MarketIntel"]
   }
+
+  @exact_module_owners %{
+    "CodingAgent.UI" => :coding_agent,
+    "CodingAgent.UI.Context" => :coding_agent,
+    "CodingAgent.UI.RPC" => :coding_agent_ui,
+    "CodingAgent.UI.Headless" => :coding_agent_ui,
+    "CodingAgent.UI.DebugRPC" => :coding_agent_ui
+  }
+
+  @namespace_prefix_owners @app_namespaces
+                           |> Enum.flat_map(fn {owner, prefixes} ->
+                             Enum.map(prefixes, &{&1, owner})
+                           end)
+                           |> Enum.sort_by(fn {prefix, _owner} -> -String.length(prefix) end)
 
   @doc """
   Runs all architecture boundary checks for the umbrella project.
@@ -141,18 +157,69 @@ defmodule LemonCore.Quality.ArchitectureCheck do
 
   @spec parse_umbrella_deps(String.t()) :: [atom()]
   defp parse_umbrella_deps(mix_file) do
-    mix_file
-    |> File.read!()
-    |> then(fn content ->
-      Regex.scan(~r/\{\s*:([a-z_]+)\s*,\s*in_umbrella:\s*true\s*\}/, content,
-        capture: :all_but_first
-      )
-    end)
-    |> List.flatten()
-    |> Enum.map(&String.to_atom/1)
-    |> Enum.uniq()
-    |> Enum.sort()
+    with {:ok, source} <- File.read(mix_file),
+         {:ok, ast} <- Code.string_to_quoted(source) do
+      ast
+      |> find_deps_asts()
+      |> Enum.flat_map(&extract_umbrella_dep_atoms/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+    else
+      _ -> []
+    end
   end
+
+  defp find_deps_asts(ast) do
+    {_ast, deps_asts} =
+      Macro.prewalk(ast, [], fn
+        {:def, _meta, [{:deps, _, _args}, [do: body]]} = node, acc ->
+          {node, [body | acc]}
+
+        {:defp, _meta, [{:deps, _, _args}, [do: body]]} = node, acc ->
+          {node, [body | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    deps_asts
+  end
+
+  defp extract_umbrella_dep_atoms(deps_ast) do
+    deps_ast
+    |> dependency_entries()
+    |> Enum.flat_map(&extract_umbrella_dep_atom/1)
+  end
+
+  defp dependency_entries(list) when is_list(list), do: list
+  defp dependency_entries(_), do: []
+
+  defp extract_umbrella_dep_atom({dep, opts}) when is_atom(dep) and is_list(opts) do
+    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
+  end
+
+  defp extract_umbrella_dep_atom({dep, _version, opts}) when is_atom(dep) and is_list(opts) do
+    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
+  end
+
+  defp extract_umbrella_dep_atom({:{}, _meta, [dep | tuple_elements]}) when is_atom(dep) do
+    if umbrella_dependency_tuple?(tuple_elements), do: [dep], else: []
+  end
+
+  defp extract_umbrella_dep_atom(_entry), do: []
+
+  defp umbrella_dependency_tuple?(tuple_elements) when is_list(tuple_elements) do
+    Enum.any?(tuple_elements, &keyword_true?(&1, :in_umbrella))
+  end
+
+  defp keyword_true?(value, key) when is_list(value) do
+    Enum.any?(value, fn
+      {^key, true} -> true
+      _ -> false
+    end)
+  end
+
+  defp keyword_true?(_value, _key), do: false
 
   @spec check_unknown_apps([issue()], %{optional(atom()) => [atom()]}) :: [issue()]
   defp check_unknown_apps(issues, actual) do
@@ -216,26 +283,21 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @spec check_namespace_violations([issue()], String.t(), %{optional(atom()) => [atom()]}) ::
           [issue()]
   defp check_namespace_violations(issues, root, actual) do
-    namespace_owners = namespace_owners()
-
     Enum.reduce(actual, issues, fn {app, _deps}, acc ->
-      allowed_prefixes = allowed_namespace_prefixes(app)
+      allowed_owners = MapSet.new([app | Map.get(@allowed_direct_deps, app, [])])
 
       app
       |> app_source_files(root)
       |> Enum.reduce(acc, fn file, file_acc ->
         case parse_module_references(file) do
           {:ok, refs} ->
-            Enum.reduce(refs, file_acc, fn {prefix, module_name, line}, ref_acc ->
-              case Map.get(namespace_owners, prefix) do
+            Enum.reduce(refs, file_acc, fn {module_name, line}, ref_acc ->
+              case owner_for_module(module_name) do
                 nil ->
                   ref_acc
 
-                ^app ->
-                  ref_acc
-
                 owner ->
-                  if MapSet.member?(allowed_prefixes, prefix) do
+                  if MapSet.member?(allowed_owners, owner) do
                     ref_acc
                   else
                     issue = %{
@@ -279,10 +341,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
         Macro.prewalk(ast, MapSet.new(), fn
           {:__aliases__, meta, parts} = node, acc when is_list(parts) ->
             if Enum.all?(parts, &is_atom/1) and parts != [] do
-              prefix = parts |> hd() |> Atom.to_string()
               module_name = Enum.map_join(parts, ".", &Atom.to_string/1)
               line = meta[:line] || get_in(meta, [:closing, :line]) || 1
-              {node, MapSet.put(acc, {prefix, module_name, line})}
+              {node, MapSet.put(acc, {module_name, line})}
             else
               {node, acc}
             end
@@ -298,18 +359,21 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     end
   end
 
-  defp namespace_owners do
-    Enum.reduce(@app_namespaces, %{}, fn {app, prefixes}, acc ->
-      Enum.reduce(prefixes, acc, fn prefix, inner -> Map.put(inner, prefix, app) end)
-    end)
-  end
+  defp owner_for_module(full_name) when is_binary(full_name) do
+    case Map.get(@exact_module_owners, full_name) do
+      nil ->
+        @namespace_prefix_owners
+        |> Enum.find(fn {prefix, _owner} ->
+          full_name == prefix || String.starts_with?(full_name, prefix <> ".")
+        end)
+        |> case do
+          nil -> nil
+          {_prefix, owner} -> owner
+        end
 
-  defp allowed_namespace_prefixes(app) do
-    allowed_apps = [app | Map.get(@allowed_direct_deps, app, [])]
-
-    allowed_apps
-    |> Enum.flat_map(fn dep -> Map.get(@app_namespaces, dep, []) end)
-    |> MapSet.new()
+      owner ->
+        owner
+    end
   end
 
   defp allowed_list(app) do

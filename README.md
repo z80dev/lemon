@@ -533,7 +533,7 @@ lemon/
 │   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (14 apps)
+├── apps/                        # Umbrella applications (17 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
@@ -679,6 +679,19 @@ lemon/
 │   │       ├── bot/             # Bot strategies + turn worker
 │   │       ├── auth.ex          # Agent token issue/validate/revoke
 │   │       └── rate_limit.ex    # Read/move rate limiting
+│   │
+│   ├── lemon_mcp/               # MCP server/client bridge for CodingAgent tools
+│   │   └── lib/lemon_mcp/
+│   │       ├── server.ex        # MCP server process
+│   │       ├── client.ex        # MCP client utilities
+│   │       ├── protocol.ex      # MCP wire protocol structures
+│   │       └── tool_adapter.ex  # Tool exposure adapter for CodingAgent
+│   │
+│   ├── lemon_services/          # Standalone OTP service manager (no umbrella deps)
+│   │   └── lib/lemon_services/
+│   │       ├── service.ex       # Service definition
+│   │       ├── manager.ex       # Service lifecycle manager
+│   │       └── supervisor.ex    # Service supervision tree
 │   │
 │   ├── lemon_sim/               # Reusable simulation harness primitives
 │   │   └── lib/lemon_sim/
@@ -1117,30 +1130,31 @@ end)
 
 ### LemonGateway
 
-`LemonGateway` provides job orchestration and multi-engine execution:
+`LemonGateway` provides execution-slot scheduling and multi-engine execution behind router-owned conversations:
 
 ```elixir
-# Submit a job
-job = %LemonGateway.Types.Job{
+# Submit an execution request
+request = %LemonGateway.ExecutionRequest{
   run_id: "run_123",
   session_key: "agent:default:main",
   prompt: "Explain this code",
   engine_id: "claude",  # or "codex", "lemon", "opencode", "pi"
-  queue_mode: :collect,
   lane: :main,
+  conversation_key: {:session, "agent:default:main"},
   meta: %{origin: :channel, agent_id: "default"}
 }
 
-LemonGateway.submit(job)
+LemonGateway.Runtime.submit_execution(request)
 
 # Events flow through the system:
-# Job → Scheduler → ThreadWorker → Run → Engine → Events (consumed by Router/Channels/ControlPlane)
+# SessionCoordinator/RunOrchestrator → ExecutionRequest → Scheduler → ThreadWorker → Run → Engine → Events
+# Router owns queue semantics; Gateway only owns execution lifecycle and slot management.
 ```
 
 **Key Features:**
 - **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, OpenCode CLI, Pi CLI
-- **Job Scheduling**: Configurable concurrency with slot-based allocation
-- **Thread Workers**: Per-conversation job queues with sequential execution
+- **Execution Scheduling**: Configurable concurrency with slot-based allocation
+- **Thread Workers**: Per-conversation execution launchers keyed by router-selected conversation keys
 - **Resume Tokens**: Persist and continue sessions across restarts
 - **Event Streaming**: Unified event format across all engines
 - **Config Loader**: Reads `~/.lemon/config.toml` (`[gateway]` section) with projects, bindings, and queue modes
@@ -1154,17 +1168,18 @@ LemonGateway.submit(job)
 | OpenCode | `opencode` | OpenCode CLI via subprocess |
 | Pi | `pi` | Pi CLI via subprocess |
 
-**Transport Adapters:**
-- Discord
+**Gateway-Native Ingress:**
 - Email
 - Farcaster
 - Webhook
-- XMTP
 - SMS (Twilio)
+- Voice (Twilio)
+
+These gateway-native transports normalize inbound requests to `LemonCore.RunRequest` and submit them through `LemonCore.RouterBridge`; only `lemon_router` submits `LemonGateway.ExecutionRequest` values into the scheduler.
 
 ### LemonRouter
 
-`LemonRouter` provides run orchestration, session routing, and policy-driven execution gating:
+`LemonRouter` provides run orchestration, conversation coordination, and semantic delivery:
 
 ```elixir
 # Submit a run through the router
@@ -1183,9 +1198,10 @@ LemonRouter.abort("session:my-agent:main")
 
 - **Session Management**: Canonical session keys (`agent:<id>:main` or full channel format)
 - **Run Orchestration**: Agent config resolution, policy merging, engine selection
+- **Queue Semantics**: `collect`, `followup`, `steer`, `steer_backlog`, and `interrupt` live in `SessionCoordinator`
 - **Hierarchical Policies**: Agent → Channel → Session → Runtime policy merging
 - **Approval Workflow**: Four scopes (once, session, agent, global) with async blocking
-- **Stream Coalescing**: Buffered output delivery with configurable thresholds
+- **Semantic Output Tracking**: Buffered stream/tool-status coalescing into `LemonCore.DeliveryIntent`
 
 **Policy Structure:**
 ```elixir
@@ -1204,22 +1220,38 @@ LemonRouter.abort("session:my-agent:main")
 | Module | Purpose |
 |--------|---------|
 | `LemonRouter.Router` | Inbound message handling and normalization |
-| `LemonRouter.RunOrchestrator` | Run submission with lifecycle management |
-| `LemonRouter.RunProcess` | Individual run state and event forwarding |
+| `LemonRouter.RunOrchestrator` | Run normalization and submission into `SessionCoordinator` |
+| `LemonRouter.SessionCoordinator` | Queue-semantics owner for one conversation key |
+| `LemonRouter.RunProcess` | Individual active-run state and event forwarding |
 | `LemonRouter.SessionKey` | Session key generation and parsing |
 | `LemonRouter.Policy` | Hierarchical policy merging |
 | `LemonRouter.ApprovalsBridge` | Approval request/resolution with timeouts |
-| `LemonRouter.StreamCoalescer` | Output buffering (48 chars, 400ms idle, 1.2s max) |
+| `LemonRouter.StreamCoalescer` | Semantic answer coalescing |
 | `LemonRouter.AgentDirectory` | Agent discovery and session listing |
 | `LemonRouter.AgentInbox` | Inbox messaging system |
 | `LemonRouter.AgentEndpoints` | Endpoint alias management |
 
 ### LemonChannels
 
-`LemonChannels` provides pluggable channel adapters with intelligent message delivery:
+`LemonChannels` provides pluggable channel adapters with semantic rendering plus direct delivery primitives:
 
 ```elixir
-# Enqueue a message for delivery
+# Semantic dispatch from router
+LemonChannels.Dispatcher.dispatch(%LemonCore.DeliveryIntent{
+  intent_id: "intent_123",
+  run_id: "run_123",
+  session_key: "agent:default:main",
+  route: %LemonCore.DeliveryRoute{
+    channel_id: "telegram",
+    account_id: "bot_123",
+    peer_kind: :dm,
+    peer_id: "user_456"
+  },
+  kind: :final_text,
+  body: %{text: "Hello from Lemon!"}
+})
+
+# Or enqueue a low-level payload directly
 LemonChannels.enqueue(%LemonChannels.OutboundPayload{
   channel_id: "telegram",
   account_id: "bot_123",
@@ -1232,6 +1264,7 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 **Key Features:**
 
 - **Pluggable Adapters**: Standardized `Plugin` behaviour for any channel
+- **Semantic Rendering**: `DeliveryIntent` -> channel-specific send/edit/file UX
 - **Smart Chunking**: Automatic message splitting at word/sentence boundaries
 - **Rate Limiting**: Token bucket algorithm (30 msgs/sec, 5 burst)
 - **Deduplication**: Outbound idempotency keys use a 1-hour TTL; Telegram inbound update dedupe defaults to 10 minutes
@@ -2307,7 +2340,11 @@ mix test apps/lemon_channels
 mix test apps/lemon_automation
 mix test apps/lemon_control_plane
 mix test apps/lemon_games
+mix test apps/lemon_mcp
+mix test apps/lemon_services
+mix test apps/lemon_sim
 mix test apps/lemon_skills
+mix test apps/lemon_web
 mix test apps/market_intel
 
 # Run integration tests (require CLI tools)

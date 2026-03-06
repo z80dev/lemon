@@ -2,7 +2,7 @@ defmodule LemonCore.Introspection do
   @moduledoc """
   Canonical introspection event API.
 
-  Events are persisted through `LemonCore.Store` in `:introspection_log` with
+  Events are persisted through `LemonCore.IntrospectionStore` in `:introspection_log` with
   the following contract:
 
   - `:event_id` - stable unique identifier
@@ -23,7 +23,7 @@ defmodule LemonCore.Introspection do
   - Result previews are kept by default and truncated.
   """
 
-  alias LemonCore.{Id, Store}
+  alias LemonCore.{Id, IntrospectionStore}
 
   @forbidden_payload_keys MapSet.new([
                             "api_key",
@@ -66,7 +66,7 @@ defmodule LemonCore.Introspection do
   def record(event_type, payload \\ %{}, opts \\ []) do
     if enabled?() do
       with {:ok, event} <- build_event(event_type, payload, opts) do
-        Store.append_introspection_event(event)
+        IntrospectionStore.append(event)
       end
     else
       :ok
@@ -116,7 +116,7 @@ defmodule LemonCore.Introspection do
   """
   @spec list(keyword()) :: [event()]
   def list(opts \\ []) do
-    Store.list_introspection_events(opts)
+    IntrospectionStore.list(opts)
   end
 
   @doc """

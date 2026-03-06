@@ -54,7 +54,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
   end
 
   defp check_run_completed(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       %{summary: %{completed: completed}} when not is_nil(completed) ->
         {:ok, format_result(completed)}
 

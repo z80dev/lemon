@@ -110,7 +110,7 @@ defmodule LemonRouter.RunProcess.RetryHandler do
             session_key: state.session_key,
             agent_id: SessionKey.agent_id(state.session_key || "") || "default",
             prompt: retry_prompt,
-            queue_mode: state.job.queue_mode,
+            queue_mode: state.queue_mode,
             engine_id: state.job.engine_id,
             cwd: state.job.cwd,
             tool_policy: state.job.tool_policy,

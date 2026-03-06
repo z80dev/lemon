@@ -1,6 +1,6 @@
 # LemonGateway
 
-Multi-engine AI gateway for Elixir. Routes user requests from messaging transports (Telegram, Discord, Email, SMS, Voice, Farcaster, XMTP, Webhooks) to AI engine backends (Lemon, Claude, Codex, Opencode, Pi) with concurrency control, per-session thread isolation, session resumption, and streaming output via an event bus.
+Multi-engine execution gateway for Elixir. It sits behind router-owned conversations and handles execution-slot scheduling, per-conversation launch isolation, session resumption, and streaming engine output via the event bus.
 
 Part of the `lemon` Elixir umbrella project.
 
@@ -8,24 +8,23 @@ Part of the `lemon` Elixir umbrella project.
 
 ```
                         +-----------------------------------------+
-                        |             Transports                   |
-                        | Telegram  Discord  Email  SMS  Voice    |
-                        | Farcaster  XMTP  Webhook                |
+                        |   Router / Gateway-Owned Transports     |
+                        | Email  SMS  Voice  Farcaster  Webhook   |
                         +-------------------+---------------------+
                                             |
-                                     Job (Types.Job)
+                               ExecutionRequest
                                             |
                                             v
                         +-------------------+---------------------+
                         |           LemonGateway.Runtime           |
-                        |              submit/1                    |
+                        |         submit_execution/1               |
                         +-------------------+---------------------+
                                             |
                                             v
                         +-------------------+---------------------+
                         |         LemonGateway.Scheduler           |
-                        |    auto-resume, slot allocation,         |
-                        |    thread_key routing                    |
+                        | slot allocation + conversation-key       |
+                        | routing from router-supplied requests    |
                         +-------------------+---------------------+
                                             |
                                     slot_granted
@@ -33,9 +32,8 @@ Part of the `lemon` Elixir umbrella project.
                                             v
                         +-------------------+---------------------+
                         |       LemonGateway.ThreadWorker          |
-                        |    per-session job queue (5 modes)       |
-                        |    collect | followup | steer |          |
-                        |    steer_backlog | interrupt             |
+                        |   trivial per-conversation launcher      |
+                        |   (no queue semantics)                   |
                         +-------------------+---------------------+
                                             |
                                      RunSupervisor
@@ -68,13 +66,14 @@ Part of the `lemon` Elixir umbrella project.
 
 ### Flow
 
-1. A **Transport** (or channel adapter) receives user input, constructs a `Job` struct, and calls `LemonGateway.submit/1`.
-2. The **Scheduler** applies auto-resume from stored `ChatState`, derives a `thread_key` from the session key, and routes the job to the appropriate `ThreadWorker`.
-3. The **ThreadWorker** manages a per-session job queue with mode-dependent enqueue semantics (collect, followup, steer, steer_backlog, interrupt). When ready, it requests a concurrency slot from the Scheduler.
-4. On slot grant, the worker starts a **Run** process via `RunSupervisor`. The Run acquires an `EngineLock`, resolves the engine, and calls `Engine.start_run/3`.
-5. The **Engine** executes the AI request (native Elixir session, CLI subprocess, or echo) and streams events (`{:engine_event, run_ref, event}`) and text deltas (`{:engine_delta, run_ref, text}`) back to the Run process.
-6. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Subscribers (router, channels, control-plane) handle channel-specific rendering and delivery.
-7. On completion, the Run stores chat state for auto-resume, releases the engine lock and scheduler slot, and notifies the `ThreadWorker` and any `meta.notify_pid`.
+1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonGateway.ExecutionRequest{}` values to the gateway.
+2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
+3. The **Scheduler** routes each execution request by the router-supplied `conversation_key` and allocates a concurrency slot.
+4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics.
+5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock`, resolves the engine, and calls `Engine.start_run/3`.
+6. The **Engine** executes the AI request and streams lifecycle events and deltas back to the Run process.
+7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
+8. On completion, the Run stores chat state for future auto-resume, releases the engine lock and scheduler slot, and finalizes its lifecycle.
 
 ## Supported Engines
 
@@ -102,7 +101,7 @@ CLI-based engines (Claude, Codex, Opencode, Pi) delegate to `Engines.CliAdapter`
 
 ### Engine Selection Priority
 
-1. Resume token engine (from auto-resume `ChatState`)
+1. Resume token engine (from router-resolved auto-resume or explicit resume)
 2. Inline directive (`/claude`, `/codex`, `/lemon`, etc. via `EngineDirective`)
 3. Binding `default_engine` (topic-level, then chat-level)
 4. Project `default_engine`
@@ -131,12 +130,13 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway` | `lemon_gateway.ex` | Public API entry point (`submit/1`) |
+| `LemonGateway` | `lemon_gateway.ex` | Public API entry point (`submit/1` delegates to `submit_execution/1`) |
 | `LemonGateway.Application` | `application.ex` | OTP supervision tree |
-| `LemonGateway.Runtime` | `runtime.ex` | Internal submit/cancel API |
+| `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
-| `LemonGateway.Types` | `types.ex` | Core type definitions (`Job`, `engine_id`, `queue_mode`, `lane`) |
+| `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway input contract with no queue semantics |
+| `LemonGateway.Types` | `types.ex` | Legacy compatibility types (`Job`, `engine_id`, `lane`) |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonGateway.ChatState` | `chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
@@ -150,8 +150,8 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator with auto-resume and thread routing |
-| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-session job queue with 5 queue modes and steer support |
+| `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator keyed by router-supplied conversation keys |
+| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-conversation launcher / slot waiter with no queue-mode logic |
 | `LemonGateway.ThreadRegistry` | `thread_registry.ex` | Registry for thread workers (unique key by `thread_key`) |
 | `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: engine lifecycle, bus events, steer/cancel |
@@ -191,7 +191,7 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Transports.Voice` | `transports/voice.ex` | Voice call transport |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
-### Binding and Rendering
+### Binding and Legacy Rendering Helpers
 
 | Module | File | Purpose |
 |--------|------|---------|
@@ -272,26 +272,20 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 ### Steering
 
 - Only the Lemon engine supports steering (`supports_steer?/0` returns `true`).
-- When a `ThreadWorker` receives a `:steer` or `:steer_backlog` mode job while a run is active, it casts `{:steer, job, self()}` to the Run process.
-- The Run delegates to `engine.steer(cancel_ctx, text)` which injects the text into the active LemonRunner session.
-- If steering is rejected (engine does not support it, run completed, or steer fails), the job falls back to `:followup` (for `:steer`) or `:collect` (for `:steer_backlog`).
+- Router-owned `SessionCoordinator` decides whether a submission should be steered, queued, or interrupted before anything reaches the gateway.
+- When the active run is already live, the gateway `Run` only handles the low-level steer attempt by calling `engine.steer(cancel_ctx, text)`.
+- Any fallback from `:steer` / `:steer_backlog` is router behavior, not gateway queue behavior.
 
 ### Cancellation
 
 - `Runtime.cancel_by_run_id/2` looks up the run in `RunRegistry` and casts `{:cancel, reason}` to the run process.
 - The Run calls `engine.cancel(cancel_ctx)`, emits a failed completion event, and terminates normally.
 
-## Queue Modes
+## Queue Semantics
 
-| Mode | Behavior |
-|------|----------|
-| `:collect` | Append to back of queue. Consecutive collect jobs at the front are coalesced into one. |
-| `:followup` | Append with debounce merging (500ms window). Auto-promoted to `:steer_backlog` if a run is active and `meta.task_auto_followup` or `meta.delegated_auto_followup` is set. |
-| `:steer` | Attempt to inject into active run. Falls back to `:followup` if rejected. |
-| `:steer_backlog` | Attempt to inject into active run. Falls back to `:collect` if rejected. |
-| `:interrupt` | Cancel the current run and insert at front of queue. |
+Queue modes such as `:collect`, `:followup`, `:steer`, `:steer_backlog`, and `:interrupt` are router-owned conversation semantics. The gateway no longer decides those modes for execution requests.
 
-Queue cap enforcement (`gateway.queue.cap`) drops either the oldest or newest jobs based on the `drop` policy when the cap is exceeded.
+Gateway queue configuration only applies to legacy transport/binding compatibility paths that still emit router-facing run requests before `SessionCoordinator` takes over. Execution submission into the gateway is keyed by router-supplied `conversation_key`.
 
 ## Voice Call System
 
@@ -372,13 +366,13 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 | `enable_xmtp` | `false` | Enable XMTP transport |
 | `enable_webhook` | `false` | Enable webhook transport |
 
-### Queue Options (`[gateway.queue]`)
+### Legacy Queue Options (`[gateway.queue]`)
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `mode` | `nil` | Default queue mode for jobs |
-| `cap` | `nil` | Maximum jobs per thread queue (0 or nil = unlimited) |
-| `drop` | `nil` | Drop policy when cap reached: `"oldest"` or `"newest"` |
+| `mode` | `nil` | Legacy default queue mode used only while building router-facing submissions from old transport/binding config |
+| `cap` | `nil` | Legacy queue cap for compatibility paths that still rely on transport-level queue config |
+| `drop` | `nil` | Legacy drop policy when that compatibility queue cap is exceeded |
 
 ### TOML Example
 

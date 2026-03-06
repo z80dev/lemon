@@ -8,6 +8,7 @@ defmodule LemonCore.RunRequest do
   """
 
   alias LemonCore.MapHelpers
+  alias LemonCore.ResumeToken
   alias LemonCore.SessionKey
 
   @type origin :: :channel | :control_plane | :cron | :node | :unknown | atom()
@@ -21,6 +22,7 @@ defmodule LemonCore.RunRequest do
           queue_mode: queue_mode(),
           engine_id: term(),
           model: term(),
+          resume: ResumeToken.t() | nil,
           meta: map(),
           cwd: term(),
           tool_policy: map() | nil,
@@ -34,6 +36,7 @@ defmodule LemonCore.RunRequest do
             queue_mode: :collect,
             engine_id: nil,
             model: nil,
+            resume: nil,
             meta: %{},
             cwd: nil,
             tool_policy: nil,
@@ -69,6 +72,7 @@ defmodule LemonCore.RunRequest do
       queue_mode: normalize_queue_mode(field(params, :queue_mode)),
       engine_id: normalize_engine_id(field(params, :engine_id)),
       model: normalize_model(field(params, :model)),
+      resume: normalize_resume(field(params, :resume)),
       meta: normalize_meta(field(params, :meta)),
       cwd: normalize_cwd(field(params, :cwd)),
       tool_policy: normalize_tool_policy(field(params, :tool_policy)),
@@ -107,6 +111,10 @@ defmodule LemonCore.RunRequest do
   @spec normalize_model(term()) :: term()
   def normalize_model(model) when model in [nil, false], do: nil
   def normalize_model(model), do: model
+
+  @spec normalize_resume(term()) :: ResumeToken.t() | nil
+  def normalize_resume(%ResumeToken{} = resume), do: resume
+  def normalize_resume(_), do: nil
 
   @spec normalize_meta(term()) :: map()
   def normalize_meta(meta) when is_map(meta), do: meta

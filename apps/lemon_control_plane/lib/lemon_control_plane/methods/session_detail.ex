@@ -110,7 +110,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp fetch_run_history(session_key, limit) do
-    LemonCore.Store.get_run_history(session_key, limit: limit)
+    LemonCore.RunStore.history(session_key, limit: limit)
     |> Enum.map(fn {run_id, run_map} -> {to_string_safe(run_id), run_map || %{}} end)
   rescue
     _ -> []
@@ -210,7 +210,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp fetch_run_record(run_id, opts) when is_binary(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       nil ->
         nil
 

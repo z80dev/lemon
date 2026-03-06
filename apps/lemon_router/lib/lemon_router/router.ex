@@ -6,7 +6,7 @@ defmodule LemonRouter.Router do
   - Normalizing inbound messages from different channels
   - Routing to the appropriate session
   - Handling abort requests
-  - Applying pending compaction for all channels (generic path)
+  - Applying pending compaction for all channels
   """
 
   alias LemonCore.RunRequest
@@ -22,8 +22,7 @@ defmodule LemonRouter.Router do
   Handle an inbound message from a channel.
 
   Normalizes the message and submits it to the orchestrator.
-  Before submission, applies any pending compaction marker for the session
-  (unless the channel adapter already handled it, indicated by meta.auto_compacted).
+  Before submission, applies any pending compaction marker for the session.
   """
   @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok
   def handle_inbound(%LemonCore.InboundMessage{} = msg) do
@@ -36,9 +35,6 @@ defmodule LemonRouter.Router do
     agent_id =
       meta[:agent_id] || meta["agent_id"] || SessionKey.agent_id(session_key) || "default"
 
-    # Apply generic pending-compaction before building the run request.
-    # Telegram transport sets auto_compacted=true before reaching here; the guard
-    # prevents double-injection.
     {msg, meta} = maybe_apply_pending_compaction(msg, meta, session_key)
 
     request = build_inbound_run_request(msg, meta, session_key, agent_id)
@@ -195,6 +191,7 @@ defmodule LemonRouter.Router do
       prompt: msg.message.text,
       queue_mode: meta[:queue_mode] || meta["queue_mode"],
       engine_id: meta[:engine_id] || meta["engine_id"],
+      resume: normalize_resume_token(meta[:resume] || meta["resume"]),
       meta:
         Map.merge(meta, %{
           channel_id: msg.channel_id,
@@ -213,6 +210,20 @@ defmodule LemonRouter.Router do
   defp normalize_meta(meta) when is_map(meta), do: meta
   defp normalize_meta(_), do: %{}
 
+  defp normalize_resume_token(%LemonCore.ResumeToken{} = resume), do: resume
+
+  defp normalize_resume_token(%{engine: engine, value: value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonCore.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(%{"engine" => engine, "value" => value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonCore.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(_), do: nil
+
   defp run_orchestrator do
     Application.get_env(:lemon_router, :run_orchestrator, RunOrchestrator)
   end
@@ -223,34 +234,23 @@ defmodule LemonRouter.Router do
 
   @doc false
   def maybe_apply_pending_compaction(msg, meta, session_key) do
-    cond do
-      # Already compacted by a channel adapter (e.g. Telegram) — skip.
-      meta[:auto_compacted] == true or meta["auto_compacted"] == true ->
-        # Clear generic marker to avoid a second compaction injection
-        # on a subsequent turn after adapter-level compaction.
-        if is_binary(session_key), do: LemonCore.Store.delete(:pending_compaction, session_key)
+    case LemonRouter.PendingCompactionStore.get(session_key) do
+      pending when is_map(pending) ->
+        if pending_compaction_fresh?(pending) do
+          apply_compaction(msg, meta, session_key, pending)
+        else
+          # Stale marker — delete and proceed without compaction.
+          _ = LemonRouter.PendingCompactionStore.delete(session_key)
 
-        {msg, meta}
+          Logger.debug(
+            "Router cleared stale pending compaction session_key=#{inspect(session_key)}"
+          )
 
-      true ->
-        case LemonCore.Store.get(:pending_compaction, session_key) do
-          pending when is_map(pending) ->
-            if pending_compaction_fresh?(pending) do
-              apply_compaction(msg, meta, session_key, pending)
-            else
-              # Stale marker — delete and proceed without compaction.
-              _ = LemonCore.Store.delete(:pending_compaction, session_key)
-
-              Logger.debug(
-                "Router cleared stale pending compaction session_key=#{inspect(session_key)}"
-              )
-
-              {msg, meta}
-            end
-
-          _ ->
-            {msg, meta}
+          {msg, meta}
         end
+
+      _ ->
+        {msg, meta}
     end
   rescue
     _ -> {msg, meta}
@@ -258,13 +258,12 @@ defmodule LemonRouter.Router do
 
   defp apply_compaction(msg, meta, session_key, _pending) do
     transcript =
-      LemonCore.Store.get_run_history(session_key, limit: 8)
+      LemonCore.RunStore.history(session_key, limit: 8)
       |> format_run_history_transcript(max_chars: 8_000)
 
     if transcript != "" do
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = LemonRouter.PendingCompactionStore.delete(session_key)
       text = build_pending_compaction_prompt(transcript, msg.message.text || "")
-      meta = Map.put(meta, :auto_compacted, true)
 
       Logger.warning(
         "Router applying pending compaction session_key=#{inspect(session_key)} " <>
@@ -275,7 +274,7 @@ defmodule LemonRouter.Router do
     else
       # No transcript to compact with; clear marker so we don't keep
       # re-attempting compaction on every inbound.
-      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = LemonRouter.PendingCompactionStore.delete(session_key)
       {msg, meta}
     end
   rescue

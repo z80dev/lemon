@@ -38,7 +38,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
     refute String.contains?(text, "%AgentCore.Types.AgentToolResult")
   end
 
-  test "telegram shows only the 5 most recent tool calls and omits older ones" do
+  test "router renderer keeps full action list; channel-specific truncation is handled by channels" do
     actions =
       for i <- 1..7, into: %{} do
         id = "a#{i}"
@@ -56,11 +56,8 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     text = ToolStatusRenderer.render("telegram", actions, order)
 
-    assert String.contains?(text, "2 tools omitted")
-
-    # Keep the most recent 5 only (a3..a7)
-    refute String.contains?(text, "Tool 1")
-    refute String.contains?(text, "Tool 2")
+    refute String.contains?(text, "omitted")
+    assert String.contains?(text, "Tool 1")
     assert String.contains?(text, "Tool 3")
     assert String.contains?(text, "Tool 7")
   end
@@ -83,7 +80,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
     assert String.contains?(text, "Tool 6")
   end
 
-  test "telegram command actions show bash command details" do
+  test "router renderer does not inject channel-specific command detail text" do
     actions = %{
       "a1" => %{
         title: "Bash",
@@ -95,10 +92,11 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     text = ToolStatusRenderer.render("telegram", actions, ["a1"])
 
-    assert String.contains?(text, "cmd: \"npm test -- --watch=false\"")
+    assert String.contains?(text, "▸ Bash")
+    refute String.contains?(text, "cmd:")
   end
 
-  test "telegram completed command actions show status metadata" do
+  test "router renderer does not inject channel-specific command status metadata" do
     actions = %{
       "a1" => %{
         title: "Bash",
@@ -111,8 +109,9 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     text = ToolStatusRenderer.render("telegram", actions, ["a1"])
 
-    assert String.contains?(text, "(status=failed exit=127)")
-    assert String.contains?(text, "cmd: \"nonexistent_command\"")
+    assert String.contains?(text, "✗ Bash")
+    refute String.contains?(text, "status=")
+    refute String.contains?(text, "cmd:")
   end
 
   test "does not duplicate command text when already in title" do

@@ -42,19 +42,19 @@ defmodule CodingAgent.Session do
   @reset_abort_wait_ms 5_000
 
   alias AgentCore.Types.AgentTool
-  alias CodingAgent.Config
-  alias CodingAgent.ContextGuardrails
   alias LemonCore.Introspection
-  alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
-  alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Session.BackgroundTasks
+  alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
-  alias CodingAgent.Session.MessageSerialization
-  alias CodingAgent.Session.ModelResolver
+  alias CodingAgent.Session.Lifecycle
+  alias CodingAgent.Session.Notifier
+  alias CodingAgent.Session.OverflowRecovery
+  alias CodingAgent.Session.Persistence
   alias CodingAgent.Session.PromptComposer
+  alias CodingAgent.Session.State
   alias CodingAgent.Session.WasmBridge
-  alias CodingAgent.Workspace
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
@@ -522,252 +522,25 @@ defmodule CodingAgent.Session do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    cwd = Keyword.fetch!(opts, :cwd)
-    explicit_system_prompt = Keyword.get(opts, :system_prompt)
-    prompt_template = Keyword.get(opts, :prompt_template)
-    session_file = Keyword.get(opts, :session_file)
-    session_id = Keyword.get(opts, :session_id)
-    parent_session = Keyword.get(opts, :parent_session)
-    ui_context = Keyword.get(opts, :ui_context)
-    custom_tools = Keyword.get(opts, :tools)
-    extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
-    workspace_dir = Keyword.get(opts, :workspace_dir, Config.workspace_dir())
-    register_session = Keyword.get(opts, :register, false)
-    session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
+    {:ok, state, extension_status_report} = Lifecycle.initialize(opts, self())
 
-    maybe_register_ui_tracker(ui_context)
-    Workspace.ensure_workspace(workspace_dir: workspace_dir)
-
-    # Load or create session
-    session_manager =
-      case session_file do
-        nil ->
-          SessionManager.new(cwd, id: session_id, parent_session: parent_session)
-
-        path ->
-          case SessionManager.load_from_file(path) do
-            {:ok, session} ->
-              session
-
-            {:error, _reason} ->
-              SessionManager.new(cwd, id: session_id, parent_session: parent_session)
-          end
-      end
-
-    # Derive scope from session lineage. This ensures that sessions loaded from disk
-    # keep their main/subagent scope even when start_link opts omit :parent_session.
-    session_scope =
-      PromptComposer.resolve_session_scope(
-        opts,
-        parent_session,
-        session_manager.header.parent_session
-      )
-
-    # Load settings FIRST so we can use defaults for model and thinking_level
-    settings_manager =
-      Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
-
-    # Compose system prompt from multiple sources
-    system_prompt =
-      PromptComposer.compose_system_prompt(
-        cwd,
-        explicit_system_prompt,
-        prompt_template,
-        workspace_dir,
-        session_scope
-      )
-
-    # Resolve explicit model overrides (including provider:model and provider/model
-    # strings) or
-    # fall back to settings_manager.default_model.
-    model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
-
-    # Get thinking_level from opts, or fall back to settings_manager.default_thinking_level
-    thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
-
-    # Get tool policy and approval context if provided
-    tool_policy = Keyword.get(opts, :tool_policy)
-    approval_context = Keyword.get(opts, :approval_context)
-
-    # Build approval context if policy requires approval but context not provided
-    approval_context =
-      if tool_policy && is_nil(approval_context) do
-        %{
-          session_key: Keyword.get(opts, :session_key, session_manager.header.id),
-          agent_id: Keyword.get(opts, :agent_id, "default"),
-          # Tool calls should not enforce approval timeouts by default.
-          timeout_ms: Keyword.get(opts, :approval_timeout_ms, :infinity)
-        }
-      else
-        approval_context
-      end
-
-    # Build tool options for ToolRegistry
-    wasm_boot =
-      WasmBridge.maybe_start_wasm_sidecar(
-        cwd,
-        settings_manager,
-        session_manager.header.id,
-        tool_policy,
-        approval_context
-      )
-
-    tool_opts =
-      opts
-      |> Keyword.put(:model, model)
-      |> Keyword.put(:thinking_level, thinking_level)
-      |> Keyword.put(:parent_session, session_manager.header.id)
-      |> Keyword.put(:session_id, session_manager.header.id)
-      |> Keyword.put(:session_pid, self())
-      |> Keyword.put(:session_key, Keyword.get(opts, :session_key, session_manager.header.id))
-      |> Keyword.put(:agent_id, Keyword.get(opts, :agent_id, "default"))
-      |> Keyword.put(:settings_manager, settings_manager)
-      |> Keyword.put(:workspace_dir, workspace_dir)
-      |> Keyword.put(:ui_context, ui_context)
-      |> Keyword.put(:tool_policy, tool_policy)
-      |> Keyword.put(:approval_context, approval_context)
-      |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
-      |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
-
-    lifecycle =
-      ExtensionLifecycle.initialize(
-        cwd: cwd,
-        settings_manager: settings_manager,
-        tool_opts: tool_opts,
-        custom_tools: custom_tools,
-        extra_tools: extra_tools,
-        wasm_tools: wasm_boot.wasm_tools,
-        wasm_status: wasm_boot.wasm_status,
-        tool_policy: tool_policy,
-        approval_context: approval_context
-      )
-
-    extensions = lifecycle.extensions
-    hooks = lifecycle.hooks
-    tools = lifecycle.tools
-    extension_status_report = lifecycle.extension_status_report
-
-    # Create the convert_to_llm function
-    convert_to_llm = &CodingAgent.Messages.to_llm/1
-
-    context_guardrail_opts =
-      build_context_guardrail_opts(
-        cwd,
-        session_manager.header.id,
-        Keyword.get(opts, :context_guardrails)
-      )
-
-    transform_context =
-      build_transform_context(Keyword.get(opts, :transform_context), context_guardrail_opts)
-
-    # Start the AgentCore.Agent
-    get_api_key =
-      Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
-
-    # Build stream options with provider-specific secrets
-    stream_options =
-      ModelResolver.build_stream_options(
-        model,
-        settings_manager,
-        Keyword.get(opts, :stream_options)
-      )
-
-    # Register main agent in AgentRegistry with key {session_id, :main, 0}
-    agent_registry_key = {session_manager.header.id, :main, 0}
-
-    {:ok, agent} =
-      AgentCore.Agent.start_link(
-        initial_state: %{
-          system_prompt: system_prompt,
-          model: model,
-          tools: tools,
-          thinking_level: thinking_level,
-          messages: []
-        },
-        convert_to_llm: convert_to_llm,
-        stream_fn: Keyword.get(opts, :stream_fn),
-        stream_options: stream_options,
-        transform_context: transform_context,
-        get_api_key: get_api_key,
-        session_id: session_manager.header.id,
-        name: AgentCore.AgentRegistry.via(agent_registry_key)
-      )
-
-    # Subscribe to agent events
-    AgentCore.Agent.subscribe(agent, self())
-
-    # Restore messages from session if loaded from file
-    messages = restore_messages_from_session(session_manager)
-
-    if messages != [] do
-      AgentCore.Agent.replace_messages(agent, messages)
-    end
-
-    state = %__MODULE__{
-      agent: agent,
-      session_manager: session_manager,
-      settings_manager: settings_manager,
-      ui_context: ui_context,
-      cwd: cwd,
-      tools: tools,
-      model: model,
-      thinking_level: thinking_level,
-      system_prompt: system_prompt,
-      explicit_system_prompt: explicit_system_prompt,
-      prompt_template: prompt_template,
-      workspace_dir: workspace_dir,
-      extra_tools: extra_tools,
-      session_scope: session_scope,
-      is_streaming: false,
-      pending_prompt_timer_ref: nil,
-      event_listeners: [],
-      event_streams: %{},
-      abort_signal: nil,
-      steering_queue: :queue.new(),
-      follow_up_queue: :queue.new(),
-      turn_index: 0,
-      started_at: System.system_time(:millisecond),
-      session_file: session_file,
-      register_session: register_session,
-      session_registry: session_registry,
-      convert_to_llm: convert_to_llm,
-      transform_context: transform_context,
-      tool_policy: tool_policy,
-      approval_context: approval_context,
-      extensions: extensions,
-      hooks: hooks,
-      extension_status_report: extension_status_report,
-      wasm_sidecar_pid: wasm_boot.sidecar_pid,
-      wasm_tool_names: wasm_boot.wasm_tool_names,
-      wasm_status: wasm_boot.wasm_status,
-      auto_compaction_in_progress: false,
-      auto_compaction_signature: nil,
-      auto_compaction_task_pid: nil,
-      auto_compaction_task_monitor_ref: nil,
-      auto_compaction_task_timeout_ref: nil,
-      overflow_recovery_in_progress: false,
-      overflow_recovery_attempted: false,
-      overflow_recovery_signature: nil,
-      overflow_recovery_task_pid: nil,
-      overflow_recovery_task_monitor_ref: nil,
-      overflow_recovery_task_timeout_ref: nil,
-      overflow_recovery_started_at_ms: nil,
-      overflow_recovery_error_reason: nil,
-      overflow_recovery_partial_state: nil
-    }
-
-    maybe_register_session(session_manager, cwd, register_session, session_registry)
+    maybe_register_session(
+      state.session_manager,
+      state.cwd,
+      state.register_session,
+      state.session_registry
+    )
 
     # Emit introspection event for session start
     Introspection.record(
       :session_started,
       %{
-        session_id: session_manager.header.id,
-        cwd: cwd,
-        model: model && model.id,
-        session_scope: session_scope
+        session_id: state.session_manager.header.id,
+        cwd: state.cwd,
+        model: state.model && state.model.id,
+        session_scope: state.session_scope
       },
-      session_key: Keyword.get(opts, :session_key, session_manager.header.id),
+      session_key: Keyword.get(opts, :session_key, state.session_manager.header.id),
       agent_id: Keyword.get(opts, :agent_id, "default"),
       engine: "lemon",
       provenance: :direct
@@ -787,34 +560,7 @@ defmodule CodingAgent.Session do
       {:reply, {:error, :already_streaming}, state}
     else
       state = refresh_system_prompt(state)
-
-      # Create user message
-      images = Keyword.get(opts, :images, [])
-
-      user_message =
-        if images == [] do
-          %Ai.Types.UserMessage{
-            role: :user,
-            content: text,
-            timestamp: System.system_time(:millisecond)
-          }
-        else
-          content =
-            [%Ai.Types.TextContent{type: :text, text: text}] ++
-              Enum.map(images, fn img ->
-                %Ai.Types.ImageContent{
-                  type: :image,
-                  data: img.data,
-                  mime_type: img.mime_type
-                }
-              end)
-
-          %Ai.Types.UserMessage{
-            role: :user,
-            content: content,
-            timestamp: System.system_time(:millisecond)
-          }
-        end
+      user_message = State.build_prompt_message(text, opts)
 
       # Defer the actual prompt slightly after we reply so callers can subscribe immediately
       # after `Session.prompt/3` and still observe `:agent_start` and other early events.
@@ -824,66 +570,24 @@ defmodule CodingAgent.Session do
       # very fast (mocked) runs.
       timer_ref = Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
 
-      new_state = %{
-        state
-        | is_streaming: true,
-          pending_prompt_timer_ref: timer_ref,
-          turn_index: state.turn_index + 1,
-          overflow_recovery_in_progress: false,
-          overflow_recovery_attempted: false,
-          overflow_recovery_signature: nil,
-          overflow_recovery_started_at_ms: nil,
-          overflow_recovery_error_reason: nil,
-          overflow_recovery_partial_state: nil
-      }
-
-      {:reply, :ok, new_state}
+      {:reply, :ok, State.begin_prompt(state, timer_ref)}
     end
   end
 
   def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
-    max_queue = Keyword.get(opts, :max_queue, 1000)
-    drop_strategy = Keyword.get(opts, :drop_strategy, :drop_oldest)
-    # Tool calls and long-running sessions should not time out by default.
-    timeout = Keyword.get(opts, :timeout, :infinity)
-
-    {:ok, stream} =
-      AgentCore.EventStream.start_link(
-        max_queue: max_queue,
-        drop_strategy: drop_strategy,
-        owner: pid,
-        timeout: timeout
-      )
-
-    mon_ref = Process.monitor(pid)
-    event_streams = Map.put(state.event_streams, mon_ref, %{pid: pid, stream: stream})
-
-    {:reply, {:ok, stream}, %{state | event_streams: event_streams}}
+    {:ok, stream, new_state} = Notifier.subscribe_stream(state, pid, opts)
+    {:reply, {:ok, stream}, new_state}
   end
 
   def handle_call({:subscribe, pid, :direct, _opts}, _from, state) do
-    monitor_ref = Process.monitor(pid)
-    new_listeners = [{pid, monitor_ref} | state.event_listeners]
-    session_pid = self()
-
-    unsubscribe = fn ->
-      GenServer.cast(session_pid, {:unsubscribe, pid})
-    end
-
-    {:reply, unsubscribe, %{state | event_listeners: new_listeners}}
+    {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
+    {:reply, unsubscribe, new_state}
   end
 
   # Legacy subscribe call for backwards compatibility
   def handle_call({:subscribe, pid}, _from, state) do
-    monitor_ref = Process.monitor(pid)
-    new_listeners = [{pid, monitor_ref} | state.event_listeners]
-    session_pid = self()
-
-    unsubscribe = fn ->
-      GenServer.cast(session_pid, {:unsubscribe, pid})
-    end
-
-    {:reply, unsubscribe, %{state | event_listeners: new_listeners}}
+    {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
+    {:reply, unsubscribe, new_state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -911,7 +615,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:health_check, _from, state) do
-    diag = build_diagnostics(state)
+    diag = State.build_diagnostics(state)
 
     health = %{
       status: diag.status,
@@ -925,7 +629,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:diagnostics, _from, state) do
-    {:reply, build_diagnostics(state), state}
+    {:reply, State.build_diagnostics(state), state}
   end
 
   def handle_call(:get_extension_status_report, _from, state) do
@@ -973,148 +677,13 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
-      # Show working message
-      ui_set_working_message(state, "Reloading extensions...")
-
-      wasm_reload = WasmBridge.reload_wasm_tools(state)
-
-      # Build tool options
-      tool_opts = [
-        model: state.model,
-        thinking_level: state.thinking_level,
-        parent_session: state.session_manager.header.id,
-        session_id: state.session_manager.header.id,
-        session_pid: self(),
-        session_key: state.session_manager.header.id,
-        agent_id: "default",
-        settings_manager: state.settings_manager,
-        workspace_dir: state.workspace_dir,
-        ui_context: state.ui_context,
-        tool_policy: state.tool_policy,
-        approval_context: state.approval_context,
-        wasm_tools: wasm_reload.wasm_tools,
-        wasm_status: wasm_reload.wasm_status
-      ]
-
-      lifecycle =
-        ExtensionLifecycle.reload(
-          cwd: state.cwd,
-          settings_manager: state.settings_manager,
-          tool_opts: tool_opts,
-          extra_tools: state.extra_tools,
-          wasm_tools: wasm_reload.wasm_tools,
-          wasm_status: wasm_reload.wasm_status,
-          tool_policy: state.tool_policy,
-          approval_context: state.approval_context,
-          previous_status_report: state.extension_status_report
-        )
-
-      extensions = lifecycle.extensions
-      hooks = lifecycle.hooks
-      tools = lifecycle.tools
-      extension_status_report = lifecycle.extension_status_report
-
-      # Update the agent's tools
-      :ok = AgentCore.Agent.set_tools(state.agent, tools)
-
-      # Clear working message
-      ui_set_working_message(state, nil)
-
-      # Broadcast the new extension status report
-      broadcast_event(state, {:extension_status_report, extension_status_report})
-
-      # Notify about the reload
-      ui_notify(
-        state,
-        "Extensions reloaded: #{extension_status_report.total_loaded} loaded",
-        :info
-      )
-
-      new_state = %{
-        state
-        | extensions: extensions,
-          hooks: hooks,
-          tools: tools,
-          extension_status_report: extension_status_report,
-          wasm_sidecar_pid: wasm_reload.sidecar_pid,
-          wasm_tool_names: wasm_reload.wasm_tool_names,
-          wasm_status: wasm_reload.wasm_status
-      }
-
+      {:ok, extension_status_report, new_state} = Lifecycle.reload_extensions(state)
       {:reply, {:ok, extension_status_report}, new_state}
     end
   end
 
   def handle_call(:reset, _from, state) do
-    was_streaming = state.is_streaming
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
-    state = cancel_pending_prompt(state)
-
-    state =
-      if was_streaming do
-        # Explicitly publish cancellation semantics for subscribers when reset
-        # interrupts an active prompt/run.
-        broadcast_event(state, {:canceled, :reset})
-        complete_event_streams(state, {:canceled, :reset})
-
-        if not had_pending_prompt do
-          AgentCore.Agent.abort(state.agent)
-
-          case AgentCore.Agent.wait_for_idle(state.agent, timeout: @reset_abort_wait_ms) do
-            :ok ->
-              :ok
-
-            {:error, :timeout} ->
-              Logger.warning("Timed out waiting for agent abort during reset")
-          end
-
-          # Prevent stale events from the aborted run from mutating the new session.
-          flush_queued_agent_events()
-        end
-
-        %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
-      else
-        state
-      end
-
-    # Reset agent
-    :ok = AgentCore.Agent.reset(state.agent)
-
-    # Create new session
-    previous_session_id = state.session_manager.header.id
-    new_session_manager = SessionManager.new(state.cwd)
-
-    maybe_unregister_session(previous_session_id, state.register_session, state.session_registry)
-
-    maybe_register_session(
-      new_session_manager,
-      state.cwd,
-      state.register_session,
-      state.session_registry
-    )
-
-    ui_set_working_message(state, nil)
-
-    new_state = %{
-      state
-      | session_manager: new_session_manager,
-        is_streaming: false,
-        pending_prompt_timer_ref: nil,
-        turn_index: 0,
-        started_at: System.system_time(:millisecond),
-        session_file: nil,
-        steering_queue: :queue.new(),
-        follow_up_queue: :queue.new(),
-        auto_compaction_in_progress: false,
-        auto_compaction_signature: nil,
-        overflow_recovery_in_progress: false,
-        overflow_recovery_attempted: false,
-        overflow_recovery_signature: nil,
-        overflow_recovery_started_at_ms: nil,
-        overflow_recovery_error_reason: nil,
-        overflow_recovery_partial_state: nil
-    }
-
+    new_state = Lifecycle.reset(state, @reset_abort_wait_ms)
     {:reply, :ok, new_state}
   end
 
@@ -1153,7 +722,7 @@ defmodule CodingAgent.Session do
     compaction_opts = CompactionManager.normalize_compaction_opts(state, opts)
 
     # Show working message before compaction
-    ui_set_working_message(state, "Compacting context...")
+    Notifier.ui_set_working_message(state, "Compacting context...")
 
     result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
 
@@ -1179,7 +748,7 @@ defmodule CodingAgent.Session do
 
         # Determine if this is a branch switch (not just moving within the same branch)
         is_branch_switch =
-          is_branch_switch?(current_branch, new_branch, current_leaf_id, entry_id)
+          BackgroundTasks.branch_switch?(current_branch, new_branch, current_leaf_id, entry_id)
 
         # Summarize abandoned branch if switching branches and option not disabled
         state =
@@ -1205,62 +774,16 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:save, _from, state) do
-    path =
-      state.session_file ||
-        Path.join(
-          SessionManager.get_session_dir(state.cwd),
-          "#{state.session_manager.header.id}.jsonl"
-        )
-
-    case SessionManager.save_to_file(path, state.session_manager) do
-      :ok ->
-        {:reply, :ok, %{state | session_file: path}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    case Persistence.save(state) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
     end
   end
 
   def handle_call({:summarize_branch, opts}, _from, state) do
-    # Get the current branch entries
-    branch_entries = SessionManager.get_branch(state.session_manager)
-
-    # Check if there are any message entries to summarize
-    message_entries =
-      Enum.filter(branch_entries, fn entry ->
-        entry.type == :message and entry.message != nil
-      end)
-
-    if Enum.empty?(message_entries) do
-      {:reply, {:error, :empty_branch}, state}
-    else
-      # Show working message before summarization
-      ui_set_working_message(state, "Summarizing branch...")
-
-      case CodingAgent.Compaction.generate_branch_summary(branch_entries, state.model, opts) do
-        {:ok, summary} ->
-          # Get the current leaf_id to use as from_id
-          from_id = SessionManager.get_leaf_id(state.session_manager)
-
-          # Create branch summary entry
-          entry = SessionEntry.branch_summary(from_id, summary)
-
-          # Append to session manager
-          session_manager = SessionManager.append_entry(state.session_manager, entry)
-
-          # Broadcast branch summary event to listeners
-          broadcast_event(state, {:branch_summarized, %{from_id: from_id, summary: summary}})
-
-          # Clear working message
-          ui_set_working_message(state, nil)
-
-          {:reply, :ok, %{state | session_manager: session_manager}}
-
-        {:error, reason} ->
-          ui_set_working_message(state, nil)
-          ui_notify(state, "Branch summarization failed: #{inspect(reason)}", :error)
-          {:reply, {:error, reason}, state}
-      end
+    case BackgroundTasks.summarize_branch(state, opts, branch_summary_callbacks()) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
     end
   end
 
@@ -1304,8 +827,8 @@ defmodule CodingAgent.Session do
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled
       # event so subscribers don't wait for a lifecycle event that never comes.
-      broadcast_event(state, {:canceled, :assistant_aborted})
-      complete_event_streams(state, {:canceled, :assistant_aborted})
+      Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
+      Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
       {:noreply, %{state | steering_queue: :queue.new(), event_streams: %{}}}
     else
       {:noreply, state}
@@ -1313,17 +836,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
-    new_listeners =
-      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
-        if listener_pid == pid do
-          Process.demonitor(monitor_ref, [:flush])
-          true
-        else
-          false
-        end
-      end)
-
-    {:noreply, %{state | event_listeners: new_listeners}}
+    {:noreply, Notifier.unsubscribe_direct(state, pid)}
   end
 
   @spec handle_info(term(), t()) :: {:noreply, t()}
@@ -1335,7 +848,7 @@ defmodule CodingAgent.Session do
 
       :no_recovery ->
         # Broadcast to listeners FIRST (before state changes that might clear streams)
-        broadcast_event(state, event)
+        Notifier.broadcast_event(state, event)
 
         # Process the event and update state
         new_state = handle_agent_event(event, state)
@@ -1345,7 +858,7 @@ defmodule CodingAgent.Session do
 
   def handle_info({:agent_event, event}, state) do
     # Broadcast to listeners FIRST (before state changes that might clear streams)
-    broadcast_event(state, event)
+    Notifier.broadcast_event(state, event)
 
     # Process the event and update state
     new_state = handle_agent_event(event, state)
@@ -1362,25 +875,7 @@ defmodule CodingAgent.Session do
         {:noreply, handle_overflow_recovery_task_down(state)}
 
       true ->
-        # Remove from direct listeners
-        new_listeners =
-          Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
-            listener_pid == pid or monitor_ref == ref
-          end)
-
-        # Remove from stream subscribers and cancel their streams
-        {streams_for_pid, remaining_streams} =
-          Enum.split_with(state.event_streams, fn {_mon_ref, %{pid: stream_pid}} ->
-            stream_pid == pid
-          end)
-
-        Enum.each(streams_for_pid, fn {mon_ref, %{stream: stream}} ->
-          AgentCore.EventStream.cancel(stream, :subscriber_down)
-          Process.demonitor(mon_ref, [:flush])
-        end)
-
-        {:noreply,
-         %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
+        {:noreply, Notifier.prune_subscribers(state, pid, ref)}
     end
   end
 
@@ -1397,150 +892,35 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:store_branch_summary, from_id, summary}, state) do
-    # Store the branch summary entry (from async summarization)
-    entry = SessionEntry.branch_summary(from_id, summary)
-    session_manager = SessionManager.append_entry(state.session_manager, entry)
-
-    # Broadcast branch summary event
-    broadcast_event(state, {:branch_summarized, %{from_id: from_id, summary: summary}})
-
-    {:noreply, %{state | session_manager: session_manager}}
+    {:noreply,
+     BackgroundTasks.store_branch_summary(state, from_id, summary, branch_summary_callbacks())}
   end
 
   def handle_info({:publish_extension_status_report, report}, state) do
     # Publish the extension status report event for UI/CLI consumption
-    broadcast_event(state, {:extension_status_report, report})
+    Notifier.broadcast_event(state, {:extension_status_report, report})
     {:noreply, state}
   end
 
   def handle_info({:auto_compaction_result, signature, result}, state) do
-    cond do
-      not state.auto_compaction_in_progress ->
-        {:noreply, state}
-
-      state.auto_compaction_signature != signature ->
-        {:noreply, state}
-
-      signature != CompactionManager.session_signature(state) ->
-        state = CompactionManager.clear_auto_compaction_state(state)
-
-        if not state.is_streaming do
-          ui_set_working_message(state, nil)
-        end
-
-        {:noreply, state}
-
-      true ->
-        state = CompactionManager.clear_auto_compaction_state(state)
-
-        case apply_compaction_result(state, result, nil) do
-          {:ok, new_state} ->
-            {:noreply, new_state}
-
-          {:error, _reason, new_state} ->
-            {:noreply, new_state}
-        end
-    end
+    {:noreply, CompactionLifecycle.handle_result(state, signature, result, session_callbacks())}
   end
 
   def handle_info({:overflow_recovery_result, signature, result}, state) do
-    cond do
-      not state.overflow_recovery_in_progress ->
-        {:noreply, state}
-
-      state.overflow_recovery_signature != signature ->
-        {:noreply, state}
-
-      signature != CompactionManager.session_signature(state) ->
-        {:noreply, CompactionManager.clear_overflow_recovery_task_state(state)}
-
-      true ->
-        state = CompactionManager.clear_overflow_recovery_task_state(state)
-
-        case apply_compaction_result(state, result, nil) do
-          {:ok, compacted_state} ->
-            case continue_after_overflow_compaction(compacted_state) do
-              {:ok, resumed_state} ->
-                CompactionManager.emit_overflow_recovery_telemetry(:success, resumed_state, %{
-                  duration_ms: CompactionManager.overflow_recovery_duration_ms(state)
-                })
-
-                {:noreply, resumed_state}
-
-              {:error, reason, failed_state} ->
-                ui_notify(
-                  failed_state,
-                  "Auto-retry failed after compaction: #{inspect(reason)}",
-                  :error
-                )
-
-                CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
-                  duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
-                  reason: CompactionManager.normalize_overflow_reason(reason)
-                })
-
-                {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
-            end
-
-          {:error, reason, failed_state} ->
-            ui_notify(
-              failed_state,
-              "Overflow compaction failed: #{inspect(reason)}",
-              :error
-            )
-
-            CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
-              duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
-              reason: CompactionManager.normalize_overflow_reason(reason)
-            })
-
-            {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
-        end
-    end
+    {:noreply, OverflowRecovery.handle_result(state, signature, result, session_callbacks())}
   end
 
   def handle_info({:auto_compaction_task_timeout, monitor_ref}, state) do
-    if state.auto_compaction_task_monitor_ref == monitor_ref do
-      state =
-        state
-        |> CompactionManager.maybe_kill_background_task(
-          state.auto_compaction_task_pid,
-          :auto_compaction_timeout
-        )
-        |> CompactionManager.clear_auto_compaction_state()
-
-      if not state.is_streaming do
-        ui_set_working_message(state, nil)
-      end
-
-      {:noreply, state}
-    else
-      {:noreply, state}
+    case CompactionLifecycle.handle_timeout(state, monitor_ref, session_callbacks()) do
+      {:handled, new_state} -> {:noreply, new_state}
+      :stale -> {:noreply, state}
     end
   end
 
   def handle_info({:overflow_recovery_task_timeout, monitor_ref}, state) do
-    if state.overflow_recovery_task_monitor_ref == monitor_ref do
-      failure_reason = :overflow_recovery_timeout
-
-      failed_state =
-        state
-        |> CompactionManager.maybe_kill_background_task(
-          state.overflow_recovery_task_pid,
-          :overflow_recovery_timeout
-        )
-        |> CompactionManager.clear_overflow_recovery_task_state()
-
-      ui_notify(failed_state, "Overflow compaction timed out", :error)
-
-      CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
-        duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
-        reason: CompactionManager.normalize_overflow_reason(failure_reason)
-      })
-
-      {:noreply, finalize_overflow_recovery_failure(failed_state, failure_reason)}
-    else
-      {:noreply, state}
+    case OverflowRecovery.handle_timeout(state, monitor_ref, session_callbacks()) do
+      {:handled, new_state} -> {:noreply, new_state}
+      :stale -> {:noreply, state}
     end
   end
 
@@ -1589,134 +969,6 @@ defmodule CodingAgent.Session do
   # Private Functions
   # ============================================================================
 
-  defp build_diagnostics(state) do
-    {messages, message_count} =
-      if state.agent && Process.alive?(state.agent) do
-        agent_state = AgentCore.Agent.get_state(state.agent)
-        messages = agent_state.messages || []
-        {messages, length(messages)}
-      else
-        {[], 0}
-      end
-
-    {tool_call_count, error_count} = count_tool_results(messages)
-    error_rate = if tool_call_count == 0, do: 0.0, else: error_count / tool_call_count
-
-    now = System.system_time(:millisecond)
-    started_at = state.started_at || now
-    last_activity_at = latest_activity_timestamp(messages, started_at)
-    uptime_ms = max(now - started_at, 0)
-
-    agent_alive = state.agent && Process.alive?(state.agent)
-
-    %{
-      status: determine_health_status(agent_alive, error_rate, state),
-      session_id: state.session_manager.header.id,
-      uptime_ms: uptime_ms,
-      started_at: started_at,
-      last_activity_at: last_activity_at,
-      is_streaming: state.is_streaming,
-      agent_alive: agent_alive,
-      message_count: message_count,
-      turn_count: state.turn_index,
-      tool_call_count: tool_call_count,
-      error_count: error_count,
-      error_rate: error_rate,
-      subscriber_count: length(state.event_listeners),
-      stream_subscriber_count: map_size(state.event_streams),
-      steering_queue_size: :queue.len(state.steering_queue),
-      follow_up_queue_size: :queue.len(state.follow_up_queue),
-      model: %{provider: state.model.provider, id: state.model.id},
-      cwd: state.cwd,
-      thinking_level: state.thinking_level
-    }
-  end
-
-  defp count_tool_results(messages) do
-    results = Enum.filter(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
-    tool_call_count = length(results)
-    error_count = Enum.count(results, fn msg -> Map.get(msg, :is_error, false) end)
-    {tool_call_count, error_count}
-  end
-
-  defp latest_activity_timestamp(messages, fallback) do
-    Enum.reduce(messages, fallback, fn msg, acc ->
-      ts = Map.get(msg, :timestamp)
-
-      cond do
-        is_integer(ts) and ts > acc -> ts
-        true -> acc
-      end
-    end)
-  end
-
-  defp determine_health_status(false, _error_rate, _state), do: :unhealthy
-
-  defp determine_health_status(true, error_rate, _state) when error_rate > 0.2, do: :degraded
-
-  defp determine_health_status(true, _error_rate, _state), do: :healthy
-
-  defp build_transform_context(nil, context_guardrail_opts) do
-    fn messages, signal ->
-      with {:ok, guarded} <-
-             normalize_transform_result(
-               ContextGuardrails.transform(messages, signal, context_guardrail_opts)
-             ),
-           {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)) do
-        {:ok, wrapped}
-      end
-    end
-  end
-
-  defp build_transform_context(transform_fn, context_guardrail_opts)
-       when is_function(transform_fn, 2) do
-    fn messages, signal ->
-      with {:ok, guarded} <-
-             normalize_transform_result(
-               ContextGuardrails.transform(messages, signal, context_guardrail_opts)
-             ),
-           {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)),
-           {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
-        {:ok, transformed}
-      end
-    end
-  end
-
-  defp build_context_guardrail_opts(cwd, session_id, nil) do
-    default_context_guardrail_opts(cwd, session_id)
-  end
-
-  defp build_context_guardrail_opts(cwd, session_id, opts) when is_list(opts) do
-    build_context_guardrail_opts(cwd, session_id, Enum.into(opts, %{}))
-  end
-
-  defp build_context_guardrail_opts(cwd, session_id, opts) when is_map(opts) do
-    Map.merge(default_context_guardrail_opts(cwd, session_id), opts)
-  end
-
-  defp build_context_guardrail_opts(cwd, session_id, _other) do
-    default_context_guardrail_opts(cwd, session_id)
-  end
-
-  defp default_context_guardrail_opts(cwd, session_id) do
-    %{
-      # Keep these blocks by default and only clamp when they become very large.
-      max_thinking_bytes: 65_536,
-      # Spill all tool result images to disk and pass references in text.
-      max_tool_result_images: 0,
-      spill_dir: Config.spill_dir(cwd, session_id)
-    }
-  end
-
-  defp normalize_transform_result({:ok, transformed}) when is_list(transformed),
-    do: {:ok, transformed}
-
-  defp normalize_transform_result({:error, reason}), do: {:error, reason}
-  defp normalize_transform_result(transformed) when is_list(transformed), do: {:ok, transformed}
-  defp normalize_transform_result(_), do: {:error, :invalid_transform_result}
-
   @spec refresh_system_prompt(t()) :: t()
   defp refresh_system_prompt(state) do
     case PromptComposer.maybe_refresh_system_prompt(
@@ -1737,37 +989,10 @@ defmodule CodingAgent.Session do
   end
 
   @spec ui_set_working_message(t(), String.t() | nil) :: :ok
-  defp ui_set_working_message(state, message) do
-    case state.ui_context do
-      %UIContext{} = ui -> UIContext.set_working_message(ui, message)
-      _ -> :ok
-    end
-  end
+  defp ui_set_working_message(state, message), do: Notifier.ui_set_working_message(state, message)
 
   @spec ui_notify(t(), String.t(), CodingAgent.UI.notify_type()) :: :ok
-  defp ui_notify(state, message, type) do
-    case state.ui_context do
-      %UIContext{} = ui -> UIContext.notify(ui, message, type)
-      _ -> :ok
-    end
-  end
-
-  defp maybe_register_ui_tracker(%UIContext{module: mod, state: tracker})
-       when not is_nil(tracker) do
-    if function_exported?(mod, :register_tracker, 1) do
-      mod.register_tracker(tracker)
-    else
-      :ok
-    end
-  end
-
-  defp maybe_register_ui_tracker(_), do: :ok
-
-  defp normalize_extra_tools(tools) when is_list(tools) do
-    Enum.filter(tools, &match?(%AgentCore.Types.AgentTool{}, &1))
-  end
-
-  defp normalize_extra_tools(_), do: []
+  defp ui_notify(state, message, type), do: Notifier.ui_notify(state, message, type)
 
   @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
@@ -1786,136 +1011,40 @@ defmodule CodingAgent.Session do
   end
 
   @spec broadcast_event(t(), AgentCore.Types.agent_event()) :: :ok
-  defp broadcast_event(state, event) do
-    session_event = {:session_event, state.session_manager.header.id, event}
-
-    # Direct subscribers (legacy)
-    Enum.each(state.event_listeners, fn {pid, _ref} ->
-      send(pid, session_event)
-    end)
-
-    # Stream subscribers (with backpressure)
-    Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
-      AgentCore.EventStream.push_async(stream, session_event)
-    end)
-
-    :ok
-  end
+  defp broadcast_event(state, event), do: Notifier.broadcast_event(state, event)
 
   @spec complete_event_streams(t(), term()) :: :ok
-  defp complete_event_streams(state, final_event) do
-    # Align EventStream terminal semantics with the terminal lifecycle event.
-    Enum.each(state.event_streams, fn {mon_ref, %{stream: stream}} ->
-      case final_event do
-        {:agent_end, messages} when is_list(messages) ->
-          AgentCore.EventStream.complete(stream, messages)
-
-        {:error, reason, partial_state} ->
-          AgentCore.EventStream.error(stream, reason, partial_state)
-
-        {:canceled, reason} ->
-          AgentCore.EventStream.push_async(stream, {:canceled, reason})
-          AgentCore.EventStream.complete(stream, [])
-
-        {:turn_end, %Ai.Types.AssistantMessage{stop_reason: :aborted}, _tool_results} ->
-          AgentCore.EventStream.push_async(stream, {:canceled, :assistant_aborted})
-          AgentCore.EventStream.complete(stream, [])
-
-        _ ->
-          AgentCore.EventStream.complete(stream, [])
-      end
-
-      Process.demonitor(mon_ref, [:flush])
-    end)
-
-    :ok
-  end
+  defp complete_event_streams(state, final_event),
+    do: Notifier.complete_event_streams(state, final_event)
 
   @spec persist_message(t(), term()) :: t()
-  defp persist_message(state, message) do
-    # Persist ALL messages, not just assistant
-    new_session_manager =
-      case message do
-        %Ai.Types.UserMessage{} ->
-          # Persist user messages (including steering/follow-up)
-          SessionManager.append_message(
-            state.session_manager,
-            MessageSerialization.serialize_message(message)
-          )
-
-        %Ai.Types.AssistantMessage{} ->
-          # Persist assistant messages
-          SessionManager.append_message(
-            state.session_manager,
-            MessageSerialization.serialize_message(message)
-          )
-
-        %Ai.Types.ToolResultMessage{} ->
-          # Persist tool results
-          SessionManager.append_message(
-            state.session_manager,
-            MessageSerialization.serialize_message(message)
-          )
-
-        _ ->
-          # Other message types, don't persist
-          state.session_manager
-      end
-
-    %{state | session_manager: new_session_manager}
-  end
+  defp persist_message(state, message), do: Persistence.persist_message(state, message)
 
   @spec restore_messages_from_session(Session.t()) :: [map()]
-  defp restore_messages_from_session(session) do
-    context = SessionManager.build_session_context(session)
+  defp restore_messages_from_session(session),
+    do: Persistence.restore_messages_from_session(session)
 
-    context.messages
-    |> Enum.map(&MessageSerialization.deserialize_message/1)
-    |> Enum.reject(&is_nil/1)
+  defp maybe_register_session(session_manager, cwd, register_session, registry),
+    do: Persistence.maybe_register_session(session_manager, cwd, register_session, registry)
+
+  defp cancel_pending_prompt(state), do: State.cancel_pending_prompt(state)
+
+  defp session_callbacks do
+    %{
+      restore_messages_from_session: &restore_messages_from_session/1,
+      broadcast_event: &broadcast_event/2,
+      ui_set_working_message: &ui_set_working_message/2,
+      ui_notify: &ui_notify/3,
+      handle_agent_event: &handle_agent_event/2
+    }
   end
 
-  defp maybe_register_session(_session_manager, _cwd, false, _registry), do: :ok
-
-  defp maybe_register_session(session_manager, cwd, true, registry) do
-    if Process.whereis(registry) do
-      case Registry.register(registry, session_manager.header.id, %{cwd: cwd}) do
-        {:ok, _} ->
-          :ok
-
-        {:error, {:already_registered, _pid}} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("Failed to register session: #{inspect(reason)}")
-      end
-    end
-  end
-
-  defp maybe_unregister_session(_session_id, false, _registry), do: :ok
-
-  defp maybe_unregister_session(session_id, true, registry) do
-    if Process.whereis(registry) do
-      Registry.unregister(registry, session_id)
-    end
-
-    :ok
-  end
-
-  defp cancel_pending_prompt(%__MODULE__{pending_prompt_timer_ref: nil} = state), do: state
-
-  defp cancel_pending_prompt(%__MODULE__{pending_prompt_timer_ref: timer_ref} = state) do
-    _ = Process.cancel_timer(timer_ref)
-    %{state | pending_prompt_timer_ref: nil, is_streaming: false}
-  end
-
-  defp flush_queued_agent_events do
-    receive do
-      {:agent_event, _event} ->
-        flush_queued_agent_events()
-    after
-      0 ->
-        :ok
-    end
+  defp branch_summary_callbacks do
+    %{
+      broadcast_event: &broadcast_event/2,
+      ui_set_working_message: &ui_set_working_message/2,
+      ui_notify: &ui_notify/3
+    }
   end
 
   # ============================================================================
@@ -1923,296 +1052,28 @@ defmodule CodingAgent.Session do
   # ============================================================================
 
   @doc false
-  # Determines if navigation constitutes a branch switch (abandoning the current branch)
-  # A branch switch occurs when:
-  # 1. The target entry is not on the current branch path, OR
-  # 2. The target entry is an ancestor of the current leaf (going back in history)
-  @spec is_branch_switch?([SessionEntry.t()], [SessionEntry.t()], String.t() | nil, String.t()) ::
-          boolean()
-  defp is_branch_switch?(_current_branch, _new_branch, nil, _target_id), do: false
-  defp is_branch_switch?(_current_branch, _new_branch, _current_leaf_id, nil), do: false
-
-  defp is_branch_switch?(current_branch, new_branch, current_leaf_id, target_id) do
-    # Get IDs on each branch path
-    current_ids = MapSet.new(Enum.map(current_branch, & &1.id))
-    new_ids = MapSet.new(Enum.map(new_branch, & &1.id))
-
-    # It's a branch switch if:
-    # 1. Target is not on the current path at all (jumping to a different branch), OR
-    # 2. Target is an ancestor of current leaf AND current leaf has descendants
-    #    (but we can't know about descendants without more info, so simplify to:
-    #    target is strictly before current leaf on the current branch)
-    cond do
-      # Target is current leaf - no switch
-      target_id == current_leaf_id ->
-        false
-
-      # Target not on current branch - definitely a switch
-      not MapSet.member?(current_ids, target_id) ->
-        true
-
-      # Target is on current branch but current leaf not on new branch
-      # This means we're going back to an ancestor, abandoning the current extension
-      not MapSet.member?(new_ids, current_leaf_id) ->
-        true
-
-      # Both are on each other's paths - just moving within same linear history
-      true ->
-        false
-    end
-  end
-
-  @doc false
   # Attempts to summarize the abandoned branch asynchronously
   # Returns the state unchanged (summarization happens in background)
   @spec maybe_summarize_abandoned_branch(t(), [SessionEntry.t()], String.t() | nil) :: t()
-  defp maybe_summarize_abandoned_branch(state, _branch_entries, nil), do: state
-
-  defp maybe_summarize_abandoned_branch(state, branch_entries, from_id) do
-    # Check if there are message entries worth summarizing
-    message_entries =
-      Enum.filter(branch_entries, fn entry ->
-        entry.type == :message and entry.message != nil
-      end)
-
-    if length(message_entries) >= 2 do
-      # Summarize asynchronously to not block navigation
-      session_pid = self()
-      model = state.model
-
-      _ =
-        CompactionManager.start_background_task(fn ->
-          case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, []) do
-            {:ok, summary} ->
-              # Send a message back to the session to store the summary
-              send(session_pid, {:store_branch_summary, from_id, summary})
-
-            {:error, _reason} ->
-              # Silently ignore summarization failures for abandoned branches
-              :ok
-          end
-        end)
-    end
-
-    state
-  end
+  defp maybe_summarize_abandoned_branch(state, branch_entries, from_id),
+    do: BackgroundTasks.maybe_summarize_abandoned_branch(state, branch_entries, from_id, self())
 
   @spec handle_overflow_recovery_task_down(t()) :: t()
-  defp handle_overflow_recovery_task_down(state) do
-    state = CompactionManager.clear_overflow_recovery_task_tracking(state)
-
-    cond do
-      not state.overflow_recovery_in_progress ->
-        state
-
-      true ->
-        failure_reason = :overflow_recovery_task_down
-        failed_state = CompactionManager.clear_overflow_recovery_task_state(state)
-
-        ui_notify(failed_state, "Overflow compaction worker stopped unexpectedly", :error)
-
-        CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
-          duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
-          reason: CompactionManager.normalize_overflow_reason(failure_reason)
-        })
-
-        finalize_overflow_recovery_failure(failed_state, failure_reason)
-    end
-  end
+  defp handle_overflow_recovery_task_down(state),
+    do: OverflowRecovery.handle_task_down(state, session_callbacks())
 
   @spec maybe_start_overflow_recovery(t(), term(), term()) :: {:ok, t()} | :no_recovery
-  defp maybe_start_overflow_recovery(state, reason, partial_state) do
-    cond do
-      not state.is_streaming ->
-        :no_recovery
-
-      state.overflow_recovery_in_progress ->
-        :no_recovery
-
-      state.overflow_recovery_attempted ->
-        :no_recovery
-
-      not CompactionManager.context_length_exceeded_error?(reason) ->
-        :no_recovery
-
-      true ->
-        signature = CompactionManager.session_signature(state)
-        session_pid = self()
-        session_manager = state.session_manager
-        model = state.model
-        started_at_ms = System.monotonic_time(:millisecond)
-        compaction_opts = CompactionManager.overflow_recovery_compaction_opts(state)
-
-        ui_notify(state, "Context window exceeded. Compacting and retrying...", :info)
-        ui_set_working_message(state, "Context overflow detected. Compacting and retrying...")
-
-        CompactionManager.emit_overflow_recovery_telemetry(:attempt, state, %{
-          reason: CompactionManager.normalize_overflow_reason(reason)
-        })
-
-        case CompactionManager.start_tracked_background_task(
-               fn ->
-                 result =
-                   CompactionManager.overflow_recovery_compaction_task_result(
-                     session_manager,
-                     model,
-                     compaction_opts
-                   )
-
-                 send(session_pid, {:overflow_recovery_result, signature, result})
-               end,
-               CompactionManager.overflow_recovery_task_timeout_ms(),
-               :overflow_recovery_task_timeout
-             ) do
-          {:ok, task_meta} ->
-            {:ok,
-             %{
-               state
-               | overflow_recovery_in_progress: true,
-                 overflow_recovery_attempted: true,
-                 overflow_recovery_signature: signature,
-                 overflow_recovery_task_pid: task_meta.pid,
-                 overflow_recovery_task_monitor_ref: task_meta.monitor_ref,
-                 overflow_recovery_task_timeout_ref: task_meta.timeout_ref,
-                 overflow_recovery_started_at_ms: started_at_ms,
-                 overflow_recovery_error_reason: reason,
-                 overflow_recovery_partial_state: partial_state
-             }}
-
-          {:error, task_reason} ->
-            Logger.warning(
-              "Overflow recovery background task failed to start: #{inspect(task_reason)}"
-            )
-
-            :no_recovery
-        end
-    end
-  end
-
-  @spec continue_after_overflow_compaction(t()) :: {:ok, t()} | {:error, term(), t()}
-  defp continue_after_overflow_compaction(state) do
-    case AgentCore.Agent.wait_for_idle(state.agent, timeout: 5_000) do
-      :ok ->
-        ui_set_working_message(state, "Retrying after compaction...")
-
-        case AgentCore.Agent.continue(state.agent) do
-          :ok ->
-            {:ok,
-             %{
-               state
-               | is_streaming: true,
-                 overflow_recovery_error_reason: nil,
-                 overflow_recovery_partial_state: nil
-             }}
-
-          {:error, reason} ->
-            {:error, reason, state}
-        end
-
-      {:error, :timeout} ->
-        {:error, :wait_for_idle_timeout, state}
-    end
-  end
-
-  @spec finalize_overflow_recovery_failure(t(), term()) :: t()
-  defp finalize_overflow_recovery_failure(state, fallback_reason) do
-    reason = state.overflow_recovery_error_reason || fallback_reason
-    event = {:error, reason, state.overflow_recovery_partial_state}
-
-    broadcast_event(state, event)
-    state = handle_agent_event(event, state)
-    CompactionManager.clear_overflow_recovery_state_on_terminal(event, state)
-  end
+  defp maybe_start_overflow_recovery(state, reason, partial_state),
+    do: OverflowRecovery.maybe_start(state, reason, partial_state, self(), session_callbacks())
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
           {:ok, t()} | {:error, term(), t()}
-  defp apply_compaction_result(state, result, custom_summary) do
-    CompactionManager.apply_compaction_result(
-      state,
-      result,
-      custom_summary,
-      &restore_messages_from_session/1,
-      &broadcast_event/2,
-      &ui_set_working_message/2,
-      &ui_notify/3
-    )
-  end
+  defp apply_compaction_result(state, result, custom_summary),
+    do: CompactionLifecycle.apply_result(state, result, custom_summary, session_callbacks())
 
   defp maybe_trigger_compaction(%__MODULE__{auto_compaction_in_progress: true} = state), do: state
 
   @spec maybe_trigger_compaction(t()) :: t()
-  defp maybe_trigger_compaction(state) do
-    # Get context usage from agent state
-    agent_state = AgentCore.Agent.get_state(state.agent)
-    context_messages = agent_state.messages || []
-
-    context_tokens =
-      CodingAgent.Compaction.estimate_request_context_tokens(
-        context_messages,
-        Map.get(agent_state, :system_prompt),
-        Map.get(agent_state, :tools, [])
-      )
-
-    context_message_count = length(context_messages)
-
-    # Get model's context_window
-    context_window = state.model.context_window
-
-    # Get compaction settings from settings_manager (or use defaults)
-    compaction_settings = CompactionManager.get_compaction_settings(state.settings_manager)
-    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
-
-    should_compact_by_tokens =
-      CodingAgent.Compaction.should_compact?(context_tokens, context_window, compaction_settings)
-
-    should_compact_by_message_limit =
-      CodingAgent.Compaction.should_compact_for_message_limit?(
-        context_message_count,
-        message_budget,
-        compaction_settings
-      )
-
-    # Check if compaction should be triggered
-    if should_compact_by_tokens or should_compact_by_message_limit do
-      signature = CompactionManager.session_signature(state)
-      session_pid = self()
-      session_manager = state.session_manager
-      model = state.model
-      compaction_opts = CompactionManager.normalize_compaction_opts(state, [])
-
-      ui_set_working_message(state, "Compacting context...")
-
-      case CompactionManager.start_tracked_background_task(
-             fn ->
-               result =
-                 CompactionManager.auto_compaction_task_result(
-                   session_manager,
-                   model,
-                   compaction_opts
-                 )
-
-               send(session_pid, {:auto_compaction_result, signature, result})
-             end,
-             CompactionManager.auto_compaction_task_timeout_ms(),
-             :auto_compaction_task_timeout
-           ) do
-        {:ok, task_meta} ->
-          %{
-            state
-            | auto_compaction_in_progress: true,
-              auto_compaction_signature: signature,
-              auto_compaction_task_pid: task_meta.pid,
-              auto_compaction_task_monitor_ref: task_meta.monitor_ref,
-              auto_compaction_task_timeout_ref: task_meta.timeout_ref
-          }
-
-        {:error, reason} ->
-          Logger.warning("Auto compaction task failed to start: #{inspect(reason)}")
-          ui_set_working_message(state, nil)
-          state
-      end
-    else
-      state
-    end
-  end
+  defp maybe_trigger_compaction(state),
+    do: CompactionLifecycle.maybe_trigger(state, self(), session_callbacks())
 end

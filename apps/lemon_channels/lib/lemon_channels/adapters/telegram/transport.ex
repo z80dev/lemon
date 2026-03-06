@@ -9,31 +9,31 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
-  alias LemonChannels.EngineRegistry
+  alias LemonChannels.Telegram.{OffsetStore, PollerLock}
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.TriggerMode
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
+  alias LemonCore.ProjectBindingStore
   alias LemonCore.ResumeToken
   alias LemonCore.MapHelpers
   alias LemonCore.SessionKey
-  alias LemonCore.Store, as: CoreStore
-  alias LemonChannels.Adapters.Telegram.Inbound
   alias LemonChannels.Adapters.Telegram.Transport.Commands
+  alias LemonChannels.Adapters.Telegram.Transport.CommandRouter
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
-  alias LemonChannels.Adapters.Telegram.Transport.MediaGroups
+  alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
-  alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
-  alias LemonChannels.Telegram.OffsetStore
-  alias LemonChannels.Telegram.PollerLock
+  alias LemonChannels.Adapters.Telegram.Transport.ModelPreferences
+  alias LemonChannels.Adapters.Telegram.Transport.Poller
+  alias LemonChannels.Adapters.Telegram.Transport.PerChatState
+  alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
+  alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
   alias LemonCore.Config
   alias LemonCore.Secrets
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
-  @webhook_clear_retry_ms 5 * 60 * 1000
-  @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @cancel_callback_prefix "lemon:cancel"
   @model_callback_prefix "lemon:model"
   @providers_per_page 8
@@ -342,253 +342,37 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp poll_updates(state) do
-    _ = PollerLock.heartbeat(state.account_id, state.token)
-
-    case safe_get_updates(state) do
-      {:ok, %{"ok" => true, "result" => updates}} ->
-        if state.drop_pending_updates? and not state.drop_pending_done? do
-          if updates == [] do
-            # Nothing to drop; we're at the live edge.
-            %{state | drop_pending_done?: true}
-          else
-            # Keep dropping until Telegram returns an empty batch (there can be >100 pending).
-            max_id = max_update_id(updates, state.offset)
-            new_offset = max(state.offset, max_id + 1)
-            persist_offset(state, new_offset)
-            %{state | offset: new_offset, drop_pending_done?: false}
-          end
-        else
-          {state, max_id} = handle_updates(state, updates)
-          new_offset = max(state.offset, max_id + 1)
-          persist_offset(state, new_offset)
-          %{state | offset: new_offset}
-        end
-
-      {:error, reason} ->
-        maybe_log_poll_error(state, reason)
-
-      other ->
-        maybe_log_poll_error(state, other)
-    end
-  rescue
-    e ->
-      Logger.warning("Telegram poll error: #{inspect(e)}")
-      state
-  end
-
-  defp maybe_log_poll_error(state, reason) do
-    state = maybe_attempt_webhook_clear(state, reason)
-
-    now = System.monotonic_time(:millisecond)
-    last_ts = state.last_poll_error_log_ts
-    last_reason = state.last_poll_error
-
-    should_log? =
-      cond do
-        is_nil(last_ts) ->
-          true
-
-        now - last_ts > 60_000 ->
-          true
-
-        last_reason != reason ->
-          true
-
-        true ->
-          false
-      end
-
-    if should_log? do
-      msg =
-        case reason do
-          {:http_error, 409, body} ->
-            body_s = body |> to_string() |> String.slice(0, 200)
-
-            "Telegram getUpdates returned HTTP 409 Conflict (#{body_s}). " <>
-              "This usually means a webhook is set for the bot, which conflicts with polling. " <>
-              "Fix: call Telegram Bot API deleteWebhook (optionally with drop_pending_updates=true), " <>
-              "then restart the gateway."
-
-          other ->
-            "Telegram getUpdates failed: #{inspect(other)}"
-        end
-
-      Logger.warning(msg)
-    end
-
-    %{state | last_poll_error: reason, last_poll_error_log_ts: now}
-  rescue
-    _ -> state
-  end
-
-  defp maybe_attempt_webhook_clear(state, {:http_error, 409, _body}) do
-    now = System.monotonic_time(:millisecond)
-    last_attempt = state[:last_webhook_clear_ts]
-
-    should_attempt? =
-      is_nil(last_attempt) or
-        (is_integer(last_attempt) and now - last_attempt >= @webhook_clear_retry_ms)
-
-    if should_attempt? do
-      result =
-        try do
-          state.api_mod.delete_webhook(state.token, drop_pending_updates: false)
-        rescue
-          e -> {:error, e}
-        end
-
-      case result do
-        {:ok, %{"ok" => true}} ->
-          Logger.warning(
-            "Telegram auto-recovery: deleteWebhook succeeded after getUpdates 409 conflict"
-          )
-
-        other ->
-          Logger.warning(
-            "Telegram auto-recovery: deleteWebhook failed after getUpdates 409 conflict: #{inspect(other)}"
-          )
-      end
-
-      %{state | last_webhook_clear_ts: now}
-    else
-      state
-    end
-  end
-
-  defp maybe_attempt_webhook_clear(state, _reason), do: state
-
-  defp safe_get_updates(state) do
-    try do
-      state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms)
-    catch
-      :exit, reason ->
-        Logger.debug("Telegram get_updates exited: #{inspect(reason)}")
-        {:error, {:exit, reason}}
-    end
-  end
-
-  defp handle_updates(state, updates) do
-    # If updates is empty, keep max_id at offset - 1 so we don't accidentally advance the offset.
-    Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
-      id = update["update_id"] || max_id
-      acc_state = UpdateProcessor.maybe_index_known_target(acc_state, update)
-      acc_state = process_single_update(acc_state, update, id)
-      {acc_state, max(max_id, id)}
-    end)
-  end
-
-  defp process_single_update(state, %{"callback_query" => cb} = _update, _id) do
-    if authorized_callback_query?(state, cb), do: handle_callback_query(state, cb)
-    state
-  end
-
-  defp process_single_update(state, update, id) do
-    with {:ok, inbound} <- Inbound.normalize(update),
-         inbound <- UpdateProcessor.prepare_inbound(inbound, state, update, id),
-         {:ok, inbound} <- maybe_transcribe_voice(state, inbound) do
-      route_authorized_inbound(state, inbound)
-    else
-      {:error, _reason} -> state
-      {:skip, new_state} -> new_state
-    end
-  end
-
-  defp route_authorized_inbound(state, inbound) do
-    UpdateProcessor.route_authorized_inbound(state, inbound, &handle_inbound_message/2)
+    Poller.poll_updates(state, %{
+      authorized_callback_query?: &authorized_callback_query?/2,
+      handle_callback_query: &handle_callback_query/2,
+      handle_inbound_message: &handle_inbound_message/2,
+      maybe_transcribe_voice: &maybe_transcribe_voice/2,
+      persist_offset: &persist_offset/2
+    })
   end
 
   defp handle_inbound_message(state, inbound) do
-    text = inbound.message.text || ""
-    original_text = text
-
-    {state, handled_model_picker?} =
-      maybe_handle_model_picker_input(state, inbound, original_text)
-
-    if handled_model_picker? do
-      state
-    else
-      cond do
-        MediaGroups.media_group_member?(inbound) and
-            MediaGroups.media_group_exists?(state, inbound) ->
-          MediaGroups.enqueue_media_group(state, inbound)
-
-        Commands.file_command?(original_text, state.bot_username) and
-            MediaGroups.media_group_member?(inbound) ->
-          # If this is a /file put command attached to a media group document, batch the whole group.
-          MediaGroups.enqueue_media_group(state, inbound)
-
-        Commands.file_command?(original_text, state.bot_username) ->
-          FileOperations.handle_file_command(state, inbound)
-
-        FileOperations.should_auto_put_media?(state, inbound) ->
-          if MediaGroups.media_group_member?(inbound) do
-            MediaGroups.enqueue_media_group(state, inbound)
-          else
-            handle_media_auto_put(state, inbound)
-          end
-
-        Commands.trigger_command?(original_text, state.bot_username) ->
-          handle_trigger_command(state, inbound)
-
-        Commands.cwd_command?(original_text, state.bot_username) ->
-          handle_cwd_command(state, inbound)
-
-        Commands.topic_command?(original_text, state.bot_username) ->
-          handle_topic_command(state, inbound)
-
-        Commands.resume_command?(original_text, state.bot_username) ->
-          handle_resume_command(state, inbound)
-
-        Commands.model_command?(original_text, state.bot_username) ->
-          handle_model_command(state, inbound)
-
-        Commands.thinking_command?(original_text, state.bot_username) ->
-          handle_thinking_command(state, inbound)
-
-        Commands.reload_command?(original_text, state.bot_username) ->
-          handle_reload_command(state, inbound)
-
-        Commands.new_command?(original_text, state.bot_username) ->
-          args = Commands.telegram_command_args(original_text, "new")
-          handle_new_session(state, inbound, args)
-
-        Commands.cancel_command?(original_text, state.bot_username) ->
-          maybe_cancel_by_reply(state, inbound)
-          state
-
-        true ->
-          cond do
-            should_ignore_for_trigger?(state, inbound, original_text) ->
-              maybe_log_drop(state, inbound, :trigger_mentions)
-              state
-
-            true ->
-              inbound = maybe_mark_new_session_pending(state, inbound)
-              inbound = maybe_mark_fork_when_busy(state, inbound)
-              {state, inbound} = maybe_switch_session_from_reply(state, inbound)
-              inbound = maybe_apply_pending_compaction(state, inbound, original_text)
-              inbound = maybe_apply_selected_resume(state, inbound, original_text)
-
-              cond do
-                Commands.command_message_for_bot?(original_text, state.bot_username) ->
-                  submit_inbound_now(state, inbound)
-
-                true ->
-                  MessageBuffer.enqueue_buffer(state, inbound)
-              end
-          end
-      end
-    end
-  rescue
-    e ->
-      meta = inbound.meta || %{}
-
-      Logger.warning(
-        "Telegram inbound handler crashed (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
-          Exception.format(:error, e, __STACKTRACE__)
-      )
-
-      state
+    CommandRouter.handle_inbound_message(state, inbound, %{
+      bot_username: state.bot_username,
+      handle_cwd_command: &handle_cwd_command/2,
+      handle_media_auto_put: &handle_media_auto_put/2,
+      handle_model_command: &handle_model_command/2,
+      handle_new_session: &handle_new_session/3,
+      handle_reload_command: &handle_reload_command/2,
+      handle_resume_command: &handle_resume_command/2,
+      handle_thinking_command: &handle_thinking_command/2,
+      handle_topic_command: &handle_topic_command/2,
+      handle_trigger_command: &handle_trigger_command/2,
+      maybe_apply_selected_resume: &maybe_apply_selected_resume/3,
+      maybe_cancel_by_reply: &maybe_cancel_by_reply/2,
+      maybe_handle_model_picker_input: &maybe_handle_model_picker_input/3,
+      maybe_log_drop: &maybe_log_drop/3,
+      maybe_mark_fork_when_busy: &maybe_mark_fork_when_busy/2,
+      maybe_mark_new_session_pending: &maybe_mark_new_session_pending/2,
+      maybe_switch_session_from_reply: &maybe_switch_session_from_reply/2,
+      should_ignore_for_trigger?: &should_ignore_for_trigger?/3,
+      submit_inbound_now: &submit_inbound_now/2
+    })
   end
 
   defp submit_buffer(buffer, state) do
@@ -680,7 +464,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         state
       end
 
-    inbound = %{inbound | meta: meta}
+    {explicit_resume, stripped_prompt} = extract_explicit_resume_and_strip(inbound.message.text)
+
+    meta =
+      if is_nil(meta[:resume]) and is_nil(meta["resume"]) and
+           match?(%ResumeToken{}, explicit_resume) do
+        Map.put(meta, :resume, explicit_resume)
+      else
+        meta
+      end
+
+    inbound = %{
+      inbound
+      | meta: meta,
+        message: Map.put(inbound.message || %{}, :text, stripped_prompt)
+    }
+
     route_to_router(inbound)
     state
   end
@@ -739,6 +538,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> state
   end
+
+  defp extract_explicit_resume_and_strip(text),
+    do: ResumeSelection.extract_explicit_resume_and_strip(text)
 
   defp process_media_group(group, state) do
     items = Enum.reverse(group.items || [])
@@ -841,8 +643,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           id = Path.basename(expanded)
           root = expanded
 
-          CoreStore.put(:projects_dynamic, id, %{root: root, default_engine: nil})
-          CoreStore.put(:project_overrides, scope, id)
+          ProjectBindingStore.put_dynamic(id, %{root: root, default_engine: nil})
+          ProjectBindingStore.put_override(scope, id)
 
           {:ok, %{id: id, root: root}}
         else
@@ -857,7 +659,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             root = Path.expand(root)
 
             if File.dir?(root) do
-              CoreStore.put(:project_overrides, scope, id)
+              ProjectBindingStore.put_override(scope, id)
 
               {:ok, %{id: id, root: root}}
             else
@@ -878,337 +680,28 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_switch_session_from_reply(state, inbound) do
-    meta = inbound.meta || %{}
-    reply_to_id = normalize_msg_id(inbound.message.reply_to_id || inbound.meta[:reply_to_id])
-
-    cond do
-      meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true ->
-        {state, inbound}
-
-      not is_integer(reply_to_id) ->
-        {state, inbound}
-
-      true ->
-        {chat_id, thread_id} = extract_chat_ids(inbound)
-
-        if not is_integer(chat_id) do
-          {state, inbound}
-        else
-          scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-          session_key = build_session_key(state, inbound, scope)
-
-          {resume, source} = resume_from_reply(state, inbound, chat_id, thread_id, reply_to_id)
-
-          if match?(%ResumeToken{}, resume) do
-            current = safe_get_chat_state(session_key)
-
-            if switching_session?(current, resume) do
-              Logger.debug(
-                "Telegram switching session from reply chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
-                  "source=#{inspect(source)} resume=#{inspect(resume)} session_key=#{inspect(session_key)}"
-              )
-
-              set_chat_resume(scope, session_key, resume)
-
-              # Keep automatic reply-based session switching silent. The user
-              # doesn't need an extra "Resuming session..." system message on
-              # normal follow-ups.
-
-              inbound =
-                case source do
-                  :reply_text ->
-                    inbound
-
-                  :msg_index ->
-                    # Ensure the very next run explicitly resumes, even if auto-resume is off.
-                    maybe_prefix_resume_to_prompt(inbound, resume)
-                end
-
-              {state, inbound}
-            else
-              {state, inbound}
-            end
-          else
-            {state, inbound}
-          end
-        end
-    end
-  rescue
-    _ -> {state, inbound}
-  end
-
-  defp resume_from_reply(state, inbound, chat_id, thread_id, reply_to_id) do
-    reply_text = inbound.meta[:reply_to_text]
-
-    cond do
-      is_binary(reply_text) and reply_text != "" ->
-        case EngineRegistry.extract_resume(reply_text) do
-          {:ok, %ResumeToken{} = token} -> {token, :reply_text}
-          _ -> {nil, nil}
-        end
-
-      true ->
-        account_id = state.account_id || "default"
-        generation = current_thread_generation(state, chat_id, thread_id)
-        key = {account_id, chat_id, thread_id, generation, reply_to_id}
-
-        token =
-          case CoreStore.get(:telegram_msg_resume, key) do
-            %ResumeToken{} = tok ->
-              tok
-
-            _ when generation == 0 ->
-              legacy_key = {account_id, chat_id, thread_id, reply_to_id}
-              CoreStore.get(:telegram_msg_resume, legacy_key)
-
-            _ ->
-              nil
-          end
-
-        case token do
-          %ResumeToken{} = tok -> {tok, :msg_index}
-          _ -> {nil, nil}
-        end
-    end
-  rescue
-    _ -> {nil, nil}
-  end
-
-  defp switching_session?(nil, %ResumeToken{}), do: true
-
-  defp switching_session?(%{} = chat_state, %ResumeToken{} = resume) do
-    last_engine = chat_state[:last_engine] || chat_state["last_engine"] || chat_state.last_engine
-
-    last_token =
-      chat_state[:last_resume_token] || chat_state["last_resume_token"] ||
-        chat_state.last_resume_token
-
-    last_engine != resume.engine or last_token != resume.value
-  rescue
-    _ -> true
-  end
-
-  defp switching_session?(_other, _resume), do: true
-
-  defp maybe_prefix_resume_to_prompt(inbound, %ResumeToken{} = resume) do
-    if is_binary(inbound.message.text) and inbound.message.text != "" do
-      resume_line = format_resume_line(resume)
-
-      message =
-        Map.put(inbound.message, :text, String.trim("#{resume_line}\n#{inbound.message.text}"))
-
-      %{inbound | message: message}
-    else
-      inbound
-    end
-  rescue
-    _ -> inbound
+    ResumeSelection.maybe_switch_session_from_reply(state, inbound, %{
+      extract_chat_ids: &extract_chat_ids/1,
+      extract_message_ids: &extract_message_ids/1,
+      build_session_key: &build_session_key/3,
+      normalize_msg_id: &normalize_msg_id/1,
+      send_system_message: &send_system_message/5,
+      submit_inbound_now: &submit_inbound_now/2
+    })
   end
 
   defp handle_resume_command(state, inbound) do
-    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
-
-    if not is_integer(chat_id) do
-      state
-    else
-      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-      session_key = build_session_key(state, inbound, scope)
-      args = Commands.telegram_command_args(inbound.message.text, "resume") || ""
-
-      state = MessageBuffer.drop_buffer_for(state, inbound)
-
-      cond do
-        args == "" ->
-          sessions = list_recent_sessions(session_key, limit: 20)
-
-          text =
-            case sessions do
-              [] ->
-                "No sessions found yet."
-
-              list ->
-                header = "Available sessions (most recent first):"
-
-                body =
-                  list
-                  |> Enum.with_index(1)
-                  |> Enum.map(fn {%{resume: r}, idx} -> "#{idx}. #{format_session_ref(r)}" end)
-                  |> Enum.join("\n")
-
-                usage = "Use /resume <number> to switch sessions."
-                Enum.join([header, body, usage], "\n\n")
-            end
-
-          _ = send_system_message(state, chat_id, thread_id, user_msg_id, text)
-          state
-
-        true ->
-          {selector, prompt_part} =
-            case String.split(args, ~r/\s+/, parts: 2) do
-              [a] -> {a, ""}
-              [a, rest] -> {a, String.trim(rest || "")}
-              _ -> {args, ""}
-            end
-
-          sessions = list_recent_sessions(session_key, limit: 50)
-          resume = resolve_resume_selector(selector, sessions)
-
-          if match?(%ResumeToken{}, resume) do
-            set_chat_resume(scope, session_key, resume)
-
-            _ =
-              send_system_message(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                "Resuming session: #{format_session_ref(resume)}"
-              )
-
-            if prompt_part != "" do
-              inbound =
-                inbound
-                |> put_in(
-                  [Access.key!(:message), :text],
-                  String.trim("#{format_resume_line(resume)}\n#{prompt_part}")
-                )
-
-              submit_inbound_now(state, inbound)
-            else
-              state
-            end
-          else
-            _ =
-              send_system_message(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                "Couldn't find that session. Try /resume to list sessions."
-              )
-
-            state
-          end
-      end
-    end
-  rescue
-    _ -> state
+    state
+    |> MessageBuffer.drop_buffer_for(inbound)
+    |> ResumeSelection.handle_resume_command(inbound, %{
+      extract_chat_ids: &extract_chat_ids/1,
+      extract_message_ids: &extract_message_ids/1,
+      build_session_key: &build_session_key/3,
+      normalize_msg_id: &normalize_msg_id/1,
+      send_system_message: &send_system_message/5,
+      submit_inbound_now: &submit_inbound_now/2
+    })
   end
-
-  defp resolve_resume_selector(selector, sessions) when is_binary(selector) do
-    selector = String.trim(selector)
-
-    cond do
-      selector == "" ->
-        nil
-
-      Regex.match?(~r/^\d+$/, selector) ->
-        idx = String.to_integer(selector)
-
-        case Enum.at(sessions, idx - 1) do
-          %{resume: %ResumeToken{} = r} -> r
-          _ -> nil
-        end
-
-      true ->
-        # Accept a full resume line (e.g., "codex resume X", "claude --resume X").
-        case EngineRegistry.extract_resume(selector) do
-          {:ok, %ResumeToken{} = token} ->
-            token
-
-          _ ->
-            # Accept "engine token" shorthand.
-            case String.split(selector, ~r/\s+/, parts: 2) do
-              [engine_id, token_value] ->
-                engine_id = String.downcase(engine_id || "")
-
-                if EngineRegistry.get_engine(engine_id) && token_value && token_value != "" do
-                  %ResumeToken{engine: engine_id, value: String.trim(token_value)}
-                else
-                  find_by_token_value(selector, sessions)
-                end
-
-              _ ->
-                find_by_token_value(selector, sessions)
-            end
-        end
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp find_by_token_value(value, sessions) do
-    v = String.trim(value || "")
-
-    Enum.find_value(sessions, fn
-      %{resume: %ResumeToken{value: ^v} = r} -> r
-      _ -> nil
-    end)
-  end
-
-  defp list_recent_sessions(session_key, opts) when is_binary(session_key) do
-    limit = Keyword.get(opts, :limit, 20)
-
-    history = CoreStore.get_run_history(session_key, limit: limit * 5)
-
-    history
-    |> Enum.map(fn {_run_id, data} ->
-      %{resume: extract_resume_from_history(data), started_at: data[:started_at] || 0}
-    end)
-    |> Enum.filter(fn %{resume: r} -> match?(%ResumeToken{}, r) end)
-    |> Enum.sort_by(& &1.started_at, :desc)
-    |> Enum.reduce({[], MapSet.new()}, fn %{resume: r, started_at: ts}, {acc, seen} ->
-      key = {r.engine, r.value}
-
-      if MapSet.member?(seen, key) do
-        {acc, seen}
-      else
-        {[%{resume: r, started_at: ts} | acc], MapSet.put(seen, key)}
-      end
-    end)
-    |> elem(0)
-    |> Enum.reverse()
-    |> Enum.take(limit)
-  rescue
-    _ -> []
-  end
-
-  defp list_recent_sessions(_other, _opts), do: []
-
-  defp extract_resume_from_history(data) when is_map(data) do
-    summary = data[:summary] || data["summary"] || %{}
-    completed = summary[:completed] || summary["completed"]
-
-    resume =
-      cond do
-        is_map(completed) and is_struct(completed) and Map.has_key?(completed, :resume) ->
-          Map.get(completed, :resume)
-
-        is_map(completed) ->
-          completed[:resume] || completed["resume"]
-
-        true ->
-          nil
-      end
-
-    case resume do
-      %ResumeToken{} = r ->
-        r
-
-      %{engine: engine, value: value} when is_binary(engine) and is_binary(value) ->
-        %ResumeToken{engine: engine, value: value}
-
-      %{"engine" => engine, "value" => value} when is_binary(engine) and is_binary(value) ->
-        %ResumeToken{engine: engine, value: value}
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp extract_resume_from_history(_), do: nil
 
   defp handle_new_session(state, inbound, raw_selector) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
@@ -1469,66 +962,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          user_msg_id
        )
        when is_binary(session_key) do
-    history = fetch_run_history_for_memory(session_key, scope, limit: 8)
-    transcript = format_run_history_transcript(history, max_chars: 12_000)
-
-    if transcript == "" do
-      :skip
-    else
-      prompt = memory_reflection_prompt(transcript)
-
-      # Internal run: avoid creating "Running…" / tool status messages.
-      progress_msg_id = nil
-      status_msg_id = nil
-
-      engine_id = last_engine_hint(session_key) || (inbound.meta || %{})[:engine_id]
-      agent_id = (inbound.meta || %{})[:agent_id] || "default"
-
-      {thinking_hint, _thinking_scope} =
-        resolve_thinking_hint(state, scope.chat_id, scope.topic_id)
-
-      thread_generation = current_thread_generation(state, chat_id, thread_id)
-
-      meta =
-        (inbound.meta || %{})
-        |> Map.put(:progress_msg_id, progress_msg_id)
-        |> Map.put(:status_msg_id, status_msg_id)
-        |> Map.put(:topic_id, thread_id)
-        |> Map.put(:thread_generation, thread_generation)
-        |> Map.put(:user_msg_id, user_msg_id)
-        |> Map.put(:command, :new)
-        |> Map.put(:record_memories, true)
-        |> maybe_put(:thinking_level, thinking_hint)
-        |> Map.merge(%{
-          channel_id: inbound.channel_id,
-          account_id: inbound.account_id,
-          peer: inbound.peer,
-          sender: inbound.sender,
-          raw: inbound.raw
-        })
-
-      reflection_session_key = reflection_session_key(session_key)
-
-      request =
-        LemonCore.RunRequest.new(%{
-          origin: :channel,
-          session_key: reflection_session_key,
-          agent_id: agent_id,
-          prompt: prompt,
-          queue_mode: :collect,
-          engine_id: engine_id,
-          meta: meta
-        })
-
-      case LemonCore.RouterBridge.submit_run(request) do
-        {:ok, run_id} when is_binary(run_id) ->
-          maybe_subscribe_to_run(run_id)
-          :ok
-
-        _ ->
-          :skip
-      end
-    end
+    MemoryReflection.submit_before_new(
+      state,
+      inbound,
+      scope,
+      session_key,
+      chat_id,
+      thread_id,
+      user_msg_id,
+      %{
+        maybe_subscribe_to_run: &maybe_subscribe_to_run/1,
+        current_thread_generation: &current_thread_generation/3,
+        maybe_put: &maybe_put/3
+      }
+    )
   rescue
     _ -> :skip
   end
@@ -1544,712 +991,129 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
        ),
        do: :skip
 
-  defp reflection_session_key(session_key) when is_binary(session_key) do
-    session_key <> ":new_reflection"
-  end
+  defp last_engine_hint(session_key), do: PerChatState.last_engine_hint(session_key)
 
-  defp reflection_session_key(_), do: "telegram:new_reflection"
+  defp safe_delete_chat_state(key), do: PerChatState.safe_delete_chat_state(key)
 
-  defp fetch_run_history_for_memory(session_key, _scope, opts) do
-    limit = Keyword.get(opts, :limit, 8)
+  defp safe_delete_session_model(session_key),
+    do: PerChatState.safe_delete_session_model(session_key)
 
-    CoreStore.get_run_history(session_key, limit: limit)
-  rescue
-    _ -> []
-  end
+  defp safe_abort_session(session_key, reason),
+    do: PerChatState.safe_abort_session(session_key, reason)
 
-  defp format_run_history_transcript(history, opts) when is_list(history) do
-    max_chars = Keyword.get(opts, :max_chars, 12_000)
+  defp safe_delete_selected_resume(state, chat_id, thread_id),
+    do:
+      PerChatState.safe_delete_selected_resume(state.account_id || "default", chat_id, thread_id)
 
-    # `get_run_history/2` returns most-recent first; format oldest->newest for the model.
-    text =
-      history
-      |> Enum.reverse()
-      |> Enum.map(&format_run_history_entry/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-      |> String.trim()
+  defp safe_clear_thread_message_indices(state, chat_id, thread_id),
+    do:
+      PerChatState.safe_clear_thread_message_indices(
+        state.account_id || "default",
+        chat_id,
+        thread_id
+      )
 
-    if byte_size(text) > max_chars do
-      String.slice(text, byte_size(text) - max_chars, max_chars)
-    else
-      text
-    end
-  rescue
-    _ -> ""
-  end
-
-  defp format_run_history_transcript(_other, _opts), do: ""
-
-  defp format_run_history_entry({_run_id, data}) when is_map(data) do
-    summary = data[:summary] || data["summary"] || %{}
-    prompt = summary[:prompt] || summary["prompt"] || ""
-
-    completed = summary[:completed] || summary["completed"] || %{}
-
-    answer =
-      cond do
-        is_map(completed) -> completed[:answer] || completed["answer"] || ""
-        true -> ""
-      end
-
-    prompt = prompt |> to_string() |> String.trim()
-    answer = answer |> to_string() |> String.trim()
-
-    cond do
-      prompt == "" and answer == "" -> ""
-      answer == "" -> "User:\n#{prompt}"
-      true -> "User:\n#{prompt}\n\nAssistant:\n#{answer}"
-    end
-  rescue
-    _ -> ""
-  end
-
-  defp format_run_history_entry(_), do: ""
-
-  defp memory_reflection_prompt(transcript) when is_binary(transcript) do
-    """
-    Before we start a new session, review the recent conversation transcript below.
-
-    Task:
-    - Record any durable, re-usable memories or learnings (preferences, recurring context, decisions, project facts, ongoing tasks) using the available memory workflow/tools.
-    - If there is nothing worth saving, do not invent anything; just respond with "No memories to record."
-    - Do not include private/secret data in durable memory.
-    - In your final response, be brief (1-2 sentences) and do not paste the memories verbatim.
-
-    Transcript (most recent portion):
-    #{transcript}
-    """
-    |> String.trim()
-  end
-
-  defp last_engine_hint(session_key) when is_binary(session_key) do
-    s1 = safe_get_chat_state(session_key)
-
-    engine = s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)
-
-    if is_binary(engine) and engine != "", do: engine, else: nil
-  rescue
-    _ -> nil
-  end
-
-  defp last_engine_hint(_), do: nil
-
-  defp safe_delete_chat_state(key) do
-    CoreStore.delete_chat_state(key)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_delete_session_model(session_key) when is_binary(session_key) do
-    _ = CoreStore.delete(:telegram_session_model, session_key)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_delete_session_model(_session_key), do: :ok
-
-  defp safe_abort_session(session_key, reason)
-       when is_binary(session_key) and byte_size(session_key) > 0 do
-    _ = LemonCore.RouterBridge.abort_session(session_key, reason)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_abort_session(_, _), do: :ok
-
-  defp safe_delete_selected_resume(state, chat_id, thread_id)
-       when is_integer(chat_id) do
-    key = {state.account_id || "default", chat_id, thread_id}
-    _ = CoreStore.delete(:telegram_selected_resume, key)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_clear_thread_message_indices(state, chat_id, thread_id)
-       when is_integer(chat_id) do
-    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_clear_thread_message_indices(_state, _chat_id, _thread_id), do: :ok
-
-  defp safe_sweep_thread_message_indices(state, chat_id, thread_id, max_generation)
-       when is_integer(chat_id) do
-    account_id = state.account_id || "default"
-
-    _ =
-      clear_thread_index_table(
-        :telegram_msg_session,
-        account_id,
+  defp safe_sweep_thread_message_indices(state, chat_id, thread_id, max_generation),
+    do:
+      PerChatState.safe_sweep_thread_message_indices(
+        state.account_id || "default",
         chat_id,
         thread_id,
         max_generation
       )
 
-    _ =
-      clear_thread_index_table(
-        :telegram_msg_resume,
+  defp current_thread_generation(state, chat_id, thread_id),
+    do: PerChatState.current_thread_generation(state.account_id || "default", chat_id, thread_id)
+
+  defp bump_thread_generation(state, chat_id, thread_id),
+    do: PerChatState.bump_thread_generation(state.account_id || "default", chat_id, thread_id)
+
+  defp resolve_model_hint(state, session_key, chat_id, thread_id),
+    do:
+      ModelPreferences.resolve_model_hint(
+        state.account_id || "default",
+        session_key,
+        chat_id,
+        thread_id
+      )
+
+  defp resolve_thinking_hint(state, chat_id, thread_id),
+    do: ModelPreferences.resolve_thinking_hint(state.account_id || "default", chat_id, thread_id)
+
+  defp format_thinking_line(level, source),
+    do: ModelPreferences.format_thinking_line(level, source)
+
+  defp session_model_override(session_key),
+    do: ModelPreferences.session_model_override(session_key)
+
+  defp put_session_model_override(session_key, model),
+    do: ModelPreferences.put_session_model_override(session_key, model)
+
+  defp default_model_preference(state, chat_id, thread_id),
+    do:
+      ModelPreferences.default_model_preference(
+        state.account_id || "default",
+        chat_id,
+        thread_id
+      )
+
+  defp put_default_model_preference(state, chat_id, thread_id, model),
+    do:
+      ModelPreferences.put_default_model_preference(
+        state.account_id || "default",
+        chat_id,
+        thread_id,
+        model
+      )
+
+  defp default_thinking_preference(account_id, chat_id, thread_id),
+    do:
+      ModelPreferences.default_thinking_preference(
         account_id,
         chat_id,
         thread_id,
-        max_generation
+        @thinking_levels
       )
 
-    :ok
-  rescue
-    _ -> :ok
-  end
+  defp put_default_thinking_preference(account_id, chat_id, thread_id, level),
+    do:
+      ModelPreferences.put_default_thinking_preference(
+        account_id,
+        chat_id,
+        thread_id,
+        level,
+        @thinking_levels
+      )
 
-  defp safe_sweep_thread_message_indices(_state, _chat_id, _thread_id, _max_generation), do: :ok
-
-  defp clear_thread_index_table(table, account_id, chat_id, thread_id, max_generation)
-       when is_atom(table) do
-    list_store_table(table)
-    |> Enum.each(fn
-      {{acc, cid, tid, generation, _msg_id} = key, _value}
-      when acc == account_id and cid == chat_id and tid == thread_id ->
-        if generation_match?(generation, max_generation) do
-          _ = delete_store_key(table, key)
-        end
-
-      {{acc, cid, tid, _msg_id} = legacy_key, _value}
-      when acc == account_id and cid == chat_id and tid == thread_id ->
-        if generation_match?(0, max_generation) do
-          _ = delete_store_key(table, legacy_key)
-        end
-
-      _ ->
-        :ok
-    end)
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp generation_match?(_generation, :all), do: true
-
-  defp generation_match?(generation, max_generation) when is_integer(max_generation) do
-    normalize_generation(generation) <= max_generation
-  end
-
-  defp generation_match?(_generation, _max_generation), do: false
-
-  defp current_thread_generation(state, chat_id, thread_id) when is_integer(chat_id) do
-    key = {state.account_id || "default", chat_id, thread_id}
-
-    case CoreStore.get(:telegram_thread_generation, key) do
-      generation -> normalize_generation(generation)
-    end
-  rescue
-    _ -> 0
-  end
-
-  defp current_thread_generation(_state, _chat_id, _thread_id), do: 0
-
-  defp bump_thread_generation(state, chat_id, thread_id) when is_integer(chat_id) do
-    account_id = state.account_id || "default"
-    key = {account_id, chat_id, thread_id}
-    previous = current_thread_generation(state, chat_id, thread_id)
-    next = previous + 1
-
-    _ = CoreStore.put(:telegram_thread_generation, key, next)
-    {previous, next}
-  rescue
-    _ -> {0, 0}
-  end
-
-  defp bump_thread_generation(_state, _chat_id, _thread_id), do: {0, 0}
-
-  defp normalize_generation(generation) when is_integer(generation) and generation >= 0,
-    do: generation
-
-  defp normalize_generation(generation) when is_binary(generation) do
-    case Integer.parse(generation) do
-      {value, _} when value >= 0 -> value
-      _ -> 0
-    end
-  end
-
-  defp normalize_generation(%{generation: generation}), do: normalize_generation(generation)
-  defp normalize_generation(%{"generation" => generation}), do: normalize_generation(generation)
-  defp normalize_generation(_generation), do: 0
-
-  defp list_store_table(table) when is_atom(table) do
-    CoreStore.list(table)
-  rescue
-    _ -> []
-  end
-
-  defp delete_store_key(table, key) when is_atom(table) do
-    CoreStore.delete(table, key)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp safe_get_chat_state(key) do
-    CoreStore.get_chat_state(key)
-  rescue
-    _ -> nil
-  end
-
-  defp resolve_model_hint(state, session_key, chat_id, thread_id)
-       when is_binary(session_key) and is_integer(chat_id) do
-    case session_model_override(session_key) do
-      model when is_binary(model) and model != "" ->
-        {model, :session}
-
-      _ ->
-        case default_model_preference(state, chat_id, thread_id) do
-          model when is_binary(model) and model != "" -> {model, :future}
-          _ -> {nil, nil}
-        end
-    end
-  rescue
-    _ -> {nil, nil}
-  end
-
-  defp resolve_model_hint(_state, _session_key, _chat_id, _thread_id), do: {nil, nil}
-
-  defp resolve_thinking_hint(state, chat_id, thread_id) when is_integer(chat_id) do
-    account_id = state.account_id || "default"
-
-    topic_level =
-      if is_integer(thread_id),
-        do: default_thinking_preference(account_id, chat_id, thread_id),
-        else: nil
-
-    chat_level = default_thinking_preference(account_id, chat_id, nil)
-
-    cond do
-      is_binary(topic_level) and topic_level != "" ->
-        {topic_level, :topic}
-
-      is_binary(chat_level) and chat_level != "" ->
-        {chat_level, :chat}
-
-      true ->
-        {nil, nil}
-    end
-  rescue
-    _ -> {nil, nil}
-  end
-
-  defp resolve_thinking_hint(_state, _chat_id, _thread_id), do: {nil, nil}
-
-  defp format_thinking_line(level, source) when is_binary(level) and level != "" do
-    case source do
-      :topic -> "#{level} (topic default)"
-      :chat -> "#{level} (chat default)"
-      _ -> level
-    end
-  end
-
-  defp format_thinking_line(_level, _source), do: "(default)"
-
-  defp session_model_override(session_key) when is_binary(session_key) do
-    case CoreStore.get(:telegram_session_model, session_key) do
-      model when is_binary(model) and model != "" -> model
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp session_model_override(_session_key), do: nil
-
-  defp put_session_model_override(session_key, model)
-       when is_binary(session_key) and is_binary(model) do
-    CoreStore.put(:telegram_session_model, session_key, model)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp put_session_model_override(_session_key, _model), do: :ok
-
-  defp default_model_preference(state, chat_id, thread_id) when is_integer(chat_id) do
-    key = {state.account_id || "default", chat_id, thread_id}
-
-    case CoreStore.get(:telegram_default_model, key) do
-      %{model: model} when is_binary(model) and model != "" -> model
-      %{"model" => model} when is_binary(model) and model != "" -> model
-      model when is_binary(model) and model != "" -> model
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp default_model_preference(_state, _chat_id, _thread_id), do: nil
-
-  defp put_default_model_preference(state, chat_id, thread_id, model)
-       when is_integer(chat_id) and is_binary(model) do
-    key = {state.account_id || "default", chat_id, thread_id}
-    payload = %{model: model, updated_at_ms: System.system_time(:millisecond)}
-    CoreStore.put(:telegram_default_model, key, payload)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp put_default_model_preference(_state, _chat_id, _thread_id, _model), do: :ok
-
-  defp default_thinking_preference(account_id, chat_id, thread_id)
-       when is_binary(account_id) and is_integer(chat_id) do
-    key = {account_id, chat_id, thread_id}
-
-    case CoreStore.get(:telegram_default_thinking, key) do
-      %{thinking_level: level} -> normalize_thinking_level(level)
-      %{"thinking_level" => level} -> normalize_thinking_level(level)
-      level -> normalize_thinking_level(level)
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
-
-  defp put_default_thinking_preference(account_id, chat_id, thread_id, level)
-       when is_binary(account_id) and is_integer(chat_id) and is_binary(level) do
-    normalized = normalize_thinking_level(level)
-
-    if is_binary(normalized) and normalized != "" do
-      key = {account_id, chat_id, thread_id}
-      payload = %{thinking_level: normalized, updated_at_ms: System.system_time(:millisecond)}
-      CoreStore.put(:telegram_default_thinking, key, payload)
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
-
-  defp clear_default_thinking_preference(account_id, chat_id, thread_id)
-       when is_binary(account_id) and is_integer(chat_id) do
-    key = {account_id, chat_id, thread_id}
-    had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
-    _ = CoreStore.delete(:telegram_default_thinking, key)
-    had_override?
-  rescue
-    _ -> false
-  end
-
-  defp clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false
-
-  defp normalize_thinking_level(level) when is_atom(level) do
-    level
-    |> Atom.to_string()
-    |> normalize_thinking_level()
-  end
-
-  defp normalize_thinking_level(level) when is_binary(level) do
-    normalized = String.downcase(String.trim(level))
-    if normalized in @thinking_levels, do: normalized, else: nil
-  end
-
-  defp normalize_thinking_level(_), do: nil
+  defp clear_default_thinking_preference(account_id, chat_id, thread_id),
+    do:
+      ModelPreferences.clear_default_thinking_preference(
+        account_id,
+        chat_id,
+        thread_id,
+        @thinking_levels
+      )
 
   # Update only last_engine in chat state, preserving last_resume_token and other fields.
-  defp update_chat_state_last_engine(session_key, engine) when is_binary(session_key) do
-    now = System.system_time(:millisecond)
-    existing = safe_get_chat_state(session_key)
+  defp update_chat_state_last_engine(session_key, engine),
+    do: PerChatState.update_chat_state_last_engine(session_key, engine)
 
-    payload =
-      case existing do
-        %{last_resume_token: token} ->
-          %{last_engine: engine, last_resume_token: token, updated_at: now}
+  defp build_session_key(state, inbound, %ChatScope{} = scope),
+    do: SessionRouting.build_session_key(state.account_id || "default", inbound, scope)
 
-        %{"last_resume_token" => token} ->
-          %{last_engine: engine, last_resume_token: token, updated_at: now}
-
-        _ ->
-          %{last_engine: engine, updated_at: now}
-      end
-
-    CoreStore.put_chat_state(session_key, payload)
-  rescue
-    _ -> :ok
-  end
-
-  defp set_chat_resume(%ChatScope{} = scope, session_key, %ResumeToken{} = resume)
-       when is_binary(session_key) do
-    now = System.system_time(:millisecond)
-
-    payload = %{
-      last_engine: resume.engine,
-      last_resume_token: resume.value,
-      updated_at: now
-    }
-
-    CoreStore.put_chat_state(session_key, payload)
-
-    # Persist the explicitly selected session for subsequent messages, even if
-    # auto-resume is disabled.
-    account_id = state_account_id_from_session_key(session_key)
-
-    _ =
-      CoreStore.put(
-        :telegram_selected_resume,
-        {account_id, scope.chat_id, scope.topic_id},
-        resume
-      )
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp state_account_id_from_session_key(session_key) when is_binary(session_key) do
-    case SessionKey.parse(session_key) do
-      %{account_id: account_id} when is_binary(account_id) -> account_id
-      _ -> "default"
-    end
-  rescue
-    _ -> "default"
-  end
-
-  defp state_account_id_from_session_key(_), do: "default"
-
-  defp build_session_key(state, inbound, %ChatScope{} = scope) do
-    agent_id =
-      inbound.meta[:agent_id] ||
-        (inbound.meta && inbound.meta["agent_id"]) ||
-        BindingResolver.resolve_agent_id(scope) ||
-        "default"
-
-    SessionKey.channel_peer(%{
-      agent_id: agent_id,
-      channel_id: "telegram",
-      account_id: state.account_id || "default",
-      peer_kind: inbound.peer.kind || :unknown,
-      peer_id: to_string(scope.chat_id),
-      thread_id: inbound.peer.thread_id
-    })
-  end
-
-  defp format_resume_line(%ResumeToken{} = resume) do
-    EngineRegistry.format_resume(resume)
-  rescue
-    _ -> "#{resume.engine} resume #{resume.value}"
-  end
-
-  defp format_session_ref(%ResumeToken{} = resume) do
-    token = resume.value || ""
-
-    abbreviated =
-      if byte_size(token) > 40 do
-        String.slice(token, 0, 40) <> "…"
-      else
-        token
-      end
-
-    "#{resume.engine}: #{abbreviated}"
-  end
-
-  defp normalize_msg_id(nil), do: nil
-  defp normalize_msg_id(i) when is_integer(i), do: i
-
-  defp normalize_msg_id(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp normalize_msg_id(_), do: nil
-
-  defp maybe_apply_pending_compaction(state, inbound, original_text) do
-    cond do
-      Commands.command_message?(original_text) ->
-        inbound
-
-      true ->
-        {chat_id, thread_id} = extract_chat_ids(inbound)
-        account_id = state.account_id || "default"
-
-        if is_integer(chat_id) do
-          key = {account_id, chat_id, thread_id}
-
-          case CoreStore.get(:telegram_pending_compaction, key) do
-            pending when is_map(pending) ->
-              if pending_compaction_fresh?(pending) do
-                scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-
-                session_key =
-                  pending[:session_key] || pending["session_key"] ||
-                    build_session_key(state, inbound, scope)
-
-                transcript =
-                  fetch_run_history_for_memory(session_key, scope, limit: 8)
-                  |> format_run_history_transcript(max_chars: 8_000)
-
-                if transcript != "" do
-                  _ = CoreStore.delete(:telegram_pending_compaction, key)
-                  text = build_pending_compaction_prompt(transcript, inbound.message.text || "")
-                  meta = Map.put(inbound.meta || %{}, :auto_compacted, true)
-
-                  Logger.warning(
-                    "Telegram applying pending compaction chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
-                      "session_key=#{inspect(session_key)} transcript_chars=#{byte_size(transcript)}"
-                  )
-
-                  %{inbound | message: Map.put(inbound.message, :text, text), meta: meta}
-                else
-                  inbound
-                end
-              else
-                _ = CoreStore.delete(:telegram_pending_compaction, key)
-
-                Logger.debug(
-                  "Telegram cleared stale pending compaction chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)}"
-                )
-
-                inbound
-              end
-
-            _ ->
-              inbound
-          end
-        else
-          inbound
-        end
-    end
-  rescue
-    _ -> inbound
-  end
-
-  defp pending_compaction_fresh?(pending) when is_map(pending) do
-    set_at_ms = pending[:set_at_ms] || pending["set_at_ms"]
-
-    cond do
-      is_integer(set_at_ms) ->
-        System.system_time(:millisecond) - set_at_ms <= @pending_compaction_ttl_ms
-
-      true ->
-        true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp pending_compaction_fresh?(_), do: false
-
-  defp build_pending_compaction_prompt(transcript, user_text)
-       when is_binary(transcript) and is_binary(user_text) do
-    user_text = String.trim(user_text)
-
-    base =
-      [
-        "The previous conversation reached the model context limit.",
-        "Use this compact transcript as prior context and continue.",
-        "",
-        "<previous_conversation>",
-        transcript,
-        "</previous_conversation>"
-      ]
-      |> Enum.join("\n")
-
-    if user_text == "" do
-      String.trim(base <> "\n\nContinue.")
-    else
-      String.trim(base <> "\n\nUser:\n" <> user_text)
-    end
-  end
-
-  defp build_pending_compaction_prompt(_transcript, user_text), do: user_text
+  defp normalize_msg_id(msg_id), do: SessionRouting.normalize_msg_id(msg_id)
 
   defp maybe_mark_new_session_pending(state, inbound) do
     {chat_id, thread_id} = extract_chat_ids(inbound)
-
-    if pending_new_for_scope?(state, chat_id, thread_id) do
-      meta =
-        (inbound.meta || %{})
-        |> Map.put(:new_session_pending, true)
-        |> Map.put(:disable_auto_resume, true)
-
-      %{inbound | meta: meta}
-    else
-      inbound
-    end
-  rescue
-    _ -> inbound
+    SessionRouting.maybe_mark_new_session_pending(state.pending_new, chat_id, thread_id, inbound)
   end
-
-  defp pending_new_for_scope?(state, chat_id, thread_id)
-       when is_integer(chat_id) and is_map(state.pending_new) do
-    state.pending_new
-    |> Map.values()
-    |> Enum.any?(fn pending ->
-      pending_chat_id = pending[:chat_id] || pending["chat_id"]
-      pending_thread_id = pending[:thread_id] || pending["thread_id"]
-      pending_chat_id == chat_id and pending_thread_id == thread_id
-    end)
-  rescue
-    _ -> false
-  end
-
-  defp pending_new_for_scope?(_state, _chat_id, _thread_id), do: false
 
   defp maybe_apply_selected_resume(state, inbound, original_text) do
-    meta = inbound.meta || %{}
-
-    cond do
-      meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true ->
-        inbound
-
-      # Don't interfere with Telegram slash commands; those can be engine directives etc.
-      Commands.command_message?(original_text) ->
-        inbound
-
-      # After overflow recovery compaction we intentionally start a fresh session.
-      meta[:auto_compacted] == true or meta["auto_compacted"] == true ->
-        inbound
-
-      # Forked sessions are meant to run independently; avoid implicitly resuming
-      # the currently-selected session when we auto-fork due to the base session
-      # being busy.
-      meta[:fork_when_busy] == true or meta["fork_when_busy"] == true ->
-        inbound
-
-      # If user already provided an explicit resume token, don't add another.
-      match?({:ok, %ResumeToken{}}, EngineRegistry.extract_resume(inbound.message.text || "")) ->
-        inbound
-
-      true ->
-        {chat_id, thread_id} = extract_chat_ids(inbound)
-
-        if is_integer(chat_id) do
-          key = {state.account_id || "default", chat_id, thread_id}
-
-          case CoreStore.get(:telegram_selected_resume, key) do
-            %ResumeToken{} = token ->
-              Logger.debug(
-                "Telegram applying selected resume chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
-                  "resume=#{inspect(token)}"
-              )
-
-              maybe_prefix_resume_to_prompt(inbound, token)
-
-            _ ->
-              inbound
-          end
-        else
-          inbound
-        end
-    end
-  rescue
-    _ -> inbound
+    ResumeSelection.maybe_apply_selected_resume(
+      state.account_id || "default",
+      inbound,
+      original_text
+    )
   end
 
   # Mark an inbound as eligible for a new parallel session when the base session is busy.
@@ -2257,166 +1121,51 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   # This is applied before buffering so we can avoid prefixing resume tokens to
   # auto-forked sessions.
   defp maybe_mark_fork_when_busy(state, inbound) do
-    reply_to_id = normalize_msg_id(inbound.message.reply_to_id || inbound.meta[:reply_to_id])
+    {chat_id, thread_id} = extract_chat_ids(inbound)
 
-    cond do
-      is_integer(reply_to_id) ->
-        inbound
-
-      true ->
-        {chat_id, thread_id} = extract_chat_ids(inbound)
-
-        if is_integer(chat_id) do
-          scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-          base_session_key = build_session_key(state, inbound, scope)
-
-          if is_binary(base_session_key) and session_busy?(base_session_key) do
-            Logger.warning(
-              "Telegram auto-forking busy session chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
-                "base_session_key=#{inspect(base_session_key)} user_msg_id=#{inspect(inbound.meta[:user_msg_id])}"
-            )
-
-            meta = Map.put(inbound.meta || %{}, :fork_when_busy, true)
-            %{inbound | meta: meta}
-          else
-            inbound
-          end
-        else
-          inbound
-        end
-    end
-  rescue
-    _ -> inbound
+    SessionRouting.maybe_mark_fork_when_busy(
+      state.account_id || "default",
+      inbound,
+      chat_id,
+      thread_id
+    )
   end
-
-  defp session_busy?(session_key) when is_binary(session_key) and session_key != "" do
-    LemonChannels.Runtime.session_busy?(session_key)
-  rescue
-    _ -> false
-  end
-
-  defp session_busy?(_), do: false
 
   defp resolve_session_key(state, inbound, %ChatScope{} = scope, meta0) do
-    meta = meta0 || %{}
-    explicit = extract_explicit_session_key(meta)
-
-    base_session_key = build_session_key(state, inbound, scope)
-
-    reply_to_id =
-      normalize_msg_id(inbound.message.reply_to_id || meta[:reply_to_id] || meta["reply_to_id"])
-
-    session_key =
-      cond do
-        is_binary(explicit) and explicit != "" ->
-          explicit
-
-        is_integer(reply_to_id) ->
-          lookup_session_key_for_reply(state, scope, reply_to_id) || base_session_key
-
-        (meta[:fork_when_busy] == true or meta["fork_when_busy"] == true) and
-            is_integer(meta[:user_msg_id] || meta["user_msg_id"]) ->
-          fork_id = meta[:user_msg_id] || meta["user_msg_id"]
-          maybe_with_sub_id(base_session_key, fork_id)
-
-        true ->
-          base_session_key
-      end
-
-    forked? = is_binary(session_key) and session_key != base_session_key
-
-    {session_key, forked?}
-  rescue
-    _ ->
-      base_session_key = build_session_key(state, inbound, scope)
-      {base_session_key, false}
+    SessionRouting.resolve_session_key(
+      state.account_id || "default",
+      inbound,
+      scope,
+      meta0,
+      current_thread_generation(state, scope.chat_id, scope.topic_id)
+    )
   end
 
   defp resolve_session_key(_state, _inbound, _scope, meta0) do
-    meta = meta0 || %{}
-    explicit = extract_explicit_session_key(meta)
-
-    {explicit, false}
+    SessionRouting.resolve_session_key(nil, nil, nil, meta0, 0)
   end
-
-  defp extract_explicit_session_key(meta) when is_map(meta) do
-    candidate =
-      cond do
-        is_binary(meta[:session_key]) and meta[:session_key] != "" -> meta[:session_key]
-        is_binary(meta["session_key"]) and meta["session_key"] != "" -> meta["session_key"]
-        true -> nil
-      end
-
-    if is_binary(candidate) and SessionKey.valid?(candidate) do
-      candidate
-    else
-      nil
-    end
-  end
-
-  defp extract_explicit_session_key(_), do: nil
-
-  defp maybe_with_sub_id(session_key, sub_id)
-       when is_binary(session_key) and session_key != "" and
-              (is_binary(sub_id) or is_integer(sub_id)) do
-    if String.contains?(session_key, ":sub:") do
-      session_key
-    else
-      session_key <> ":sub:" <> to_string(sub_id)
-    end
-  rescue
-    _ -> session_key
-  end
-
-  defp maybe_with_sub_id(session_key, _sub_id), do: session_key
 
   defp lookup_session_key_for_reply(state, %ChatScope{} = scope, reply_to_id)
        when is_integer(reply_to_id) do
-    account_id = state.account_id || "default"
-    generation = current_thread_generation(state, scope.chat_id, scope.topic_id)
-    key = {account_id, scope.chat_id, scope.topic_id, generation, reply_to_id}
-
-    case CoreStore.get(:telegram_msg_session, key) do
-      sk when is_binary(sk) and sk != "" ->
-        sk
-
-      _ when generation == 0 ->
-        legacy_key = {account_id, scope.chat_id, scope.topic_id, reply_to_id}
-
-        case CoreStore.get(:telegram_msg_session, legacy_key) do
-          sk when is_binary(sk) and sk != "" -> sk
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
+    SessionRouting.lookup_session_key_for_reply(
+      state.account_id || "default",
+      scope,
+      reply_to_id,
+      current_thread_generation(state, scope.chat_id, scope.topic_id)
+    )
   end
 
   defp lookup_session_key_for_reply(_state, _scope, _reply_to_id), do: nil
 
-  defp maybe_index_telegram_msg_session(state, %ChatScope{} = scope, session_key, msg_ids)
-       when is_list(msg_ids) and is_binary(session_key) and session_key != "" do
-    account_id = state.account_id || "default"
-    generation = current_thread_generation(state, scope.chat_id, scope.topic_id)
-
-    msg_ids
-    |> Enum.map(&normalize_msg_id/1)
-    |> Enum.filter(&is_integer/1)
-    |> Enum.uniq()
-    |> Enum.each(fn msg_id ->
-      key = {account_id, scope.chat_id, scope.topic_id, generation, msg_id}
-      _ = CoreStore.put(:telegram_msg_session, key, session_key)
-    end)
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_index_telegram_msg_session(_state, _scope, _session_key, _msg_ids), do: :ok
+  defp maybe_index_telegram_msg_session(state, %ChatScope{} = scope, session_key, msg_ids),
+    do:
+      SessionRouting.maybe_index_telegram_msg_session(
+        state.account_id || "default",
+        scope,
+        session_key,
+        msg_ids,
+        current_thread_generation(state, scope.chat_id, scope.topic_id)
+      )
 
   defp send_system_message(state, chat_id, thread_id, reply_to_message_id, text)
        when is_integer(chat_id) and is_binary(text) do
@@ -3769,7 +2518,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp scope_has_cwd_override?(_), do: false
 
   defp clear_cwd_override(%ChatScope{} = scope) do
-    _ = CoreStore.delete(:project_overrides, scope)
+    _ = ProjectBindingStore.delete_override(scope)
     :ok
   rescue
     _ -> :ok
@@ -3835,17 +2584,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       is_integer(stored_offset) -> stored_offset
       true -> 0
     end
-  end
-
-  defp max_update_id([], offset), do: offset - 1
-
-  defp max_update_id(updates, offset) do
-    Enum.reduce(updates, offset - 1, fn update, acc ->
-      case update["update_id"] do
-        id when is_integer(id) -> max(acc, id)
-        _ -> acc
-      end
-    end)
   end
 
   defp persist_offset(state, new_offset) do

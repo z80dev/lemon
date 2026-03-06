@@ -46,7 +46,7 @@ defmodule LemonAutomation.CronManager do
   @vsn 1
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
-  alias LemonCore.{Bus, Event, SessionKey, Store}
+  alias LemonCore.{Bus, Event, RunStore, SessionKey}
 
   require Logger
 
@@ -516,7 +516,7 @@ defmodule LemonAutomation.CronManager do
         }
       }
 
-      Store.finalize_run(forwarded_run_id, summary)
+      RunStore.finalize(forwarded_run_id, summary)
 
       event =
         Event.new(
@@ -590,8 +590,8 @@ defmodule LemonAutomation.CronManager do
   defp maybe_deliver_summary_to_channel(session_key, text, %CronRun{} = run) do
     case SessionKey.parse(session_key) do
       %{kind: :channel_peer} = parsed ->
-        payload_mod = Module.concat(LemonChannels, OutboundPayload)
-        delivery_mod = Module.concat(LemonRouter, ChannelsDelivery)
+        payload_mod = Module.concat([:"Elixir.LemonChannels", :OutboundPayload])
+        delivery_mod = Module.concat([:"Elixir.LemonRouter", :ChannelsDelivery])
 
         if Code.ensure_loaded?(payload_mod) and Code.ensure_loaded?(delivery_mod) and
              function_exported?(delivery_mod, :enqueue, 2) do
@@ -618,9 +618,13 @@ defmodule LemonAutomation.CronManager do
           case delivery_mod.enqueue(payload,
                  context: %{component: :cron_manager, phase: :forwarded_summary}
                ) do
-            {:ok, _ref} -> :ok
+            {:ok, _ref} ->
+              :ok
+
             {:error, reason} ->
-              Logger.warning("[CronManager] Failed to enqueue forwarded summary: #{inspect(reason)}")
+              Logger.warning(
+                "[CronManager] Failed to enqueue forwarded summary: #{inspect(reason)}"
+              )
           end
         end
 

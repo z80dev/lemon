@@ -60,6 +60,18 @@ defmodule LemonChannels.Runtime do
 
   def keep_run_alive(_, _), do: :ok
 
+  @spec clear_telegram_thread_state(binary(), integer(), integer() | nil) :: :ok
+  def clear_telegram_thread_state(account_id, chat_id, thread_id)
+      when is_binary(account_id) and is_integer(chat_id) do
+    LemonChannels.Telegram.StateStore.delete_selected_resume({account_id, chat_id, thread_id})
+    LemonChannels.Telegram.ResumeIndexStore.delete_thread(account_id, chat_id, thread_id)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  def clear_telegram_thread_state(_, _, _), do: :ok
+
   @spec session_busy?(binary()) :: boolean()
   def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
     with true <- Code.ensure_loaded?(Registry),

@@ -11,10 +11,10 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   ## Usage
 
-  Use this module instead of direct CoreStore access for model resolution:
+  Use this module instead of direct legacy storage access for model resolution:
 
-      # Old way (direct storage access)
-      CoreStore.get(:telegram_default_model, key)
+      # Old way (legacy typed store access)
+      StateStore.get_default_model(key)
 
       # New way (unified policy resolution)
       ModelPolicyAdapter.resolve_model(state, chat_id, thread_id)
@@ -33,11 +33,9 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   alias LemonCore.ModelPolicy
   alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.Telegram.StateStore
 
   require Logger
-
-  @legacy_model_table :telegram_default_model
-  @legacy_thinking_table :telegram_default_thinking
 
   @doc """
   Resolves the effective model ID for a Telegram chat/thread.
@@ -195,7 +193,8 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     route_for(account_id || "default", chat_id, thread_id)
   end
 
-  def route_for(account_id, chat_id, thread_id) when is_binary(account_id) and is_integer(chat_id) do
+  def route_for(account_id, chat_id, thread_id)
+      when is_binary(account_id) and is_integer(chat_id) do
     Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
   end
 
@@ -206,7 +205,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
   defp resolve_legacy_model(state, chat_id, thread_id) when is_integer(chat_id) do
     key = {state.account_id || "default", chat_id, thread_id}
 
-    case CoreStore.get(@legacy_model_table, key) do
+    case StateStore.get_default_model(key) do
       %{model: model} when is_binary(model) and model != "" -> model
       %{"model" => model} when is_binary(model) and model != "" -> model
       model when is_binary(model) and model != "" -> model
@@ -220,7 +219,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
        when is_binary(account_id) and is_integer(chat_id) do
     key = {account_id, chat_id, thread_id}
 
-    case CoreStore.get(@legacy_thinking_table, key) do
+    case StateStore.get_default_thinking(key) do
       %{thinking_level: level} -> normalize_thinking_level(level)
       %{"thinking_level" => level} -> normalize_thinking_level(level)
       level -> normalize_thinking_level(level)

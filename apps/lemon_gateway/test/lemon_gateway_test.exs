@@ -2,6 +2,7 @@ defmodule LemonGatewayTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case
 
+  alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Event
   alias Elixir.LemonGateway.Types.Job
 
@@ -18,6 +19,49 @@ defmodule LemonGatewayTest do
     end)
 
     :ok
+  end
+
+  defp submit_job(%Job{} = job) do
+    LemonGateway.submit(
+      ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
+    )
+  end
+
+  defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
+       when is_binary(engine) and is_binary(value),
+       do: {:resume, engine, value}
+
+  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
+    do: {:session, session_key}
+
+  describe "ExecutionRequest compatibility" do
+    test "from_job/1 preserves execution fields while omitting queue_mode" do
+      job = %Job{
+        run_id: "run-1",
+        session_key: "agent:default:main",
+        prompt: "hello",
+        engine_id: "lemon",
+        cwd: "/tmp",
+        resume: %LemonCore.ResumeToken{engine: "lemon", value: "resume-1"},
+        lane: :main,
+        tool_policy: %{approvals: %{"bash" => "always"}},
+        meta: %{origin: :test}
+      }
+
+      request = ExecutionRequest.from_job(job)
+      request_map = Map.from_struct(request)
+
+      assert request.run_id == job.run_id
+      assert request.session_key == job.session_key
+      assert request.prompt == job.prompt
+      assert request.engine_id == job.engine_id
+      assert request.cwd == job.cwd
+      assert request.resume == job.resume
+      assert request.lane == job.lane
+      assert request.tool_policy == job.tool_policy
+      assert request.meta.origin == :test
+      refute Map.has_key?(request_map, :queue_mode)
+    end
   end
 
   defmodule LemonGatewayTest.CrashEngine do
@@ -398,7 +442,7 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
-    Elixir.LemonGateway.submit(job)
+    submit_job(job)
 
     assert_receive {:lemon_gateway_run_completed, ^job,
                     %{__event__: :completed, ok: true, answer: "Echo: hello"}},
@@ -454,8 +498,8 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 11}
     }
 
-    Elixir.LemonGateway.submit(crash_job)
-    Elixir.LemonGateway.submit(ok_job)
+    submit_job(crash_job)
+    submit_job(ok_job)
 
     assert_receive {:lemon_gateway_run_completed, ^ok_job,
                     %{__event__: :completed, ok: true, answer: "Echo: ok"}},
@@ -481,8 +525,8 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 21}
     }
 
-    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
-    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
+    Task.async(fn -> submit_job(job1) end)
+    Task.async(fn -> submit_job(job2) end)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
                     %{__event__: :completed, ok: true, answer: "Echo: first"}},
@@ -512,7 +556,7 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 31}
     }
 
-    Elixir.LemonGateway.submit(job1)
+    submit_job(job1)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
                     %{__event__: :completed, ok: true, answer: "Echo: one"}},
@@ -521,7 +565,7 @@ defmodule LemonGatewayTest do
     # Allow worker to stop when idle.
     Process.sleep(50)
 
-    Elixir.LemonGateway.submit(job2)
+    submit_job(job2)
 
     assert_receive {:lemon_gateway_run_completed, ^job2,
                     %{__event__: :completed, ok: true, answer: "Echo: two"}},
@@ -539,7 +583,7 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 40}
     }
 
-    Elixir.LemonGateway.submit(job)
+    submit_job(job)
 
     assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: false}},
                    1_000

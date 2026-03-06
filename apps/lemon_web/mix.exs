@@ -10,7 +10,7 @@ defmodule LemonWeb.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -28,7 +28,6 @@ defmodule LemonWeb.MixProject do
       {:lemon_core, in_umbrella: true},
       {:lemon_games, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
-      {:lemon_games, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},
@@ -36,8 +35,7 @@ defmodule LemonWeb.MixProject do
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:gettext, "~> 0.26"},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.5"},
-      {:lazy_html, ">= 0.1.0", only: :test}
+      {:bandit, "~> 1.5"}
     ]
   end
 end

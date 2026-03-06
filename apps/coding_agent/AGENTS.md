@@ -120,6 +120,14 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
 `CodingAgent.Session` now composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed.
+Its public GenServer shell stays `CodingAgent.Session`, but the larger internal concern clusters are now split into helper modules under `lib/coding_agent/session/`:
+- `Lifecycle` for startup, extension reload, and reset orchestration
+- `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
+- `Notifier` for UI notifications plus subscriber/event-stream lifecycle and fanout
+- `Persistence` for message/session persistence helpers and session-file saving
+- `BackgroundTasks` for deferred branch-summary/background work and branch navigation helpers
+- `CompactionLifecycle` for auto-compaction triggering/result handling
+- `OverflowRecovery` for context-window recovery and retry flow
 
 ### Extensions & WASM
 
@@ -146,6 +154,13 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
 
 `CodingAgent.Tools.Task` now emits lifecycle events (`:task_started`, `:task_completed`, `:task_error`, `:task_timeout`, `:task_aborted`) to both `LemonCore.Bus` (`run:*` topics) and `LemonCore.Introspection`, with run/parent/session/agent lineage metadata for monitoring UIs.
+Its public entry module stays `CodingAgent.Tools.Task`, but the internals are now split across:
+- `CodingAgent.Tools.Task.Params` for validation and option shaping
+- `CodingAgent.Tools.Task.Execution` for top-level run orchestration and execution-context construction
+- `CodingAgent.Tools.Task.Async` for background lifecycle and task/run bookkeeping
+- `CodingAgent.Tools.Task.Runner` for CLI/internal execution paths
+- `CodingAgent.Tools.Task.Followup` for async followup routing
+- `CodingAgent.Tools.Task.Result` for poll/join/result shaping
 
 ### Long-Running Harness Primitives
 

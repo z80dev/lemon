@@ -739,11 +739,12 @@ defmodule LemonGateway.ThreadRegistryTest do
       job = %Job{
         session_key: session_key,
         prompt: "test",
-        queue_mode: :collect,
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      LemonGateway.submit(job)
+      LemonGateway.submit(
+        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
+      )
 
       # The worker should be registered
       Process.sleep(50)
@@ -774,11 +775,15 @@ defmodule LemonGateway.ThreadRegistryTest do
           job = %Job{
             session_key: session_key,
             prompt: "test",
-            queue_mode: :collect,
             meta: %{notify_pid: self(), user_msg_id: 1}
           }
 
-          LemonGateway.submit(job)
+          LemonGateway.submit(
+            LemonGateway.ExecutionRequest.from_job(
+              job,
+              conversation_key: {:session, job.session_key}
+            )
+          )
           job
         end
 
@@ -814,11 +819,15 @@ defmodule LemonGateway.ThreadRegistryTest do
       job1 = %Job{
         session_key: session_key,
         prompt: "first",
-        queue_mode: :collect,
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      LemonGateway.submit(job1)
+      LemonGateway.submit(
+        LemonGateway.ExecutionRequest.from_job(
+          job1,
+          conversation_key: {:session, job1.session_key}
+        )
+      )
       assert_receive {:lemon_gateway_run_completed, ^job1, _}, 2000
 
       # Wait for worker to die
@@ -828,11 +837,15 @@ defmodule LemonGateway.ThreadRegistryTest do
       job2 = %Job{
         session_key: session_key,
         prompt: "second",
-        queue_mode: :collect,
         meta: %{notify_pid: self(), user_msg_id: 2}
       }
 
-      LemonGateway.submit(job2)
+      LemonGateway.submit(
+        LemonGateway.ExecutionRequest.from_job(
+          job2,
+          conversation_key: {:session, job2.session_key}
+        )
+      )
 
       Process.sleep(50)
       worker_pid = ThreadRegistry.whereis(thread_key)

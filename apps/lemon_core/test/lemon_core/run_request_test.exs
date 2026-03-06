@@ -1,6 +1,7 @@
 defmodule LemonCore.RunRequestTest do
   use ExUnit.Case, async: true
 
+  alias LemonCore.ResumeToken
   alias LemonCore.RunRequest
 
   describe "normalize/1" do
@@ -18,6 +19,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.queue_mode == :collect
       assert request.engine_id == nil
       assert request.model == nil
+      assert request.resume == nil
       assert request.meta == %{}
       assert request.cwd == nil
       assert request.tool_policy == nil
@@ -45,6 +47,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.queue_mode == :interrupt
       assert request.engine_id == "openai:gpt-4o"
       assert request.model == "openai:gpt-4.1"
+      assert request.resume == nil
       assert request.meta == %{"foo" => "bar"}
       assert request.cwd == "/tmp"
       assert request.tool_policy == %{"sandbox" => true}
@@ -75,6 +78,19 @@ defmodule LemonCore.RunRequestTest do
     test "falls back to default agent_id when session_key is missing/invalid" do
       assert RunRequest.normalize(%{}).agent_id == "default"
       assert RunRequest.normalize(%{session_key: "invalid"}).agent_id == "default"
+    end
+
+    test "keeps structured resume tokens" do
+      resume = %ResumeToken{engine: "codex", value: "thread_123"}
+      request = RunRequest.normalize(%{resume: resume})
+      assert request.resume == resume
+    end
+
+    test "normalizes non-struct resume values to nil" do
+      assert RunRequest.normalize(%{resume: "codex resume thread_123"}).resume == nil
+
+      assert RunRequest.normalize(%{resume: %{engine: "codex", value: "thread_123"}}).resume ==
+               nil
     end
   end
 end

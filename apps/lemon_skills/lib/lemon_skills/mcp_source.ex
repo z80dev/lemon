@@ -95,6 +95,7 @@ defmodule LemonSkills.McpSource do
     case URI.parse(url) do
       %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and not is_nil(host) ->
         :ok
+
       _ ->
         {:error, "invalid HTTP URL: #{url}"}
     end
@@ -114,11 +115,12 @@ defmodule LemonSkills.McpSource do
   @spec mcp_enabled?() :: boolean()
   def mcp_enabled? do
     disabled = Application.get_env(:lemon_skills, :mcp_disabled, false)
+    mcp_client_module = Module.concat([:"Elixir.LemonMCP", :Client])
 
     if disabled do
       false
     else
-      Code.ensure_loaded?(LemonMCP.Client)
+      Code.ensure_loaded?(mcp_client_module)
     end
   end
 

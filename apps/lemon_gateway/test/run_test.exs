@@ -17,6 +17,7 @@ defmodule LemonGateway.RunTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Run
+  alias LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ResumeToken
   alias Elixir.LemonGateway.Event
@@ -426,7 +427,6 @@ defmodule LemonGateway.RunTest do
     %Job{
       session_key: session_key,
       prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
-      queue_mode: Keyword.get(opts, :queue_mode, :collect),
       engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "test")),
       resume: Keyword.get(opts, :resume),
       meta: meta
@@ -435,7 +435,7 @@ defmodule LemonGateway.RunTest do
 
   defp start_run_direct(job, slot_ref \\ make_ref()) do
     args = %{
-      job: job,
+      execution_request: ExecutionRequest.from_job(job),
       slot_ref: slot_ref,
       worker_pid: self()
     }
@@ -507,7 +507,6 @@ defmodule LemonGateway.RunTest do
       job = %Job{
         session_key: scope,
         prompt: "test",
-        queue_mode: :collect,
         engine_id: nil,
         meta: %{notify_pid: self(), user_msg_id: 1}
       }

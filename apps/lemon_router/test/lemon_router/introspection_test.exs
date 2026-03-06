@@ -26,7 +26,6 @@ defmodule LemonRouter.IntrospectionTest do
         session_key: session_key,
         prompt: "test",
         engine_id: "lemon",
-        queue_mode: :collect,
         meta: %{origin: :test}
       }
 
@@ -66,7 +65,6 @@ defmodule LemonRouter.IntrospectionTest do
         session_key: session_key,
         prompt: "test",
         engine_id: "echo",
-        queue_mode: :collect,
         meta: %{origin: :test}
       }
 

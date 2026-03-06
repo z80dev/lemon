@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Discord.Inbound
   alias LemonChannels.BindingResolver
   alias LemonCore.ChatScope
-  alias LemonCore.{InboundMessage, RouterBridge, Secrets, SessionKey}
+  alias LemonCore.{ChatStateStore, InboundMessage, RouterBridge, Secrets, SessionKey}
   alias Nostrum.Api.ApplicationCommand
   alias Nostrum.Api.Interaction
 
@@ -166,7 +166,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     case sub do
       "new" ->
         session_key = interaction_session_key(interaction, state)
-        LemonCore.Store.delete_chat_state(session_key)
+        ChatStateStore.delete(session_key)
         respond(interaction, "Started a fresh session.", ephemeral: true)
 
       "info" ->

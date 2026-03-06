@@ -62,12 +62,44 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
   end
 
   describe "dependency violation detection" do
+    test "parses umbrella deps that include extra tuple options" do
+      tmp_dir = create_tmp_umbrella()
+
+      create_app_with_dep_literals(tmp_dir, :lemon_core, [])
+
+      create_app_with_dep_literals(tmp_dir, :lemon_gateway, [
+        "{:lemon_channels, in_umbrella: true, runtime: false}",
+        "{:lemon_core, in_umbrella: true}",
+        "{:external_dep, \"~> 1.0\"}",
+        "{:path_dep, path: \"../path_dep\"}"
+      ])
+
+      create_app_with_dep_literals(tmp_dir, :lemon_channels, [
+        "{:lemon_core, in_umbrella: true, runtime: false}"
+      ])
+
+      try do
+        {status, report} = ArchitectureCheck.run(root: tmp_dir)
+        assert status in [:ok, :error]
+
+        assert Map.get(report.actual_dependencies, :lemon_gateway) == [
+                 :lemon_channels,
+                 :lemon_core
+               ]
+
+        assert Map.get(report.actual_dependencies, :lemon_channels) == [:lemon_core]
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
     test "detects forbidden umbrella dependencies" do
       tmp_dir = create_tmp_umbrella()
 
       # Create an app with a forbidden dependency
       create_app(tmp_dir, :test_app_a, [:lemon_core])
-      create_app(tmp_dir, :test_app_b, [:lemon_core, :test_app_a])  # test_app_a is not in allowed deps
+      # test_app_a is not in allowed deps
+      create_app(tmp_dir, :test_app_b, [:lemon_core, :test_app_a])
 
       # Add test_app_a to allowed deps by creating a minimal policy
       # This test will actually check unknown_app detection instead
@@ -102,6 +134,68 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
   end
 
   describe "namespace violation detection" do
+    test "attributes CodingAgent.UI.RPC ownership to coding_agent_ui" do
+      tmp_dir = create_tmp_umbrella()
+
+      create_app_with_namespace(tmp_dir, :coding_agent, "CodingAgent", [])
+      create_app_with_namespace(tmp_dir, :coding_agent_ui, "CodingAgentUi", [:coding_agent])
+
+      create_app_with_code(
+        tmp_dir,
+        :coding_agent,
+        "CodingAgent",
+        """
+        defmodule CodingAgent.TestReference do
+          def test do
+            CodingAgent.UI.RPC.call(%{})
+          end
+        end
+        """,
+        []
+      )
+
+      try do
+        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
+
+        assert Enum.any?(report.issues, fn issue ->
+                 issue.code == :forbidden_namespace_reference and issue.app == :coding_agent and
+                   issue.message =~ "CodingAgent.UI.RPC"
+               end)
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "uses namespace prefix ownership for normal namespaces" do
+      tmp_dir = create_tmp_umbrella()
+
+      create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
+
+      create_app_with_code(
+        tmp_dir,
+        :ai,
+        "Ai",
+        """
+        defmodule Ai.NamespaceReference do
+          def test do
+            LemonCore.Bus.topic(:system)
+          end
+        end
+        """,
+        [:lemon_core]
+      )
+
+      try do
+        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
+
+        refute Enum.any?(report.issues, fn issue ->
+                 issue.code == :forbidden_namespace_reference and issue.app == :ai
+               end)
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
     test "detects forbidden namespace references" do
       tmp_dir = create_tmp_umbrella()
 
@@ -110,18 +204,27 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       create_app_with_namespace(tmp_dir, :ai, "Ai", [:lemon_core])
 
       # Now create an app that references Ai but doesn't depend on it
-      create_app_with_code(tmp_dir, :test_app, "LemonCore", "
+      create_app_with_code(
+        tmp_dir,
+        :test_app,
+        "LemonCore",
+        "
         defmodule TestApp.Module do
           def test do
             Ai.SomeModule.call()
           end
         end
-      ", [:lemon_core])  # Only depends on lemon_core, not ai
+      ",
+        # Only depends on lemon_core, not ai
+        [:lemon_core]
+      )
 
       try do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
-        namespace_issues = Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+        namespace_issues =
+          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+
         assert length(namespace_issues) > 0
       after
         File.rm_rf!(tmp_dir)
@@ -146,7 +249,9 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
         # Should not have namespace violations for self-references
-        namespace_issues = Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+        namespace_issues =
+          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+
         assert namespace_issues == []
       after
         File.rm_rf!(tmp_dir)
@@ -174,7 +279,9 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         # But we will have unknown_app issues for our test setup
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
-        namespace_issues = Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+        namespace_issues =
+          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+
         assert namespace_issues == []
       after
         File.rm_rf!(tmp_dir)
@@ -197,6 +304,17 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       after
         File.rm_rf!(tmp_dir)
       end
+    end
+  end
+
+  describe "policy coverage" do
+    test "does not flag lemon_mcp as unknown app in the repository" do
+      {status, report} = ArchitectureCheck.run(root: @repo_root)
+      assert status in [:ok, :error]
+
+      refute Enum.any?(report.issues, fn issue ->
+               issue.code == :unknown_app and issue.app == :lemon_mcp
+             end)
     end
   end
 
@@ -225,10 +343,14 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         end
       end
       """
+
       File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
 
       # Write a file with invalid syntax
-      File.write!(Path.join(app_dir, "lib/bad_syntax.ex"), "defmodule BadSyntax do def invalid end")
+      File.write!(
+        Path.join(app_dir, "lib/bad_syntax.ex"),
+        "defmodule BadSyntax do def invalid end"
+      )
 
       try do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
@@ -264,6 +386,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         end
       end
       """
+
       File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
       File.write!(Path.join(app_dir, "lib/empty.ex"), "")
 
@@ -329,7 +452,8 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
     # Create two apps where one violates dependency rules
     create_app(tmp_dir, :app_a, [])
-    create_app(tmp_dir, :app_b, [:app_a])  # app_b depends on app_a
+    # app_b depends on app_a
+    create_app(tmp_dir, :app_b, [:app_a])
 
     # app_a is not in allowed_direct_deps, so this creates a violation
     tmp_dir
@@ -364,6 +488,51 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
     # Create a basic module file
     module_name = Macro.camelize(to_string(app_name))
+
+    module_content = """
+    defmodule #{module_name} do
+      @moduledoc "Test module"
+    end
+    """
+
+    File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), module_content)
+
+    app_dir
+  end
+
+  defp create_app_with_dep_literals(root, app_name, dep_literals)
+       when is_atom(app_name) and is_list(dep_literals) do
+    app_dir = Path.join([root, "apps", to_string(app_name)])
+    File.mkdir_p!(Path.join(app_dir, "lib"))
+
+    deps_block =
+      case dep_literals do
+        [] -> "[]"
+        literals -> "[\n      #{Enum.join(literals, ",\n      ")}\n    ]"
+      end
+
+    mix_exs = """
+    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
+      use Mix.Project
+
+      def project do
+        [
+          app: :#{app_name},
+          version: "0.1.0",
+          deps: deps()
+        ]
+      end
+
+      defp deps do
+        #{deps_block}
+      end
+    end
+    """
+
+    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
+
+    module_name = Macro.camelize(to_string(app_name))
+
     module_content = """
     defmodule #{module_name} do
       @moduledoc "Test module"
@@ -390,7 +559,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
     app_dir
   end
 
-  defp create_app_with_code(root, app_name, namespace, code, deps) do
+  defp create_app_with_code(root, app_name, _namespace, code, deps) do
     app_dir = Path.join([root, "apps", to_string(app_name)])
     File.mkdir_p!(Path.join(app_dir, "lib"))
 

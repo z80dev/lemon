@@ -484,19 +484,8 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       assert job.resume.value == "sess_abc"
     end
 
-    test "creates job with various queue modes" do
-      session_key = "telegram:123"
-
-      for mode <- [:collect, :followup, :steer, :interrupt] do
-        job = %Job{
-          session_key: session_key,
-          prompt: "test",
-          meta: %{user_msg_id: 1},
-          queue_mode: mode
-        }
-
-        assert job.queue_mode == mode
-      end
+    test "legacy jobs are queue-semantic-free" do
+      refute Map.has_key?(Map.from_struct(%Job{}), :queue_mode)
     end
   end
 

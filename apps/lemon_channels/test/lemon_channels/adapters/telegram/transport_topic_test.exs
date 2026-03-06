@@ -3,7 +3,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.BindingResolver
+  alias LemonChannels.Telegram.StateStore
   alias LemonCore.ChatScope
+  alias LemonCore.ProjectBindingStore
 
   defmodule TestRouter do
     def handle_inbound(msg) do
@@ -189,18 +191,18 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
 
     _ =
-      LemonCore.Store.put(:projects_dynamic, project_id, %{
+      ProjectBindingStore.put_dynamic(project_id, %{
         root: cwd,
         default_engine: nil
       })
 
-    _ = LemonCore.Store.put(:project_overrides, scope, project_id)
-    _ = LemonCore.Store.put(:project_overrides, scope, project_id)
+    _ = ProjectBindingStore.put_override(scope, project_id)
+    _ = ProjectBindingStore.put_override(scope, project_id)
 
     on_exit(fn ->
-      _ = LemonCore.Store.delete(:projects_dynamic, project_id)
-      _ = LemonCore.Store.delete(:project_overrides, scope)
-      _ = LemonCore.Store.delete(:project_overrides, scope)
+      _ = ProjectBindingStore.delete_dynamic(project_id)
+      _ = ProjectBindingStore.delete_override(scope)
+      _ = ProjectBindingStore.delete_override(scope)
     end)
 
     MockAPI.set_updates([
@@ -250,7 +252,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert inbound.meta[:thinking_scope] == :topic
     assert inbound.meta[:topic_id] == topic_id
 
-    stored = LemonCore.Store.get(:telegram_default_thinking, {"default", chat_id, topic_id})
+    stored = StateStore.get_default_thinking({"default", chat_id, topic_id})
     assert stored[:thinking_level] == "high"
   end
 
@@ -260,11 +262,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     msg_id = System.unique_integer([:positive])
 
     _ =
-      LemonCore.Store.put(
-        :telegram_default_thinking,
-        {"default", chat_id, topic_id},
-        %{thinking_level: "medium"}
-      )
+      StateStore.put_default_thinking({"default", chat_id, topic_id}, %{thinking_level: "medium"})
 
     MockAPI.set_updates([
       topic_message_update(chat_id, topic_id, "/thinking clear", msg_id + 1)
@@ -278,7 +276,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
     assert clear_msg == "Cleared thinking level override for this topic."
-    assert LemonCore.Store.get(:telegram_default_thinking, {"default", chat_id, topic_id}) == nil
+    assert StateStore.get_default_thinking({"default", chat_id, topic_id}) == nil
   end
 
   defp start_transport(overrides) when is_map(overrides) do

@@ -239,7 +239,6 @@ defmodule LemonGateway.RunSupervisorTest do
     %Job{
       session_key: session_key,
       prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
-      queue_mode: Keyword.get(opts, :queue_mode, :collect),
       engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "quick")),
       meta: meta
     }

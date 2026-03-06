@@ -31,7 +31,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Anthropic do
       default_secret_name: "llm_anthropic_api_key",
       default_secret_provider: "onboarding_anthropic",
       oauth_secret_provider: "onboarding_anthropic_oauth",
-      oauth_module: Module.concat([Ai, Auth, AnthropicOAuth]),
+      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :AnthropicOAuth]),
       preferred_models: [
         "claude-sonnet-4-20250514",
         "claude-sonnet-4-5-20250929",

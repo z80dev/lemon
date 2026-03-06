@@ -316,7 +316,7 @@ defmodule LemonCore.Onboarding.OAuthHelper do
   end
 
   defp available_model_ids(spec) do
-    models_module = Module.concat([Ai, Models])
+    models_module = Module.concat([:"Elixir.Ai", :Models])
 
     with true <- Code.ensure_loaded?(models_module),
          true <- function_exported?(models_module, :get_models, 1),

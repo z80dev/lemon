@@ -8,12 +8,15 @@ defmodule LemonGateway.Types do
   """
 
   @type engine_id :: String.t()
-  @type queue_mode :: :collect | :followup | :steer | :steer_backlog | :interrupt
   @type lane :: :main | :subagent | :background_exec
 
   defmodule Job do
     @moduledoc """
-    Transport-agnostic job definition for run orchestration.
+    Legacy transport-agnostic job definition for run orchestration.
+
+    New code should prefer `LemonGateway.ExecutionRequest` as the scheduler
+    input contract. `Job` remains as a compatibility surface while callers
+    migrate.
 
     ## Fields
 
@@ -23,7 +26,6 @@ defmodule LemonGateway.Types do
     - `:engine_id` - Resolved engine identifier
     - `:cwd` - Working directory (optional)
     - `:resume` - Resume token for session continuation
-    - `:queue_mode` - How to handle queuing (:collect, :followup, :steer, :steer_backlog, :interrupt)
     - `:lane` - Execution lane (:main, :subagent, :background_exec)
     - `:tool_policy` - Tool execution policy map
     - `:meta` - Additional metadata (origin, channel info, etc.)
@@ -38,8 +40,7 @@ defmodule LemonGateway.Types do
       :resume,
       :lane,
       :tool_policy,
-      :meta,
-      queue_mode: :collect
+      :meta
     ]
 
     @type t :: %__MODULE__{
@@ -49,7 +50,6 @@ defmodule LemonGateway.Types do
             engine_id: LemonGateway.Types.engine_id() | nil,
             cwd: String.t() | nil,
             resume: LemonCore.ResumeToken.t() | nil,
-            queue_mode: LemonGateway.Types.queue_mode(),
             lane: LemonGateway.Types.lane() | nil,
             tool_policy: map() | nil,
             meta: map() | nil

@@ -59,7 +59,12 @@ defmodule LemonRouter.RunOrchestratorTest do
         send(opts[:notify_pid], {:captured_job, opts[:job]})
       end
 
-      {:ok, opts}
+      {:ok, opts, {:continue, :auto_stop}}
+    end
+
+    @impl true
+    def handle_continue(:auto_stop, state) do
+      {:stop, :normal, state}
     end
   end
 
@@ -469,48 +474,17 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
-  describe "resume extraction and prompt sanitization" do
-    test "extracts resume token from prompt and strips strict resume lines" do
-      prompt = "codex resume thread_abc123\nPlease continue with this task."
+  describe "structured resume handling" do
+    test "respects structured resume tokens supplied by the caller" do
+      params = %{
+        origin: :channel,
+        session_key: unique_oracle_session_key(),
+        agent_id: "test",
+        prompt: "Please continue with this task.",
+        resume: %ResumeToken{engine: "codex", value: "thread_abc123"}
+      }
 
-      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
-
-      assert %ResumeToken{engine: "codex", value: "thread_abc123"} = resume
-      assert stripped == "Please continue with this task."
-    end
-
-    test "extracts resume token from reply_to_text when prompt has none" do
-      prompt = "Continue with changes."
-      meta = %{reply_to_text: "`codex resume thread_reply_123`"}
-
-      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, meta)
-
-      assert %ResumeToken{engine: "codex", value: "thread_reply_123"} = resume
-      assert stripped == "Continue with changes."
-    end
-
-    test "uses fallback prompt when stripped prompt would be empty" do
-      prompt = "codex resume thread_only_resume"
-
-      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
-
-      assert %ResumeToken{engine: "codex", value: "thread_only_resume"} =
-               resume
-
-      assert stripped == "Continue."
-    end
-
-    test "strips multiple strict resume lines but keeps non-resume text" do
-      prompt = """
-      codex resume thread_one
-      Keep this line
-      `codex resume thread_two`
-      and this one too
-      """
-
-      {_resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
-
-      assert stripped == "Keep this line\nand this one too"
+      assert match?({:ok, _run_id}, RunOrchestrator.submit(request(params)))
     end
   end
 

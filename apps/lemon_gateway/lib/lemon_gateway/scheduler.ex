@@ -1,19 +1,15 @@
 defmodule LemonGateway.Scheduler do
   @moduledoc """
-  Concurrency-limited job scheduler.
+  Concurrency-limited execution scheduler.
 
   Manages a pool of execution slots (`max_concurrent_runs`) and routes incoming
-  jobs to `ThreadWorker` processes keyed by session. Handles auto-resume by
-  restoring conversation tokens from stored chat state.
+  execution requests to `ThreadWorker` processes keyed by conversation.
   """
   use GenServer
   require Logger
 
   alias LemonCore.Introspection
-  alias LemonGateway.{ChatState, Config}
-  alias LemonCore.Store
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias LemonGateway.ExecutionRequest
 
   # Timeout for slot requests - workers should not wait forever
   @slot_request_timeout_ms 30_000
@@ -25,10 +21,10 @@ defmodule LemonGateway.Scheduler do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
-  @doc "Submits a job for scheduling. Applies auto-resume and routes to the appropriate thread worker."
-  @spec submit(Job.t()) :: :ok
-  def submit(%Job{} = job) do
-    GenServer.cast(__MODULE__, {:submit, job})
+  @doc "Submits an execution request for scheduling."
+  @spec submit_execution(ExecutionRequest.t()) :: :ok
+  def submit_execution(%ExecutionRequest{} = request) do
+    GenServer.cast(__MODULE__, {:submit_execution, request})
   end
 
   @doc "Requests an execution slot for the given worker. Grants immediately or queues the request."
@@ -89,31 +85,8 @@ defmodule LemonGateway.Scheduler do
   end
 
   @impl true
-  def handle_cast({:submit, job}, state) do
-    job = maybe_apply_auto_resume(job)
-    thread_key = thread_key(job)
-
-    Logger.debug(
-      "Scheduler submit run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
-        "queue_mode=#{inspect(job.queue_mode)} thread_key=#{inspect(thread_key)}"
-    )
-
-    Introspection.record(
-      :scheduled_job_triggered,
-      %{
-        queue_mode: job.queue_mode,
-        engine_id: job.engine_id,
-        thread_key: inspect(thread_key)
-      },
-      run_id: job.run_id,
-      session_key: job.session_key,
-      engine: "lemon",
-      provenance: :direct
-    )
-
-    :ok = enqueue_job(thread_key, job)
-
-    {:noreply, state}
+  def handle_cast({:submit_execution, %ExecutionRequest{} = request}, state) do
+    {:noreply, schedule_submission(request, state)}
   end
 
   def handle_cast({:request_slot, worker_pid, thread_key}, state) do
@@ -200,7 +173,8 @@ defmodule LemonGateway.Scheduler do
       :scheduled_job_completed,
       %{
         in_flight: map_size(state.in_flight),
-        max: state.max
+        max: state.max,
+        thread_key: inspect(removed[:thread_key])
       },
       engine: "lemon",
       provenance: :direct
@@ -239,6 +213,30 @@ defmodule LemonGateway.Scheduler do
   def handle_info(msg, state) do
     Logger.warning("Scheduler received unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  defp schedule_submission(%ExecutionRequest{} = request, state) do
+    thread_key = thread_key(request)
+
+    Logger.debug(
+      "Scheduler submit run_id=#{inspect(request.run_id)} session_key=#{inspect(request.session_key)} " <>
+        "thread_key=#{inspect(thread_key)}"
+    )
+
+    Introspection.record(
+      :scheduled_job_triggered,
+      %{
+        engine_id: request.engine_id,
+        thread_key: inspect(thread_key)
+      },
+      run_id: request.run_id,
+      session_key: request.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
+
+    :ok = enqueue_request(thread_key, request)
+    state
   end
 
   defp schedule_slot_timeout_check do
@@ -487,102 +485,19 @@ defmodule LemonGateway.Scheduler do
     _, _ -> :ok
   end
 
-  #
-  # IMPORTANT: session_key must win over resume tokens.
-  #
-  # We want strict single-flight per user session (Telegram DM, Slack thread, etc).
-  # If we derive the worker key from a resume token first, commands like /new
-  # (which intentionally run without a resume token) can end up on a different
-  # ThreadWorker and run concurrently with an in-flight session run.
-  #
-  # The router has a session-level single-flight guard (LemonRouter.SessionRegistry)
-  # to track the best-effort "active run" for a session_key. The gateway is responsible
-  # for serializing runs per session_key; the router should not cancel queued runs just
-  # because the previous RunProcess is still finalizing output.
-  defp thread_key(%Job{session_key: session_key})
-       when is_binary(session_key) and session_key != "" do
-    {:session, session_key}
+  defp thread_key(%ExecutionRequest{conversation_key: conversation_key})
+       when not is_nil(conversation_key),
+       do: conversation_key
+
+  defp thread_key(%ExecutionRequest{run_id: run_id}) do
+    raise ArgumentError,
+          "execution request #{inspect(run_id)} is missing router-owned conversation_key"
   end
 
-  defp thread_key(%Job{resume: %ResumeToken{engine: engine, value: value}}) do
-    {engine, value}
-  end
-
-  defp thread_key(_), do: {:default, :global}
-
-  defp maybe_apply_auto_resume(%Job{} = job) do
-    meta = job.meta || %{}
-
-    if is_map(meta) and
-         (meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true) do
-      job
-    else
-      maybe_apply_auto_resume_inner(job)
-    end
-  rescue
-    _ -> job
-  catch
-    _, _ -> job
-  end
-
-  defp maybe_apply_auto_resume_inner(%Job{resume: %ResumeToken{}} = job), do: job
-
-  defp maybe_apply_auto_resume_inner(%Job{session_key: session_key} = job)
-       when is_binary(session_key) do
-    if auto_resume_enabled?() do
-      case Store.get_chat_state(session_key) do
-        %ChatState{last_engine: engine, last_resume_token: token}
-        when is_binary(engine) and is_binary(token) ->
-          apply_resume_if_compatible(job, engine, token)
-
-        %{} = map ->
-          engine = map_get(map, :last_engine)
-          token = map_get(map, :last_resume_token)
-
-          if is_binary(engine) and is_binary(token) do
-            apply_resume_if_compatible(job, engine, token)
-          else
-            job
-          end
-
-        _ ->
-          job
-      end
-    else
-      job
-    end
-  catch
-    :exit, _ -> job
-    :error, _ -> job
-  end
-
-  defp maybe_apply_auto_resume_inner(job), do: job
-
-  defp auto_resume_enabled? do
-    if is_pid(Process.whereis(Config)) do
-      Config.get(:auto_resume) == true
-    else
-      false
-    end
-  catch
-    :exit, _ -> false
-    :error, _ -> false
-  end
-
-  defp apply_resume_if_compatible(%Job{} = job, engine, token) do
-    # Only apply auto-resume if engine matches (or no engine selected yet).
-    if is_nil(job.engine_id) or job.engine_id == engine do
-      resume = %ResumeToken{engine: engine, value: token}
-      %{job | resume: resume, engine_id: job.engine_id || engine}
-    else
-      job
-    end
-  end
-
-  defp enqueue_job(thread_key, job) do
+  defp enqueue_request(thread_key, request) do
     case ensure_worker(thread_key) do
       {:ok, worker_pid} ->
-        case safe_enqueue_async(worker_pid, job) do
+        case safe_enqueue_async(worker_pid, request) do
           :ok ->
             :ok
 
@@ -594,7 +509,7 @@ defmodule LemonGateway.Scheduler do
 
             case ensure_worker(thread_key) do
               {:ok, worker_pid2} ->
-                case safe_enqueue_async(worker_pid2, job) do
+                case safe_enqueue_async(worker_pid2, request) do
                   :ok ->
                     :ok
 
@@ -684,10 +599,10 @@ defmodule LemonGateway.Scheduler do
     end
   end
 
-  defp safe_enqueue_async(pid, job) when is_pid(pid) do
+  defp safe_enqueue_async(pid, request) when is_pid(pid) do
     try do
       if Process.alive?(pid) do
-        GenServer.cast(pid, {:enqueue, job})
+        GenServer.cast(pid, {:enqueue, request})
         :ok
       else
         {:error, :noproc}
@@ -701,9 +616,4 @@ defmodule LemonGateway.Scheduler do
   defp normalize_enqueue(_result), do: :ok
 
   defp slot_request_times(state), do: Map.get(state, :slot_request_times, %{})
-
-  # Helper for consistent atom/string key access
-  defp map_get(map, key) when is_atom(key) do
-    Map.get(map, key) || Map.get(map, to_string(key))
-  end
 end

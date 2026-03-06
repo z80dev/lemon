@@ -254,7 +254,7 @@ defmodule LemonRouter.AgentDirectory do
   end
 
   defp indexed_sessions do
-    LemonCore.Store.list(:sessions_index)
+    LemonCore.RunStore.list_sessions()
     |> Enum.map(&indexed_session_entry/1)
     |> Enum.reject(&is_nil/1)
   rescue
@@ -340,7 +340,7 @@ defmodule LemonRouter.AgentDirectory do
   defp active_session_entry(_), do: nil
 
   defp run_started_at_ms(run_id) when is_binary(run_id) and run_id != "" do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       nil -> nil
       run when is_map(run) -> normalize_int(map_get(run, :started_at))
       _ -> nil

@@ -94,7 +94,7 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
   end
 
   defp fetch_run_record(run_id, include_run_events, run_event_limit) do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       nil ->
         nil
 

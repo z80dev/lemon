@@ -1,16 +1,19 @@
 # LemonGateway AGENTS.md
 
-Gateway and transport layer for the Lemon AI system. Handles external messaging transports, AI engine management, job scheduling with concurrency control, and real-time streaming via an event bus.
+Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, transport ingress that still lives in gateway, and real-time run events on the bus.
 
 ## Quick Orientation
 
-LemonGateway is the central orchestration layer that connects messaging channels to AI engine backends. It does NOT render output to channels directly. Instead, it emits events to `LemonCore.Bus` and lets downstream subscribers (LemonRouter, LemonChannels) handle delivery.
+LemonGateway is the execution backend behind router-owned conversations. It does NOT render output to channels directly and it does NOT own queue semantics anymore. Router-owned `SessionCoordinator` processes decide collect/followup/steer/interrupt behavior and submit queue-semantic-free `ExecutionRequest` values into the gateway.
 
-**Entry point**: `LemonGateway.submit(%Job{})` or `LemonGateway.Runtime.submit(%Job{})`.
+Gateway-native transports such as email, Farcaster, and webhook are ingress shims only. They normalize inbound requests to `LemonCore.RunRequest` and submit through `LemonCore.RouterBridge`; they must not call `LemonRouter.*` modules directly.
 
-**Core loop**: Transport -> Job -> Scheduler -> ThreadWorker -> Run -> Engine -> Bus events -> Channel delivery (via lemon_channels).
+**Entry point**: `LemonGateway.Runtime.submit_execution(%ExecutionRequest{})`.
+The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reintroduce it.
 
-**Key principle**: One active run per session at a time, enforced by both `ThreadWorker` (queue serialization) and `EngineLock` (mutex). Multiple sessions can run concurrently up to `max_concurrent_runs` (default: 2).
+**Core loop**: Router -> `ExecutionRequest` -> Scheduler -> ThreadWorker -> Run -> Engine -> bus events.
+
+**Key principle**: Gateway owns slot allocation, worker/process lifecycle, and engine safety rails. `ThreadWorker` is now a dumb per-conversation launcher; `EngineLock` remains defense-in-depth, not the source of product semantics.
 
 ## Architecture
 
@@ -22,21 +25,23 @@ LemonGateway is the central orchestration layer that connects messaging channels
 |  Farcaster (Frame)  Webhook (HTTP sync/async)                          |
 +-------------------------------------+---------------------------------+
                                       |
-                               Runtime.submit/1
+                RunRequest via LemonCore.RouterBridge.submit_run/1
+                                      |
+                          LemonRouter.RunOrchestrator
+                                      |
+                         Runtime.submit_execution/1
                                       |
 +-------------------------------------+---------------------------------+
 |                          Scheduler                                     |
-|  - Auto-resume from ChatState                                          |
-|  - Derive thread_key from session_key (priority) or resume token       |
+|  - Accept already-resolved execution requests                          |
+|  - Derive thread_key from router-provided conversation_key/session     |
 |  - Route to ThreadWorker (create if needed via ThreadWorkerSupervisor) |
 |  - Slot allocation: max_concurrent_runs concurrency limit              |
 +-------------------------------------+---------------------------------+
                                       |
                           ThreadWorker (per session)
-|  - Job queue with 5 modes: collect, followup, steer, steer_backlog,   |
-|    interrupt                                                           |
+|  - Simple FIFO request launcher for one conversation key               |
 |  - Request slot -> on grant -> start Run via RunSupervisor             |
-|  - Steer active runs (for lemon engine)                                |
 |  - Terminate when idle (queue empty + no active run)                   |
 +-------------------------------------+---------------------------------+
                                       |
@@ -72,13 +77,14 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 
 | File | Module | What It Does |
 |------|--------|-------------|
-| `lib/lemon_gateway.ex` | `LemonGateway` | Public API: `submit/1` delegates to `Runtime.submit/1` |
-| `lib/lemon_gateway/runtime.ex` | `Runtime` | Submit and cancel API: `submit/1`, `cancel_by_run_id/2`, `cancel_by_progress_msg/2` |
-| `lib/lemon_gateway/scheduler.ex` | `Scheduler` | GenServer: auto-resume, thread routing, slot-based concurrency (max_concurrent_runs) |
-| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-session job queue, 5 queue modes, steer support, auto-terminate |
+| `lib/lemon_gateway.ex` | `LemonGateway` | Public API facade for execution submission and health helpers. |
+| `lib/lemon_gateway/runtime.ex` | `Runtime` | Submit and cancel API. Preferred entry is `submit_execution/1`. |
+| `lib/lemon_gateway/execution_request.ex` | `ExecutionRequest` | Gateway input contract with no queue-mode semantics. |
+| `lib/lemon_gateway/scheduler.ex` | `Scheduler` | GenServer: thread routing plus slot-based concurrency (`max_concurrent_runs`). |
+| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-conversation launcher/slot waiter, no collect/followup/interrupt policy. |
 | `lib/lemon_gateway/run.ex` | `Run` | GenServer: engine lifecycle, bus event emission, steer/cancel, lock management |
 | `lib/lemon_gateway/engine.ex` | `Engine` | Behaviour: `id/0`, `start_run/3`, `cancel/1`, `supports_steer?/0`, `steer/2`, resume callbacks |
-| `lib/lemon_gateway/types.ex` | `Types`, `Types.Job` | Core types: `Job` struct (run_id, session_key, prompt, engine_id, queue_mode, meta) |
+| `lib/lemon_gateway/types.ex` | `Types`, `Types.Job` | Legacy compatibility types. Do not add new queue semantics here. |
 | `lib/lemon_gateway/event.ex` | `Event`, `Event.Delta` | Event constructors (`:started`, `:action_event`, `:completed`) and `Delta` struct |
 
 ### Engine Implementations
@@ -99,7 +105,7 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 |------|--------|-------|
 | `lib/lemon_gateway/config.ex` | `Config` | GenServer holding all runtime config. Access via `Config.get/0` or `Config.get(:key)`. |
 | `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Loads from `LemonCore.GatewayConfig.load/0` and parses into typed structs (Project, Binding, queue, SMS, email, etc.) |
-| `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves engine, cwd, agent_id, queue_mode for a `ChatScope`. Delegates to `LemonCore.BindingResolver`. |
+| `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves engine/cwd/agent metadata for gateway-owned transports. Delegates to `LemonCore.BindingResolver`. |
 | `lib/lemon_gateway/engine_directive.ex` | `EngineDirective` | Strips `/claude`, `/codex`, `/lemon`, etc. from user input to select engine |
 | `lib/lemon_gateway/engine_registry.ex` | `EngineRegistry` | GenServer: engine ID -> module mapping. Also does cross-engine resume token extraction. |
 | `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | GenServer: per-session mutex with FIFO wait queue, configurable timeout, process monitoring, stale lock sweeping |
@@ -286,16 +292,17 @@ defmodule LemonGateway.Transports.MyTransport do
   def handle_info({:incoming_message, data}, state) do
     scope = %ChatScope{transport: :mytransport, chat_id: data.chat_id}
 
-    job = %Job{
+    request = %LemonGateway.ExecutionRequest{
+      run_id: LemonCore.Id.run_id(),
       session_key: "mytransport:#{data.chat_id}:#{data.user_id}",
       prompt: data.text,
       engine_id: BindingResolver.resolve_engine(scope, nil, nil),
       cwd: BindingResolver.resolve_cwd(scope),
-      queue_mode: :collect,
+      conversation_key: {:session, "mytransport:#{data.chat_id}:#{data.user_id}"},
       meta: %{origin: :mytransport, notify_pid: self()}
     }
 
-    Runtime.submit(job)
+    Runtime.submit_execution(request)
     {:noreply, state}
   end
 
@@ -312,11 +319,11 @@ Add to `:transports` in application config, or modify `TransportRegistry.init/1`
 
 ### Best Practices
 
-- Always use `Runtime.submit/1` (never call Scheduler directly)
+- Prefer `Runtime.submit_execution/1` (never call Scheduler directly)
 - Set `meta.notify_pid: self()` to receive `{:lemon_gateway_run_completed, job, completed}`
 - Build stable, unique `session_key` strings (transport:chat:user or similar)
 - Return `:ignore` from `start_link/1` when disabled
-- Use `BindingResolver` to respect config bindings for engine/cwd/queue_mode
+- Use `BindingResolver` to respect config bindings for engine/cwd/agent metadata
 
 ## How to Add Gateway Tools
 
@@ -391,8 +398,8 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | Test File | What It Tests |
 |-----------|---------------|
 | `run_test.exs` | Run GenServer: init, events, steering, cancellation, lock handling |
-| `scheduler_test.exs` | Scheduler: slot allocation, auto-resume, thread routing |
-| `thread_worker_test.exs` | ThreadWorker: queue modes, steer handling, slot management |
+| `scheduler_test.exs` | Scheduler: slot allocation and thread routing |
+| `thread_worker_test.exs` | ThreadWorker: launch/slot lifecycle and crash handling |
 | `engine_registry_test.exs` | Engine registration, lookup, resume extraction |
 | `engine_lock_test.exs` | EngineLock: acquire/release, FIFO queueing, timeouts |
 | `engine_directive_test.exs` | Directive parsing (`/claude text` -> `{"claude", "text"}`) |
@@ -401,7 +408,7 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `chat_state_test.exs` | ChatState struct operations |
 | `command_registry_test.exs` | Command registration and validation |
 | `cancel_flow_test.exs` | End-to-end cancel flow |
-| `queue_mode_test.exs` | Queue mode semantics |
+| `queue_mode_test.exs` | Router/gateway boundary coverage for legacy queue-mode adapters that still normalize into `ExecutionRequest` |
 | `run_transport_agnostic_test.exs` | Run process transport-agnostic behavior |
 | `cli_adapter_test.exs` | CliAdapter shared logic |
 | `cli_adapter_claude_test.exs` | Claude-specific CliAdapter behavior |
@@ -429,18 +436,19 @@ For Run tests, you need to set up: `EngineRegistry` (or mock it), `EngineLock`, 
 ### Common Test Patterns
 
 ```elixir
-# Create a test job
-job = %LemonGateway.Types.Job{
+# Create a test execution request
+request = %LemonGateway.ExecutionRequest{
+  run_id: LemonCore.Id.run_id(),
   session_key: "test:#{System.unique_integer([:positive])}",
   prompt: "test prompt",
   engine_id: "echo",
-  queue_mode: :collect,
+  conversation_key: {:session, "test:conversation"},
   meta: %{notify_pid: self()}
 }
 
 # Submit and wait for completion
-LemonGateway.submit(job)
-assert_receive {:lemon_gateway_run_completed, ^job, completed}, 5000
+LemonGateway.Runtime.submit_execution(request)
+assert_receive {:lemon_gateway_run_completed, _job, completed}, 5000
 assert completed.ok == true
 ```
 
@@ -466,11 +474,11 @@ assert completed.ok == true
 
 ### Key Integration Points
 
-1. **Job submission**: Any app can call `LemonGateway.submit(%Job{})` to trigger an AI run.
-2. **Completion notification**: Set `meta.notify_pid` in the Job to receive `{:lemon_gateway_run_completed, job, completed}` when a run finishes.
+1. **Execution submission**: Prefer `LemonGateway.Runtime.submit_execution(%ExecutionRequest{})` to trigger an AI run.
+2. **Completion notification**: Set `meta.notify_pid` to receive `{:lemon_gateway_run_completed, job, completed}` when a run finishes.
 3. **Bus events**: Subscribe to `LemonCore.Bus` topic `"run:<run_id>"` to receive real-time run events.
 4. **Run cancellation**: Call `LemonGateway.Runtime.cancel_by_run_id/2` with the run_id.
-5. **Chat state**: `LemonCore.Store.get_chat_state/1` and `put_chat_state/2` manage auto-resume tokens per session.
+5. **Chat state**: `LemonCore.ChatStateStore` manages auto-resume tokens per session.
 
 ## Common Debugging
 
@@ -532,9 +540,9 @@ ThreadWorker and Scheduler emit introspection events via `LemonCore.Introspectio
 | Event Type | When | Key Fields |
 |---|---|---|
 | `:thread_started` | ThreadWorker init | `thread_key` |
-| `:thread_message_dispatched` | Job enqueued to worker | `thread_key`, `queue_mode`, `queue_len` |
+| `:thread_message_dispatched` | Request enqueued to worker | `thread_key`, `queue_len` |
 | `:thread_terminated` | ThreadWorker terminate | `thread_key`, `queue_len` |
-| `:scheduled_job_triggered` | Scheduler receives submit | `queue_mode`, `engine_id`, `thread_key` |
+| `:scheduled_job_triggered` | Scheduler receives submit | `engine_id`, `thread_key` |
 | `:scheduled_job_completed` | Scheduler releases slot | `in_flight`, `max` |
 
 ## Telemetry Events

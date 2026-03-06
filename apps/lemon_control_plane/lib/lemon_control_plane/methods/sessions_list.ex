@@ -38,7 +38,7 @@ defmodule LemonControlPlane.Methods.SessionsList do
   end
 
   defp get_sessions_index do
-    LemonCore.Store.list(:sessions_index)
+    LemonCore.RunStore.list_sessions()
   rescue
     _ -> []
   end

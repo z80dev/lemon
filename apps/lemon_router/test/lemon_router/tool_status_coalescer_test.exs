@@ -2,6 +2,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
   alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
+  alias LemonCore.DeliveryIntent
+  alias LemonCore.DeliveryRoute
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
   defmodule ToolStatusCoalescerTestTelegramPlugin do
@@ -23,6 +25,19 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       pid = :persistent_term.get({__MODULE__, :test_pid}, nil)
       if is_pid(pid), do: send(pid, {:delivered, payload})
       {:ok, %{"ok" => true, "result" => %{"message_id" => 1001}}}
+    end
+  end
+
+  defmodule ToolStatusIntentDispatcherStub do
+    @moduledoc false
+
+    def dispatch(%DeliveryIntent{} = intent) do
+      case :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        pid when is_pid(pid) -> send(pid, {:dispatched_intent, intent})
+        _ -> :ok
+      end
+
+      :ok
     end
   end
 
@@ -53,6 +68,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.PresentationState)) do
+      {:ok, _} = LemonChannels.PresentationState.start_link([])
     end
 
     :persistent_term.put({__MODULE__.ToolStatusCoalescerTestTelegramPlugin, :test_pid}, self())
@@ -215,28 +234,17 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :text,
                       peer: %{id: "12345", thread_id: "777"},
-                      reply_to: 9,
-                      meta: %{run_id: ^run_id}
+                      reply_to: "9",
+                      meta: %{run_id: ^run_id, intent_kind: :tool_status_snapshot}
                     }},
                    1_000
 
-    # Wait until the coalescer captures status_msg_id from the outbox delivery ack.
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    route = telegram_route("bot", :group, "12345", "777")
 
-    status_id =
-      Enum.reduce_while(1..50, nil, fn _, _ ->
-        state = :sys.get_state(pid)
-        id = state.meta[:status_msg_id]
-
-        if is_integer(id) do
-          {:halt, id}
-        else
-          Process.sleep(10)
-          {:cont, nil}
-        end
-      end)
-
-    assert status_id == 1001
+    assert eventually(fn ->
+             LemonChannels.PresentationState.get(route, run_id, :status).platform_message_id ==
+               1001
+           end)
 
     # Now subsequent updates should edit the status message
     completed = %{started | phase: :completed, ok: true}
@@ -248,8 +256,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :edit,
                       peer: %{id: "12345", thread_id: "777"},
-                      content: %{message_id: 1001, text: text},
-                      meta: %{run_id: ^run_id}
+                      content: %{message_id: "1001", text: text},
+                      meta: %{run_id: ^run_id, intent_kind: :tool_status_snapshot}
                     }},
                    1_000
 
@@ -320,7 +328,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :text,
                       peer: %{id: "12345", thread_id: "777"},
-                      reply_to: 9,
+                      reply_to: "9",
                       meta: %{reply_markup: reply_markup}
                     }},
                    1_000
@@ -336,23 +344,12 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
              ]
            }
 
-    # Wait until the coalescer captures status_msg_id from the outbox delivery ack.
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    route = telegram_route("bot", :group, "12345", "777")
 
-    status_id =
-      Enum.reduce_while(1..50, nil, fn _, _ ->
-        state = :sys.get_state(pid)
-        id = state.meta[:status_msg_id]
-
-        if is_integer(id) do
-          {:halt, id}
-        else
-          Process.sleep(10)
-          {:cont, nil}
-        end
-      end)
-
-    assert status_id == 1001
+    assert eventually(fn ->
+             LemonChannels.PresentationState.get(route, run_id, :status).platform_message_id ==
+               1001
+           end)
 
     assert :ok = ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true)
 
@@ -361,10 +358,78 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :edit,
                       peer: %{id: "12345", thread_id: "777"},
-                      content: %{message_id: 1001},
+                      content: %{message_id: "1001"},
                       meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
                     }},
                    1_000
+  end
+
+  test "flush emits a semantic tool status intent via configurable dispatcher" do
+    previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)
+    :persistent_term.put({ToolStatusIntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({ToolStatusIntentDispatcherStub, :test_pid})
+
+      if is_nil(previous_dispatcher) do
+        Application.delete_env(:lemon_router, :dispatcher)
+      else
+        Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+      end
+    end)
+
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    started = %{
+      engine: "lemon",
+      action: %{id: "a1", kind: "tool", title: "Read: foo.txt", detail: %{}},
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               meta: %{user_msg_id: 9}
+             )
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{
+                      intent_id: intent_id,
+                      run_id: ^run_id,
+                      session_key: ^session_key,
+                      kind: :tool_status_snapshot,
+                      route: %DeliveryRoute{
+                        channel_id: "telegram",
+                        account_id: "bot",
+                        peer_kind: :group,
+                        peer_id: "12345",
+                        thread_id: "777"
+                      },
+                      body: %{text: text, seq: 1},
+                      controls: %{allow_cancel?: true},
+                      meta: %{surface: :status, user_msg_id: 9}
+                    }},
+                   1_000
+
+    assert intent_id == "#{run_id}:status:1:tool_status_snapshot"
+    assert String.contains?(text, "Read: foo.txt")
+  end
+
+  defp telegram_route(account_id, peer_kind, peer_id, thread_id) do
+    %DeliveryRoute{
+      channel_id: "telegram",
+      account_id: account_id,
+      peer_kind: peer_kind,
+      peer_id: peer_id,
+      thread_id: thread_id
+    }
   end
 
   defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do

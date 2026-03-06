@@ -10,6 +10,31 @@ defmodule LemonCore.ApplicationTest do
   alias LemonCore.ConfigCache
   alias LemonCore.Store
 
+  setup do
+    assert {:ok, _} = Application.ensure_all_started(:lemon_core)
+    :ok
+  end
+
+  defp wait_for_pid(name, previous_pid, attempts \\ 20)
+
+  defp wait_for_pid(_name, _previous_pid, 0), do: nil
+
+  defp wait_for_pid(name, previous_pid, attempts) do
+    case Process.whereis(name) do
+      pid when is_pid(pid) and pid != previous_pid ->
+        if Process.alive?(pid) do
+          pid
+        else
+          Process.sleep(50)
+          wait_for_pid(name, previous_pid, attempts - 1)
+        end
+
+      _ ->
+        Process.sleep(50)
+        wait_for_pid(name, previous_pid, attempts - 1)
+    end
+  end
+
   describe "application startup" do
     test "application is started" do
       assert {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -136,11 +161,8 @@ defmodule LemonCore.ApplicationTest do
       # Kill the Store process
       Process.exit(original_pid, :kill)
 
-      # Wait for supervisor to restart it
-      Process.sleep(100)
-
       # Verify Store was restarted
-      new_pid = Process.whereis(LemonCore.Store)
+      new_pid = wait_for_pid(LemonCore.Store, original_pid)
       assert new_pid != nil
       assert new_pid != original_pid
       assert Process.alive?(new_pid)
@@ -154,11 +176,8 @@ defmodule LemonCore.ApplicationTest do
       # Kill the LocalServer process
       Process.exit(original_pid, :kill)
 
-      # Wait for supervisor to restart it
-      Process.sleep(100)
-
       # Verify LocalServer was restarted
-      new_pid = Process.whereis(LemonCore.Browser.LocalServer)
+      new_pid = wait_for_pid(LemonCore.Browser.LocalServer, original_pid)
       assert new_pid != nil
       assert new_pid != original_pid
       assert Process.alive?(new_pid)

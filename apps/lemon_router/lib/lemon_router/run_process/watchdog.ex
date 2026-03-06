@@ -9,13 +9,11 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
   require Logger
 
-  alias LemonChannels.OutboundPayload
-  alias LemonRouter.{ChannelContext, ChannelsDelivery}
+  alias LemonCore.{DeliveryIntent, DeliveryRoute}
+  alias LemonRouter.ChannelContext
 
   @default_run_idle_watchdog_timeout_ms 2 * 60 * 60 * 1000
   @default_run_idle_watchdog_confirm_timeout_ms 5 * 60 * 1000
-  @idle_keepalive_continue_callback_prefix "lemon:idle:c:"
-  @idle_keepalive_stop_callback_prefix "lemon:idle:k:"
 
   @spec resolve_run_watchdog_timeout_ms(keyword()) :: pos_integer()
   def resolve_run_watchdog_timeout_ms(opts) do
@@ -95,11 +93,8 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
   @spec maybe_request_watchdog_confirmation(map()) :: {:ok, map()} | :error
   def maybe_request_watchdog_confirmation(state) do
-    with {:ok, payload} <- watchdog_confirmation_payload(state),
-         {:ok, _ref} <-
-           ChannelsDelivery.enqueue(payload,
-             context: %{component: :run_process, phase: :watchdog_keepalive_prompt}
-           ) do
+    with {:ok, intent} <- watchdog_confirmation_intent(state),
+         :ok <- dispatcher().dispatch(intent) do
       timeout_ms =
         state.run_watchdog_confirm_timeout_ms || @default_run_idle_watchdog_confirm_timeout_ms
 
@@ -162,7 +157,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
     :ok
   end
 
-  defp watchdog_confirmation_payload(state) do
+  defp watchdog_confirmation_intent(state) do
     parsed = ChannelContext.parse_session_key(state.session_key)
 
     with "telegram" <- parsed.channel_id,
@@ -175,36 +170,25 @@ defmodule LemonRouter.RunProcess.Watchdog do
         "Still running, but no output for about #{mins} minutes.\n" <>
           "Keep waiting?"
 
-      reply_markup = %{
-        "inline_keyboard" => [
-          [
-            %{
-              "text" => "Keep Waiting",
-              "callback_data" => @idle_keepalive_continue_callback_prefix <> state.run_id
-            },
-            %{
-              "text" => "Stop Run",
-              "callback_data" => @idle_keepalive_stop_callback_prefix <> state.run_id
-            }
-          ]
-        ]
-      }
-
-      payload = %OutboundPayload{
+      route = %DeliveryRoute{
         channel_id: "telegram",
         account_id: parsed.account_id || "default",
-        peer: %{kind: peer_kind, id: peer_id, thread_id: parsed.thread_id},
-        kind: :text,
-        content: text,
-        idempotency_key: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}",
-        meta: %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          reply_markup: reply_markup
-        }
+        peer_kind: peer_kind,
+        peer_id: peer_id,
+        thread_id: parsed.thread_id
       }
 
-      {:ok, payload}
+      {:ok,
+       %DeliveryIntent{
+         intent_id: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}",
+         run_id: state.run_id,
+         session_key: state.session_key,
+         route: route,
+         kind: :watchdog_prompt,
+         body: %{text: text, seq: 0},
+         controls: %{allow_cancel?: true, watchdog_prompt?: true},
+         meta: %{surface: :status, user_msg_id: nil}
+       }}
     else
       _ -> :error
     end
@@ -245,5 +229,9 @@ defmodule LemonRouter.RunProcess.Watchdog do
     |> cancel_run_watchdog_confirmation()
     |> Map.put(:run_watchdog_confirmation_ref, ref)
     |> Map.put(:run_watchdog_awaiting_confirmation?, true)
+  end
+
+  defp dispatcher do
+    Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
 end

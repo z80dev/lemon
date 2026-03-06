@@ -324,7 +324,7 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   end
 
   defp fetch_store_record(run_id) do
-    case LemonCore.Store.get_run(run_id) do
+    case LemonCore.RunStore.get(run_id) do
       record when is_map(record) -> record
       _ -> %{}
     end

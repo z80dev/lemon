@@ -69,15 +69,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
     trimmed = String.trim_leading(text || "")
 
     case Regex.run(~r/^\/#{cmd}(?:@([\w_]+))?(?:\s|$)/i, trimmed) do
-      [_full] -> true
-      [_, nil] -> true
-      [_, ""] -> true
+      [_full] ->
+        true
+
+      [_, nil] ->
+        true
+
+      [_, ""] ->
+        true
 
       [_, target] when is_binary(bot_username) and bot_username != "" ->
         String.downcase(target) == String.downcase(bot_username)
 
-      [_, _target] -> true
-      _ -> false
+      [_, _target] ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -108,14 +116,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
     trimmed = String.trim_leading(text || "")
 
     case Regex.run(~r{^/([a-z][a-z0-9_]*)(?:@([\w_]+))?(?:\s|$)}i, trimmed) do
-      [_, _cmd, nil] -> true
-      [_, _cmd, ""] -> true
+      [_, _cmd, nil] ->
+        true
+
+      [_, _cmd, ""] ->
+        true
 
       [_, _cmd, target] when is_binary(bot_username) and bot_username != "" ->
         String.downcase(target) == String.downcase(bot_username)
 
-      [_, _cmd, _target] -> true
-      _ -> false
+      [_, _cmd, _target] ->
+        true
+
+      _ ->
+        false
     end
   end
 
