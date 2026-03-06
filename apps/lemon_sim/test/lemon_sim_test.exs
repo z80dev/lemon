@@ -140,6 +140,27 @@ defmodule LemonSimTest do
     assert result.state == state
   end
 
+  test "runner step ingests direct decision events before consulting the adapter" do
+    state = State.new(sim_id: "sim-step-4", world: %{"hp" => 100})
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.DirectEventDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: __MODULE__.DecisionAdapterErrorStub
+               },
+               []
+             )
+
+    assert result.events == [%{"kind" => "enemy_visible"}]
+    assert {:decide, "enemy spotted"} = result.signal
+    assert [%Event{kind: "enemy_visible"}] = result.state.recent_events
+  end
+
   test "runner runs until terminal state" do
     state = State.new(sim_id: "sim-run", world: %{"turns" => 0})
 
@@ -272,6 +293,15 @@ defmodule LemonSimTest do
     @impl true
     def decide(_context, _tools, _opts) do
       {:ok, %{"type" => "tool_call", "result_details" => %{"event" => %{"kind" => "tick"}}}}
+    end
+  end
+
+  defmodule DirectEventDeciderStub do
+    @behaviour LemonSim.Decider
+
+    @impl true
+    def decide(_context, _tools, _opts) do
+      {:ok, %{"type" => "domain_decision", "events" => [%{"kind" => "enemy_visible"}]}}
     end
   end
 

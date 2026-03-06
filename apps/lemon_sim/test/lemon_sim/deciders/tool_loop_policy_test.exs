@@ -45,7 +45,7 @@ defmodule LemonSim.Deciders.ToolLoopPolicyTest do
     result =
       %AgentToolResult{
         content: [AgentCore.text_content("attack committed")],
-        details: %{ok: true},
+        details: %{events: [%{kind: "attack_committed"}], ok: true},
         trust: :trusted
       }
 
@@ -57,7 +57,7 @@ defmodule LemonSim.Deciders.ToolLoopPolicyTest do
                support_tool_matcher: &support_tool?/1
              )
 
-    assert %{"tool_name" => "attack"} =
+    assert %{"tool_name" => "attack", "events" => [%{kind: "attack_committed"}]} =
              SingleTerminal.decision_from_call(
                tool_call("tc-2", "attack"),
                tool("attack"),

@@ -155,24 +155,49 @@ defmodule LemonSim.Runner do
   end
 
   defp adapt_events(decision_adapter, decision, state, opts) do
-    if Code.ensure_loaded?(decision_adapter) and
-         function_exported?(decision_adapter, :to_events, 3) do
-      case decision_adapter.to_events(decision, state, opts) do
-        {:ok, events} when is_list(events) ->
-          {:ok, events}
+    case direct_events(decision) do
+      {:ok, events} ->
+        {:ok, events}
 
-        {:ok, events} ->
-          {:error, {:invalid_events, events}}
+      :no_events ->
+        if Code.ensure_loaded?(decision_adapter) and
+             function_exported?(decision_adapter, :to_events, 3) do
+          case decision_adapter.to_events(decision, state, opts) do
+            {:ok, events} when is_list(events) ->
+              {:ok, events}
 
-        {:error, _reason} = error ->
-          error
+            {:ok, events} ->
+              {:error, {:invalid_events, events}}
 
-        other ->
-          {:error, {:invalid_decision_adapter_result, other}}
-      end
-    else
-      {:error, {:invalid_decision_adapter, decision_adapter}}
+            {:error, _reason} = error ->
+              error
+
+            other ->
+              {:error, {:invalid_decision_adapter_result, other}}
+          end
+        else
+          {:error, {:invalid_decision_adapter, decision_adapter}}
+        end
     end
+  end
+
+  defp direct_events(%{} = decision) do
+    cond do
+      is_list(fetch(decision, :events, "events", nil)) ->
+        {:ok, fetch(decision, :events, "events", [])}
+
+      not is_nil(fetch(decision, :event, "event", nil)) ->
+        {:ok, [fetch(decision, :event, "event", nil)]}
+
+      true ->
+        :no_events
+    end
+  end
+
+  defp direct_events(_decision), do: :no_events
+
+  defp fetch(map, atom_key, string_key, default) do
+    Map.get(map, atom_key, Map.get(map, string_key, default))
   end
 
   defp maybe_notify(callback, turn, payload) when is_function(callback, 2) do

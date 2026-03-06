@@ -47,7 +47,7 @@ defmodule LemonSim.Deciders.ToolPolicies.SingleTerminal do
     if support_tool?(tool, opts) do
       nil
     else
-      %{
+      decision = %{
         "type" => "tool_call",
         "tool_name" => tool_call.name,
         "tool_call_id" => tool_call.id,
@@ -55,6 +55,11 @@ defmodule LemonSim.Deciders.ToolPolicies.SingleTerminal do
         "result_text" => AgentCore.get_text(result),
         "result_details" => result.details
       }
+
+      case decision_events(result.details) do
+        nil -> decision
+        events -> Map.put(decision, "events", events)
+      end
     end
   end
 
@@ -70,5 +75,24 @@ defmodule LemonSim.Deciders.ToolPolicies.SingleTerminal do
       matcher when is_function(matcher, 1) -> matcher.(tool)
       _ -> false
     end
+  end
+
+  defp decision_events(details) when is_map(details) do
+    cond do
+      is_list(fetch(details, :events, "events", nil)) ->
+        fetch(details, :events, "events", [])
+
+      not is_nil(fetch(details, :event, "event", nil)) ->
+        [fetch(details, :event, "event", nil)]
+
+      true ->
+        nil
+    end
+  end
+
+  defp decision_events(_details), do: nil
+
+  defp fetch(map, atom_key, string_key, default) do
+    Map.get(map, atom_key, Map.get(map, string_key, default))
   end
 end

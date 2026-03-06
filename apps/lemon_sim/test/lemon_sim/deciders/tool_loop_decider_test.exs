@@ -44,7 +44,7 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
           {:ok,
            %AgentToolResult{
              content: [AgentCore.text_content("attack committed")],
-             details: %{ok: true},
+             details: %{ok: true, event: %{"kind" => "attack_committed", "target" => "goblin"}},
              trust: :trusted
            }}
         end
@@ -69,6 +69,7 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
     assert decision["type"] == "tool_call"
     assert decision["tool_name"] == "attack"
     assert decision["arguments"] == %{"target" => "goblin"}
+    assert decision["events"] == [%{"kind" => "attack_committed", "target" => "goblin"}]
 
     assert ["memory_write_file", "attack"] =
              Enum.map(decision["executed_calls"], & &1.tool_name)
@@ -230,7 +231,7 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
         {:ok,
          %AgentToolResult{
            content: [AgentCore.text_content("#{name} committed")],
-           details: %{ok: true},
+           details: %{ok: true, event: %{"kind" => "#{name}_committed"}},
            trust: :trusted
          }}
       end

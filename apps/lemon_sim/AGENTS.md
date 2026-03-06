@@ -23,8 +23,8 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 | `lib/lemon_sim/decider.ex` | `LemonSim.Decider` | One-turn decision behaviour |
 | `lib/lemon_sim/deciders/tool_loop_policy.ex` | `LemonSim.Deciders.ToolLoopPolicy` | Tool-batch validation + terminal decision policy behaviour |
 | `lib/lemon_sim/deciders/tool_policies/single_terminal.ex` | `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default support-tool + one-terminal-action policy |
-| `lib/lemon_sim/decision_adapter.ex` | `LemonSim.DecisionAdapter` | Decision -> event adaptation behaviour |
-| `lib/lemon_sim/decision_adapters/tool_result_events.ex` | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results that return event payloads |
+| `lib/lemon_sim/decision_adapter.ex` | `LemonSim.DecisionAdapter` | Decision -> event adaptation behaviour for decisions without direct top-level events |
+| `lib/lemon_sim/decision_adapters/tool_result_events.ex` | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results that return event payloads in `result_details` |
 | `lib/lemon_sim/deciders/tool_loop_decider.ex` | `LemonSim.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/runner.ex` | `LemonSim.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
 | `lib/lemon_sim/store.ex` | `LemonSim.Store` | `LemonCore.Store` persistence wrapper |
@@ -38,6 +38,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 - Keep authoritative argument legality in updater logic, not prompt text or `ActionSpace`.
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
 - Keep memory policy out of the core harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.Memory.Tools`).
+- Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
 
 ## Testing
 
