@@ -7,13 +7,15 @@ defmodule LemonControlPlane.Methods.NodePairVerify do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
   def name, do: "node.pair.verify"
 
   @impl true
-  def scopes, do: []  # No auth required - node uses code
+  # No auth required - node uses code
+  def scopes, do: []
 
   @impl true
   def handle(params, _ctx) do
@@ -23,9 +25,9 @@ defmodule LemonControlPlane.Methods.NodePairVerify do
       {:error, Errors.invalid_request("code is required")}
     else
       # Find pairing by code
-      pairing_id = LemonCore.Store.get(:nodes_pairing_by_code, code)
+      pairing_id = NodeStore.get_pairing_id_by_code(code)
 
-      case pairing_id && LemonCore.Store.get(:nodes_pairing, pairing_id) do
+      case pairing_id && NodeStore.get_pairing(pairing_id) do
         nil ->
           {:error, Errors.not_found("Invalid pairing code")}
 
@@ -41,31 +43,35 @@ defmodule LemonControlPlane.Methods.NodePairVerify do
               {:error, Errors.invalid_request("Pairing code has expired")}
 
             status == :rejected or status == "rejected" ->
-              {:ok, %{
-                "valid" => false,
-                "status" => "rejected"
-              }}
+              {:ok,
+               %{
+                 "valid" => false,
+                 "status" => "rejected"
+               }}
 
             status == :approved or status == "approved" ->
               # Return the node credentials
-              {:ok, %{
-                "valid" => true,
-                "status" => "approved",
-                "pairingId" => pairing_id
-              }}
+              {:ok,
+               %{
+                 "valid" => true,
+                 "status" => "approved",
+                 "pairingId" => pairing_id
+               }}
 
             status == :pending or status == "pending" ->
-              {:ok, %{
-                "valid" => true,
-                "status" => "pending",
-                "pairingId" => pairing_id
-              }}
+              {:ok,
+               %{
+                 "valid" => true,
+                 "status" => "pending",
+                 "pairingId" => pairing_id
+               }}
 
             true ->
-              {:ok, %{
-                "valid" => false,
-                "status" => to_string(status)
-              }}
+              {:ok,
+               %{
+                 "valid" => false,
+                 "status" => to_string(status)
+               }}
           end
       end
     end

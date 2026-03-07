@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.ConfigSet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.ConfigStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -28,7 +29,7 @@ defmodule LemonControlPlane.Methods.ConfigSet do
         {:error, Errors.invalid_request("value is required")}
 
       true ->
-        LemonCore.Store.put(:system_config, key, value)
+        ConfigStore.put(key, value)
         {:ok, %{"key" => key, "value" => value, "success" => true}}
     end
   end

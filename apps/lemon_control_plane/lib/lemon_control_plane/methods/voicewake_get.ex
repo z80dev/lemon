@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.VoicewakeGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.VoicewakeStore
+
   @impl true
   def name, do: "voicewake.get"
 
@@ -15,14 +17,15 @@ defmodule LemonControlPlane.Methods.VoicewakeGet do
 
   @impl true
   def handle(_params, _ctx) do
-    config = LemonCore.Store.get(:voicewake_config, :global) || default_config()
+    config = VoicewakeStore.get() || default_config()
 
-    {:ok, %{
-      "enabled" => config[:enabled] || false,
-      "keyword" => config[:keyword] || "hey lemon",
-      "sensitivity" => config[:sensitivity] || 0.5,
-      "backend" => config[:backend] || "porcupine"
-    }}
+    {:ok,
+     %{
+       "enabled" => config[:enabled] || false,
+       "keyword" => config[:keyword] || "hey lemon",
+       "sensitivity" => config[:sensitivity] || 0.5,
+       "backend" => config[:backend] || "porcupine"
+     }}
   end
 
   defp default_config do

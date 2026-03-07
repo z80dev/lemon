@@ -36,7 +36,7 @@ defmodule LemonAutomation.HeartbeatManager do
   use GenServer
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronManager, Events}
-  alias LemonCore.Bus
+  alias LemonCore.{Bus, HeartbeatStore}
 
   require Logger
 
@@ -127,7 +127,7 @@ defmodule LemonAutomation.HeartbeatManager do
   """
   @spec get_config(String.t()) :: map() | nil
   def get_config(agent_id) do
-    LemonCore.Store.get(:heartbeat_config, agent_id)
+    HeartbeatStore.get_config(agent_id)
   end
 
   @doc """
@@ -135,7 +135,7 @@ defmodule LemonAutomation.HeartbeatManager do
   """
   @spec get_last(String.t()) :: map() | nil
   def get_last(agent_id) do
-    LemonCore.Store.get(:heartbeat_last, agent_id)
+    HeartbeatStore.get_last(agent_id)
   end
 
   # ============================================================================
@@ -168,7 +168,7 @@ defmodule LemonAutomation.HeartbeatManager do
   # Restore heartbeat jobs from stored configuration on startup
   defp restore_heartbeat_jobs(state) do
     # Get all heartbeat configs from store and schedule jobs
-    case LemonCore.Store.list(:heartbeat_config) do
+    case HeartbeatStore.list_configs() do
       configs when is_list(configs) ->
         Enum.reduce(configs, state, fn {agent_id, config}, acc ->
           if config[:enabled] || config["enabled"] do
@@ -208,7 +208,7 @@ defmodule LemonAutomation.HeartbeatManager do
         job_id: job_id
       }
 
-      LemonCore.Store.put(:heartbeat_last, agent_id, last_result)
+      HeartbeatStore.put_last(agent_id, last_result)
 
       state =
         update_in(state.stats.total_heartbeats, &(&1 + 1))
@@ -410,8 +410,8 @@ defmodule LemonAutomation.HeartbeatManager do
     CronManager.list()
     |> Enum.find(fn job ->
       # Match by name (most reliable)
+      # Match by meta - handle both atom and string keys (JSONL round-trip)
       job.name == name or
-        # Match by meta - handle both atom and string keys (JSONL round-trip)
         (is_map(job.meta) and
            (job.meta[:heartbeat] == true or job.meta["heartbeat"] == true) and
            (job.meta[:agent_id] == agent_id or job.meta["agent_id"] == agent_id))

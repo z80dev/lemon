@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.AgentsFilesList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentFileStore
+
   @impl true
   def name, do: "agents.files.list"
 
@@ -20,16 +22,17 @@ defmodule LemonControlPlane.Methods.AgentsFilesList do
     # Get agent files from store
     files = list_agent_files(agent_id)
 
-    {:ok, %{
-      "agentId" => agent_id,
-      "files" => files
-    }}
+    {:ok,
+     %{
+       "agentId" => agent_id,
+       "files" => files
+     }}
   end
 
   defp list_agent_files(agent_id) do
     # Files are stored with compound key {agent_id, file_name} by agents.files.set
     # So we need to scan for all keys matching this agent_id
-    all_entries = LemonCore.Store.list(:agent_files)
+    all_entries = AgentFileStore.list()
 
     all_entries
     |> Enum.filter(fn
@@ -40,7 +43,7 @@ defmodule LemonControlPlane.Methods.AgentsFilesList do
   rescue
     # Fallback for old format where files might be stored differently
     _ ->
-      case LemonCore.Store.get(:agent_files, agent_id) do
+      case AgentFileStore.get_legacy(agent_id) do
         nil -> []
         files when is_list(files) -> Enum.map(files, &file_to_map/1)
         files when is_map(files) -> Map.values(files) |> Enum.map(&file_to_map/1)

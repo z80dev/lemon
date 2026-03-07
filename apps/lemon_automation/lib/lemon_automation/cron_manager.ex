@@ -467,7 +467,7 @@ defmodule LemonAutomation.CronManager do
 
       if agent_id do
         Logger.info("[CronManager] Clearing heartbeat config for agent: #{agent_id}")
-        LemonCore.Store.delete(:heartbeat_config, agent_id)
+        LemonCore.HeartbeatStore.delete_config(agent_id)
       end
     end
   rescue

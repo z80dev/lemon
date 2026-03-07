@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -30,7 +31,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
         {:error, Errors.invalid_request("method is required")}
 
       true ->
-        case LemonCore.Store.get(:nodes_registry, node_id) do
+        case NodeStore.get_node(node_id) do
           nil ->
             {:error, Errors.not_found("Node not found")}
 
@@ -54,24 +55,28 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
                 created_at_ms: System.system_time(:millisecond),
                 timeout_ms: timeout_ms
               }
-              LemonCore.Store.put(:node_invocations, invoke_id, invocation)
+
+              NodeStore.put_invocation(invoke_id, invocation)
 
               # Broadcast invoke request to node
-              event = LemonCore.Event.new(:node_invoke_request, %{
-                invoke_id: invoke_id,
-                node_id: node_id,
-                method: method,
-                args: args,
-                timeout_ms: timeout_ms
-              })
+              event =
+                LemonCore.Event.new(:node_invoke_request, %{
+                  invoke_id: invoke_id,
+                  node_id: node_id,
+                  method: method,
+                  args: args,
+                  timeout_ms: timeout_ms
+                })
+
               LemonCore.Bus.broadcast("nodes", event)
 
-              {:ok, %{
-                "invokeId" => invoke_id,
-                "nodeId" => node_id,
-                "method" => method,
-                "status" => "pending"
-              }}
+              {:ok,
+               %{
+                 "invokeId" => invoke_id,
+                 "nodeId" => node_id,
+                 "method" => method,
+                 "status" => "pending"
+               }}
             end
         end
     end

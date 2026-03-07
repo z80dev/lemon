@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.DevicePairingStore
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.Bus
 
@@ -23,7 +24,7 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
     if is_nil(pairing_id) or pairing_id == "" do
       {:error, Errors.invalid_request("pairingId is required")}
     else
-      case LemonCore.Store.get(:device_pairing, pairing_id) do
+      case DevicePairingStore.get_pairing(pairing_id) do
         nil ->
           {:error, Errors.not_found("Pairing request not found")}
 
@@ -47,19 +48,21 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
               # Generate device token and challenge token
               device_token = generate_device_token()
               challenge_token = generate_challenge_token()
-              challenge_expires_at = now + 60_000  # Challenge valid for 1 minute
+              # Challenge valid for 1 minute
+              challenge_expires_at = now + 60_000
 
-              updated = Map.merge(pairing, %{
-                status: :approved,
-                device_token: device_token,
-                challenge_token: challenge_token,
-                approved_at_ms: now
-              })
+              updated =
+                Map.merge(pairing, %{
+                  status: :approved,
+                  device_token: device_token,
+                  challenge_token: challenge_token,
+                  approved_at_ms: now
+                })
 
-              LemonCore.Store.put(:device_pairing, pairing_id, updated)
+              DevicePairingStore.put_pairing(pairing_id, updated)
 
               # Store device registration
-              LemonCore.Store.put(:devices, device_token, %{
+              DevicePairingStore.put_device(device_token, %{
                 device_type: device_type,
                 device_name: device_name,
                 pairing_id: pairing_id,
@@ -67,7 +70,7 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
               })
 
               # Store challenge for connect.challenge verification
-              LemonCore.Store.put(:device_pairing_challenges, challenge_token, %{
+              DevicePairingStore.put_challenge(challenge_token, %{
                 device_id: device_token,
                 device_name: device_name,
                 device_type: device_type,
@@ -87,11 +90,12 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
                 }
               })
 
-              {:ok, %{
-                "success" => true,
-                "deviceToken" => device_token,
-                "challengeToken" => challenge_token
-              }}
+              {:ok,
+               %{
+                 "success" => true,
+                 "deviceToken" => device_token,
+                 "challengeToken" => challenge_token
+               }}
           end
       end
     end

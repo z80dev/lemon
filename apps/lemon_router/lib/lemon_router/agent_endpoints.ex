@@ -23,8 +23,7 @@ defmodule LemonRouter.AgentEndpoints do
   """
 
   alias LemonCore.SessionKey
-
-  @table :agent_endpoints
+  alias LemonRouter.AgentEndpointStore
   @allowed_peer_kinds [:dm, :group, :channel, :unknown]
 
   @type route :: %{
@@ -59,7 +58,7 @@ defmodule LemonRouter.AgentEndpoints do
     limit = normalize_limit(opts[:limit])
 
     rows =
-      LemonCore.Store.list(@table)
+      AgentEndpointStore.list()
       |> Enum.reduce([], fn
         {{entry_agent_id, _name}, entry}, acc when is_binary(entry_agent_id) and is_map(entry) ->
           if is_nil(agent_id) or entry_agent_id == agent_id do
@@ -86,7 +85,7 @@ defmodule LemonRouter.AgentEndpoints do
   def get(agent_id, name)
       when is_binary(agent_id) and agent_id != "" and is_binary(name) and name != "" do
     with {:ok, normalized_name} <- normalize_name(name),
-         entry when is_map(entry) <- LemonCore.Store.get(@table, {agent_id, normalized_name}),
+         entry when is_map(entry) <- AgentEndpointStore.get(agent_id, normalized_name),
          normalized when is_map(normalized) <- normalize_entry(agent_id, entry) do
       {:ok, normalized}
     else
@@ -108,7 +107,7 @@ defmodule LemonRouter.AgentEndpoints do
     with {:ok, normalized_name} <- normalize_name(name),
          {:ok, resolved} <- resolve(agent_id, target, opts),
          {:ok, route} <- normalize_route(resolved.route, opts) do
-      existing = LemonCore.Store.get(@table, {agent_id, normalized_name})
+      existing = AgentEndpointStore.get(agent_id, normalized_name)
 
       endpoint = %{
         id: map_get(existing, :id) || "endpoint_#{LemonCore.Id.uuid()}",
@@ -123,7 +122,7 @@ defmodule LemonRouter.AgentEndpoints do
         updated_at_ms: now
       }
 
-      case LemonCore.Store.put(@table, {agent_id, normalized_name}, endpoint) do
+      case AgentEndpointStore.put(agent_id, normalized_name, endpoint) do
         :ok -> {:ok, endpoint}
         {:error, reason} -> {:error, reason}
       end
@@ -138,7 +137,7 @@ defmodule LemonRouter.AgentEndpoints do
   def delete(agent_id, name)
       when is_binary(agent_id) and agent_id != "" and is_binary(name) and name != "" do
     with {:ok, normalized_name} <- normalize_name(name) do
-      LemonCore.Store.delete(@table, {agent_id, normalized_name})
+      AgentEndpointStore.delete(agent_id, normalized_name)
       :ok
     end
   rescue

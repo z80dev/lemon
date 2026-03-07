@@ -201,7 +201,7 @@ items = LemonCore.Store.list(:my_table)
 
 Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
 
-Use the generic table API only for backend/wrapper internals or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, and `LemonCore.IntrospectionStore`.
+Use the generic table API only for backend/wrapper internals or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, and `LemonCore.ExecApprovalStore`.
 
 ### Specialized APIs
 

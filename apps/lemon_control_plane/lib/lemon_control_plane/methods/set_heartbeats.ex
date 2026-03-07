@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.SetHeartbeats do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.HeartbeatStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -36,18 +37,19 @@ defmodule LemonControlPlane.Methods.SetHeartbeats do
         }
 
         # Store heartbeat config
-        LemonCore.Store.put(:heartbeat_config, agent_id, config)
+        HeartbeatStore.put_config(agent_id, config)
 
         # Notify HeartbeatManager if available
         if Code.ensure_loaded?(LemonAutomation.HeartbeatManager) do
           LemonAutomation.HeartbeatManager.update_config(agent_id, config)
         end
 
-        {:ok, %{
-          "agentId" => agent_id,
-          "enabled" => enabled,
-          "intervalMs" => config.interval_ms
-        }}
+        {:ok,
+         %{
+           "agentId" => agent_id,
+           "enabled" => enabled,
+           "intervalMs" => config.interval_ms
+         }}
     end
   end
 end

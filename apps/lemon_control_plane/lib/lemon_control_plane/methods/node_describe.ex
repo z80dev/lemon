@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NodeDescribe do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -22,22 +23,23 @@ defmodule LemonControlPlane.Methods.NodeDescribe do
     if is_nil(node_id) or node_id == "" do
       {:error, Errors.invalid_request("nodeId is required")}
     else
-      case LemonCore.Store.get(:nodes_registry, node_id) do
+      case NodeStore.get_node(node_id) do
         nil ->
           {:error, Errors.not_found("Node not found")}
 
         node ->
           # Safe access supporting both atom and string keys (for JSONL reload)
-          {:ok, %{
-            "nodeId" => get_field(node, :id),
-            "name" => get_field(node, :name),
-            "type" => get_field(node, :type),
-            "capabilities" => get_field(node, :capabilities) || %{},
-            "status" => to_string(get_field(node, :status) || :unknown),
-            "pairedAtMs" => get_field(node, :paired_at_ms),
-            "lastSeenMs" => get_field(node, :last_seen_ms),
-            "metadata" => get_field(node, :metadata) || %{}
-          }}
+          {:ok,
+           %{
+             "nodeId" => get_field(node, :id),
+             "name" => get_field(node, :name),
+             "type" => get_field(node, :type),
+             "capabilities" => get_field(node, :capabilities) || %{},
+             "status" => to_string(get_field(node, :status) || :unknown),
+             "pairedAtMs" => get_field(node, :paired_at_ms),
+             "lastSeenMs" => get_field(node, :last_seen_ms),
+             "metadata" => get_field(node, :metadata) || %{}
+           }}
       end
     end
   end

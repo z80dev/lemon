@@ -19,6 +19,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.ExecApprovalStore
+
   @impl true
   def name, do: "exec.approvals.set"
 
@@ -58,18 +60,18 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
 
   defp set_approval_policy(policy) when is_map(policy) do
     # Store the global policy map for reference
-    LemonCore.Store.put(:exec_approvals_policy_map, :global, policy)
+    ExecApprovalStore.put_global_policy_map(policy)
 
     # Also store per-tool entries that the runtime can check
     # Tools with "allow" are pre-approved at the tool level (any action)
     Enum.each(policy, fn {tool, disposition} ->
       if disposition == "allow" do
         # Store with a wildcard action hash to indicate any action is pre-approved
-        LemonCore.Store.put(
-          :exec_approvals_policy,
-          {tool, :any},
-          %{approved: true, scope: :global, approved_at_ms: LemonCore.Clock.now_ms()}
-        )
+        ExecApprovalStore.put_global_policy(tool, :any, %{
+          approved: true,
+          scope: :global,
+          approved_at_ms: LemonCore.Clock.now_ms()
+        })
       end
     end)
 
@@ -87,17 +89,13 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
         if tool do
           action_hash = hash_action(action)
 
-          LemonCore.Store.put(
-            :exec_approvals_policy,
-            {tool, action_hash},
-            %{
-              approved: true,
-              tool: tool,
-              action_hash: action_hash,
-              scope: :global,
-              approved_at_ms: LemonCore.Clock.now_ms()
-            }
-          )
+          ExecApprovalStore.put_global_policy(tool, action_hash, %{
+            approved: true,
+            tool: tool,
+            action_hash: action_hash,
+            scope: :global,
+            approved_at_ms: LemonCore.Clock.now_ms()
+          })
 
           acc + 1
         else

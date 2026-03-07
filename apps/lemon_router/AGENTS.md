@@ -65,6 +65,7 @@ Inbound transport
 `SessionCoordinator` owns:
 
 - active run pointer per conversation key
+- `SessionRegistry` updates, exposed to other modules only through `SessionReadModel`
 - pending queue/backlog
 - followup merge/debounce
 - steer and steer-backlog fallback
@@ -103,6 +104,7 @@ Use typed wrappers when you touch shared state:
 - `LemonCore.RunStore`
 - `LemonCore.PolicyStore`
 - `LemonCore.ProgressStore`
+- `LemonRouter.AgentEndpointStore`
 - `LemonRouter.PendingCompactionStore`
 
 Telegram-specific router tests should assert against channels-owned wrappers:

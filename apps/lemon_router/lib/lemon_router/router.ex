@@ -145,15 +145,17 @@ defmodule LemonRouter.Router do
     LemonRouter.SessionCoordinator.abort_session(session_key, reason)
 
     # Compatibility fallback for any legacy run registrations still present.
-    LemonRouter.SessionRegistry
-    |> Registry.lookup(session_key)
-    |> Enum.reduce(MapSet.new(), fn
-      {_pid, %{run_id: run_id}}, acc when is_binary(run_id) -> MapSet.put(acc, run_id)
-      _, acc -> acc
-    end)
-    |> Enum.each(&abort_run(&1, reason))
+    case LemonRouter.SessionReadModel.active_run(session_key) do
+      {:ok, run_id} -> abort_run(run_id, reason)
+      :none -> :ok
+    end
 
     :ok
+  end
+
+  @spec session_busy?(binary()) :: boolean()
+  def session_busy?(session_key) when is_binary(session_key) do
+    LemonRouter.SessionReadModel.busy?(session_key)
   end
 
   @doc """

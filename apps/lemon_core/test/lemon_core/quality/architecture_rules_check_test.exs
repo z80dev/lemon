@@ -358,6 +358,57 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags heartbeat raw store bypasses outside the typed wrapper" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_automation/lib/lemon_automation/bad_heartbeat.ex",
+        """
+        defmodule LemonAutomation.BadHeartbeat do
+          def bad(agent_id), do: LemonCore.Store.get(:heartbeat_config, agent_id)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :heartbeat_store_wrapper_bypass and
+                 issue.path == "apps/lemon_automation/lib/lemon_automation/bad_heartbeat.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags control-plane node storage bypasses outside typed wrappers" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_node.ex",
+        """
+        defmodule LemonControlPlane.Methods.BadNode do
+          def bad(node_id), do: LemonCore.Store.get(:nodes_registry, node_id)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :control_plane_store_wrapper_bypass and
+                 issue.path ==
+                   "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_node.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   defp tmp_repo! do
     dir =
       Path.join(

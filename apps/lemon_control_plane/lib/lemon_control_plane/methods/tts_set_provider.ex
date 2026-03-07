@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.TtsSetProvider do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.TtsStore
   alias LemonControlPlane.Protocol.Errors
 
   @valid_providers ~w(system openai elevenlabs)
@@ -25,16 +26,20 @@ defmodule LemonControlPlane.Methods.TtsSetProvider do
       {:error, Errors.invalid_request("provider is required")}
     else
       if provider not in @valid_providers do
-        {:error, Errors.invalid_request("Invalid provider. Valid options: #{Enum.join(@valid_providers, ", ")}")}
+        {:error,
+         Errors.invalid_request(
+           "Invalid provider. Valid options: #{Enum.join(@valid_providers, ", ")}"
+         )}
       else
-        existing = LemonCore.Store.get(:tts_config, :global) || %{}
+        existing = TtsStore.get() || %{}
 
-        config = Map.merge(existing, %{
-          provider: provider,
-          updated_at_ms: System.system_time(:millisecond)
-        })
+        config =
+          Map.merge(existing, %{
+            provider: provider,
+            updated_at_ms: System.system_time(:millisecond)
+          })
 
-        LemonCore.Store.put(:tts_config, :global, config)
+        TtsStore.put(config)
 
         {:ok, %{"provider" => provider}}
       end

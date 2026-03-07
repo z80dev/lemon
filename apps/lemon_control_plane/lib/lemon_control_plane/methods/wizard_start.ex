@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.WizardStart do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.WizardStore
   alias LemonCore.Id
 
   @impl true
@@ -31,14 +32,15 @@ defmodule LemonControlPlane.Methods.WizardStart do
       started_at_ms: System.system_time(:millisecond)
     }
 
-    LemonCore.Store.put(:wizards, wizard_id, wizard)
+    WizardStore.put(wizard_id, wizard)
 
-    {:ok, %{
-      "wizardId" => wizard_id,
-      "type" => wizard_type,
-      "steps" => wizard.steps,
-      "currentStep" => 0
-    }}
+    {:ok,
+     %{
+       "wizardId" => wizard_id,
+       "type" => wizard_type,
+       "steps" => wizard.steps,
+       "currentStep" => 0
+     }}
   end
 
   defp get_wizard_steps("setup") do

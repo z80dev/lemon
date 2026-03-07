@@ -64,9 +64,9 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Validates engine IDs, parses resume tokens. Default engines: lemon echo codex claude opencode pi kimi. |
+| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Channels-local compatibility shim for engine IDs and resume lines. Defers to `LemonGateway.EngineRegistry` at runtime when available; otherwise uses configured/default engine IDs. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` / router read model |
 
 ### Outbox Pipeline
 

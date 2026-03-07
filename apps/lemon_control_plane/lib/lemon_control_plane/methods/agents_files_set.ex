@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.AgentsFilesSet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentFileStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -39,14 +40,15 @@ defmodule LemonControlPlane.Methods.AgentsFilesSet do
         }
 
         # Store with compound key
-        LemonCore.Store.put(:agent_files, {agent_id, file_name}, file)
+        AgentFileStore.put(agent_id, file_name, file)
 
-        {:ok, %{
-          "agentId" => agent_id,
-          "fileName" => file_name,
-          "size" => byte_size(content),
-          "updatedAt" => file.updated_at_ms
-        }}
+        {:ok,
+         %{
+           "agentId" => agent_id,
+           "fileName" => file_name,
+           "size" => byte_size(content),
+           "updatedAt" => file.updated_at_ms
+         }}
     end
   end
 end

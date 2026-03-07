@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.TtsEnable do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.TtsStore
+
   @impl true
   def name, do: "tts.enable"
 
@@ -17,19 +19,21 @@ defmodule LemonControlPlane.Methods.TtsEnable do
   def handle(params, _ctx) do
     provider = params["provider"] || "system"
 
-    existing = LemonCore.Store.get(:tts_config, :global) || %{}
+    existing = TtsStore.get() || %{}
 
-    config = Map.merge(existing, %{
-      enabled: true,
-      provider: provider,
-      updated_at_ms: System.system_time(:millisecond)
-    })
+    config =
+      Map.merge(existing, %{
+        enabled: true,
+        provider: provider,
+        updated_at_ms: System.system_time(:millisecond)
+      })
 
-    LemonCore.Store.put(:tts_config, :global, config)
+    TtsStore.put(config)
 
-    {:ok, %{
-      "enabled" => true,
-      "provider" => provider
-    }}
+    {:ok,
+     %{
+       "enabled" => true,
+       "provider" => provider
+     }}
   end
 end

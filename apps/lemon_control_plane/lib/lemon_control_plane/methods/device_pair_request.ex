@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.DevicePairRequest do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.DevicePairingStore
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.{Bus, Id}
 
@@ -44,7 +45,7 @@ defmodule LemonControlPlane.Methods.DevicePairRequest do
           expires_at_ms: expires_at
         }
 
-        LemonCore.Store.put(:device_pairing, pairing_id, pairing)
+        DevicePairingStore.put_pairing(pairing_id, pairing)
 
         # Emit event
         Bus.broadcast("system", %LemonCore.Event{
@@ -57,11 +58,12 @@ defmodule LemonControlPlane.Methods.DevicePairRequest do
           }
         })
 
-        {:ok, %{
-          "pairingId" => pairing_id,
-          "code" => code,
-          "expiresAt" => expires_at
-        }}
+        {:ok,
+         %{
+           "pairingId" => pairing_id,
+           "code" => code,
+           "expiresAt" => expires_at
+         }}
     end
   end
 

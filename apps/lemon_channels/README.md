@@ -519,7 +519,7 @@ Engine resolution priority: resume token > engine hint > binding default > proje
 
 ### Engine Registry
 
-`LemonChannels.EngineRegistry` validates engine IDs and parses resume tokens.
+`LemonChannels.EngineRegistry` is a channels-local compatibility shim. It formats resume lines locally, but engine discovery and resume parsing defer to `LemonGateway.EngineRegistry` when the gateway registry is running and fall back to the configured/default engine list otherwise.
 
 ```elixir
 LemonChannels.EngineRegistry.engine_known?("claude")  # true
@@ -531,11 +531,11 @@ LemonChannels.EngineRegistry.format_resume(%ResumeToken{engine: "claude", value:
 # "claude --resume abc123"
 ```
 
-Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override via `config :lemon_channels, :engines`.
+Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override the fallback list via `config :lemon_channels, :engines`.
 
 ### Runtime Bridge
 
-`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency:
+`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` or the router read model rather than reaching into `SessionRegistry` directly:
 
 ```elixir
 LemonChannels.Runtime.cancel_by_run_id(run_id)

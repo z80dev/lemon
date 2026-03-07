@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.NodeList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
+
   @impl true
   def name, do: "node.list"
 
@@ -16,7 +18,7 @@ defmodule LemonControlPlane.Methods.NodeList do
   @impl true
   def handle(_params, _ctx) do
     nodes =
-      LemonCore.Store.list(:nodes_registry)
+      NodeStore.list_nodes()
       |> Enum.map(fn {_id, node} -> format_node(node) end)
       |> Enum.sort_by(& &1["name"])
 

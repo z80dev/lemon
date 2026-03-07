@@ -63,7 +63,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     agent_core: ["AgentCore"],
     ai: ["Ai"],
     coding_agent: ["CodingAgent"],
-    coding_agent_ui: ["CodingAgentUi"],
+    coding_agent_ui: ["CodingAgent.UI", "CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],

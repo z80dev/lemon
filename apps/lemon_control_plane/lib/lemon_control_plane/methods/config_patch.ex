@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.ConfigPatch do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.ConfigStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -24,13 +25,14 @@ defmodule LemonControlPlane.Methods.ConfigPatch do
     else
       # Apply each key-value pair
       Enum.each(patch, fn {key, value} ->
-        LemonCore.Store.put(:system_config, key, value)
+        ConfigStore.put(key, value)
       end)
 
-      {:ok, %{
-        "success" => true,
-        "applied" => Map.keys(patch)
-      }}
+      {:ok,
+       %{
+         "success" => true,
+         "applied" => Map.keys(patch)
+       }}
     end
   end
 end

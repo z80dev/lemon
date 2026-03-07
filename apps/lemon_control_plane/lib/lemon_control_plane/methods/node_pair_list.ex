@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.NodePairList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
+
   @impl true
   def name, do: "node.pair.list"
 
@@ -19,7 +21,7 @@ defmodule LemonControlPlane.Methods.NodePairList do
 
     # Get all pairing requests
     requests =
-      LemonCore.Store.list(:nodes_pairing)
+      NodeStore.list_pairings()
       |> Enum.map(fn {_id, request} -> request end)
       |> Enum.filter(fn request ->
         # Only pending and not expired

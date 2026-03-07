@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.UsageStatus do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.UsageStore
+
   @impl true
   def name, do: "usage.status"
 
@@ -41,7 +43,7 @@ defmodule LemonControlPlane.Methods.UsageStatus do
   end
 
   defp get_run_count(_since_ms) do
-    case LemonCore.Store.get(:usage_stats, :runs_today) do
+    case UsageStore.get_stats(:runs_today) do
       nil -> 0
       stats -> stats[:count] || 0
     end
@@ -50,19 +52,22 @@ defmodule LemonControlPlane.Methods.UsageStatus do
   end
 
   defp get_token_count(_since_ms) do
-    case LemonCore.Store.get(:usage_stats, :tokens_today) do
-      nil -> %{"input" => 0, "output" => 0}
-      stats -> %{
-        "input" => stats[:input] || 0,
-        "output" => stats[:output] || 0
-      }
+    case UsageStore.get_stats(:tokens_today) do
+      nil ->
+        %{"input" => 0, "output" => 0}
+
+      stats ->
+        %{
+          "input" => stats[:input] || 0,
+          "output" => stats[:output] || 0
+        }
     end
   rescue
     _ -> %{"input" => 0, "output" => 0}
   end
 
   defp get_cost_estimate(_since_ms) do
-    case LemonCore.Store.get(:usage_stats, :cost_today) do
+    case UsageStore.get_stats(:cost_today) do
       nil -> 0.0
       stats -> stats[:total] || 0.0
     end

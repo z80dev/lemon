@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.WizardCancel do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.WizardStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -22,7 +23,7 @@ defmodule LemonControlPlane.Methods.WizardCancel do
     if is_nil(wizard_id) or wizard_id == "" do
       {:error, Errors.invalid_request("wizardId is required")}
     else
-      case LemonCore.Store.get(:wizards, wizard_id) do
+      case WizardStore.get(wizard_id) do
         nil ->
           {:error, Errors.not_found("Wizard not found")}
 
@@ -30,12 +31,13 @@ defmodule LemonControlPlane.Methods.WizardCancel do
           if wizard.status != :in_progress do
             {:error, Errors.conflict("Wizard is not in progress")}
           else
-            updated = Map.merge(wizard, %{
-              status: :cancelled,
-              cancelled_at_ms: System.system_time(:millisecond)
-            })
+            updated =
+              Map.merge(wizard, %{
+                status: :cancelled,
+                cancelled_at_ms: System.system_time(:millisecond)
+              })
 
-            LemonCore.Store.put(:wizards, wizard_id, updated)
+            WizardStore.put(wizard_id, updated)
 
             {:ok, %{"success" => true}}
           end

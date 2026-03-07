@@ -197,6 +197,148 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       message: "Gateway run handling must not keep legacy Job compatibility branches",
       files: ["apps/lemon_gateway/lib/lemon_gateway/run.ex"],
       patterns: ["def handle_cast({:steer, %Job", "def handle_cast({:steer_backlog, %Job"]
+    },
+    %{
+      code: :heartbeat_store_wrapper_bypass,
+      message: "Heartbeat state must go through LemonCore.HeartbeatStore",
+      files: [
+        "apps/lemon_automation/lib/**/*.ex",
+        "apps/lemon_control_plane/lib/**/*.ex",
+        "apps/lemon_core/lib/**/*.ex"
+      ],
+      exclude: [
+        "apps/lemon_core/lib/lemon_core/heartbeat_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:heartbeat_config",
+        "LemonCore.Store.put(:heartbeat_config",
+        "LemonCore.Store.delete(:heartbeat_config",
+        "LemonCore.Store.list(:heartbeat_config",
+        "LemonCore.Store.get(:heartbeat_last",
+        "LemonCore.Store.put(:heartbeat_last",
+        "LemonCore.Store.delete(:heartbeat_last",
+        "LemonCore.Store.list(:heartbeat_last"
+      ]
+    },
+    %{
+      code: :exec_approval_store_wrapper_bypass,
+      message: "Execution approval state must go through LemonCore.ExecApprovalStore",
+      files: ["apps/lemon_core/lib/**/*.ex", "apps/lemon_control_plane/lib/**/*.ex"],
+      exclude: [
+        "apps/lemon_core/lib/lemon_core/exec_approval_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:exec_approvals_policy",
+        "LemonCore.Store.put(:exec_approvals_policy",
+        "LemonCore.Store.list(:exec_approvals_policy",
+        "LemonCore.Store.get(:exec_approvals_policy_agent",
+        "LemonCore.Store.put(:exec_approvals_policy_agent",
+        "LemonCore.Store.list(:exec_approvals_policy_agent",
+        "LemonCore.Store.get(:exec_approvals_policy_session",
+        "LemonCore.Store.put(:exec_approvals_policy_session",
+        "LemonCore.Store.list(:exec_approvals_policy_session",
+        "LemonCore.Store.get(:exec_approvals_policy_node",
+        "LemonCore.Store.put(:exec_approvals_policy_node",
+        "LemonCore.Store.list(:exec_approvals_policy_node",
+        "LemonCore.Store.get(:exec_approvals_policy_map",
+        "LemonCore.Store.put(:exec_approvals_policy_map",
+        "LemonCore.Store.get(:exec_approvals_policy_node_map",
+        "LemonCore.Store.put(:exec_approvals_policy_node_map",
+        "LemonCore.Store.get(:exec_approvals_pending",
+        "LemonCore.Store.put(:exec_approvals_pending",
+        "LemonCore.Store.delete(:exec_approvals_pending",
+        "LemonCore.Store.list(:exec_approvals_pending"
+      ]
+    },
+    %{
+      code: :router_agent_endpoint_store_bypass,
+      message: "Agent endpoint storage must go through LemonRouter.AgentEndpointStore",
+      files: ["apps/lemon_router/lib/**/*.ex", "apps/lemon_control_plane/lib/**/*.ex"],
+      exclude: [
+        "apps/lemon_router/lib/lemon_router/agent_endpoint_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:agent_endpoints",
+        "LemonCore.Store.put(:agent_endpoints",
+        "LemonCore.Store.delete(:agent_endpoints",
+        "LemonCore.Store.list(:agent_endpoints"
+      ]
+    },
+    %{
+      code: :sms_inbox_store_bypass,
+      message: "SMS inbox storage must go through LemonGateway.Sms.InboxStore",
+      files: ["apps/lemon_gateway/lib/**/*.ex"],
+      exclude: [
+        "apps/lemon_gateway/lib/lemon_gateway/sms/inbox_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:sms_inbox",
+        "LemonCore.Store.put(:sms_inbox",
+        "LemonCore.Store.delete(:sms_inbox",
+        "LemonCore.Store.list(:sms_inbox"
+      ]
+    },
+    %{
+      code: :control_plane_store_wrapper_bypass,
+      message:
+        "Control-plane persisted state must use typed wrappers instead of raw store tables",
+      files: ["apps/lemon_control_plane/lib/**/*.ex"],
+      exclude: [
+        "apps/lemon_control_plane/lib/lemon_control_plane/config_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/tts_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/voicewake_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/wizard_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/usage_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/talk_mode_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/agent_file_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/device_pairing_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/node_store.ex",
+        "apps/lemon_core/lib/lemon_core/store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:system_config",
+        "LemonCore.Store.put(:system_config",
+        "LemonCore.Store.list(:system_config",
+        "LemonCore.Store.get(:tts_config",
+        "LemonCore.Store.put(:tts_config",
+        "LemonCore.Store.get(:voicewake_config",
+        "LemonCore.Store.put(:voicewake_config",
+        "LemonCore.Store.get(:wizards",
+        "LemonCore.Store.put(:wizards",
+        "LemonCore.Store.get(:usage_records",
+        "LemonCore.Store.put(:usage_records",
+        "LemonCore.Store.get(:usage_data",
+        "LemonCore.Store.put(:usage_data",
+        "LemonCore.Store.get(:usage_stats",
+        "LemonCore.Store.get(:talk_mode",
+        "LemonCore.Store.put(:talk_mode",
+        "LemonCore.Store.get(:agent_files",
+        "LemonCore.Store.put(:agent_files",
+        "LemonCore.Store.list(:agent_files",
+        "LemonCore.Store.get(:device_pairing",
+        "LemonCore.Store.put(:device_pairing",
+        "LemonCore.Store.get(:device_pairing_challenges",
+        "LemonCore.Store.put(:device_pairing_challenges",
+        "LemonCore.Store.delete(:device_pairing_challenges",
+        "LemonCore.Store.put(:devices",
+        "LemonCore.Store.get(:nodes_pairing",
+        "LemonCore.Store.put(:nodes_pairing",
+        "LemonCore.Store.list(:nodes_pairing",
+        "LemonCore.Store.get(:nodes_pairing_by_code",
+        "LemonCore.Store.put(:nodes_pairing_by_code",
+        "LemonCore.Store.get(:nodes_registry",
+        "LemonCore.Store.put(:nodes_registry",
+        "LemonCore.Store.list(:nodes_registry",
+        "LemonCore.Store.get(:node_challenges",
+        "LemonCore.Store.put(:node_challenges",
+        "LemonCore.Store.delete(:node_challenges",
+        "LemonCore.Store.get(:node_invocations",
+        "LemonCore.Store.put(:node_invocations"
+      ]
     }
   ]
 

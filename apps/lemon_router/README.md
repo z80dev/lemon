@@ -42,12 +42,14 @@ Channel transport or gateway-native ingress
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction application, control-plane abort/keepalive hooks |
 | `LemonRouter.RunOrchestrator` | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
+| `LemonRouter.SessionReadModel` | Read-only facade over coordinator-owned active session state (`SessionRegistry`) |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before gateway submission |
 | `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
+| `LemonRouter.AgentEndpointStore` | Router-owned typed wrapper for persistent endpoint aliases |
 | `LemonRouter.AgentInbox` | BEAM-local send API with selectors, fanout, and queue-mode selection |
 | `LemonRouter.AgentDirectory` | Active/durable session discovery |
 | `LemonRouter.AgentEndpoints` | Persistent route aliases |

@@ -10,6 +10,8 @@ defmodule LemonControlPlane.Methods.ConfigGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.ConfigStore
+
   # Allowed config keys that can be retrieved from Application.get_env.
   # This prevents atom exhaustion from arbitrary key lookups.
   @allowed_app_config_keys %{
@@ -54,10 +56,11 @@ defmodule LemonControlPlane.Methods.ConfigGet do
 
   defp get_config_value(key) do
     # First check the store (user-set values)
-    case LemonCore.Store.get(:system_config, key) do
+    case ConfigStore.get(key) do
       nil ->
         # Fall back to Application.get_env only for allowed keys
         get_app_config_value(key)
+
       value ->
         value
     end
@@ -69,6 +72,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
       nil ->
         # Key not in allowed list - return nil instead of creating atom
         nil
+
       {app, config_key} ->
         Application.get_env(app, config_key)
     end
@@ -76,7 +80,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
 
   defp get_all_config do
     # Gather config from multiple sources
-    stored = LemonCore.Store.list(:system_config)
+    stored = ConfigStore.list()
 
     stored_map =
       if is_list(stored) do
@@ -89,6 +93,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     app_config =
       Enum.reduce(@allowed_app_config_keys, %{}, fn {key, {app, config_key}}, acc ->
         value = Application.get_env(app, config_key)
+
         if value != nil do
           Map.put(acc, key, format_config_value(value))
         else

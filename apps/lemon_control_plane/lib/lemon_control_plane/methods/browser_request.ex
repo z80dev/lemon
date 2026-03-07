@@ -24,6 +24,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -112,7 +113,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
     deadline = System.monotonic_time(:millisecond) + max(0, timeout_ms)
 
     poll = fn ->
-      case LemonCore.Store.get(:node_invocations, invoke_id) do
+      case NodeStore.get_invocation(invoke_id) do
         nil ->
           :pending
 
@@ -159,7 +160,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
 
   defp find_browser_node(nil) do
     # Try to find a default browser node
-    case LemonCore.Store.list(:nodes_registry) do
+    case NodeStore.list_nodes() do
       nodes when is_list(nodes) ->
         Enum.find_value(nodes, fn {_id, node} ->
           node_type = get_field(node, :type)
@@ -172,7 +173,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
   end
 
   defp find_browser_node(node_id) do
-    LemonCore.Store.get(:nodes_registry, node_id)
+    NodeStore.get_node(node_id)
   end
 
   # Safe map access supporting both atom and string keys

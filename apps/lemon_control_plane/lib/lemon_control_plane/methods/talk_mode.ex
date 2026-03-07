@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.TalkMode do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.TalkModeStore
+
   @impl true
   def name, do: "talk.mode"
 
@@ -28,14 +30,15 @@ defmodule LemonControlPlane.Methods.TalkMode do
   end
 
   defp get_talk_mode(session_key, _ctx) do
-    mode = LemonCore.Store.get(:talk_mode, session_key) || %{mode: :off}
+    mode = TalkModeStore.get(session_key) || %{mode: :off}
 
-    {:ok, %{
-      "sessionKey" => session_key,
-      "mode" => to_string(mode[:mode] || :off),
-      "provider" => mode[:provider],
-      "voice" => mode[:voice]
-    }}
+    {:ok,
+     %{
+       "sessionKey" => session_key,
+       "mode" => to_string(mode[:mode] || :off),
+       "provider" => mode[:provider],
+       "voice" => mode[:voice]
+     }}
   end
 
   defp set_talk_mode(session_key, mode, ctx) do
@@ -49,24 +52,28 @@ defmodule LemonControlPlane.Methods.TalkMode do
         updated_at_ms: System.system_time(:millisecond)
       }
 
-      LemonCore.Store.put(:talk_mode, session_key, config)
+      TalkModeStore.put(session_key, config)
 
       # Broadcast talk.mode event
-      event = LemonCore.Event.new(:talk_mode_changed, %{
-        session_key: session_key,
-        mode: mode
-      })
+      event =
+        LemonCore.Event.new(:talk_mode_changed, %{
+          session_key: session_key,
+          mode: mode
+        })
+
       LemonCore.Bus.broadcast("system", event)
 
-      {:ok, %{
-        "sessionKey" => session_key,
-        "mode" => mode,
-        "set" => true
-      }}
+      {:ok,
+       %{
+         "sessionKey" => session_key,
+         "mode" => mode,
+         "set" => true
+       }}
     else
-      {:error, LemonControlPlane.Protocol.Errors.invalid_request(
-        "Invalid mode. Must be one of: #{Enum.join(valid_modes, ", ")}"
-      )}
+      {:error,
+       LemonControlPlane.Protocol.Errors.invalid_request(
+         "Invalid mode. Must be one of: #{Enum.join(valid_modes, ", ")}"
+       )}
     end
   end
 end

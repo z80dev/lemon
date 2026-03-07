@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.AgentsFilesGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentFileStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -28,25 +29,31 @@ defmodule LemonControlPlane.Methods.AgentsFilesGet do
           {:error, Errors.not_found("File not found: #{file_name}")}
 
         file ->
-          {:ok, %{
-            "agentId" => agent_id,
-            "fileName" => file_name,
-            "content" => file[:content] || file["content"] || "",
-            "type" => to_string(file[:type] || file["type"] || "text"),
-            "updatedAt" => file[:updated_at] || file["updatedAt"] || file[:updated_at_ms]
-          }}
+          {:ok,
+           %{
+             "agentId" => agent_id,
+             "fileName" => file_name,
+             "content" => file[:content] || file["content"] || "",
+             "type" => to_string(file[:type] || file["type"] || "text"),
+             "updatedAt" => file[:updated_at] || file["updatedAt"] || file[:updated_at_ms]
+           }}
       end
     end
   end
 
   defp get_agent_file(agent_id, file_name) do
-    case LemonCore.Store.get(:agent_files, {agent_id, file_name}) do
+    case AgentFileStore.get(agent_id, file_name) do
       nil ->
         # Try getting from agent files map
-        case LemonCore.Store.get(:agent_files, agent_id) do
-          nil -> nil
-          files when is_map(files) -> Map.get(files, file_name)
-          files when is_list(files) -> Enum.find(files, &(&1[:name] == file_name || &1["name"] == file_name))
+        case AgentFileStore.get_legacy(agent_id) do
+          nil ->
+            nil
+
+          files when is_map(files) ->
+            Map.get(files, file_name)
+
+          files when is_list(files) ->
+            Enum.find(files, &(&1[:name] == file_name || &1["name"] == file_name))
         end
 
       file ->

@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.ExecApprovalStore
+
   @impl true
   def name, do: "exec.approvals.get"
 
@@ -16,11 +18,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
   @impl true
   def handle(_params, _ctx) do
     # Get the global policy map (tool -> disposition)
-    policy = LemonCore.Store.get(:exec_approvals_policy_map, :global) || %{}
+    policy = ExecApprovalStore.get_global_policy_map() || %{}
 
     # Get specific approvals (tool+action combinations)
     approvals =
-      LemonCore.Store.list(:exec_approvals_policy)
+      ExecApprovalStore.list_global_policies()
       |> Enum.map(fn {{tool, action_hash}, approval} ->
         %{
           "tool" => tool,
@@ -33,7 +35,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
     # Get pending requests
     pending =
-      LemonCore.Store.list(:exec_approvals_pending)
+      ExecApprovalStore.list_pending()
       |> Enum.map(fn {_id, p} ->
         %{
           "id" => p.id,
@@ -48,10 +50,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
       end)
       |> Enum.filter(fn p -> p["expiresAtMs"] > LemonCore.Clock.now_ms() end)
 
-    {:ok, %{
-      "policy" => policy,
-      "approvals" => approvals,
-      "pending" => pending
-    }}
+    {:ok,
+     %{
+       "policy" => policy,
+       "approvals" => approvals,
+       "pending" => pending
+     }}
   end
 end

@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.VoicewakeStore
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.Bus
 
@@ -23,7 +24,7 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
     if is_nil(enabled) do
       {:error, Errors.invalid_request("enabled is required")}
     else
-      existing = LemonCore.Store.get(:voicewake_config, :global) || %{}
+      existing = VoicewakeStore.get() || %{}
 
       config = %{
         enabled: enabled,
@@ -33,7 +34,7 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
         updated_at_ms: System.system_time(:millisecond)
       }
 
-      LemonCore.Store.put(:voicewake_config, :global, config)
+      VoicewakeStore.put(config)
 
       # Emit voicewake.changed event
       Bus.broadcast("system", %LemonCore.Event{
@@ -42,10 +43,11 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
         payload: config
       })
 
-      {:ok, %{
-        "enabled" => config.enabled,
-        "keyword" => config.keyword
-      }}
+      {:ok,
+       %{
+         "enabled" => config.enabled,
+         "keyword" => config.keyword
+       }}
     end
   end
 end

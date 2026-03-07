@@ -19,6 +19,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   alias LemonControlPlane.Protocol.Errors
   alias LemonControlPlane.Auth.TokenStore
+  alias LemonControlPlane.{DevicePairingStore, NodeStore}
 
   # Token TTL: 7 days (node/device sessions are long-lived)
   @token_ttl_ms 7 * 24 * 60 * 60 * 1000
@@ -27,7 +28,8 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   def name, do: "connect.challenge"
 
   @impl true
-  def scopes, do: []  # No auth required - this IS the auth
+  # No auth required - this IS the auth
+  def scopes, do: []
 
   @impl true
   def handle(params, ctx) do
@@ -42,16 +44,18 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
           token = generate_session_token()
 
           # Store token with identity for later validation
-          {:ok, _token_info} = TokenStore.store(token, identity,
-            ttl_ms: @token_ttl_ms,
-            conn_id: ctx[:conn_id]
-          )
+          {:ok, _token_info} =
+            TokenStore.store(token, identity,
+              ttl_ms: @token_ttl_ms,
+              conn_id: ctx[:conn_id]
+            )
 
-          {:ok, %{
-            "verified" => true,
-            "identity" => identity,
-            "token" => token
-          }}
+          {:ok,
+           %{
+             "verified" => true,
+             "identity" => identity,
+             "token" => token
+           }}
 
         {:error, reason} ->
           {:error, Errors.unauthorized(reason)}
@@ -61,7 +65,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   defp verify_challenge(challenge, ctx) do
     # Check if this is a device pairing verification
-    case LemonCore.Store.get(:device_pairing_challenges, challenge) do
+    case DevicePairingStore.get_challenge(challenge) do
       nil ->
         # Check if it's a node pairing verification
         verify_node_challenge(challenge, ctx)
@@ -69,18 +73,20 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
       pairing_info when is_map(pairing_info) ->
         # Verify the challenge matches a pending pairing
         expires_at = pairing_info[:expires_at_ms] || pairing_info["expires_at_ms"]
+
         if expires_at && expires_at > System.system_time(:millisecond) do
           # Clean up the challenge after successful verification (one-time use)
-          LemonCore.Store.delete(:device_pairing_challenges, challenge)
+          DevicePairingStore.delete_challenge(challenge)
 
-          {:ok, %{
-            "type" => "device",
-            "deviceId" => pairing_info[:device_id] || pairing_info["device_id"],
-            "deviceName" => pairing_info[:device_name] || pairing_info["device_name"]
-          }}
+          {:ok,
+           %{
+             "type" => "device",
+             "deviceId" => pairing_info[:device_id] || pairing_info["device_id"],
+             "deviceName" => pairing_info[:device_name] || pairing_info["device_name"]
+           }}
         else
           # Clean up expired challenge
-          LemonCore.Store.delete(:device_pairing_challenges, challenge)
+          DevicePairingStore.delete_challenge(challenge)
           {:error, "Challenge expired"}
         end
 
@@ -91,24 +97,26 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   defp verify_node_challenge(challenge, _ctx) do
     # Check against stored node challenges
-    case LemonCore.Store.get(:node_challenges, challenge) do
+    case NodeStore.get_challenge(challenge) do
       nil ->
         {:error, "Invalid challenge"}
 
       node_info when is_map(node_info) ->
         expires_at = node_info[:expires_at_ms] || node_info["expires_at_ms"]
+
         if expires_at && expires_at > System.system_time(:millisecond) do
           # Clean up the challenge after successful verification (one-time use)
-          LemonCore.Store.delete(:node_challenges, challenge)
+          NodeStore.delete_challenge(challenge)
 
-          {:ok, %{
-            "type" => "node",
-            "nodeId" => node_info[:node_id] || node_info["node_id"],
-            "nodeName" => node_info[:node_name] || node_info["node_name"]
-          }}
+          {:ok,
+           %{
+             "type" => "node",
+             "nodeId" => node_info[:node_id] || node_info["node_id"],
+             "nodeName" => node_info[:node_name] || node_info["node_name"]
+           }}
         else
           # Clean up expired challenge
-          LemonCore.Store.delete(:node_challenges, challenge)
+          NodeStore.delete_challenge(challenge)
           {:error, "Challenge expired"}
         end
 

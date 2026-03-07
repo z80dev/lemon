@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.TtsStatus do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.TtsStore
+
   @impl true
   def name, do: "tts.status"
 
@@ -15,14 +17,15 @@ defmodule LemonControlPlane.Methods.TtsStatus do
 
   @impl true
   def handle(_params, _ctx) do
-    config = LemonCore.Store.get(:tts_config, :global) || default_config()
+    config = TtsStore.get() || default_config()
 
-    {:ok, %{
-      "enabled" => config[:enabled] || false,
-      "provider" => config[:provider] || "system",
-      "voice" => config[:voice],
-      "rate" => config[:rate] || 1.0
-    }}
+    {:ok,
+     %{
+       "enabled" => config[:enabled] || false,
+       "provider" => config[:provider] || "system",
+       "voice" => config[:voice],
+       "rate" => config[:rate] || 1.0
+     }}
   end
 
   defp default_config do

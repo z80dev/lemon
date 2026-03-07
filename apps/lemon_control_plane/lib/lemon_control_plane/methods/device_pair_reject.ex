@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.DevicePairReject do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.DevicePairingStore
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.Bus
 
@@ -23,7 +24,7 @@ defmodule LemonControlPlane.Methods.DevicePairReject do
     if is_nil(pairing_id) or pairing_id == "" do
       {:error, Errors.invalid_request("pairingId is required")}
     else
-      case LemonCore.Store.get(:device_pairing, pairing_id) do
+      case DevicePairingStore.get_pairing(pairing_id) do
         nil ->
           {:error, Errors.not_found("Pairing request not found")}
 
@@ -38,12 +39,13 @@ defmodule LemonControlPlane.Methods.DevicePairReject do
           else
             now = System.system_time(:millisecond)
 
-            updated = Map.merge(pairing, %{
-              status: :rejected,
-              rejected_at_ms: now
-            })
+            updated =
+              Map.merge(pairing, %{
+                status: :rejected,
+                rejected_at_ms: now
+              })
 
-            LemonCore.Store.put(:device_pairing, pairing_id, updated)
+            DevicePairingStore.put_pairing(pairing_id, updated)
 
             # Emit event
             Bus.broadcast("system", %LemonCore.Event{

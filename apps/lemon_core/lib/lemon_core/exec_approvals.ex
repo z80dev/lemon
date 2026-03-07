@@ -23,6 +23,8 @@ defmodule LemonCore.ExecApprovals do
   - Session: `{session_key, tool, action_hash}`
   """
 
+  alias LemonCore.ExecApprovalStore
+
   @type approval_id :: binary()
 
   @doc """
@@ -91,7 +93,7 @@ defmodule LemonCore.ExecApprovals do
           expires_at_ms: expires_at_ms
         }
 
-        LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
+        ExecApprovalStore.put_pending(approval_id, pending)
 
         LemonCore.Telemetry.approval_requested(approval_id, tool, %{
           run_id: run_id,
@@ -127,12 +129,12 @@ defmodule LemonCore.ExecApprovals do
   """
   @spec resolve(approval_id(), decision :: atom()) :: :ok
   def resolve(approval_id, decision) when is_binary(approval_id) and is_atom(decision) do
-    case LemonCore.Store.get(:exec_approvals_pending, approval_id) do
+    case ExecApprovalStore.get_pending(approval_id) do
       nil ->
         :ok
 
       pending ->
-        LemonCore.Store.delete(:exec_approvals_pending, approval_id)
+        ExecApprovalStore.delete_pending(approval_id)
 
         if decision != :deny do
           store_approval(pending, decision)
@@ -194,12 +196,12 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp check_global_approval(tool, action_hash) do
-    case LemonCore.Store.get(:exec_approvals_policy, {tool, action_hash}) do
+    case ExecApprovalStore.get_global_policy(tool, action_hash) do
       %{approved: true} ->
         {:approved, :global}
 
       _ ->
-        case LemonCore.Store.get(:exec_approvals_policy, {tool, :any}) do
+        case ExecApprovalStore.get_global_policy(tool, :any) do
           %{approved: true} -> {:approved, :global}
           _ -> :not_approved
         end
@@ -207,12 +209,12 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp check_node_approval(node_id, tool, action_hash) do
-    case LemonCore.Store.get(:exec_approvals_policy_node, {node_id, tool, action_hash}) do
+    case ExecApprovalStore.get_node_policy(node_id, tool, action_hash) do
       %{approved: true} ->
         {:approved, :node}
 
       _ ->
-        case LemonCore.Store.get(:exec_approvals_policy_node, {node_id, tool, :any}) do
+        case ExecApprovalStore.get_node_policy(node_id, tool, :any) do
           %{approved: true} -> {:approved, :node}
           _ -> :not_approved
         end
@@ -220,12 +222,12 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp check_agent_approval(agent_id, tool, action_hash) do
-    case LemonCore.Store.get(:exec_approvals_policy_agent, {agent_id, tool, action_hash}) do
+    case ExecApprovalStore.get_agent_policy(agent_id, tool, action_hash) do
       %{approved: true} ->
         {:approved, :agent}
 
       _ ->
-        case LemonCore.Store.get(:exec_approvals_policy_agent, {agent_id, tool, :any}) do
+        case ExecApprovalStore.get_agent_policy(agent_id, tool, :any) do
           %{approved: true} -> {:approved, :agent}
           _ -> :not_approved
         end
@@ -233,12 +235,12 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp check_session_approval(session_key, tool, action_hash) do
-    case LemonCore.Store.get(:exec_approvals_policy_session, {session_key, tool, action_hash}) do
+    case ExecApprovalStore.get_session_policy(session_key, tool, action_hash) do
       %{approved: true} ->
         {:approved, :session}
 
       _ ->
-        case LemonCore.Store.get(:exec_approvals_policy_session, {session_key, tool, :any}) do
+        case ExecApprovalStore.get_session_policy(session_key, tool, :any) do
           %{approved: true} -> {:approved, :session}
           _ -> :not_approved
         end
@@ -266,19 +268,16 @@ defmodule LemonCore.ExecApprovals do
 
     case scope do
       :global ->
-        LemonCore.Store.put(:exec_approvals_policy, {pending.tool, action_hash}, approval)
+        ExecApprovalStore.put_global_policy(pending.tool, action_hash, approval)
 
       :agent ->
-        LemonCore.Store.put(
-          :exec_approvals_policy_agent,
-          {pending.agent_id, pending.tool, action_hash},
-          approval
-        )
+        ExecApprovalStore.put_agent_policy(pending.agent_id, pending.tool, action_hash, approval)
 
       :session ->
-        LemonCore.Store.put(
-          :exec_approvals_policy_session,
-          {pending.session_key, pending.tool, action_hash},
+        ExecApprovalStore.put_session_policy(
+          pending.session_key,
+          pending.tool,
+          action_hash,
           approval
         )
 
@@ -328,13 +327,14 @@ defmodule LemonCore.ExecApprovals do
           :deny ->
             {:ok, :denied}
 
-          scope when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
+          scope
+          when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
             {:ok, :approved, scope}
         end
     after
       timeout_ms ->
         LemonCore.Bus.unsubscribe("exec_approvals")
-        LemonCore.Store.delete(:exec_approvals_pending, approval_id)
+        ExecApprovalStore.delete_pending(approval_id)
         {:error, :timeout}
     end
   end

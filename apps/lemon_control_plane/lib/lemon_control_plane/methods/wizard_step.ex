@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.WizardStep do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.WizardStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -29,7 +30,7 @@ defmodule LemonControlPlane.Methods.WizardStep do
         {:error, Errors.invalid_request("stepId is required")}
 
       true ->
-        case LemonCore.Store.get(:wizards, wizard_id) do
+        case WizardStore.get(wizard_id) do
           nil ->
             {:error, Errors.not_found("Wizard not found")}
 
@@ -44,10 +45,11 @@ defmodule LemonControlPlane.Methods.WizardStep do
                 {:error, Errors.not_found("Step not found")}
               else
                 # Merge data and update wizard
-                updated = %{wizard |
-                  current_step: step_index,
-                  data: Map.merge(wizard.data, data),
-                  updated_at_ms: System.system_time(:millisecond)
+                updated = %{
+                  wizard
+                  | current_step: step_index,
+                    data: Map.merge(wizard.data, data),
+                    updated_at_ms: System.system_time(:millisecond)
                 }
 
                 # Check if wizard is complete
@@ -60,15 +62,16 @@ defmodule LemonControlPlane.Methods.WizardStep do
                     updated
                   end
 
-                LemonCore.Store.put(:wizards, wizard_id, updated)
+                WizardStore.put(wizard_id, updated)
 
-                {:ok, %{
-                  "wizardId" => wizard_id,
-                  "currentStep" => step_index,
-                  "stepId" => step_id,
-                  "complete" => is_complete,
-                  "data" => updated.data
-                }}
+                {:ok,
+                 %{
+                   "wizardId" => wizard_id,
+                   "currentStep" => step_index,
+                   "stepId" => step_id,
+                   "complete" => is_complete,
+                   "data" => updated.data
+                 }}
               end
             end
         end

@@ -44,6 +44,8 @@ defmodule LemonControlPlane.Methods.UsageCost do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.UsageStore
+
   @impl true
   def name, do: "usage.cost"
 
@@ -104,24 +106,28 @@ defmodule LemonControlPlane.Methods.UsageCost do
     date_key = Date.utc_today() |> Date.to_iso8601()
 
     # Get or create today's record
-    record = LemonCore.Store.get(:usage_records, date_key) || %{
-      date: date_key,
-      total_cost: 0.0,
-      breakdown: %{},
-      requests: %{},
-      tokens: %{}
-    }
+    record =
+      UsageStore.get_record(date_key) ||
+        %{
+          date: date_key,
+          total_cost: 0.0,
+          breakdown: %{},
+          requests: %{},
+          tokens: %{}
+        }
 
     # Update totals
-    record = %{record |
-      total_cost: (get_field(record, :total_cost) || 0.0) + cost,
-      breakdown: update_breakdown(get_field(record, :breakdown) || %{}, provider, cost),
-      requests: update_count(get_field(record, :requests) || %{}, provider, 1),
-      tokens: update_tokens(get_field(record, :tokens) || %{}, provider, input_tokens, output_tokens)
+    record = %{
+      record
+      | total_cost: (get_field(record, :total_cost) || 0.0) + cost,
+        breakdown: update_breakdown(get_field(record, :breakdown) || %{}, provider, cost),
+        requests: update_count(get_field(record, :requests) || %{}, provider, 1),
+        tokens:
+          update_tokens(get_field(record, :tokens) || %{}, provider, input_tokens, output_tokens)
     }
 
     # Store updated record
-    LemonCore.Store.put(:usage_records, date_key, record)
+    UsageStore.put_record(date_key, record)
 
     # Also update the current summary for quick access
     update_current_summary(provider, cost, input_tokens, output_tokens)
@@ -147,24 +153,27 @@ defmodule LemonControlPlane.Methods.UsageCost do
   end
 
   defp update_current_summary(provider, cost, input_tokens, output_tokens) do
-    summary = LemonCore.Store.get(:usage_data, :current) || %{
-      total_cost: 0.0,
-      breakdown: %{},
-      total_requests: 0,
-      total_tokens: %{input: 0, output: 0}
+    summary =
+      UsageStore.get_summary(:current) ||
+        %{
+          total_cost: 0.0,
+          breakdown: %{},
+          total_requests: 0,
+          total_tokens: %{input: 0, output: 0}
+        }
+
+    updated = %{
+      summary
+      | total_cost: (get_field(summary, :total_cost) || 0.0) + cost,
+        breakdown: update_breakdown(get_field(summary, :breakdown) || %{}, provider, cost),
+        total_requests: (get_field(summary, :total_requests) || 0) + 1,
+        total_tokens: %{
+          input: (get_in_field(summary, [:total_tokens, :input]) || 0) + input_tokens,
+          output: (get_in_field(summary, [:total_tokens, :output]) || 0) + output_tokens
+        }
     }
 
-    updated = %{summary |
-      total_cost: (get_field(summary, :total_cost) || 0.0) + cost,
-      breakdown: update_breakdown(get_field(summary, :breakdown) || %{}, provider, cost),
-      total_requests: (get_field(summary, :total_requests) || 0) + 1,
-      total_tokens: %{
-        input: (get_in_field(summary, [:total_tokens, :input]) || 0) + input_tokens,
-        output: (get_in_field(summary, [:total_tokens, :output]) || 0) + output_tokens
-      }
-    }
-
-    LemonCore.Store.put(:usage_data, :current, updated)
+    UsageStore.put_summary(:current, updated)
   end
 
   defp parse_date_range(nil, nil) do
@@ -175,18 +184,22 @@ defmodule LemonControlPlane.Methods.UsageCost do
   end
 
   defp parse_date_range(start_str, end_str) do
-    start_ms = parse_date_string(start_str) || (System.system_time(:millisecond) - 30 * 24 * 60 * 60 * 1000)
+    start_ms =
+      parse_date_string(start_str) || System.system_time(:millisecond) - 30 * 24 * 60 * 60 * 1000
+
     end_ms = parse_date_string(end_str) || System.system_time(:millisecond)
     {start_ms, end_ms}
   end
 
   defp parse_date_string(nil), do: nil
+
   defp parse_date_string(str) when is_binary(str) do
     case Date.from_iso8601(str) do
       {:ok, date} ->
         date
         |> DateTime.new!(~T[00:00:00], "Etc/UTC")
         |> DateTime.to_unix(:millisecond)
+
       _ ->
         nil
     end
@@ -200,12 +213,13 @@ defmodule LemonControlPlane.Methods.UsageCost do
     date_keys = generate_date_range(start_date, end_date)
 
     # Fetch records for each date
-    records = Enum.flat_map(date_keys, fn date_key ->
-      case LemonCore.Store.get(:usage_records, date_key) do
-        nil -> []
-        record -> [record]
-      end
-    end)
+    records =
+      Enum.flat_map(date_keys, fn date_key ->
+        case UsageStore.get_record(date_key) do
+          nil -> []
+          record -> [record]
+        end
+      end)
 
     if Enum.empty?(records) do
       # No records found - return zeros
@@ -237,38 +251,42 @@ defmodule LemonControlPlane.Methods.UsageCost do
         total = acc.total + record_cost
 
         # Merge breakdowns
-        breakdown = Enum.reduce(record_breakdown, acc.breakdown, fn {provider, cost}, b ->
-          Map.update(b, provider, cost, &(&1 + cost))
-        end)
+        breakdown =
+          Enum.reduce(record_breakdown, acc.breakdown, fn {provider, cost}, b ->
+            Map.update(b, provider, cost, &(&1 + cost))
+          end)
 
         # Sum requests
         total_requests = acc.total_requests + sum_map_values(record_requests)
 
         # Sum tokens
-        total_tokens = Enum.reduce(record_tokens, acc.total_tokens, fn {_provider, tokens}, t ->
-          %{
-            input: t.input + (get_field(tokens, :input) || 0),
-            output: t.output + (get_field(tokens, :output) || 0)
-          }
-        end)
+        total_tokens =
+          Enum.reduce(record_tokens, acc.total_tokens, fn {_provider, tokens}, t ->
+            %{
+              input: t.input + (get_field(tokens, :input) || 0),
+              output: t.output + (get_field(tokens, :output) || 0)
+            }
+          end)
 
         # Add to daily if grouping by day
-        daily = if group_by == "day" and record_date do
-          Map.put(acc.daily, record_date, %{
-            "cost" => record_cost,
-            "requests" => sum_map_values(record_requests),
-            "breakdown" => record_breakdown
-          })
-        else
-          acc.daily
-        end
+        daily =
+          if group_by == "day" and record_date do
+            Map.put(acc.daily, record_date, %{
+              "cost" => record_cost,
+              "requests" => sum_map_values(record_requests),
+              "breakdown" => record_breakdown
+            })
+          else
+            acc.daily
+          end
 
-        %{acc |
-          total: total,
-          breakdown: breakdown,
-          total_requests: total_requests,
-          total_tokens: total_tokens,
-          daily: daily
+        %{
+          acc
+          | total: total,
+            breakdown: breakdown,
+            total_requests: total_requests,
+            total_tokens: total_tokens,
+            daily: daily
         }
       end)
     end
@@ -298,6 +316,7 @@ defmodule LemonControlPlane.Methods.UsageCost do
 
   defp get_in_field(map, [key | rest]) do
     value = get_field(map, key)
+
     if rest == [] do
       value
     else

@@ -4,10 +4,14 @@ defmodule LemonChannels.EngineRegistry do
   alias LemonCore.ResumeToken
 
   @default_engines ~w(lemon echo codex claude opencode pi kimi)
+  @gateway_engine_registry :"Elixir.LemonGateway.EngineRegistry"
 
   @spec extract_resume(String.t()) :: {:ok, ResumeToken.t()} | :none
   def extract_resume(text) when is_binary(text) do
-    parse_resume_line(text)
+    case safe_gateway_extract_resume(text) do
+      {:ok, %ResumeToken{} = token} -> {:ok, token}
+      _ -> parse_resume_line(text)
+    end
   rescue
     _ -> :none
   end
@@ -40,20 +44,50 @@ defmodule LemonChannels.EngineRegistry do
   def engine_known?(_), do: false
 
   defp configured_engine_ids do
-    env = Application.get_env(:lemon_channels, :engines)
-
-    case env do
-      list when is_list(list) and list != [] ->
-        list
-        |> Enum.map(&normalize_engine_id/1)
-        |> Enum.filter(&(is_binary(&1) and &1 != ""))
-        |> Enum.uniq()
+    case safe_gateway_list_engines() do
+      [_ | _] = ids ->
+        ids
 
       _ ->
-        @default_engines
+        env = Application.get_env(:lemon_channels, :engines)
+
+        case env do
+          list when is_list(list) and list != [] ->
+            list
+            |> Enum.map(&normalize_engine_id/1)
+            |> Enum.filter(&(is_binary(&1) and &1 != ""))
+            |> Enum.uniq()
+
+          _ ->
+            @default_engines
+        end
     end
   rescue
     _ -> @default_engines
+  end
+
+  defp safe_gateway_list_engines do
+    if (Code.ensure_loaded?(@gateway_engine_registry) and
+          Process.whereis(@gateway_engine_registry)) &&
+         function_exported?(@gateway_engine_registry, :list_engines, 0) do
+      apply(@gateway_engine_registry, :list_engines, [])
+    else
+      []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp safe_gateway_extract_resume(text) do
+    if (Code.ensure_loaded?(@gateway_engine_registry) and
+          Process.whereis(@gateway_engine_registry)) &&
+         function_exported?(@gateway_engine_registry, :extract_resume, 1) do
+      apply(@gateway_engine_registry, :extract_resume, [text])
+    else
+      :none
+    end
+  rescue
+    _ -> :none
   end
 
   defp normalize_engine_id(%{id: id}) when is_binary(id), do: String.downcase(id)

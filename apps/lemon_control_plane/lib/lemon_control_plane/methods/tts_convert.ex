@@ -14,7 +14,7 @@ defmodule LemonControlPlane.Methods.TtsConvert do
 
   Enable TTS via store:
   ```elixir
-  LemonCore.Store.put(:tts_config, :global, %{
+  LemonControlPlane.TtsStore.put(%{
     enabled: true,
     provider: "system",
     openai_api_key: "sk-...",
@@ -25,6 +25,7 @@ defmodule LemonControlPlane.Methods.TtsConvert do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.TtsStore
   alias LemonControlPlane.Protocol.Errors
 
   require Logger
@@ -44,7 +45,7 @@ defmodule LemonControlPlane.Methods.TtsConvert do
     if is_nil(text) or text == "" do
       {:error, Errors.invalid_request("text is required")}
     else
-      config = LemonCore.Store.get(:tts_config, :global) || %{}
+      config = TtsStore.get() || %{}
 
       # Safe access supporting both atom and string keys (for JSONL reload)
       enabled = get_field(config, :enabled)
@@ -58,12 +59,13 @@ defmodule LemonControlPlane.Methods.TtsConvert do
 
         case convert_text(text, active_provider, voice, config) do
           {:ok, audio_data, format} ->
-            {:ok, %{
-              "success" => true,
-              "provider" => active_provider,
-              "format" => format,
-              "data" => Base.encode64(audio_data)
-            }}
+            {:ok,
+             %{
+               "success" => true,
+               "provider" => active_provider,
+               "format" => format,
+               "data" => Base.encode64(audio_data)
+             }}
 
           {:error, :not_implemented, message} ->
             {:error, Errors.not_implemented(message)}
@@ -109,7 +111,8 @@ defmodule LemonControlPlane.Methods.TtsConvert do
     api_key = get_field(config, :elevenlabs_api_key)
 
     if is_nil(api_key) or api_key == "" do
-      {:error, :not_implemented, "ElevenLabs TTS requires api key. Set elevenlabs_api_key in tts_config."}
+      {:error, :not_implemented,
+       "ElevenLabs TTS requires api key. Set elevenlabs_api_key in tts_config."}
     else
       convert_with_elevenlabs(text, voice, api_key)
     end
@@ -133,7 +136,9 @@ defmodule LemonControlPlane.Methods.TtsConvert do
       case System.cmd("say", say_args, stderr_to_stdout: true) do
         {_, 0} ->
           # Convert AIFF to WAV using afconvert
-          case System.cmd("afconvert", ["-f", "WAVE", "-d", "LEI16", aiff_path, wav_path], stderr_to_stdout: true) do
+          case System.cmd("afconvert", ["-f", "WAVE", "-d", "LEI16", aiff_path, wav_path],
+                 stderr_to_stdout: true
+               ) do
             {_, 0} ->
               case File.read(wav_path) do
                 {:ok, data} -> {:ok, data, "audio/wav"}
@@ -165,11 +170,12 @@ defmodule LemonControlPlane.Methods.TtsConvert do
 
     try do
       # Build espeak command with optional voice
-      espeak_args = if voice do
-        ["-v", voice, "-w", wav_path, text]
-      else
-        ["-w", wav_path, text]
-      end
+      espeak_args =
+        if voice do
+          ["-v", voice, "-w", wav_path, text]
+        else
+          ["-w", wav_path, text]
+        end
 
       case System.cmd("espeak", espeak_args, stderr_to_stdout: true) do
         {_, 0} ->
@@ -195,12 +201,13 @@ defmodule LemonControlPlane.Methods.TtsConvert do
   defp convert_with_openai(text, voice, api_key) do
     url = "https://api.openai.com/v1/audio/speech"
 
-    body = Jason.encode!(%{
-      "model" => "tts-1",
-      "input" => text,
-      "voice" => voice,
-      "response_format" => "mp3"
-    })
+    body =
+      Jason.encode!(%{
+        "model" => "tts-1",
+        "input" => text,
+        "voice" => voice,
+        "response_format" => "mp3"
+      })
 
     headers = [
       {"Authorization", "Bearer #{api_key}"},
@@ -223,13 +230,15 @@ defmodule LemonControlPlane.Methods.TtsConvert do
   # ElevenLabs TTS API
   defp convert_with_elevenlabs(text, voice, api_key) do
     # Use default voice if not specified
-    voice_id = voice || "21m00Tcm4TlvDq8ikWAM"  # "Rachel" voice
+    # "Rachel" voice
+    voice_id = voice || "21m00Tcm4TlvDq8ikWAM"
     url = "https://api.elevenlabs.io/v1/text-to-speech/#{voice_id}"
 
-    body = Jason.encode!(%{
-      "text" => text,
-      "model_id" => "eleven_monolingual_v1"
-    })
+    body =
+      Jason.encode!(%{
+        "text" => text,
+        "model_id" => "eleven_monolingual_v1"
+      })
 
     headers = [
       {"xi-api-key", api_key},
@@ -252,7 +261,8 @@ defmodule LemonControlPlane.Methods.TtsConvert do
   # Simple HTTP POST using httpc (built into Erlang/OTP)
   defp http_post(url, headers, body) do
     # Convert headers to httpc format
-    httpc_headers = Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+    httpc_headers =
+      Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
 
     request = {
       String.to_charlist(url),

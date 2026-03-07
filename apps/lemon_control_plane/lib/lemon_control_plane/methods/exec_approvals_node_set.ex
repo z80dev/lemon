@@ -19,6 +19,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.ExecApprovalStore
+
   @impl true
   def name, do: "exec.approvals.node.set"
 
@@ -62,17 +64,18 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
 
   defp set_node_policy(node_id, policy) when is_map(policy) do
     # Store the node policy map for reference
-    LemonCore.Store.put(:exec_approvals_policy_node_map, node_id, policy)
+    ExecApprovalStore.put_node_policy_map(node_id, policy)
 
     # Also store per-tool entries that the runtime can check
     Enum.each(policy, fn {tool, disposition} ->
       if disposition == "allow" do
         # Store with node_id prefix and wildcard action hash
-        LemonCore.Store.put(
-          :exec_approvals_policy_node,
-          {node_id, tool, :any},
-          %{approved: true, scope: :node, node_id: node_id, approved_at_ms: LemonCore.Clock.now_ms()}
-        )
+        ExecApprovalStore.put_node_policy(node_id, tool, :any, %{
+          approved: true,
+          scope: :node,
+          node_id: node_id,
+          approved_at_ms: LemonCore.Clock.now_ms()
+        })
       end
     end)
 
@@ -90,18 +93,14 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
         if tool do
           action_hash = hash_action(action)
 
-          LemonCore.Store.put(
-            :exec_approvals_policy_node,
-            {node_id, tool, action_hash},
-            %{
-              approved: true,
-              tool: tool,
-              action_hash: action_hash,
-              scope: :node,
-              node_id: node_id,
-              approved_at_ms: LemonCore.Clock.now_ms()
-            }
-          )
+          ExecApprovalStore.put_node_policy(node_id, tool, action_hash, %{
+            approved: true,
+            tool: tool,
+            action_hash: action_hash,
+            scope: :node,
+            node_id: node_id,
+            approved_at_ms: LemonCore.Clock.now_ms()
+          })
 
           acc + 1
         else

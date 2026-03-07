@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -30,10 +31,10 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
           if pairing_id do
             pairing_id
           else
-            LemonCore.Store.get(:nodes_pairing_by_code, code)
+            NodeStore.get_pairing_id_by_code(code)
           end
 
-        case LemonCore.Store.get(:nodes_pairing, pairing_id) do
+        case NodeStore.get_pairing(pairing_id) do
           nil ->
             {:error, Errors.not_found("Pairing request not found")}
 
@@ -59,15 +60,18 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                 node_id = LemonCore.Id.uuid()
                 node_token = generate_node_token()
                 challenge_token = generate_challenge_token()
-                challenge_expires_at = now + 60_000  # Challenge valid for 1 minute
+                # Challenge valid for 1 minute
+                challenge_expires_at = now + 60_000
 
                 # Update pairing request
-                updated_request = Map.merge(request, %{
-                  status: :approved,
-                  node_id: node_id,
-                  challenge_token: challenge_token
-                })
-                LemonCore.Store.put(:nodes_pairing, pairing_id, updated_request)
+                updated_request =
+                  Map.merge(request, %{
+                    status: :approved,
+                    node_id: node_id,
+                    challenge_token: challenge_token
+                  })
+
+                NodeStore.put_pairing(pairing_id, updated_request)
 
                 # Register node
                 node = %{
@@ -80,10 +84,11 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                   last_seen_ms: now,
                   status: :online
                 }
-                LemonCore.Store.put(:nodes_registry, node_id, node)
+
+                NodeStore.put_node(node_id, node)
 
                 # Store challenge for connect.challenge verification
-                LemonCore.Store.put(:node_challenges, challenge_token, %{
+                NodeStore.put_challenge(challenge_token, %{
                   node_id: node_id,
                   node_name: node_name,
                   node_type: node_type,
@@ -92,19 +97,22 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                 })
 
                 # Broadcast event
-                event = LemonCore.Event.new(:node_pair_resolved, %{
-                  pairing_id: pairing_id,
-                  node_id: node_id,
-                  approved: true
-                })
+                event =
+                  LemonCore.Event.new(:node_pair_resolved, %{
+                    pairing_id: pairing_id,
+                    node_id: node_id,
+                    approved: true
+                  })
+
                 LemonCore.Bus.broadcast("nodes", event)
 
-                {:ok, %{
-                  "nodeId" => node_id,
-                  "token" => node_token,
-                  "challengeToken" => challenge_token,
-                  "approved" => true
-                }}
+                {:ok,
+                 %{
+                   "nodeId" => node_id,
+                   "token" => node_token,
+                   "challengeToken" => challenge_token,
+                   "approved" => true
+                 }}
             end
         end
     end

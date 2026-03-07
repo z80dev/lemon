@@ -338,6 +338,8 @@ Shared-domain callers should prefer typed wrappers:
 - **Progress mapping**: `LemonCore.ProgressStore.put_run/3`, `get_run/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
+- **Heartbeats**: `LemonCore.HeartbeatStore.get_config/1`, `put_config/2`, `get_last/1`
+- **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
 
 ### ReadCache
 

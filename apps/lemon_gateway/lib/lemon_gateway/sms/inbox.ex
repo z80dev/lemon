@@ -11,9 +11,7 @@ defmodule LemonGateway.Sms.Inbox do
 
   require Logger
 
-  alias LemonGateway.Sms.Config
-
-  @table :sms_inbox
+  alias LemonGateway.Sms.{Config, InboxStore}
   @cleanup_interval_ms 10 * 60 * 1000
 
   def start_link(opts \\ []) do
@@ -62,9 +60,9 @@ defmodule LemonGateway.Sms.Inbox do
   def handle_call({:ingest_twilio_sms, params}, _from, state) do
     case normalize_twilio_sms(params) do
       {:ok, msg} ->
-        case LemonCore.Store.get(@table, msg["message_sid"]) do
+        case InboxStore.get(msg["message_sid"]) do
           nil ->
-            :ok = LemonCore.Store.put(@table, msg["message_sid"], msg)
+            :ok = InboxStore.put(msg["message_sid"], msg)
             state = fulfill_waiters(msg, state)
             {:reply, {:ok, :stored}, state}
 
@@ -96,7 +94,7 @@ defmodule LemonGateway.Sms.Inbox do
   def handle_call({:claim_message, session_key, message_sid}, _from, state) do
     session_key = normalize_session_key(session_key)
 
-    case LemonCore.Store.get(@table, message_sid) do
+    case InboxStore.get(message_sid) do
       nil ->
         {:reply, {:error, :not_found}, state}
 
@@ -113,7 +111,7 @@ defmodule LemonGateway.Sms.Inbox do
               |> Map.put("claimed_by", session_key)
               |> Map.put("claimed_at_ms", now_ms())
 
-            :ok = LemonCore.Store.put(@table, message_sid, updated)
+            :ok = InboxStore.put(message_sid, updated)
             {:reply, :ok, state}
         end
     end
@@ -242,7 +240,7 @@ defmodule LemonGateway.Sms.Inbox do
   defp extract_default_codes(_), do: []
 
   defp read_all_messages do
-    LemonCore.Store.list(@table)
+    InboxStore.list()
     |> Enum.map(fn {_k, v} -> v end)
     |> Enum.filter(&is_map/1)
   end
@@ -387,7 +385,7 @@ defmodule LemonGateway.Sms.Inbox do
       sid = updated["message_sid"]
 
       if is_binary(sid) and sid != "" do
-        :ok = LemonCore.Store.put(@table, sid, updated)
+        :ok = InboxStore.put(sid, updated)
       end
 
       {updated, state}
@@ -418,7 +416,7 @@ defmodule LemonGateway.Sms.Inbox do
             |> Map.put("claimed_by", waiter.session_key)
             |> Map.put("claimed_at_ms", now_ms())
 
-          :ok = LemonCore.Store.put(@table, msg["message_sid"], updated)
+          :ok = InboxStore.put(msg["message_sid"], updated)
           updated
         else
           msg
@@ -441,7 +439,7 @@ defmodule LemonGateway.Sms.Inbox do
       ts = msg["received_at_ms"] || 0
 
       if is_binary(sid) and ts < cutoff do
-        _ = LemonCore.Store.delete(@table, sid)
+        _ = InboxStore.delete(sid)
         acc + 1
       else
         acc

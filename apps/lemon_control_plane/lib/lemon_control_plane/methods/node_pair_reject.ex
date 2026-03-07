@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NodePairReject do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -30,10 +31,10 @@ defmodule LemonControlPlane.Methods.NodePairReject do
           if pairing_id do
             pairing_id
           else
-            LemonCore.Store.get(:nodes_pairing_by_code, code)
+            NodeStore.get_pairing_id_by_code(code)
           end
 
-        case LemonCore.Store.get(:nodes_pairing, pairing_id) do
+        case NodeStore.get_pairing(pairing_id) do
           nil ->
             {:error, Errors.not_found("Pairing request not found")}
 
@@ -46,20 +47,23 @@ defmodule LemonControlPlane.Methods.NodePairReject do
             else
               # Update pairing request using Map.merge (handles both atom and string keys)
               updated_request = Map.merge(request, %{status: :rejected})
-              LemonCore.Store.put(:nodes_pairing, pairing_id, updated_request)
+              NodeStore.put_pairing(pairing_id, updated_request)
 
               # Broadcast event
-              event = LemonCore.Event.new(:node_pair_resolved, %{
-                pairing_id: pairing_id,
-                approved: false,
-                rejected: true
-              })
+              event =
+                LemonCore.Event.new(:node_pair_resolved, %{
+                  pairing_id: pairing_id,
+                  approved: false,
+                  rejected: true
+                })
+
               LemonCore.Bus.broadcast("nodes", event)
 
-              {:ok, %{
-                "pairingId" => pairing_id,
-                "rejected" => true
-              }}
+              {:ok,
+               %{
+                 "pairingId" => pairing_id,
+                 "rejected" => true
+               }}
             end
         end
     end

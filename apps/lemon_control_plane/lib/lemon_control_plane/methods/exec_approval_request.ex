@@ -8,6 +8,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.ExecApprovalStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -44,7 +45,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
           created_at_ms: System.system_time(:millisecond)
         }
 
-        LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
+        ExecApprovalStore.put_pending(approval_id, pending)
 
         event =
           LemonCore.Event.new(:approval_requested, %{pending: pending}, %{
@@ -55,10 +56,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
 
         LemonCore.Bus.broadcast("exec_approvals", event)
 
-        {:ok, %{
-          "approvalId" => approval_id,
-          "expiresAtMs" => expires_at_ms
-        }}
+        {:ok,
+         %{
+           "approvalId" => approval_id,
+           "expiresAtMs" => expires_at_ms
+         }}
     end
   end
 end

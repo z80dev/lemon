@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.ExecApprovalStore
+
   @impl true
   def name, do: "exec.approvals.node.get"
 
@@ -27,7 +29,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeGet do
   end
 
   defp get_node_policy(node_id) do
-    case LemonCore.Store.get(:exec_approvals_policy_node_map, node_id) do
+    case ExecApprovalStore.get_node_policy_map(node_id) do
       nil -> %{}
       policy -> policy
     end
@@ -36,7 +38,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeGet do
   end
 
   defp get_node_approvals(node_id) do
-    LemonCore.Store.list(:exec_approvals_policy_node)
+    ExecApprovalStore.list_node_policies()
     |> Enum.filter(fn
       {{^node_id, _tool, _hash}, _approval} -> true
       _ -> false

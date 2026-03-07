@@ -10,6 +10,7 @@ defmodule LemonControlPlane.Methods.NodeEvent do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   # Allowed node event types to prevent atom exhaustion.
@@ -33,7 +34,8 @@ defmodule LemonControlPlane.Methods.NodeEvent do
   def name, do: "node.event"
 
   @impl true
-  def scopes, do: []  # Node role required
+  # Node role required
+  def scopes, do: []
 
   @doc """
   Returns the list of allowed event type strings for node events.
@@ -80,7 +82,8 @@ defmodule LemonControlPlane.Methods.NodeEvent do
         {:ok, :node_custom, true}
 
       true ->
-        {:error, "Invalid event type '#{event_type}'. Allowed types: #{Enum.join(allowed_event_types(), ", ")}"}
+        {:error,
+         "Invalid event type '#{event_type}'. Allowed types: #{Enum.join(allowed_event_types(), ", ")}"}
     end
   end
 
@@ -94,27 +97,32 @@ defmodule LemonControlPlane.Methods.NodeEvent do
       end
 
     # Broadcast node event
-    event = LemonCore.Event.new(
-      atom_type,
-      final_payload,
-      %{node_id: node_id, event_type: original_type}
-    )
+    event =
+      LemonCore.Event.new(
+        atom_type,
+        final_payload,
+        %{node_id: node_id, event_type: original_type}
+      )
+
     LemonCore.Bus.broadcast("nodes", event)
 
     # Update node last_seen
     if node_id do
-      case LemonCore.Store.get(:nodes_registry, node_id) do
-        nil -> :ok
+      case NodeStore.get_node(node_id) do
+        nil ->
+          :ok
+
         node ->
           # Use Map.merge instead of update syntax to handle both atom and string keys
           updated = Map.merge(node, %{last_seen_ms: System.system_time(:millisecond)})
-          LemonCore.Store.put(:nodes_registry, node_id, updated)
+          NodeStore.put_node(node_id, updated)
       end
     end
 
-    {:ok, %{
-      "eventType" => original_type,
-      "broadcast" => true
-    }}
+    {:ok,
+     %{
+       "eventType" => original_type,
+       "broadcast" => true
+     }}
   end
 end

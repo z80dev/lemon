@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.LastHeartbeat do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.HeartbeatStore
+
   @impl true
   def name, do: "last-heartbeat"
 
@@ -18,26 +20,27 @@ defmodule LemonControlPlane.Methods.LastHeartbeat do
     agent_id = params["agentId"] || params["agent_id"] || "default"
 
     # Get heartbeat config
-    config = LemonCore.Store.get(:heartbeat_config, agent_id)
+    config = HeartbeatStore.get_config(agent_id)
 
     # Get last heartbeat result
-    last_result = LemonCore.Store.get(:heartbeat_last, agent_id)
+    last_result = HeartbeatStore.get_last(agent_id)
 
-    {:ok, %{
-      "agentId" => agent_id,
-      "enabled" => config && config[:enabled] || false,
-      "intervalMs" => config && config[:interval_ms],
-      "lastRun" =>
-        if last_result do
-          %{
-            "timestamp" => last_result[:timestamp_ms],
-            "status" => to_string(last_result[:status] || :unknown),
-            "response" => last_result[:response],
-            "suppressed" => last_result[:suppressed] || false
-          }
-        else
-          nil
-        end
-    }}
+    {:ok,
+     %{
+       "agentId" => agent_id,
+       "enabled" => (config && config[:enabled]) || false,
+       "intervalMs" => config && config[:interval_ms],
+       "lastRun" =>
+         if last_result do
+           %{
+             "timestamp" => last_result[:timestamp_ms],
+             "status" => to_string(last_result[:status] || :unknown),
+             "response" => last_result[:response],
+             "suppressed" => last_result[:suppressed] || false
+           }
+         else
+           nil
+         end
+     }}
   end
 end

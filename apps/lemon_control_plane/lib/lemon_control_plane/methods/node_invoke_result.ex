@@ -8,13 +8,15 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
   def name, do: "node.invoke.result"
 
   @impl true
-  def scopes, do: []  # Node role required
+  # Node role required
+  def scopes, do: []
 
   @impl true
   def handle(params, ctx) do
@@ -32,7 +34,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
       if is_nil(invoke_id) or invoke_id == "" do
         {:error, Errors.invalid_request("invokeId is required")}
       else
-        case LemonCore.Store.get(:node_invocations, invoke_id) do
+        case NodeStore.get_invocation(invoke_id) do
           nil ->
             {:error, Errors.not_found("Invocation not found")}
 
@@ -44,24 +46,28 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
               error: error,
               completed_at_ms: System.system_time(:millisecond)
             }
+
             updated = Map.merge(invocation, updates)
-            LemonCore.Store.put(:node_invocations, invoke_id, updated)
+            NodeStore.put_invocation(invoke_id, updated)
 
             # Broadcast result event
             # Safe access supporting both atom and string keys (for JSONL reload)
-            event = LemonCore.Event.new(:node_invoke_completed, %{
-              invoke_id: invoke_id,
-              node_id: get_field(invocation, :node_id),
-              result: result,
-              error: error,
-              ok: is_nil(error)
-            })
+            event =
+              LemonCore.Event.new(:node_invoke_completed, %{
+                invoke_id: invoke_id,
+                node_id: get_field(invocation, :node_id),
+                result: result,
+                error: error,
+                ok: is_nil(error)
+              })
+
             LemonCore.Bus.broadcast("nodes", event)
 
-            {:ok, %{
-              "invokeId" => invoke_id,
-              "received" => true
-            }}
+            {:ok,
+             %{
+               "invokeId" => invoke_id,
+               "received" => true
+             }}
         end
       end
     end

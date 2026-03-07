@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NodeRename do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -28,20 +29,21 @@ defmodule LemonControlPlane.Methods.NodeRename do
         {:error, Errors.invalid_request("name is required")}
 
       true ->
-        case LemonCore.Store.get(:nodes_registry, node_id) do
+        case NodeStore.get_node(node_id) do
           nil ->
             {:error, Errors.not_found("Node not found")}
 
           node ->
             # Use Map.merge instead of update syntax to handle both atom and string keys
             updated_node = Map.merge(node, %{name: new_name})
-            LemonCore.Store.put(:nodes_registry, node_id, updated_node)
+            NodeStore.put_node(node_id, updated_node)
 
-            {:ok, %{
-              "nodeId" => node_id,
-              "name" => new_name,
-              "renamed" => true
-            }}
+            {:ok,
+             %{
+               "nodeId" => node_id,
+               "name" => new_name,
+               "renamed" => true
+             }}
         end
     end
   end
