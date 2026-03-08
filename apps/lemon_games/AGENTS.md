@@ -7,7 +7,7 @@ LemonGames is the game domain engine inside the `games-platform` Elixir umbrella
 Core principles:
 - **Server-authoritative**: clients submit move intents, never full state
 - **Event-sourced**: all game history stored as append-only events; current state is a projection
-- **Plain maps with string keys**: no Ecto schemas; storage via `LemonCore.Store` (ETS/JSONL/SQLite)
+- **Plain maps with string keys**: no Ecto schemas; storage via app-local wrappers backed by `LemonCore.Store` (ETS/JSONL/SQLite)
 - **Per-match global locks**: all mutating operations go through `:global.trans` for consistency
 - **Visibility policy**: match `visibility` must be one of `public`, `private`, or `unlisted`
 
@@ -31,6 +31,8 @@ Core principles:
 | `lib/lemon_games/matches/service.ex` | Main API: create, accept, move, forfeit, expire, get, list | Adding new match operations or changing lifecycle flow |
 | `lib/lemon_games/matches/match.ex` | Match record shape, constructors, status predicates, timeout values | Changing match schema, adding fields, adjusting timeouts |
 | `lib/lemon_games/matches/event_log.ex` | Append-only event storage keyed by `{match_id, seq}` | Changing event storage or adding event types |
+| `lib/lemon_games/matches/store.ex` | Typed wrapper for `:game_matches` storage | Changing how matches are persisted or listed |
+| `lib/lemon_games/matches/event_store.ex` | Typed wrapper for `:game_match_events` storage | Changing how event records are persisted |
 | `lib/lemon_games/matches/projection.ex` | Event replay and public view construction with redaction | Changing what spectators/players see |
 | `lib/lemon_games/matches/deadline_sweeper.ex` | GenServer sweeping expired matches every 1s | Changing expiry logic or sweep interval |
 
@@ -49,8 +51,10 @@ Core principles:
 | File | What it does | When to touch it |
 |------|-------------|-----------------|
 | `lib/lemon_games/auth.ex` | Token CRUD: issue (`lgm_` prefix), validate, revoke, list, scope check | Changing auth model or token format |
+| `lib/lemon_games/auth_store.ex` | Typed wrapper for `:game_agent_tokens` storage | Changing token persistence details |
 | `lib/lemon_games/bus.ex` | PubSub wrapper for `games:lobby` and `games:match:<id>` topics | Adding new event broadcast types |
 | `lib/lemon_games/rate_limit.ex` | Sliding window rate limiters (60 reads/min, 20 moves/min, 4 burst/5s) | Adjusting rate limits |
+| `lib/lemon_games/rate_limit_store.ex` | Typed wrapper for `:game_rate_limits` storage | Changing rate limit persistence details |
 | `lib/lemon_games/application.ex` | OTP supervisor tree; starts `DeadlineSweeper` | Adding new supervised processes |
 
 ## How to Add a New Game Engine
@@ -202,7 +206,7 @@ mix test apps/lemon_games --trace
 - Service and auth tests use `async: false` (shared ETS tables) and clean store tables in `setup`
 - Helper functions like `drop/3`, `drop_seq/2`, `play/2` are defined locally in test modules for concise test bodies
 - Service tests use a `create_bot_match/1` helper that creates a match with a lemon_bot opponent for quick active-match setup
-- Store tables to clean between tests: `:game_matches`, `:game_match_events`, `:game_agent_tokens`, `:game_rate_limits`
+- Store-backed test cleanup should go through `LemonGames.Matches.Store`, `LemonGames.Matches.EventStore`, `LemonGames.AuthStore`, and `LemonGames.RateLimitStore`
 
 ### What to Test for a New Game Engine
 
@@ -231,7 +235,7 @@ At minimum, cover:
 
 ### Upstream Dependencies
 
-- **`lemon_core`**: Storage (`LemonCore.Store`), PubSub (`LemonCore.Bus`, `LemonCore.Event`), idempotency (`LemonCore.Idempotency`), config
+- **`lemon_core`**: Storage backend for LemonGames store wrappers (`LemonCore.Store`), PubSub (`LemonCore.Bus`, `LemonCore.Event`), idempotency (`LemonCore.Idempotency`), config
 
 ### Downstream Dependents
 
@@ -244,7 +248,8 @@ At minimum, cover:
 HTTP Request -> lemon_control_plane (auth check via LemonGames.Auth)
              -> lemon_control_plane (rate check via LemonGames.RateLimit)
              -> LemonGames.Matches.Service (business logic)
-             -> LemonCore.Store (persistence)
+             -> LemonGames.*Store wrappers (persistence boundary)
+             -> LemonCore.Store (backend)
              -> LemonGames.Bus (PubSub broadcast)
              -> lemon_web LiveView (spectator receives update)
 ```
@@ -253,7 +258,7 @@ HTTP Request -> lemon_control_plane (auth check via LemonGames.Auth)
 
 ### String Keys Everywhere
 
-All maps use string keys, not atoms. This is a project-wide convention for `LemonCore.Store` compatibility:
+All maps use string keys, not atoms. This is a project-wide convention for wrapper and `LemonCore.Store` compatibility:
 
 ```elixir
 # Correct
@@ -275,7 +280,7 @@ All error returns from Service follow `{:error, atom_code, string_message}`:
 {:error, :storage_unavailable, "match store unavailable"}
 ```
 
-For persistence failures from `LemonCore.Store.put/3`, `LemonGames.Matches.Service` maps the backend/store error into `{:error, :storage_unavailable, "match store unavailable"}` instead of crashing the caller process.
+For persistence failures from `LemonGames.Matches.Store.put/2`, `LemonGames.Matches.Service` maps the backend/store error into `{:error, :storage_unavailable, "match store unavailable"}` instead of crashing the caller process.
 
 ### Move Format Convention
 

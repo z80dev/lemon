@@ -35,14 +35,20 @@ defmodule LemonCore.ResumeToken do
 
   @doc "Format token for display to user"
   def format(%__MODULE__{engine: engine, value: value}) do
+    "`" <> format_plain(%__MODULE__{engine: engine, value: value}) <> "`"
+  end
+
+  @doc "Format token for plain-text display without code fences"
+  @spec format_plain(t()) :: String.t()
+  def format_plain(%__MODULE__{engine: engine, value: value}) do
     case engine do
-      "codex" -> "`codex resume #{value}`"
-      "claude" -> "`claude --resume #{value}`"
-      "kimi" -> "`kimi --session #{value}`"
-      "opencode" -> "`opencode --session #{value}`"
-      "pi" -> "`pi --session #{quote_token(value)}`"
-      "lemon" -> "`lemon resume #{value}`"
-      _ -> "`#{engine} resume #{value}`"
+      "codex" -> "codex resume #{value}"
+      "claude" -> "claude --resume #{value}"
+      "kimi" -> "kimi --session #{value}"
+      "opencode" -> "opencode --session #{value}"
+      "pi" -> "pi --session #{quote_token(value)}"
+      "lemon" -> "lemon resume #{value}"
+      _ -> "#{engine} resume #{value}"
     end
   end
 

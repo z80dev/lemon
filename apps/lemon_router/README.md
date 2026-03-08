@@ -42,7 +42,7 @@ Channel transport or gateway-native ingress
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction application, control-plane abort/keepalive hooks |
 | `LemonRouter.RunOrchestrator` | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
-| `LemonRouter.SessionReadModel` | Read-only facade over coordinator-owned active session state (`SessionRegistry`) |
+| Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before gateway submission |
 | `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
@@ -57,11 +57,13 @@ Channel transport or gateway-native ingress
 ## Important Contracts
 
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
+- Engine ID validation and normalization should use `LemonCore.EngineCatalog`; default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Gateway input is `LemonGateway.ExecutionRequest`, not `LemonGateway.Types.Job`.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
   - `LemonChannels.Telegram.ResumeIndexStore`
+- External apps must query busy/active session state through `LemonRouter.Router` or `LemonCore.RouterBridge`, not router-internal read-model or registry details.
 
 ## Session And Queue Semantics
 

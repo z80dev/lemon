@@ -59,13 +59,14 @@ Inbound transport
 - Router owns pending-compaction prompt mutation.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.
+- External apps must use `LemonRouter.Router` or `LemonCore.RouterBridge` for busy/active session queries. Router-internal read-model and registry details are not public boundaries.
 
 ## Queue Semantics
 
 `SessionCoordinator` owns:
 
 - active run pointer per conversation key
-- `SessionRegistry` updates, exposed to other modules only through `SessionReadModel`
+- internal registry-backed read-model updates as an implementation detail
 - pending queue/backlog
 - followup merge/debounce
 - steer and steer-backlog fallback
@@ -122,6 +123,7 @@ Do not add queue-mode branches to `lemon_gateway`.
 ### Change model or engine resolution
 
 Start in `run_orchestrator.ex`, `resume_resolver.ex`, `model_selection.ex`, and `sticky_engine.ex`.
+Use `LemonCore.EngineCatalog` for engine ID validation/normalization and `LemonCore.Cwd` for default cwd selection.
 
 ### Change output behavior
 

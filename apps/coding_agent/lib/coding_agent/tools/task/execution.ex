@@ -97,8 +97,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       meta: validated.meta,
       session_pid: Keyword.get(opts, :session_pid),
       session_module: Keyword.get(opts, :session_module, Session),
-      run_orchestrator:
-        Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
+      run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
     }
 
     %{

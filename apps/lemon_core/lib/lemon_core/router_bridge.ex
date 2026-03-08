@@ -165,6 +165,42 @@ defmodule LemonCore.RouterBridge do
 
   def session_busy?(_), do: false
 
+  @spec active_run(binary()) :: {:ok, binary()} | :none
+  def active_run(session_key) when is_binary(session_key) and session_key != "" do
+    case impl(:router) do
+      nil ->
+        :none
+
+      mod ->
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :active_run, 1) do
+          apply(mod, :active_run, [session_key])
+        else
+          :none
+        end
+    end
+  rescue
+    _ -> :none
+  end
+
+  def active_run(_), do: :none
+
+  @spec list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
+  def list_active_sessions do
+    case impl(:router) do
+      nil ->
+        []
+
+      mod ->
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :list_active_sessions, 0) do
+          apply(mod, :list_active_sessions, [])
+        else
+          []
+        end
+    end
+  rescue
+    _ -> []
+  end
+
   defp impl(key) do
     config = current_config()
     Map.get(config, key)

@@ -6,7 +6,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Telegram.ResumeIndexStore
   alias LemonChannels.EngineRegistry
-  alias LemonCore.ResumeToken
+  alias LemonCore.{EngineCatalog, ResumeToken}
   alias LemonCore.RunStore
 
   @type callbacks :: %{
@@ -202,11 +202,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     normalized_engine_id = String.downcase(String.trim(engine_id || ""))
     normalized_token = String.trim(token || "")
 
-    if normalized_engine_id != "" and normalized_token != "" and
-         EngineRegistry.get_engine(normalized_engine_id) do
-      {%ResumeToken{engine: normalized_engine_id, value: normalized_token}, prompt_part}
-    else
-      nil
+    case EngineCatalog.normalize(normalized_engine_id) do
+      normalized_engine when is_binary(normalized_engine) and normalized_token != "" ->
+        {%ResumeToken{engine: normalized_engine, value: normalized_token}, prompt_part}
+
+      _ ->
+        nil
     end
   end
 
@@ -225,24 +226,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         end
 
       true ->
-        case EngineRegistry.extract_resume(selector) do
-          {:ok, %ResumeToken{} = token} ->
+        case parse_resume_selector(selector) do
+          %ResumeToken{} = token ->
             token
 
-          _ ->
-            case String.split(selector, ~r/\s+/, parts: 2) do
-              [engine_id, token_value] ->
-                engine_id = String.downcase(engine_id || "")
-
-                if EngineRegistry.get_engine(engine_id) && token_value && token_value != "" do
-                  %ResumeToken{engine: engine_id, value: String.trim(token_value)}
-                else
-                  find_by_token_value(selector, sessions)
-                end
-
-              _ ->
-                find_by_token_value(selector, sessions)
-            end
+          nil ->
+            find_by_token_value(selector, sessions)
         end
     end
   rescue
@@ -281,18 +270,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   @spec extract_explicit_resume_and_strip(String.t() | term()) ::
           {ResumeToken.t() | nil, String.t() | term()}
   def extract_explicit_resume_and_strip(text) when is_binary(text) do
-    case EngineRegistry.extract_resume(text) do
-      {:ok, %ResumeToken{} = token} ->
+    case parse_resume_selector(text) do
+      %ResumeToken{} = token ->
         stripped =
           text
           |> String.split("\n")
-          |> Enum.reject(&ResumeToken.is_resume_line/1)
+          |> Enum.reject(&(match?(%ResumeToken{}, parse_resume_selector(&1))))
           |> Enum.join("\n")
           |> String.trim()
 
         {token, if(stripped == "", do: "Continue.", else: stripped)}
 
-      _ ->
+      nil ->
         {nil, text}
     end
   rescue
@@ -315,7 +304,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
       meta[:fork_when_busy] == true or meta["fork_when_busy"] == true ->
         inbound
 
-      match?({:ok, %ResumeToken{}}, EngineRegistry.extract_resume(inbound.message.text || "")) ->
+      match?(%ResumeToken{}, parse_resume_selector(inbound.message.text || "")) ->
         inbound
 
       true ->
@@ -386,8 +375,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
     cond do
       is_binary(reply_text) and reply_text != "" ->
-        case EngineRegistry.extract_resume(reply_text) do
-          {:ok, %ResumeToken{} = token} -> {token, :reply_text}
+        case parse_resume_selector(reply_text) do
+          %ResumeToken{} = token -> {token, :reply_text}
           _ -> {nil, nil}
         end
 
@@ -441,8 +430,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     end)
   end
 
+  defp parse_resume_selector(selector) when is_binary(selector) do
+    case EngineRegistry.extract_resume(selector) do
+      {:ok, %ResumeToken{} = token} ->
+        token
+
+      _ ->
+        case String.split(selector, ~r/\s+/, parts: 2) do
+          [engine_id, token_value] ->
+            case EngineCatalog.normalize(engine_id) do
+              normalized_engine when is_binary(normalized_engine) and is_binary(token_value) ->
+                trimmed_token = String.trim(token_value)
+                if trimmed_token == "", do: nil, else: %ResumeToken{engine: normalized_engine, value: trimmed_token}
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp parse_resume_selector(_), do: nil
+
   @spec format_resume_line(ResumeToken.t()) :: String.t()
-  def format_resume_line(%ResumeToken{} = resume), do: EngineRegistry.format_resume(resume)
+  def format_resume_line(%ResumeToken{} = resume), do: ResumeToken.format_plain(resume)
 
   @spec format_session_ref(ResumeToken.t()) :: String.t()
   def format_session_ref(%ResumeToken{} = resume) do

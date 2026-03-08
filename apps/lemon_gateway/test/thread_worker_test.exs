@@ -42,7 +42,12 @@ defmodule LemonGateway.ThreadWorkerTest do
           send(
             sink_pid,
             {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: "Slow: #{job.prompt}"})}
+             Event.completed(%{
+               engine: id(),
+               resume: resume,
+               ok: true,
+               answer: "Slow: #{job.prompt}"
+             })}
           )
         end)
 
@@ -118,7 +123,9 @@ defmodule LemonGateway.ThreadWorkerTest do
   end
 
   defp assert_completed_prompt(expected_prompt) do
-    assert_receive {:lemon_gateway_run_completed, %Job{prompt: ^expected_prompt}, completed}, 2_000
+    assert_receive {:lemon_gateway_run_completed, %Job{prompt: ^expected_prompt}, completed},
+                   2_000
+
     assert completed.answer == "Slow: #{expected_prompt}"
   end
 

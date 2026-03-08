@@ -7,7 +7,7 @@ defmodule LemonCore.Idempotency do
 
   ## Storage
 
-  Backed by `LemonCore.Store` table `:idempotency`.
+  Backed by `LemonCore.IdempotencyStore`.
   Values include `{result, inserted_at_ms}`.
 
   ## Examples
@@ -26,12 +26,14 @@ defmodule LemonCore.Idempotency do
 
   """
 
+  alias LemonCore.IdempotencyStore
+
   @type scope :: binary()
   @type key :: binary()
   @type result :: term()
 
-  @table :idempotency
-  @default_ttl_ms 24 * 60 * 60 * 1000  # 24 hours
+  # 24 hours
+  @default_ttl_ms 24 * 60 * 60 * 1000
 
   @doc """
   Get a cached result for a scope and key.
@@ -40,16 +42,14 @@ defmodule LemonCore.Idempotency do
   """
   @spec get(scope(), key()) :: {:ok, result()} | :miss
   def get(scope, key) do
-    full_key = make_key(scope, key)
-
-    case LemonCore.Store.get(@table, full_key) do
+    case IdempotencyStore.get(scope, key) do
       nil ->
         :miss
 
       %{"result" => result, "inserted_at_ms" => inserted_at_ms} ->
         if expired?(inserted_at_ms) do
           # Clean up expired entry
-          LemonCore.Store.delete(@table, full_key)
+          IdempotencyStore.delete(scope, key)
           :miss
         else
           {:ok, result}
@@ -68,12 +68,12 @@ defmodule LemonCore.Idempotency do
   """
   @spec put(scope(), key(), result()) :: :ok
   def put(scope, key, result) do
-    full_key = make_key(scope, key)
     value = %{
       "result" => result,
       "inserted_at_ms" => LemonCore.Event.now_ms()
     }
-    LemonCore.Store.put(@table, full_key, value)
+
+    IdempotencyStore.put(scope, key, value)
   end
 
   @doc """
@@ -98,8 +98,7 @@ defmodule LemonCore.Idempotency do
   """
   @spec delete(scope(), key()) :: :ok
   def delete(scope, key) do
-    full_key = make_key(scope, key)
-    LemonCore.Store.delete(@table, full_key)
+    IdempotencyStore.delete(scope, key)
   end
 
   @doc """
@@ -119,12 +118,6 @@ defmodule LemonCore.Idempotency do
         put(scope, key, result)
         result
     end
-  end
-
-  # Private functions
-
-  defp make_key(scope, key) do
-    "#{scope}:#{key}"
   end
 
   defp expired?(inserted_at_ms) do

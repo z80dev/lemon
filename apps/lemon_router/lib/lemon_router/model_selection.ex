@@ -114,10 +114,7 @@ defmodule LemonRouter.ModelSelection do
   defp engine_prefix(_), do: nil
 
   defp known_engine_id?(engine_id) when is_binary(engine_id) do
-    case LemonGateway.EngineRegistry.get_engine(engine_id) do
-      nil -> false
-      _ -> true
-    end
+    LemonCore.EngineCatalog.known?(engine_id)
   rescue
     _ -> false
   catch

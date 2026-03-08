@@ -3,6 +3,7 @@ defmodule LemonGateway.ApplicationTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.ExecutionRequest
+
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.Application startup, supervision tree,
   and configuration loading.

@@ -142,20 +142,23 @@ defmodule LemonRouter.Router do
   """
   @spec abort(session_key :: binary(), reason :: term()) :: :ok
   def abort(session_key, reason \\ :user_requested) do
-    LemonRouter.SessionCoordinator.abort_session(session_key, reason)
-
-    # Compatibility fallback for any legacy run registrations still present.
-    case LemonRouter.SessionReadModel.active_run(session_key) do
-      {:ok, run_id} -> abort_run(run_id, reason)
-      :none -> :ok
-    end
-
+    session_coordinator().abort_session(session_key, reason)
     :ok
   end
 
   @spec session_busy?(binary()) :: boolean()
   def session_busy?(session_key) when is_binary(session_key) do
-    LemonRouter.SessionReadModel.busy?(session_key)
+    session_coordinator().busy?(session_key)
+  end
+
+  @spec active_run(binary()) :: {:ok, binary()} | :none
+  def active_run(session_key) when is_binary(session_key) do
+    session_coordinator().active_run_for_session(session_key)
+  end
+
+  @spec list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
+  def list_active_sessions do
+    session_coordinator().list_active_sessions()
   end
 
   @doc """
@@ -230,6 +233,10 @@ defmodule LemonRouter.Router do
 
   defp run_orchestrator do
     Application.get_env(:lemon_router, :run_orchestrator, RunOrchestrator)
+  end
+
+  defp session_coordinator do
+    Application.get_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
   end
 
   # ---------------------------------------------------------------------------

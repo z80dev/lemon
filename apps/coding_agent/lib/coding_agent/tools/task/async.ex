@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.Task.Async do
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.Introspection
 
-  @spec run_async(String.t() | nil, String.t() | nil, (() -> term()), map(), map()) :: :ok
+  @spec run_async(String.t() | nil, String.t() | nil, (-> term()), map(), map()) :: :ok
   def run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
     Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
       Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
@@ -24,7 +24,7 @@ defmodule CodingAgent.Tools.Task.Async do
     :ok
   end
 
-  @spec run_sync((() -> term())) :: term()
+  @spec run_sync((-> term())) :: term()
   def run_sync(run_fun) do
     result =
       if lane_queue_available?() do
@@ -41,7 +41,7 @@ defmodule CodingAgent.Tools.Task.Async do
     end
   end
 
-  @spec wrap_on_update(String.t() | nil, ((AgentToolResult.t() -> :ok) | nil)) ::
+  @spec wrap_on_update(String.t() | nil, (AgentToolResult.t() -> :ok) | nil) ::
           (AgentToolResult.t() -> :ok) | nil
   def wrap_on_update(nil, on_update), do: on_update
 
@@ -69,7 +69,10 @@ defmodule CodingAgent.Tools.Task.Async do
       maybe_acquire_task_semaphore()
 
       if lane_queue_available?() do
-        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{task_id: task_id, run_id: run_id})
+        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
+          task_id: task_id,
+          run_id: run_id
+        })
       else
         {:ok, wrapped.()}
       end
@@ -262,14 +265,15 @@ defmodule CodingAgent.Tools.Task.Async do
     agent_id = payload[:agent_id] || lifecycle_context[:agent_id]
     task_meta = payload[:meta] || lifecycle_context[:meta]
 
-    event = LemonCore.Event.new(event_type, payload, %{
-      run_id: run_id,
-      parent_run_id: parent_run_id,
-      session_key: session_key,
-      agent_id: agent_id,
-      task_id: payload[:task_id],
-      task_meta: task_meta
-    })
+    event =
+      LemonCore.Event.new(event_type, payload, %{
+        run_id: run_id,
+        parent_run_id: parent_run_id,
+        session_key: session_key,
+        agent_id: agent_id,
+        task_id: payload[:task_id],
+        task_meta: task_meta
+      })
 
     if is_binary(run_id) do
       LemonCore.Bus.broadcast("run:#{run_id}", event)

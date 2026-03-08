@@ -10,6 +10,8 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
   """
   use ExUnit.Case, async: false
 
+  alias LemonControlPlane.UpdateStore
+
   alias LemonControlPlane.Methods.{
     BrowserRequest,
     TtsConvert,
@@ -35,7 +37,8 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       LemonCore.Store.delete(:usage_data, :current)
 
       # Clean up update config
-      LemonCore.Store.delete(:update_config, :global)
+      UpdateStore.delete_config()
+      UpdateStore.delete_pending()
     end)
 
     :ok
@@ -60,12 +63,17 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
         status: :offline,
         name: "Test Browser"
       }
+
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
 
-      {:error, error} = BrowserRequest.handle(%{
-        "method" => "navigate",
-        "nodeId" => "test-browser-node"
-      }, @ctx)
+      {:error, error} =
+        BrowserRequest.handle(
+          %{
+            "method" => "navigate",
+            "nodeId" => "test-browser-node"
+          },
+          @ctx
+        )
 
       assert error == {:unavailable, "Browser node is not online"}
     end
@@ -78,14 +86,19 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
         status: :online,
         name: "Test Browser"
       }
+
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
 
       # This will forward to node.invoke which creates a pending invocation
-      {:ok, result} = BrowserRequest.handle(%{
-        "method" => "navigate",
-        "args" => %{"url" => "https://example.com"},
-        "nodeId" => "test-browser-node"
-      }, @ctx)
+      {:ok, result} =
+        BrowserRequest.handle(
+          %{
+            "method" => "navigate",
+            "args" => %{"url" => "https://example.com"},
+            "nodeId" => "test-browser-node"
+          },
+          @ctx
+        )
 
       assert result["nodeId"] == "test-browser-node"
       assert result["method"] == "browser.navigate"
@@ -101,15 +114,20 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
         status: :online,
         name: "Default Browser"
       }
+
       LemonCore.Store.put(:nodes_registry, "default-browser-node", node)
 
       on_exit(fn ->
         LemonCore.Store.delete(:nodes_registry, "default-browser-node")
       end)
 
-      {:ok, result} = BrowserRequest.handle(%{
-        "method" => "screenshot"
-      }, @ctx)
+      {:ok, result} =
+        BrowserRequest.handle(
+          %{
+            "method" => "screenshot"
+          },
+          @ctx
+        )
 
       assert result["nodeId"] == "default-browser-node"
       assert result["method"] == "browser.screenshot"
@@ -138,14 +156,20 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       LemonCore.Store.put(:tts_config, :global, %{enabled: true, provider: "openai"})
 
       {:error, error} = TtsConvert.handle(%{"text" => "Hello"}, @ctx)
-      assert error == {:not_implemented, "Method not implemented: OpenAI TTS requires api key. Set openai_api_key in tts_config."}
+
+      assert error ==
+               {:not_implemented,
+                "Method not implemented: OpenAI TTS requires api key. Set openai_api_key in tts_config."}
     end
 
     test "returns not_implemented for elevenlabs without API key" do
       LemonCore.Store.put(:tts_config, :global, %{enabled: true, provider: "elevenlabs"})
 
       {:error, error} = TtsConvert.handle(%{"text" => "Hello"}, @ctx)
-      assert error == {:not_implemented, "Method not implemented: ElevenLabs TTS requires api key. Set elevenlabs_api_key in tts_config."}
+
+      assert error ==
+               {:not_implemented,
+                "Method not implemented: ElevenLabs TTS requires api key. Set elevenlabs_api_key in tts_config."}
     end
 
     test "returns error for unknown provider" do
@@ -223,21 +247,29 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     end
 
     test "accepts date range parameters" do
-      {:ok, result} = UsageCost.handle(%{
-        "startDate" => "2024-01-01",
-        "endDate" => "2024-01-31"
-      }, @ctx)
+      {:ok, result} =
+        UsageCost.handle(
+          %{
+            "startDate" => "2024-01-01",
+            "endDate" => "2024-01-31"
+          },
+          @ctx
+        )
 
       assert result["startDate"] == "2024-01-01"
       assert result["endDate"] == "2024-01-31"
     end
 
     test "accepts snake_case parameters" do
-      {:ok, result} = UsageCost.handle(%{
-        "start_date" => "2024-01-01",
-        "end_date" => "2024-01-31",
-        "group_by" => "day"
-      }, @ctx)
+      {:ok, result} =
+        UsageCost.handle(
+          %{
+            "start_date" => "2024-01-01",
+            "end_date" => "2024-01-31",
+            "group_by" => "day"
+          },
+          @ctx
+        )
 
       assert result["startDate"] == "2024-01-01"
     end
@@ -251,19 +283,21 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
   describe "UsageCost.record_usage/1" do
     test "records usage and updates totals" do
       # Record some usage
-      :ok = UsageCost.record_usage(%{
-        provider: "claude",
-        cost: 0.05,
-        input_tokens: 500,
-        output_tokens: 200
-      })
+      :ok =
+        UsageCost.record_usage(%{
+          provider: "claude",
+          cost: 0.05,
+          input_tokens: 500,
+          output_tokens: 200
+        })
 
-      :ok = UsageCost.record_usage(%{
-        provider: "openai",
-        cost: 0.03,
-        input_tokens: 300,
-        output_tokens: 100
-      })
+      :ok =
+        UsageCost.record_usage(%{
+          provider: "openai",
+          cost: 0.03,
+          input_tokens: 300,
+          output_tokens: 100
+        })
 
       # Get the cost report
       {:ok, result} = UsageCost.handle(%{}, @ctx)
@@ -275,12 +309,13 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     end
 
     test "records usage with string keys" do
-      :ok = UsageCost.record_usage(%{
-        "provider" => "claude",
-        "cost" => 0.10,
-        "input_tokens" => 1000,
-        "output_tokens" => 500
-      })
+      :ok =
+        UsageCost.record_usage(%{
+          "provider" => "claude",
+          "cost" => 0.10,
+          "input_tokens" => 1000,
+          "output_tokens" => 500
+        })
 
       # Verify it was recorded
       summary = LemonCore.Store.get(:usage_data, :current)
@@ -297,12 +332,13 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
     test "accumulates usage across multiple calls" do
       for _ <- 1..5 do
-        :ok = UsageCost.record_usage(%{
-          provider: "claude",
-          cost: 0.01,
-          input_tokens: 100,
-          output_tokens: 50
-        })
+        :ok =
+          UsageCost.record_usage(%{
+            provider: "claude",
+            cost: 0.01,
+            input_tokens: 100,
+            output_tokens: 50
+          })
       end
 
       summary = LemonCore.Store.get(:usage_data, :current)
@@ -313,12 +349,13 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     end
 
     test "stores daily records" do
-      :ok = UsageCost.record_usage(%{
-        provider: "claude",
-        cost: 0.05,
-        input_tokens: 500,
-        output_tokens: 200
-      })
+      :ok =
+        UsageCost.record_usage(%{
+          provider: "claude",
+          cost: 0.05,
+          input_tokens: 500,
+          output_tokens: 200
+        })
 
       # Get today's date key
       date_key = Date.utc_today() |> Date.to_iso8601()
@@ -352,6 +389,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
           "openai" => %{input: 3000, output: 1000}
         }
       }
+
       LemonCore.Store.put(:usage_records, today, record)
 
       on_exit(fn ->

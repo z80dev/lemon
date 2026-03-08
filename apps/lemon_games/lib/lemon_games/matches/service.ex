@@ -7,10 +7,8 @@ defmodule LemonGames.Matches.Service do
   """
 
   alias LemonGames.Games.Registry
-  alias LemonGames.Matches.{EventLog, Match, Projection}
+  alias LemonGames.Matches.{EventLog, Match, Projection, Store}
   alias LemonGames.Bus
-
-  @match_table :game_matches
 
   # --- Public API ---
 
@@ -147,8 +145,7 @@ defmodule LemonGames.Matches.Service do
 
   @spec list_lobby(map()) :: [map()]
   def list_lobby(_opts \\ %{}) do
-    @match_table
-    |> LemonCore.Store.list()
+    Store.list()
     |> Enum.map(fn {_key, match} -> match end)
     |> Enum.filter(fn m -> m["visibility"] == "public" end)
     |> Enum.sort_by(fn m -> -m["updated_at_ms"] end)
@@ -365,7 +362,7 @@ defmodule LemonGames.Matches.Service do
   end
 
   defp fetch_match(match_id) do
-    case LemonCore.Store.get(@match_table, match_id) do
+    case Store.get(match_id) do
       nil -> {:error, :not_found, "match not found"}
       match -> {:ok, match}
     end
@@ -426,7 +423,7 @@ defmodule LemonGames.Matches.Service do
   end
 
   defp persist_match(match_id, match) do
-    case LemonCore.Store.put(@match_table, match_id, match) do
+    case Store.put(match_id, match) do
       :ok ->
         :ok
 

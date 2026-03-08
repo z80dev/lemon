@@ -1,7 +1,14 @@
 defmodule LemonGames.RateLimitTest do
   use ExUnit.Case, async: false
 
-  alias LemonGames.RateLimit
+  alias LemonGames.{RateLimit, RateLimitStore}
+
+  setup do
+    RateLimitStore.list()
+    |> Enum.each(fn {key, _timestamps} -> RateLimitStore.delete(key) end)
+
+    :ok
+  end
 
   test "check_read allows under limit" do
     hash = "rl_test_#{System.unique_integer()}"

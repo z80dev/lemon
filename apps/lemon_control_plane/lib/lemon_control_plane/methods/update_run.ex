@@ -6,9 +6,9 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
   ## Configuration
 
-  Configure update checking via store:
+  Configure update checking via `LemonControlPlane.UpdateStore`:
   ```elixir
-  LemonCore.Store.put(:update_config, :global, %{
+  LemonControlPlane.UpdateStore.put_config(%{
     update_url: "https://api.example.com/releases/latest",
     auto_restart: false
   })
@@ -30,6 +30,7 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.UpdateStore
   alias LemonControlPlane.Protocol.Errors
 
   require Logger
@@ -49,17 +50,18 @@ defmodule LemonControlPlane.Methods.UpdateRun do
     current_version = get_current_version()
 
     # Check if update checking is configured
-    update_config = LemonCore.Store.get(:update_config, :global) || %{}
+    update_config = UpdateStore.get_config() || %{}
     update_url = get_field(update_config, :update_url)
 
     if is_nil(update_url) or update_url == "" do
       # No update URL configured - return current version info
-      {:ok, %{
-        "currentVersion" => current_version,
-        "updateAvailable" => false,
-        "latestVersion" => current_version,
-        "message" => "Update checking not configured. Set update_url in update_config."
-      }}
+      {:ok,
+       %{
+         "currentVersion" => current_version,
+         "updateAvailable" => false,
+         "latestVersion" => current_version,
+         "message" => "Update checking not configured. Set update_url in update_config."
+       }}
     else
       # Fetch latest version info from update URL
       case fetch_update_manifest(update_url) do
@@ -79,23 +81,26 @@ defmodule LemonControlPlane.Methods.UpdateRun do
             # Attempt to apply update
             case apply_update(manifest, update_config) do
               {:ok, message} ->
-                {:ok, Map.merge(result, %{
-                  "updateApplied" => true,
-                  "message" => message
-                })}
+                {:ok,
+                 Map.merge(result, %{
+                   "updateApplied" => true,
+                   "message" => message
+                 })}
 
               {:error, reason} ->
-                {:ok, Map.merge(result, %{
-                  "updateApplied" => false,
-                  "message" => "Update available but failed to apply: #{reason}"
-                })}
+                {:ok,
+                 Map.merge(result, %{
+                   "updateApplied" => false,
+                   "message" => "Update available but failed to apply: #{reason}"
+                 })}
             end
           else
-            message = cond do
-              not update_available -> "Already running latest version"
-              check_only -> "Update available. Use force=true to apply."
-              true -> "Update available. Use force=true to apply."
-            end
+            message =
+              cond do
+                not update_available -> "Already running latest version"
+                check_only -> "Update available. Use force=true to apply."
+                true -> "Update available. Use force=true to apply."
+              end
 
             {:ok, Map.put(result, "message", message)}
           end
@@ -173,7 +178,8 @@ defmodule LemonControlPlane.Methods.UpdateRun do
               path: update_path,
               downloaded_at: System.system_time(:millisecond)
             }
-            LemonCore.Store.put(:pending_update, :current, update_info)
+
+            UpdateStore.put_pending(update_info)
 
             if auto_restart do
               # Schedule restart
@@ -182,6 +188,7 @@ defmodule LemonControlPlane.Methods.UpdateRun do
                 Logger.info("Restarting for update to version #{manifest["version"]}")
                 System.stop(0)
               end)
+
               {:ok, "Update downloaded. Restarting..."}
             else
               {:ok, "Update downloaded to #{update_path}. Restart to apply."}
@@ -223,6 +230,7 @@ defmodule LemonControlPlane.Methods.UpdateRun do
     case String.split(expected, ":", parts: 2) do
       ["sha256", hash] ->
         actual = :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
+
         if actual == String.downcase(hash) do
           :ok
         else
@@ -231,6 +239,7 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
       ["md5", hash] ->
         actual = :crypto.hash(:md5, data) |> Base.encode16(case: :lower)
+
         if actual == String.downcase(hash) do
           :ok
         else

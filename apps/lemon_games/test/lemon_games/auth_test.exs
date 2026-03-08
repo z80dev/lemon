@@ -1,7 +1,14 @@
 defmodule LemonGames.AuthTest do
   use ExUnit.Case, async: false
 
-  alias LemonGames.Auth
+  alias LemonGames.{Auth, AuthStore}
+
+  setup do
+    AuthStore.list()
+    |> Enum.each(fn {token_hash, _claims} -> AuthStore.delete(token_hash) end)
+
+    :ok
+  end
 
   test "issue_token returns plaintext, hash, and claims" do
     {:ok, result} = Auth.issue_token(%{"agent_id" => "a1", "owner_id" => "o1"})

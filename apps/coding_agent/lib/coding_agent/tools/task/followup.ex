@@ -178,7 +178,10 @@ defmodule CodingAgent.Tools.Task.Followup do
   end
 
   defp normalize_followup_answer(answer) when is_binary(answer), do: answer
-  defp normalize_followup_answer(%AgentToolResult{} = result), do: AgentCore.get_text(result) || ""
+
+  defp normalize_followup_answer(%AgentToolResult{} = result),
+    do: AgentCore.get_text(result) || ""
+
   defp normalize_followup_answer(%{answer: answer}) when is_binary(answer), do: answer
   defp normalize_followup_answer(%{"answer" => answer}) when is_binary(answer), do: answer
   defp normalize_followup_answer(other), do: inspect(other)

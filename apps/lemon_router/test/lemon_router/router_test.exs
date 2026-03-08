@@ -14,6 +14,30 @@ defmodule LemonRouter.RouterTest do
     end
   end
 
+  defmodule SessionCoordinatorStubRouter do
+    def abort_session(session_key, reason) do
+      send(test_pid(), {:abort_session, session_key, reason})
+      :ok
+    end
+
+    def busy?(session_key) do
+      send(test_pid(), {:busy_query, session_key})
+      session_key == Process.get(:router_busy_session_key)
+    end
+
+    def active_run_for_session(session_key) do
+      send(test_pid(), {:active_run_query, session_key})
+      Process.get({:active_run, session_key}, :none)
+    end
+
+    def list_active_sessions do
+      send(test_pid(), :list_active_sessions)
+      Process.get(:router_active_sessions, [])
+    end
+
+    defp test_pid, do: Process.get(:router_test_pid)
+  end
+
   setup do
     start_if_needed(LemonRouter.RunRegistry, fn ->
       Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
@@ -24,10 +48,14 @@ defmodule LemonRouter.RouterTest do
     end)
 
     previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
+    previous_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
     Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
+    Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStubRouter)
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
+    Process.delete(:router_busy_session_key)
+    Process.delete(:router_active_sessions)
 
     on_exit(fn ->
       case previous_orchestrator do
@@ -35,8 +63,15 @@ defmodule LemonRouter.RouterTest do
         mod -> Application.put_env(:lemon_router, :run_orchestrator, mod)
       end
 
+      case previous_session_coordinator do
+        nil -> Application.delete_env(:lemon_router, :session_coordinator)
+        mod -> Application.put_env(:lemon_router, :session_coordinator, mod)
+      end
+
       Process.delete(:router_test_pid)
       Process.delete(:router_submit_result)
+      Process.delete(:router_busy_session_key)
+      Process.delete(:router_active_sessions)
     end)
 
     :ok
@@ -48,41 +83,44 @@ defmodule LemonRouter.RouterTest do
     end
   end
 
-  defp start_registered_run(parent, session_key, run_id) do
-    pid =
-      spawn_link(fn ->
-        _ = Registry.register(LemonRouter.RunRegistry, run_id, :ok)
-        _ = Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
-        send(parent, {:registered, run_id, self()})
-
-        receive do
-          {:"$gen_cast", {:abort, reason}} ->
-            send(parent, {:aborted, run_id, reason})
-        after
-          5_000 ->
-            send(parent, {:abort_timeout, run_id})
-        end
-      end)
-
-    pid
-  end
-
   test "abort/2 aborts the active run registered for the session" do
-    # Avoid flakiness in umbrella runs: other tests may also use SessionRegistry.
     session_key = "agent:test:main:#{System.unique_integer([:positive])}"
-    run_id1 = "run_#{System.unique_integer([:positive])}"
-
-    _pid1 = start_registered_run(self(), session_key, run_id1)
-
-    assert_receive {:registered, ^run_id1, _}, 500
 
     Router.abort(session_key, :test_abort)
 
-    assert_receive {:aborted, ^run_id1, :test_abort}, 500
+    assert_receive {:abort_session, ^session_key, :test_abort}, 500
   end
 
   test "abort/2 is a no-op when session has no runs" do
     assert :ok = Router.abort("missing:session", :test_abort)
+    assert_receive {:abort_session, "missing:session", :test_abort}, 500
+  end
+
+  test "session_busy?/1 delegates to the session coordinator" do
+    session_key = "agent:test:main:#{System.unique_integer([:positive])}"
+    Process.put(:router_busy_session_key, session_key)
+
+    assert Router.session_busy?(session_key)
+    assert_receive {:busy_query, ^session_key}, 500
+
+    refute Router.session_busy?("agent:test:main:other")
+    assert_receive {:busy_query, "agent:test:main:other"}, 500
+  end
+
+  test "active_run/1 delegates to the session coordinator" do
+    session_key = "agent:test:main:#{System.unique_integer([:positive])}"
+    Process.put({:active_run, session_key}, {:ok, "run_active"})
+
+    assert Router.active_run(session_key) == {:ok, "run_active"}
+    assert_receive {:active_run_query, ^session_key}, 500
+  end
+
+  test "list_active_sessions/0 delegates to the session coordinator" do
+    sessions = [%{session_key: "agent:test:main:1", run_id: "run_1"}]
+    Process.put(:router_active_sessions, sessions)
+
+    assert Router.list_active_sessions() == sessions
+    assert_receive :list_active_sessions, 500
   end
 
   test "resolve_session_key/1 uses explicit meta.session_key when provided" do

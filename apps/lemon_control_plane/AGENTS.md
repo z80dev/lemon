@@ -80,6 +80,9 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
 | `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
 | `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
+| `LemonControlPlane.AgentIdentityStore` | `lib/lemon_control_plane/agent_identity_store.ex` | Typed wrapper for persisted agent identity records |
+| `LemonControlPlane.UpdateStore` | `lib/lemon_control_plane/update_store.ex` | Typed wrapper for update config and pending-update state |
+| `LemonControlPlane.SkillsConfigStore` | `lib/lemon_control_plane/skills_config_store.ex` | Typed wrapper for fallback persisted skill config |
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |

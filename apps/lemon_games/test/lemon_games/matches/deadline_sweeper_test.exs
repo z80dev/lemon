@@ -1,13 +1,14 @@
 defmodule LemonGames.Matches.DeadlineSweeperTest do
   use ExUnit.Case, async: false
 
-  alias LemonGames.Matches.{DeadlineSweeper, Service}
+  alias LemonGames.Matches.{DeadlineSweeper, EventStore, Service, Store}
 
   @actor %{"agent_id" => "deadline_test_agent", "display_name" => "Deadline Tester"}
 
   setup do
-    clear_table(:game_matches)
-    clear_table(:game_match_events)
+    clear_matches()
+    clear_events()
+
     :ok
   end
 
@@ -20,12 +21,12 @@ defmodule LemonGames.Matches.DeadlineSweeperTest do
       |> Map.put("deadline_at_ms", System.system_time(:millisecond) - 1_000)
       |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
-    :ok = LemonCore.Store.put(:game_matches, match["id"], expired_deadline_match)
+    :ok = Store.put(match["id"], expired_deadline_match)
 
     trigger_sweep()
 
     assert_eventually(fn ->
-      updated = LemonCore.Store.get(:game_matches, match["id"])
+      updated = Store.get(match["id"])
       updated["status"] == "expired" and updated["result"]["reason"] == "accept_timeout"
     end)
   end
@@ -46,12 +47,12 @@ defmodule LemonGames.Matches.DeadlineSweeperTest do
       |> Map.put("deadline_at_ms", System.system_time(:millisecond) - 1_000)
       |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
-    :ok = LemonCore.Store.put(:game_matches, match["id"], overdue)
+    :ok = Store.put(match["id"], overdue)
 
     trigger_sweep()
 
     assert_eventually(fn ->
-      updated = LemonCore.Store.get(:game_matches, match["id"])
+      updated = Store.get(match["id"])
       updated["status"] == "expired" and updated["result"]["reason"] == "turn_timeout"
     end)
   end
@@ -74,9 +75,13 @@ defmodule LemonGames.Matches.DeadlineSweeperTest do
 
   defp assert_eventually(_fun, 0), do: flunk("condition not met within timeout")
 
-  defp clear_table(table) do
-    table
-    |> LemonCore.Store.list()
-    |> Enum.each(fn {key, _value} -> LemonCore.Store.delete(table, key) end)
+  defp clear_matches do
+    Enum.each(Store.list(), fn {match_id, _match} -> Store.delete(match_id) end)
+  end
+
+  defp clear_events do
+    Enum.each(EventStore.list(), fn {{match_id, seq}, _event} ->
+      EventStore.delete(match_id, seq)
+    end)
   end
 end

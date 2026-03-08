@@ -5,7 +5,7 @@ defmodule LemonGames.RateLimit do
   Uses ETS-based sliding window counters.
   """
 
-  @table :game_rate_limits
+  alias LemonGames.RateLimitStore
 
   @read_limit_per_min 60
   @move_limit_per_min 20
@@ -27,10 +27,9 @@ defmodule LemonGames.RateLimit do
   defp check_window(key, window_ms, limit) do
     now = System.system_time(:millisecond)
     window_start = now - window_ms
-    full_key = {:rate, key}
 
     entries =
-      case LemonCore.Store.get(@table, full_key) do
+      case RateLimitStore.get(key) do
         nil -> []
         list -> list
       end
@@ -44,7 +43,7 @@ defmodule LemonGames.RateLimit do
       {:error, :rate_limited, max(retry_after, 0)}
     else
       updated = [now | active]
-      LemonCore.Store.put(@table, full_key, updated)
+      RateLimitStore.put(key, updated)
       :ok
     end
   end

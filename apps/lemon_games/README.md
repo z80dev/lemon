@@ -47,7 +47,7 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 
 **Key design decisions:**
 
-- All state is stored as plain maps with string keys in `LemonCore.Store` (ETS/JSONL/SQLite). No Ecto, no migrations.
+- All state is stored as plain maps with string keys through app-local store wrappers backed by `LemonCore.Store` (ETS/JSONL/SQLite). No Ecto, no migrations.
 - Per-match global locks (`with_lock/2` via `:global.trans`) ensure consistency for all mutating operations.
 - Idempotency keys on move submission prevent duplicate moves from retries.
 - PubSub events (`LemonGames.Bus`) notify the lobby and per-match topics of state changes.
@@ -90,6 +90,8 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 | `LemonGames.Matches.Service` | `matches/service.ex` | Core match API: `create_match/2`, `accept_match/2`, `submit_move/4`, `get_match/2`, `list_lobby/1`, `list_events/4`, `forfeit_match/3`, `expire_match/2` |
 | `LemonGames.Matches.Match` | `matches/match.ex` | Match record constructor and status predicates (`new/1`, `add_player/3`, `active?/1`, `terminal?/1`, `turn_timeout_ms/1`) |
 | `LemonGames.Matches.EventLog` | `matches/event_log.ex` | Append-only event persistence keyed by `{match_id, seq}`; provides `append/4`, `list/3`, `latest_seq/1` |
+| `LemonGames.Matches.Store` | `matches/store.ex` | Typed wrapper for match persistence in `:game_matches` |
+| `LemonGames.Matches.EventStore` | `matches/event_store.ex` | Typed wrapper for append-only event persistence in `:game_match_events` |
 | `LemonGames.Matches.Projection` | `matches/projection.ex` | Event replay (`replay/2`) and public view projection with game-engine-aware state redaction (`project_public_view/2`) |
 | `LemonGames.Matches.DeadlineSweeper` | `matches/deadline_sweeper.ex` | GenServer that sweeps every 1 second, expiring matches that have exceeded their accept or turn deadlines |
 
@@ -108,8 +110,10 @@ LemonGames follows a **server-authoritative, event-sourced** architecture. Clien
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGames.Auth` | `lib/lemon_games/auth.ex` | Token management for external agents: `issue_token/1`, `validate_token/1`, `revoke_token/1`, `list_tokens/1`, `has_scope?/2`. Tokens use `lgm_` prefix, stored by SHA-256 hash. |
+| `LemonGames.AuthStore` | `lib/lemon_games/auth_store.ex` | Typed wrapper for auth token claim persistence in `:game_agent_tokens` |
 | `LemonGames.Bus` | `lib/lemon_games/bus.ex` | PubSub wrapper: `games:lobby` topic for lobby changes, `games:match:<id>` for per-match events. Subscribe/unsubscribe/broadcast helpers. |
 | `LemonGames.RateLimit` | `lib/lemon_games/rate_limit.ex` | Sliding window rate limiting: 60 reads/min per token, 20 moves/min per token, 4 moves/5s per token per match |
+| `LemonGames.RateLimitStore` | `lib/lemon_games/rate_limit_store.ex` | Typed wrapper for rate limit window persistence in `:game_rate_limits` |
 
 ## Match Lifecycle Flow
 
@@ -174,7 +178,7 @@ The bot system runs asynchronously via `Task.start/1`:
 
 ## Storage Tables
 
-All storage uses `LemonCore.Store` (ETS-backed with optional JSONL/SQLite persistence).
+All storage flows through typed LemonGames store wrappers backed by `LemonCore.Store` (ETS-backed with optional JSONL/SQLite persistence).
 
 | Table | Key | Value | Purpose |
 |-------|-----|-------|---------|
@@ -222,7 +226,7 @@ Turn and accept timeout values are defined in `LemonGames.Matches.Match`:
 
 | Dependency | Source | Purpose |
 |------------|--------|---------|
-| `lemon_core` | Umbrella (in_umbrella) | Storage (`LemonCore.Store`), PubSub (`LemonCore.Bus`), idempotency (`LemonCore.Idempotency`), event construction (`LemonCore.Event`) |
+| `lemon_core` | Umbrella (in_umbrella) | Storage backend for LemonGames store wrappers (`LemonCore.Store`), PubSub (`LemonCore.Bus`), idempotency (`LemonCore.Idempotency`), event construction (`LemonCore.Event`) |
 | `jason` | Hex (~> 1.4) | JSON encoding/decoding |
 
 ## Dependents

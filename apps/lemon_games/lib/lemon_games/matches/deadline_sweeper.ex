@@ -4,8 +4,9 @@ defmodule LemonGames.Matches.DeadlineSweeper do
   use GenServer
   require Logger
 
+  alias LemonGames.Matches.Store
+
   @sweep_interval_ms 1_000
-  @match_table :game_matches
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -31,8 +32,7 @@ defmodule LemonGames.Matches.DeadlineSweeper do
   defp sweep do
     now = System.system_time(:millisecond)
 
-    @match_table
-    |> LemonCore.Store.list()
+    Store.list()
     |> Enum.each(fn {_key, match} ->
       cond do
         match["status"] in ["finished", "expired", "aborted"] ->

@@ -2,7 +2,6 @@ defmodule LemonChannels.Runtime do
   @moduledoc false
 
   @router_mod :"Elixir.LemonRouter.Router"
-  @session_read_model_mod :"Elixir.LemonRouter.SessionReadModel"
 
   @spec cancel_by_progress_msg(binary(), integer()) :: :ok
   def cancel_by_progress_msg(session_key, _progress_msg_id)
@@ -74,17 +73,7 @@ defmodule LemonChannels.Runtime do
 
   @spec session_busy?(binary()) :: boolean()
   def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
-    cond do
-      function_exported?(LemonCore.RouterBridge, :session_busy?, 1) ->
-        LemonCore.RouterBridge.session_busy?(session_key)
-
-      Code.ensure_loaded?(@session_read_model_mod) and
-          function_exported?(@session_read_model_mod, :busy?, 1) ->
-        apply(@session_read_model_mod, :busy?, [session_key])
-
-      true ->
-        false
-    end
+    LemonCore.RouterBridge.session_busy?(session_key)
   rescue
     _ -> false
   end

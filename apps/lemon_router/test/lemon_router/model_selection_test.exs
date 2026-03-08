@@ -3,24 +3,6 @@ defmodule LemonRouter.ModelSelectionTest do
 
   alias LemonRouter.ModelSelection
 
-  setup do
-    {started_here?, pid} =
-      case Process.whereis(LemonGateway.EngineRegistry) do
-        nil ->
-          {:ok, started_pid} = LemonGateway.EngineRegistry.start_link([])
-          {true, started_pid}
-
-        existing_pid ->
-          {false, existing_pid}
-      end
-
-    on_exit(fn ->
-      if started_here? and is_pid(pid) and Process.alive?(pid), do: GenServer.stop(pid)
-    end)
-
-    :ok
-  end
-
   test "model precedence: explicit > meta > session > profile > default" do
     resolved =
       ModelSelection.resolve(%{

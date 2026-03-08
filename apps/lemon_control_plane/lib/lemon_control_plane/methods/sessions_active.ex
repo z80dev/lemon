@@ -4,7 +4,7 @@ defmodule LemonControlPlane.Methods.SessionsActive do
 
   Returns the active (in-flight) run for a given sessionKey.
 
-  This is backed by LemonRouter.SessionRegistry and is therefore:
+  This is backed by router-owned best-effort local-node activity state and is therefore:
   - Best-effort (only reflects the current node state)
   - Strict single-flight (at most one active run per sessionKey)
   """
@@ -25,13 +25,9 @@ defmodule LemonControlPlane.Methods.SessionsActive do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
       run_id =
-        if Code.ensure_loaded?(Registry) and Code.ensure_loaded?(LemonRouter.SessionRegistry) do
-          case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
-            [{_pid, %{run_id: run_id}}] when is_binary(run_id) and run_id != "" -> run_id
-            _ -> nil
-          end
-        else
-          nil
+        case LemonCore.RouterBridge.active_run(session_key) do
+          {:ok, active_run_id} -> active_run_id
+          :none -> nil
         end
 
       {:ok, %{"sessionKey" => session_key, "runId" => run_id}}

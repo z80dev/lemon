@@ -12,6 +12,7 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.SkillsConfigStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -58,8 +59,8 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
               LemonSkills.Config.disable(skill_key, cwd: cwd)
             end
           else
-            # Fallback: store in LemonCore.Store
-            LemonCore.Store.put(:skills_config, {cwd, skill_key, :enabled}, enabled)
+            # Fallback: store via the typed wrapper
+            SkillsConfigStore.put_enabled(cwd, skill_key, enabled)
             :ok
           end
 
@@ -80,8 +81,8 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
             updated_config = Map.put(existing, "env", merged_env)
             LemonSkills.Config.set_skill_config(skill_key, updated_config, cwd: cwd)
           else
-            # Fallback: store in LemonCore.Store
-            LemonCore.Store.put(:skills_config, {cwd, skill_key, :env}, env)
+            # Fallback: store via the typed wrapper
+            SkillsConfigStore.put_env(cwd, skill_key, env)
             :ok
           end
 
@@ -94,9 +95,11 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
     errors = Enum.filter(results, fn {_key, result} -> result != :ok end)
 
     if length(errors) > 0 do
-      error_details = Enum.map(errors, fn {key, {:error, reason}} ->
-        "#{key}: #{inspect(reason)}"
-      end)
+      error_details =
+        Enum.map(errors, fn {key, {:error, reason}} ->
+          "#{key}: #{inspect(reason)}"
+        end)
+
       {:error, Errors.internal_error("Update failed", Enum.join(error_details, "; "))}
     else
       # Get current enabled state for response
@@ -104,14 +107,15 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
         if Code.ensure_loaded?(LemonSkills.Config) do
           not LemonSkills.Config.skill_disabled?(skill_key, cwd)
         else
-          enabled
+          SkillsConfigStore.get_enabled(cwd, skill_key)
         end
 
-      {:ok, %{
-        "skillKey" => skill_key,
-        "enabled" => current_enabled,
-        "env" => env
-      }}
+      {:ok,
+       %{
+         "skillKey" => skill_key,
+         "enabled" => current_enabled,
+         "env" => env
+       }}
     end
   end
 
@@ -131,13 +135,14 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
 
       case LemonSkills.Installer.update(skill_key, opts) do
         {:ok, entry} ->
-          {:ok, %{
-            "skillKey" => entry.key,
-            "enabled" => entry.enabled,
-            "name" => entry.name,
-            "source" => to_string(entry.source),
-            "updated" => true
-          }}
+          {:ok,
+           %{
+             "skillKey" => entry.key,
+             "enabled" => entry.enabled,
+             "name" => entry.name,
+             "source" => to_string(entry.source),
+             "updated" => true
+           }}
 
         {:error, reason} ->
           {:error, Errors.internal_error("Update failed", inspect(reason))}

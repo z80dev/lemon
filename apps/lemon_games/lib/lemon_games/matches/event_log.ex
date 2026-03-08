@@ -5,7 +5,7 @@ defmodule LemonGames.Matches.EventLog do
   Events are stored in `:game_match_events` keyed by `{match_id, seq}`.
   """
 
-  @table :game_match_events
+  alias LemonGames.Matches.EventStore
 
   @spec append(String.t(), String.t(), map(), map()) :: {:ok, non_neg_integer()}
   def append(match_id, event_type, actor, payload) do
@@ -20,14 +20,13 @@ defmodule LemonGames.Matches.EventLog do
       "ts_ms" => System.system_time(:millisecond)
     }
 
-    :ok = LemonCore.Store.put(@table, {match_id, seq}, event)
+    :ok = EventStore.put(match_id, seq, event)
     {:ok, seq}
   end
 
   @spec list(String.t(), non_neg_integer(), non_neg_integer()) :: [map()]
   def list(match_id, after_seq \\ 0, limit \\ 100) do
-    @table
-    |> LemonCore.Store.list()
+    EventStore.list()
     |> Enum.filter(fn {{mid, seq}, _} -> mid == match_id and seq > after_seq end)
     |> Enum.sort_by(fn {{_, seq}, _} -> seq end)
     |> Enum.take(limit)
@@ -36,8 +35,7 @@ defmodule LemonGames.Matches.EventLog do
 
   @spec latest_seq(String.t()) :: non_neg_integer()
   def latest_seq(match_id) do
-    @table
-    |> LemonCore.Store.list()
+    EventStore.list()
     |> Enum.filter(fn {{mid, _seq}, _} -> mid == match_id end)
     |> Enum.map(fn {{_, seq}, _} -> seq end)
     |> Enum.max(fn -> 0 end)

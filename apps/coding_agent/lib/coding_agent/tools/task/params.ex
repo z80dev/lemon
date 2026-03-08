@@ -266,7 +266,8 @@ defmodule CodingAgent.Tools.Task.Params do
     [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
   end
 
-  @spec normalize_queue_mode(term()) :: :collect | :followup | :steer | :steer_backlog | :interrupt
+  @spec normalize_queue_mode(term()) ::
+          :collect | :followup | :steer | :steer_backlog | :interrupt
   def normalize_queue_mode("collect"), do: :collect
   def normalize_queue_mode("followup"), do: :followup
   def normalize_queue_mode("steer"), do: :steer

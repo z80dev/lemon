@@ -56,8 +56,10 @@ defmodule LemonControlPlane.Methods.SkillsMethodsTest do
 
     test "applies enabled config change when provided" do
       ctx = %{auth: %{role: :operator}}
+      skill_key = "test-skill-#{System.unique_integer([:positive])}"
+
       params = %{
-        "skillKey" => "test-skill",
+        "skillKey" => skill_key,
         "enabled" => false,
         "cwd" => "/tmp/test"
       }
@@ -65,21 +67,23 @@ defmodule LemonControlPlane.Methods.SkillsMethodsTest do
       # This will use the fallback path since LemonSkills.Config might not be fully loaded
       {:ok, result} = SkillsUpdate.handle(params, ctx)
 
-      assert result["skillKey"] == "test-skill"
+      assert result["skillKey"] == skill_key
       assert result["enabled"] == false
     end
 
     test "applies env config change when provided" do
       ctx = %{auth: %{role: :operator}}
+      skill_key = "test-skill-#{System.unique_integer([:positive])}"
+
       params = %{
-        "skillKey" => "test-skill",
+        "skillKey" => skill_key,
         "env" => %{"API_KEY" => "test123"},
         "cwd" => "/tmp/test"
       }
 
       {:ok, result} = SkillsUpdate.handle(params, ctx)
 
-      assert result["skillKey"] == "test-skill"
+      assert result["skillKey"] == skill_key
       assert result["env"] == %{"API_KEY" => "test123"}
     end
   end

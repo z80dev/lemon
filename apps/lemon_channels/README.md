@@ -38,6 +38,8 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
 
 **Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs, and routes them (via `LemonCore.RouterBridge`) to the session engine.
 
+Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
+
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids and pending creates per `{route, run, surface}`.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
@@ -519,23 +521,25 @@ Engine resolution priority: resume token > engine hint > binding default > proje
 
 ### Engine Registry
 
-`LemonChannels.EngineRegistry` is a channels-local compatibility shim. It formats resume lines locally, but engine discovery and resume parsing defer to `LemonGateway.EngineRegistry` when the gateway registry is running and fall back to the configured/default engine list otherwise.
+`LemonCore.EngineCatalog` is the shared validation/normalization boundary for known engine IDs.
+`LemonChannels.EngineRegistry` remains only as a compatibility shim for resume parsing that may defer to `LemonGateway.EngineRegistry` when custom engine modules are present.
 
 ```elixir
-LemonChannels.EngineRegistry.engine_known?("claude")  # true
+LemonCore.EngineCatalog.known?("claude")  # true
+LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
 
 {:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
   LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
 
-LemonChannels.EngineRegistry.format_resume(%ResumeToken{engine: "claude", value: "abc123"})
+LemonCore.ResumeToken.format_plain(%ResumeToken{engine: "claude", value: "abc123"})
 # "claude --resume abc123"
 ```
 
-Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override the fallback list via `config :lemon_channels, :engines`.
+Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override the shared list via `config :lemon_core, :known_engines`.
 
 ### Runtime Bridge
 
-`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` or the router read model rather than reaching into `SessionRegistry` directly:
+`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
 
 ```elixir
 LemonChannels.Runtime.cancel_by_run_id(run_id)
@@ -584,7 +588,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
-| `LemonChannels.EngineRegistry` | Engine ID validation, resume token parsing |
+| `LemonChannels.EngineRegistry` | Compatibility resume-token parsing shim for custom gateway engines |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | `LemonChannels.Runtime` | Runtime bridge for cancel / keepalive / busy checks via `LemonCore.RouterBridge` |
 | `LemonChannels.Cwd` | Working directory resolution |

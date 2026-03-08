@@ -109,6 +109,110 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags router-internal session registry access outside lemon_router" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_session_state.ex",
+        """
+        defmodule LemonChannels.BadSessionState do
+          def bad(session_key), do: Registry.lookup(LemonRouter.SessionRegistry, session_key)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :router_session_registry_boundary and
+                 issue.path == "apps/lemon_channels/lib/lemon_channels/bad_session_state.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags router use of gateway cwd and engine registry" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_boundary.ex",
+        """
+        defmodule LemonRouter.BadBoundary do
+          def bad(engine_id) do
+            LemonGateway.Cwd.default_cwd()
+            LemonGateway.EngineRegistry.get_engine(engine_id)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, &(&1.code == :router_gateway_cwd_dependency))
+      assert Enum.any?(report.issues, &(&1.code == :router_gateway_engine_registry_dependency))
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags channels validation or formatting via EngineRegistry" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_engine_usage.ex",
+        """
+        defmodule LemonChannels.BadEngineUsage do
+          def bad(token) do
+            LemonChannels.EngineRegistry.get_engine("claude")
+            LemonChannels.EngineRegistry.format_resume(token)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :channels_engine_registry_format_validation and
+                 issue.path == "apps/lemon_channels/lib/lemon_channels/bad_engine_usage.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags raw lemon_games store access outside app-local wrappers" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_games/lib/lemon_games/bad_game_state.ex",
+        """
+        defmodule LemonGames.BadGameState do
+          def bad(id), do: LemonCore.Store.get(:matches, id)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :games_raw_store_bypass and
+                 issue.path == "apps/lemon_games/lib/lemon_games/bad_game_state.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "flags raw generic shared-domain session store access" do
     tmp_dir = tmp_repo!()
 
@@ -161,6 +265,34 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags raw model-policy and idempotency storage bypasses outside typed wrappers" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/bad_core_store.ex",
+        """
+        defmodule LemonCore.BadCoreStore do
+          def bad(route_key, scope, key) do
+            LemonCore.Store.get(:model_policies, route_key)
+            LemonCore.Store.put(:idempotency, "\#{scope}:\#{key}", :ok)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :shared_domain_store_wrapper_bypass and
+                 issue.path == "apps/lemon_core/lib/lemon_core/bad_core_store.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "allows typed project binding wrapper to use raw store internally" do
     tmp_dir = tmp_repo!()
 
@@ -171,6 +303,111 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
         """
         defmodule LemonCore.ProjectBindingStore do
           def get(project_id), do: LemonCore.Store.get(:project_overrides, project_id)
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows typed model-policy and idempotency wrappers to use raw store internally" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/model_policy_store.ex",
+        """
+        defmodule LemonCore.ModelPolicyStore do
+          def get(route_key), do: LemonCore.Store.get(:model_policies, route_key)
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/idempotency_store.ex",
+        """
+        defmodule LemonCore.IdempotencyStore do
+          def put(scope, key, value), do: LemonCore.Store.put(:idempotency, "\#{scope}:\#{key}", value)
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags raw control-plane agent/update/skills storage bypasses outside typed wrappers" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_control_store.ex",
+        """
+        defmodule LemonControlPlane.Methods.BadControlStore do
+          def bad(agent_id) do
+            LemonCore.Store.get(:agents, agent_id)
+            LemonCore.Store.get(:update_config, :global)
+            LemonCore.Store.put(:pending_update, :current, %{})
+            LemonCore.Store.put(:skills_config, {nil, "skill", :enabled}, true)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :control_plane_store_wrapper_bypass and
+                 issue.path ==
+                   "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_control_store.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows typed control-plane agent/update/skills wrappers to use raw store internally" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/agent_identity_store.ex",
+        """
+        defmodule LemonControlPlane.AgentIdentityStore do
+          def get(agent_id), do: LemonCore.Store.get(:agents, agent_id)
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/update_store.ex",
+        """
+        defmodule LemonControlPlane.UpdateStore do
+          def get_config, do: LemonCore.Store.get(:update_config, :global)
+          def put_pending(value), do: LemonCore.Store.put(:pending_update, :current, value)
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/skills_config_store.ex",
+        """
+        defmodule LemonControlPlane.SkillsConfigStore do
+          def put_enabled(cwd, skill_key, enabled),
+            do: LemonCore.Store.put(:skills_config, {cwd, skill_key, :enabled}, enabled)
         end
         """
       )

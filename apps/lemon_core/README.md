@@ -317,16 +317,21 @@ config :lemon_core, LemonCore.Store,
   backend_opts: [path: "/var/lib/lemon/store.sqlite3"]
 ```
 
-### Generic Table API
+### Wrapper-First Table Access
 
 ```elixir
-:ok = LemonCore.Store.put(:my_table, key, value)
-value = LemonCore.Store.get(:my_table, key)
-:ok = LemonCore.Store.delete(:my_table, key)
-items = LemonCore.Store.list(:my_table)
+defmodule MyApp.WidgetStore do
+  def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
+  def get(id), do: LemonCore.Store.get(:widgets, id)
+end
+
+MyApp.WidgetStore.put(id, widget)
+widget = MyApp.WidgetStore.get(id)
 ```
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
+
+Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized.
 
 ### Specialized APIs
 
@@ -335,6 +340,8 @@ Shared-domain callers should prefer typed wrappers:
 - **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
+- **Model policies**: `LemonCore.ModelPolicyStore.put/2`, `get/1`, `list/0`, `delete/1`
+- **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
 - **Progress mapping**: `LemonCore.ProgressStore.put_run/3`, `get_run/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`

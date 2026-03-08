@@ -42,6 +42,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
+| `LemonCore.IdempotencyStore` | Typed wrapper for persisted idempotency entries |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
@@ -56,6 +57,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
+| `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
 | `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
@@ -189,19 +191,21 @@ config :lemon_core, LemonCore.Store,
   backend_opts: [path: "/var/lib/lemon/store.sqlite3"]
 ```
 
-### Generic Table API
+### Wrapper-First Table Access
 
 ```elixir
-# Any table name (atom) works
-:ok = LemonCore.Store.put(:my_table, key, value)
-value = LemonCore.Store.get(:my_table, key)
-:ok = LemonCore.Store.delete(:my_table, key)
-items = LemonCore.Store.list(:my_table)
+defmodule MyApp.WidgetStore do
+  def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
+  def get(id), do: LemonCore.Store.get(:widgets, id)
+end
+
+MyApp.WidgetStore.put(id, widget)
+widget = MyApp.WidgetStore.get(id)
 ```
 
 Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
 
-Use the generic table API only for backend/wrapper internals or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, and `LemonCore.ExecApprovalStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, and `LemonCore.ExecApprovalStore`.
 
 ### Specialized APIs
 

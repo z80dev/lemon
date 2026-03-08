@@ -784,6 +784,7 @@ defmodule LemonGateway.ThreadRegistryTest do
               conversation_key: {:session, job.session_key}
             )
           )
+
           job
         end
 
@@ -828,6 +829,7 @@ defmodule LemonGateway.ThreadRegistryTest do
           conversation_key: {:session, job1.session_key}
         )
       )
+
       assert_receive {:lemon_gateway_run_completed, ^job1, _}, 2000
 
       # Wait for worker to die

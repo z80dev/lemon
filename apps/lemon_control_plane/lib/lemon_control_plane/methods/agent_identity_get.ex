@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentIdentityStore
+
   @impl true
   def name, do: "agent.identity.get"
 
@@ -28,7 +30,7 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
             end
 
           true ->
-            case LemonCore.Store.get(:agents, agent_id) do
+            case AgentIdentityStore.get(agent_id) do
               nil -> default_identity(agent_id)
               agent -> agent_to_identity(agent)
             end

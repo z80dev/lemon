@@ -384,7 +384,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   defp normalize_resume(_), do: nil
 
   defp format_resume_line(%ResumeToken{} = resume) do
-    LemonChannels.EngineRegistry.format_resume(resume)
+    ResumeToken.format_plain(resume)
   rescue
     _ -> "#{resume.engine} resume #{resume.value}"
   end

@@ -56,7 +56,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     @impl true
     def init(opts) do
       if is_pid(opts[:notify_pid]) do
-        send(opts[:notify_pid], {:captured_job, opts[:job]})
+        send(opts[:notify_pid], {:captured_job, opts[:execution_request]})
       end
 
       {:ok, opts, {:continue, :auto_stop}}

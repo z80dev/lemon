@@ -25,6 +25,16 @@ defmodule LemonCore.RouterBridgeTest do
       send(self(), {:run_aborted, run_id, reason})
       :ok
     end
+
+    def active_run(session_key) do
+      send(self(), {:active_run, session_key})
+      {:ok, "run_for_#{session_key}"}
+    end
+
+    def list_active_sessions do
+      send(self(), :list_active_sessions)
+      [%{session_key: "agent:bridge:main", run_id: "run_bridge"}]
+    end
   end
 
   defmodule AlternativeRunOrchestrator do
@@ -127,6 +137,34 @@ defmodule LemonCore.RouterBridgeTest do
     test "returns unavailable when no router is configured" do
       :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
       assert {:error, :unavailable} = RouterBridge.abort_run("run-x")
+    end
+  end
+
+  describe "session queries" do
+    test "active_run/1 delegates to router when configured" do
+      :ok = RouterBridge.configure(router: RouterBridgeTestRouter)
+
+      assert RouterBridge.active_run("agent:bridge:main") == {:ok, "run_for_agent:bridge:main"}
+      assert_receive {:active_run, "agent:bridge:main"}
+    end
+
+    test "active_run/1 fails soft when router is unavailable" do
+      :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
+      assert RouterBridge.active_run("agent:x:main") == :none
+    end
+
+    test "list_active_sessions/0 delegates to router when configured" do
+      :ok = RouterBridge.configure(router: RouterBridgeTestRouter)
+
+      assert RouterBridge.list_active_sessions() ==
+               [%{session_key: "agent:bridge:main", run_id: "run_bridge"}]
+
+      assert_receive :list_active_sessions
+    end
+
+    test "list_active_sessions/0 fails soft when router is unavailable" do
+      :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
+      assert RouterBridge.list_active_sessions() == []
     end
   end
 

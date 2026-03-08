@@ -46,6 +46,8 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - `lemon_channels` owns channel rendering and presentation state. It must not mutate inbound prompts for pending-compaction behavior.
 - `lemon_gateway` owns execution slots and engine lifecycle. Router-owned queue semantics, chat-state readback for auto-resume request mutation, and conversation-key selection must not move back into gateway. `ExecutionRequest` values must arrive with a pre-resolved `conversation_key`, and `LemonGateway.Runtime.submit/1` must not be reintroduced as a legacy compatibility path.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
+- Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` or `LemonRouter.SessionReadModel` directly.
+- Router and channels should validate engine IDs through `LemonCore.EngineCatalog`. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.

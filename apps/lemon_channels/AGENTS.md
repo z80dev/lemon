@@ -64,9 +64,9 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Channels-local compatibility shim for engine IDs and resume lines. Defers to `LemonGateway.EngineRegistry` at runtime when available; otherwise uses configured/default engine IDs. |
+| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Temporary parser-only compatibility shim for resume lines when gateway/custom engine modules expose custom syntax. Validation and formatting should use `LemonCore.EngineCatalog` / `LemonCore.ResumeToken`. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` / router read model |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
 
 ### Outbox Pipeline
 
@@ -96,7 +96,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/model_preferences.ex` | Session/chat/topic model and thinking preference helpers. |
 | `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, resume index, and generation bookkeeping helpers. |
 | `adapters/telegram/transport/resume_selection.ex` | Explicit resume parsing, recent-session lookup, and resume formatting helpers. |
-| `adapters/telegram/transport/update_processor.ex` | Authorization, dedup, routing pipeline, known-target indexing (`LemonCore.Store` with 30s throttle), engine directive parsing. |
+| `adapters/telegram/transport/update_processor.ex` | Authorization, dedup, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, engine directive parsing. |
 | `adapters/telegram/renderer.ex` | Telegram semantic renderer for send-vs-edit behavior, truncation, and presentation-state-aware delivery. |
 | `adapters/telegram/status_renderer.ex` | Telegram tool-status rendering and controls presentation. |
 | `adapters/telegram/file_batcher.ex` | Telegram-specific media/file batching for renderer-owned outbound UX. |
@@ -335,7 +335,7 @@ Session/resume indices use generation-scoped keys:
 
 ### Known-Target Indexing
 
-`update_processor.ex` writes to `:telegram_known_targets` in `LemonCore.Store` but throttles writes to a 30-second cadence per target (unless metadata changes) to avoid overloading the store during high-traffic chats.
+`update_processor.ex` writes known targets through `LemonChannels.Telegram.KnownTargetStore` but throttles writes to a 30-second cadence per target (unless metadata changes) to avoid overloading the store during high-traffic chats.
 
 ### Delivery Helpers
 
@@ -432,13 +432,14 @@ Bindings from `GatewayConfig.get(:bindings)`. Projects from `GatewayConfig.get(:
 ## Engine Registry
 
 ```elixir
-LemonChannels.EngineRegistry.engine_known?("claude")  # true
+LemonCore.EngineCatalog.known?("claude")  # true
+LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
 
 {:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
   LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
 ```
 
-Default engines: `lemon echo codex claude opencode pi kimi`. Override via `config :lemon_channels, :engines`.
+Default engines: `lemon echo codex claude opencode pi kimi`. Override via `config :lemon_core, :known_engines`.
 
 ## Runtime Bridge
 

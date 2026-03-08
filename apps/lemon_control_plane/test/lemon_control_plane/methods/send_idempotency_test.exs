@@ -9,12 +9,13 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
     # Clean up idempotency store before each test
     on_exit(fn ->
       try do
-        LemonCore.Store.delete(:idempotency, "send:test-key-1")
-        LemonCore.Store.delete(:idempotency, "send:test-key-2")
+        LemonCore.IdempotencyStore.delete("send", "test-key-1")
+        LemonCore.IdempotencyStore.delete("send", "test-key-2")
       rescue
         _ -> :ok
       end
     end)
+
     :ok
   end
 
@@ -69,7 +70,7 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
 
     test "idempotency key prevents duplicate sends" do
       # Clean start - no cached result
-      LemonCore.Store.delete(:idempotency, "send:test-key-2")
+      LemonCore.IdempotencyStore.delete("send", "test-key-2")
 
       params = %{
         "channelId" => "telegram",
@@ -81,15 +82,16 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
       result1 = Send.handle(params, @ctx)
 
       # Store a mock result manually if channels not available
-      first_ref = case result1 do
-        {:error, {:internal_error, _, :channels_not_available}} ->
-          # Simulate what would happen if send succeeded
-          LemonCore.Idempotency.put(:send, "test-key-2", "ref-456")
-          "ref-456"
+      first_ref =
+        case result1 do
+          {:error, {:internal_error, _, :channels_not_available}} ->
+            # Simulate what would happen if send succeeded
+            LemonCore.Idempotency.put(:send, "test-key-2", "ref-456")
+            "ref-456"
 
-        {:ok, response} ->
-          response["deliveryRef"]
-      end
+          {:ok, response} ->
+            response["deliveryRef"]
+        end
 
       # Second call with same key should return cached result
       result2 = Send.handle(params, @ctx)
@@ -135,22 +137,25 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
       counter = :counters.new(1, [:atomics])
 
       # First execute
-      result1 = LemonCore.Idempotency.execute(:send, "exec-key", fn ->
-        :counters.add(counter, 1, 1)
-        "computed"
-      end)
+      result1 =
+        LemonCore.Idempotency.execute(:send, "exec-key", fn ->
+          :counters.add(counter, 1, 1)
+          "computed"
+        end)
 
       assert result1 == "computed"
       assert :counters.get(counter, 1) == 1
 
       # Second execute - should return cached, not increment counter
-      result2 = LemonCore.Idempotency.execute(:send, "exec-key", fn ->
-        :counters.add(counter, 1, 1)
-        "computed-again"
-      end)
+      result2 =
+        LemonCore.Idempotency.execute(:send, "exec-key", fn ->
+          :counters.add(counter, 1, 1)
+          "computed-again"
+        end)
 
       assert result2 == "computed"
-      assert :counters.get(counter, 1) == 1  # Still 1, not 2
+      # Still 1, not 2
+      assert :counters.get(counter, 1) == 1
 
       # Cleanup
       LemonCore.Idempotency.delete(:send, "exec-key")

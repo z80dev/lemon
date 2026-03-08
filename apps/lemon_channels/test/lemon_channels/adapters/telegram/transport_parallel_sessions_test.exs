@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
 
   defmodule ParallelTestRouter do
+    @busy_sessions_key {__MODULE__, :busy_sessions}
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -21,6 +23,19 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       end
 
       {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    def session_busy?(session_key) do
+      :persistent_term.get(@busy_sessions_key, MapSet.new())
+      |> MapSet.member?(session_key)
+    end
+
+    def set_busy_sessions(session_keys) when is_list(session_keys) do
+      :persistent_term.put(@busy_sessions_key, MapSet.new(session_keys))
+    end
+
+    def clear_busy_sessions do
+      :persistent_term.erase(@busy_sessions_key)
     end
   end
 
@@ -80,7 +95,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
   setup do
     stop_transport()
-    ensure_session_registry()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
@@ -92,6 +106,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       router: ParallelTestRouter,
       run_orchestrator: ParallelTestRouter
     )
+    ParallelTestRouter.clear_busy_sessions()
 
     set_bindings([])
 
@@ -100,6 +115,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       :persistent_term.erase({ParallelMockAPI, :updates})
       :persistent_term.erase({ParallelMockAPI, :pid})
       :persistent_term.erase({ParallelTestRouter, :pid})
+      ParallelTestRouter.clear_busy_sessions()
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
     end)
@@ -120,8 +136,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
-    on_exit(fn -> safe_unregister_session(base_session_key) end)
+    ParallelTestRouter.set_busy_sessions([base_session_key])
 
     ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
 
@@ -149,8 +164,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
-    on_exit(fn -> safe_unregister_session(base_session_key) end)
+    ParallelTestRouter.set_busy_sessions([base_session_key])
 
     resume = %LemonCore.ResumeToken{engine: "lemon", value: "tok"}
     _ = StateStore.put_selected_resume({"default", chat_id, nil}, resume)
@@ -182,8 +196,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
-    on_exit(fn -> safe_unregister_session(base_session_key) end)
+    ParallelTestRouter.set_busy_sessions([base_session_key])
 
     ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id1, "first")])
 
@@ -567,28 +580,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       end
 
     Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
-  end
-
-  defp ensure_session_registry do
-    if Process.whereis(LemonRouter.SessionRegistry) == nil do
-      {:ok, _} = Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
-    end
-
-    :ok
-  end
-
-  defp safe_unregister_session(key) do
-    if Process.whereis(LemonRouter.SessionRegistry) do
-      try do
-        _ = Registry.unregister(LemonRouter.SessionRegistry, key)
-      rescue
-        ArgumentError -> :ok
-      catch
-        :exit, _ -> :ok
-      end
-    end
-
-    :ok
   end
 
   defp eventually(fun, timeout_ms \\ 1_500) when is_function(fun, 0) do

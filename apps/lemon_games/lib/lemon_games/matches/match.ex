@@ -2,7 +2,8 @@ defmodule LemonGames.Matches.Match do
   @moduledoc """
   Match record shape and helpers.
 
-  Matches are stored as plain maps with string keys in `LemonCore.Store`.
+  Matches are stored as plain maps with string keys via app-local store wrappers backed by
+  `LemonCore.Store`.
   This module provides constructors and status predicates.
   """
 

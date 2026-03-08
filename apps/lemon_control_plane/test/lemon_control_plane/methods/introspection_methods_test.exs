@@ -9,6 +9,62 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   alias LemonCore.SessionKey
 
+  defmodule RouterBridgeStub do
+    @active_sessions_key {__MODULE__, :active_sessions}
+
+    def set_active_sessions(entries) when is_list(entries) do
+      :persistent_term.put(@active_sessions_key, entries)
+    end
+
+    def clear_active_sessions do
+      :persistent_term.erase(@active_sessions_key)
+    end
+
+    def active_run(session_key) do
+      case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
+        %{run_id: run_id} -> {:ok, run_id}
+        _ -> :none
+      end
+    end
+
+    def list_active_sessions do
+      active_sessions()
+    end
+
+    defp active_sessions do
+      :persistent_term.get(@active_sessions_key, [])
+    end
+  end
+
+  defmodule SessionCoordinatorStub do
+    @active_sessions_key {__MODULE__, :active_sessions}
+
+    def set_active_sessions(entries) when is_list(entries) do
+      :persistent_term.put(@active_sessions_key, entries)
+    end
+
+    def clear_active_sessions do
+      :persistent_term.erase(@active_sessions_key)
+    end
+
+    def active_run_for_session(session_key) do
+      case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
+        %{run_id: run_id} -> {:ok, run_id}
+        _ -> :none
+      end
+    end
+
+    def busy?(session_key), do: active_run_for_session(session_key) != :none
+
+    def list_active_sessions do
+      active_sessions()
+    end
+
+    defp active_sessions do
+      :persistent_term.get(@active_sessions_key, [])
+    end
+  end
+
   setup do
     token = System.unique_integer([:positive, :monotonic])
     agent_id = "cp_introspection_#{token}"
@@ -24,7 +80,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
     run_id = "run_cp_introspection_#{token}"
     requirements_cwd = Path.join(System.tmp_dir!(), "cp_introspection_requirements_#{token}")
-    registry_available? = is_pid(Process.whereis(LemonRouter.SessionRegistry))
+    old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
+    old_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
 
     File.mkdir_p!(requirements_cwd)
 
@@ -65,9 +122,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         requirements_cwd
       )
 
-    if registry_available? do
-      {:ok, _} = Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
-    end
+    LemonCore.RouterBridge.configure(router: RouterBridgeStub)
+    RouterBridgeStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
+    Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStub)
+    SessionCoordinatorStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
 
     LemonCore.Store.put(:runs, run_id, %{started_at: System.system_time(:millisecond)})
 
@@ -95,10 +153,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       )
 
     on_exit(fn ->
-      if registry_available? do
-        Registry.unregister(LemonRouter.SessionRegistry, session_key)
-      end
-
+      RouterBridgeStub.clear_active_sessions()
+      SessionCoordinatorStub.clear_active_sessions()
+      restore_router_bridge(old_router_bridge)
+      restore_session_coordinator(old_session_coordinator)
       LemonCore.Store.delete(:runs, run_id)
       CodingAgent.Tools.TodoStore.delete(session_key)
       CodingAgent.Checkpoint.delete(checkpoint.id)
@@ -110,8 +168,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
        agent_id: agent_id,
        session_key: session_key,
        run_id: run_id,
-       requirements_cwd: requirements_cwd,
-       registry_available?: registry_available?
+       requirements_cwd: requirements_cwd
      }}
   end
 
@@ -119,8 +176,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     test "lists active sessions with filters", %{
       agent_id: agent_id,
       session_key: session_key,
-      requirements_cwd: requirements_cwd,
-      registry_available?: registry_available?
+      requirements_cwd: requirements_cwd
     } do
       assert SessionsActiveList.name() == "sessions.active.list"
       assert SessionsActiveList.scopes() == [:read]
@@ -141,17 +197,15 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["filters"]["agentId"] == agent_id
       assert result["filters"]["route"]["channelId"] == "telegram"
 
-      if registry_available? do
-        assert Enum.any?(result["sessions"], &(&1["sessionKey"] == session_key))
+      assert Enum.any?(result["sessions"], &(&1["sessionKey"] == session_key))
 
-        assert session = Enum.find(result["sessions"], &(&1["sessionKey"] == session_key))
-        assert is_map(session["harness"])
-        assert session["harness"]["todos"]["total"] == 1
-        assert session["harness"]["checkpoints"]["count"] >= 1
-        assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
-        assert session["harness"]["requirements"]["percentage"] == 50
-        assert session["harness"]["requirements"]["cwd"] == requirements_cwd
-      end
+      assert session = Enum.find(result["sessions"], &(&1["sessionKey"] == session_key))
+      assert is_map(session["harness"])
+      assert session["harness"]["todos"]["total"] == 1
+      assert session["harness"]["checkpoints"]["count"] >= 1
+      assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+      assert session["harness"]["requirements"]["percentage"] == 50
+      assert session["harness"]["requirements"]["cwd"] == requirements_cwd
     end
   end
 
@@ -181,8 +235,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     test "returns a consolidated introspection payload", %{
       agent_id: agent_id,
       session_key: session_key,
-      requirements_cwd: requirements_cwd,
-      registry_available?: registry_available?
+      requirements_cwd: requirements_cwd
     } do
       assert IntrospectionSnapshot.name() == "introspection.snapshot"
       assert IntrospectionSnapshot.scopes() == [:read]
@@ -219,15 +272,13 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["counts"]["activeSessions"] == length(result["activeSessions"])
       assert result["counts"]["transports"] == length(result["transports"])
 
-      if registry_available? do
-        assert Enum.any?(result["activeSessions"], &(&1["sessionKey"] == session_key))
+      assert Enum.any?(result["activeSessions"], &(&1["sessionKey"] == session_key))
 
-        assert session = Enum.find(result["activeSessions"], &(&1["sessionKey"] == session_key))
-        assert is_map(session["harness"])
-        assert session["harness"]["todos"]["total"] == 1
-        assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
-        assert session["harness"]["requirements"]["cwd"] == requirements_cwd
-      end
+      assert session = Enum.find(result["activeSessions"], &(&1["sessionKey"] == session_key))
+      assert is_map(session["harness"])
+      assert session["harness"]["todos"]["total"] == 1
+      assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+      assert session["harness"]["requirements"]["cwd"] == requirements_cwd
     end
 
     test "honors include toggles" do
@@ -249,5 +300,14 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["channels"] == []
       assert result["transports"] == []
     end
+  end
+
+  defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
+  defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)
+
+  defp restore_session_coordinator(nil), do: Application.delete_env(:lemon_router, :session_coordinator)
+
+  defp restore_session_coordinator(config) do
+    Application.put_env(:lemon_router, :session_coordinator, config)
   end
 end

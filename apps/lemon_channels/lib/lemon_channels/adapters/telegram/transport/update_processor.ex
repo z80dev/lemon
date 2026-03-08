@@ -362,9 +362,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       [_, cmd] ->
         cmd_lower = String.downcase(cmd)
 
-        if Code.ensure_loaded?(LemonChannels.EngineRegistry) and
-             function_exported?(LemonChannels.EngineRegistry, :get_engine, 1) and
-             LemonChannels.EngineRegistry.get_engine(cmd_lower) do
+        if LemonCore.EngineCatalog.known?(cmd_lower) do
           cmd_lower
         else
           nil

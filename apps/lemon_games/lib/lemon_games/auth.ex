@@ -5,7 +5,8 @@ defmodule LemonGames.Auth do
   Tokens are issued as `lgm_<random>` plaintext, stored by SHA-256 hash.
   """
 
-  @table :game_agent_tokens
+  alias LemonGames.AuthStore
+
   @prefix "lgm_"
 
   @spec issue_token(map()) :: {:ok, map()}
@@ -24,7 +25,7 @@ defmodule LemonGames.Auth do
       "status" => "active"
     }
 
-    :ok = LemonCore.Store.put(@table, token_hash, claims)
+    :ok = AuthStore.put(token_hash, claims)
     {:ok, %{token: plaintext, claims: claims, token_hash: token_hash}}
   end
 
@@ -32,7 +33,7 @@ defmodule LemonGames.Auth do
   def validate_token(bearer) do
     token_hash = hash_token(bearer)
 
-    case LemonCore.Store.get(@table, token_hash) do
+    case AuthStore.get(token_hash) do
       nil ->
         {:error, :invalid_token}
 
@@ -49,19 +50,18 @@ defmodule LemonGames.Auth do
 
   @spec revoke_token(String.t()) :: :ok
   def revoke_token(token_hash) do
-    case LemonCore.Store.get(@table, token_hash) do
+    case AuthStore.get(token_hash) do
       nil ->
         :ok
 
       claims ->
-        LemonCore.Store.put(@table, token_hash, Map.put(claims, "status", "revoked"))
+        AuthStore.put(token_hash, Map.put(claims, "status", "revoked"))
     end
   end
 
   @spec list_tokens(map()) :: [map()]
   def list_tokens(_opts \\ %{}) do
-    @table
-    |> LemonCore.Store.list()
+    AuthStore.list()
     |> Enum.map(fn {hash, claims} ->
       Map.put(claims, "token_hash", hash)
     end)

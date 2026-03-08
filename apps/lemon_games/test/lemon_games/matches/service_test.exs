@@ -1,16 +1,17 @@
 defmodule LemonGames.Matches.ServiceTest do
   use ExUnit.Case, async: false
 
-  alias LemonGames.Matches.Service
+  alias LemonGames.{AuthStore, RateLimitStore}
+  alias LemonGames.Matches.{EventStore, Service, Store}
 
   @actor %{"agent_id" => "test_agent", "display_name" => "Test Agent"}
   @actor2 %{"agent_id" => "test_agent_2", "display_name" => "Agent 2"}
 
   setup do
-    # Clean store tables between tests
-    for table <- [:game_matches, :game_match_events, :game_agent_tokens, :game_rate_limits] do
-      clear_table(table)
-    end
+    clear_matches()
+    clear_events()
+    clear_tokens()
+    clear_rate_limits()
 
     :ok
   end
@@ -205,10 +206,24 @@ defmodule LemonGames.Matches.ServiceTest do
 
   # --- helpers ---
 
-  defp clear_table(table) do
-    LemonCore.Store.list(table)
-    |> Enum.each(fn {key, _value} ->
-      LemonCore.Store.delete(table, key)
+  defp clear_matches,
+    do: Enum.each(Store.list(), fn {match_id, _match} -> Store.delete(match_id) end)
+
+  defp clear_events do
+    Enum.each(EventStore.list(), fn {{match_id, seq}, _event} ->
+      EventStore.delete(match_id, seq)
+    end)
+  end
+
+  defp clear_tokens do
+    Enum.each(AuthStore.list(), fn {token_hash, _claims} ->
+      AuthStore.delete(token_hash)
+    end)
+  end
+
+  defp clear_rate_limits do
+    Enum.each(RateLimitStore.list(), fn {key, _timestamps} ->
+      RateLimitStore.delete(key)
     end)
   end
 

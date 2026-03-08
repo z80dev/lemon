@@ -41,10 +41,9 @@ defmodule LemonCore.ModelPolicy do
   """
 
   alias LemonCore.ModelPolicy.Route
+  alias LemonCore.ModelPolicyStore
 
   require Logger
-
-  @model_policy_table :model_policies
 
   @typedoc "Model identifier string"
   @type model_id :: String.t()
@@ -130,11 +129,9 @@ defmodule LemonCore.ModelPolicy do
     key = Route.to_key(route)
     policy = ensure_metadata_timestamp(policy)
 
-    Logger.debug(
-      "Setting model policy for route=#{inspect(key)} model_id=#{policy.model_id}"
-    )
+    Logger.debug("Setting model policy for route=#{inspect(key)} model_id=#{policy.model_id}")
 
-    LemonCore.Store.put(@model_policy_table, key, policy)
+    ModelPolicyStore.put(key, policy)
   end
 
   @doc """
@@ -153,7 +150,7 @@ defmodule LemonCore.ModelPolicy do
   @spec get(Route.t()) :: policy() | nil
   def get(%Route{} = route) do
     key = Route.to_key(route)
-    LemonCore.Store.get(@model_policy_table, key)
+    ModelPolicyStore.get(key)
   end
 
   @doc """
@@ -168,7 +165,7 @@ defmodule LemonCore.ModelPolicy do
   def clear(%Route{} = route) do
     key = Route.to_key(route)
     Logger.debug("Clearing model policy for route=#{inspect(key)}")
-    LemonCore.Store.delete(@model_policy_table, key)
+    ModelPolicyStore.delete(key)
   end
 
   @doc """
@@ -198,7 +195,7 @@ defmodule LemonCore.ModelPolicy do
 
     result =
       Enum.find_value(keys, fn key ->
-        case LemonCore.Store.get(@model_policy_table, key) do
+        case ModelPolicyStore.get(key) do
           nil -> nil
           policy -> {key, policy}
         end
@@ -274,8 +271,7 @@ defmodule LemonCore.ModelPolicy do
   """
   @spec list() :: [{Route.t(), policy()}]
   def list do
-    @model_policy_table
-    |> LemonCore.Store.list()
+    ModelPolicyStore.list()
     |> Enum.map(fn {key, policy} ->
       {Route.from_key(key), policy}
     end)
@@ -358,6 +354,7 @@ defmodule LemonCore.ModelPolicy do
   # ============================================================================
 
   defp normalize_thinking_level(nil), do: nil
+
   defp normalize_thinking_level(level) when is_atom(level) do
     if level in [:minimal, :low, :medium, :high, :xhigh] do
       level

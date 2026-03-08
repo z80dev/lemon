@@ -160,6 +160,30 @@ defmodule LemonRouter.SessionCoordinatorTest do
            end)
   end
 
+  test "query helpers expose router-owned active session state", %{run_supervisor: run_supervisor} do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+
+    refute SessionCoordinator.busy?(session_key)
+    assert SessionCoordinator.active_run_for_session(session_key) == :none
+    assert SessionCoordinator.list_active_sessions() == []
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+
+    assert SessionCoordinator.busy?(session_key)
+    assert SessionCoordinator.active_run_for_session(session_key) == {:ok, "run1"}
+
+    assert [%{session_key: ^session_key, run_id: "run1"}] =
+             Enum.filter(SessionCoordinator.list_active_sessions(), &(&1.session_key == session_key))
+
+    SessionCoordinator.cancel(session_key, :user_requested)
+    assert_receive {:aborted, "run1", :user_requested}, 500
+
+    assert eventually(fn -> not SessionCoordinator.busy?(session_key) end)
+    assert eventually(fn -> SessionCoordinator.active_run_for_session(session_key) == :none end)
+  end
+
   defp submit(key, run_id, prompt, queue_mode, run_supervisor) do
     request = %ExecutionRequest{
       run_id: run_id,

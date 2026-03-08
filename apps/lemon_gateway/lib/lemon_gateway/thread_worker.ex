@@ -91,13 +91,15 @@ defmodule LemonGateway.ThreadWorker do
                 mon_ref = Process.monitor(run_pid)
 
                 {:noreply,
-                 %{state |
-                   requests: rest,
-                   current_run: run_pid,
-                   current_slot_ref: slot_ref,
-                   run_mon_ref: mon_ref,
-                   slot_pending: false,
-                   slot_requested_at: nil}}
+                 %{
+                   state
+                   | requests: rest,
+                     current_run: run_pid,
+                     current_slot_ref: slot_ref,
+                     run_mon_ref: mon_ref,
+                     slot_pending: false,
+                     slot_requested_at: nil
+                 }}
 
               {:error, reason} ->
                 Logger.error(

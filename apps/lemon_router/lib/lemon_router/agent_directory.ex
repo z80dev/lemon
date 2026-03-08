@@ -4,7 +4,7 @@ defmodule LemonRouter.AgentDirectory do
 
   This module merges:
 
-  - Active sessions from `LemonRouter.SessionReadModel`
+  - Active sessions from `LemonRouter.Router`
   - Durable session metadata from `LemonCore.Store` (`:sessions_index`)
 
   to provide a "phonebook" for agent/session addressing.
@@ -12,7 +12,6 @@ defmodule LemonRouter.AgentDirectory do
 
   alias LemonChannels.Telegram.KnownTargetStore
   alias LemonCore.SessionKey
-  alias LemonRouter.SessionReadModel
 
   @peer_kind_map %{
     "dm" => :dm,
@@ -295,11 +294,16 @@ defmodule LemonRouter.AgentDirectory do
   defp indexed_session_entry(_), do: nil
 
   defp active_sessions do
-    SessionReadModel.list_active()
+    LemonRouter.Router.list_active_sessions()
     |> Enum.map(&active_session_entry/1)
     |> Enum.reject(&is_nil/1)
   rescue
     _ -> []
+  end
+
+  defp active_session_entry(%{session_key: session_key, run_id: run_id})
+       when is_binary(session_key) do
+    active_session_entry({session_key, nil, %{run_id: run_id}})
   end
 
   defp active_session_entry({session_key, _pid, meta}) when is_binary(session_key) do

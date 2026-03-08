@@ -1,7 +1,7 @@
 defmodule LemonCore.IdempotencyTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{Idempotency, Store}
+  alias LemonCore.{Idempotency, IdempotencyStore, Store}
 
   setup do
     case Store.start_link([]) do
@@ -10,7 +10,7 @@ defmodule LemonCore.IdempotencyTest do
     end
 
     # Clear idempotency table to avoid cross-run collisions with persisted data.
-    Store.list(:idempotency)
+    IdempotencyStore.list()
     |> Enum.each(fn {key, _value} -> Store.delete(:idempotency, key) end)
 
     :ok
@@ -128,10 +128,11 @@ defmodule LemonCore.IdempotencyTest do
       key = "key_#{System.unique_integer()}"
       counter = :counters.new(1, [])
 
-      result = Idempotency.execute(scope, key, fn ->
-        :counters.add(counter, 1, 1)
-        "computed_result"
-      end)
+      result =
+        Idempotency.execute(scope, key, fn ->
+          :counters.add(counter, 1, 1)
+          "computed_result"
+        end)
 
       assert result == "computed_result"
       assert :counters.get(counter, 1) == 1
@@ -149,10 +150,11 @@ defmodule LemonCore.IdempotencyTest do
       end)
 
       # Second call should not execute function
-      result = Idempotency.execute(scope, key, fn ->
-        :counters.add(counter, 1, 1)
-        "new_result"
-      end)
+      result =
+        Idempotency.execute(scope, key, fn ->
+          :counters.add(counter, 1, 1)
+          "new_result"
+        end)
 
       assert result == "result"
       assert :counters.get(counter, 1) == 1
@@ -237,15 +239,17 @@ defmodule LemonCore.IdempotencyTest do
       key = "shared_key"
       counter = :counters.new(1, [])
 
-      result1 = Idempotency.execute(scope1, key, fn ->
-        :counters.add(counter, 1, 1)
-        "scope1_result"
-      end)
+      result1 =
+        Idempotency.execute(scope1, key, fn ->
+          :counters.add(counter, 1, 1)
+          "scope1_result"
+        end)
 
-      result2 = Idempotency.execute(scope2, key, fn ->
-        :counters.add(counter, 1, 1)
-        "scope2_result"
-      end)
+      result2 =
+        Idempotency.execute(scope2, key, fn ->
+          :counters.add(counter, 1, 1)
+          "scope2_result"
+        end)
 
       assert result1 == "scope1_result"
       assert result2 == "scope2_result"
@@ -262,19 +266,18 @@ defmodule LemonCore.IdempotencyTest do
       # Store with a timestamp far in the past (more than 24 hours ago)
       expired_time = System.system_time(:millisecond) - 25 * 60 * 60 * 1000
 
-      full_key = "#{scope}:#{key}"
       expired_value = %{
         "result" => "old_value",
         "inserted_at_ms" => expired_time
       }
 
-      Store.put(:idempotency, full_key, expired_value)
+      IdempotencyStore.put(scope, key, expired_value)
 
       # Should return :miss and clean up the expired entry
       assert :miss = Idempotency.get(scope, key)
 
       # Verify the entry was deleted
-      assert Store.get(:idempotency, full_key) == nil
+      assert IdempotencyStore.get(scope, key) == nil
     end
 
     test "non-expired entries are returned" do
@@ -295,13 +298,12 @@ defmodule LemonCore.IdempotencyTest do
       # Store with a timestamp exactly 24 hours ago
       boundary_time = System.system_time(:millisecond) - 24 * 60 * 60 * 1000
 
-      full_key = "#{scope}:#{key}"
       boundary_value = %{
         "result" => "boundary_value",
         "inserted_at_ms" => boundary_time
       }
 
-      Store.put(:idempotency, full_key, boundary_value)
+      IdempotencyStore.put(scope, key, boundary_value)
 
       # Should return the value (not expired - TTL uses > not >=)
       assert {:ok, "boundary_value"} = Idempotency.get(scope, key)
@@ -314,13 +316,12 @@ defmodule LemonCore.IdempotencyTest do
       # Store with a timestamp just under 24 hours ago
       recent_time = System.system_time(:millisecond) - 23 * 60 * 60 * 1000
 
-      full_key = "#{scope}:#{key}"
       recent_value = %{
         "result" => "recent_value",
         "inserted_at_ms" => recent_time
       }
 
-      Store.put(:idempotency, full_key, recent_value)
+      IdempotencyStore.put(scope, key, recent_value)
 
       # Should return the value (not expired)
       assert {:ok, "recent_value"} = Idempotency.get(scope, key)
@@ -332,9 +333,8 @@ defmodule LemonCore.IdempotencyTest do
       scope = "test_#{System.unique_integer()}"
       key = "key_#{System.unique_integer()}"
 
-      full_key = "#{scope}:#{key}"
       # Legacy format: just the raw result without timestamp wrapper
-      Store.put(:idempotency, full_key, "legacy_value")
+      IdempotencyStore.put(scope, key, "legacy_value")
 
       # Should still return the value (no TTL check possible)
       assert {:ok, "legacy_value"} = Idempotency.get(scope, key)

@@ -26,8 +26,7 @@ defmodule LemonRouter.RunOrchestrator do
     SessionCoordinator,
     StickyEngine
   }
-  alias LemonCore.{Introspection, RunRequest, SessionKey}
-  alias LemonGateway.Cwd, as: GatewayCwd
+  alias LemonCore.{Cwd, Introspection, RunRequest, SessionKey}
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -501,7 +500,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp resolve_effective_cwd(cwd_override, meta) do
     normalize_cwd(cwd_override) || normalize_cwd(meta[:cwd] || meta["cwd"]) ||
-      GatewayCwd.default_cwd()
+        Cwd.default_cwd()
   end
 
   defp normalize_cwd(cwd) when is_binary(cwd) do

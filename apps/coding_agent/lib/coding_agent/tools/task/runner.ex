@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   require Logger
 
   alias AgentCore.AbortSignal
+
   alias AgentCore.CliRunners.{
     ClaudeSubagent,
     CodexSubagent,
@@ -78,7 +79,10 @@ defmodule CodingAgent.Tools.Task.Runner do
     with {:ok, session} <-
            module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt, model: model) do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
-      result = reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+
+      result =
+        reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+
       maybe_stop_abort_monitor(abort_monitor)
 
       details = %{
@@ -151,7 +155,15 @@ defmodule CodingAgent.Tools.Task.Runner do
           %{current_action: %{title: title, kind: to_string(kind), phase: "updated"}}
           |> maybe_add_action_detail(detail)
 
-        maybe_emit_cli_update(on_update, description, engine_label, "running", text, extra_details)
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          text,
+          extra_details
+        )
+
         {:cont, acc}
 
       {:action, %{title: title, detail: detail, kind: kind}, :completed, _opts}, acc ->
@@ -222,7 +234,16 @@ defmodule CodingAgent.Tools.Task.Runner do
       try do
         case Session.prompt(session, prompt) do
           :ok ->
-            case await_result(session, session_id, signal, on_update, description, "", "", role_id) do
+            case await_result(
+                   session,
+                   session_id,
+                   signal,
+                   on_update,
+                   description,
+                   "",
+                   "",
+                   role_id
+                 ) do
               {:ok, %{text: text, thinking: thinking}} ->
                 %AgentToolResult{
                   content: Result.build_update_content(text, thinking),
@@ -350,25 +371,70 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id) do
+  defp await_result(
+         session,
+         session_id,
+         signal,
+         on_update,
+         description,
+         last_text,
+         last_thinking,
+         role_id
+       ) do
     receive do
       {:session_event, ^session_id, {:message_update, %Ai.Types.AssistantMessage{} = msg, _event}} ->
         text = Ai.get_text(msg)
         thinking = Ai.get_thinking(msg)
 
         {last_text, last_thinking} =
-          maybe_emit_update(on_update, text, thinking, last_text, last_thinking, description, session_id, role_id)
+          maybe_emit_update(
+            on_update,
+            text,
+            thinking,
+            last_text,
+            last_thinking,
+            description,
+            session_id,
+            role_id
+          )
 
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
 
       {:session_event, ^session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
         text = Ai.get_text(msg)
         thinking = Ai.get_thinking(msg)
 
         {last_text, last_thinking} =
-          maybe_emit_update(on_update, text, thinking, last_text, last_thinking, description, session_id, role_id)
+          maybe_emit_update(
+            on_update,
+            text,
+            thinking,
+            last_text,
+            last_thinking,
+            description,
+            session_id,
+            role_id
+          )
 
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
         {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
@@ -377,23 +443,59 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, reason}
 
       {:session_event, ^session_id, _event} ->
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
     after
       200 ->
         if AbortSignal.aborted?(signal) do
           Session.abort(session)
           {:error, "Task aborted"}
         else
-          await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+          await_result(
+            session,
+            session_id,
+            signal,
+            on_update,
+            description,
+            last_text,
+            last_thinking,
+            role_id
+          )
         end
     end
   end
 
-  defp maybe_emit_update(nil, _text, _thinking, last_text, last_thinking, _description, _session_id, _role_id) do
+  defp maybe_emit_update(
+         nil,
+         _text,
+         _thinking,
+         last_text,
+         last_thinking,
+         _description,
+         _session_id,
+         _role_id
+       ) do
     {last_text, last_thinking}
   end
 
-  defp maybe_emit_update(on_update, text, thinking, last_text, last_thinking, description, session_id, role_id) do
+  defp maybe_emit_update(
+         on_update,
+         text,
+         thinking,
+         last_text,
+         last_thinking,
+         description,
+         session_id,
+         role_id
+       ) do
     if (text != "" or thinking != "") and (text != last_text or thinking != last_thinking) do
       on_update.(%AgentToolResult{
         content: Result.build_update_content(text, thinking),

@@ -16,6 +16,10 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
           issues: [issue()]
         }
 
+  @router_session_registry "LemonRouter." <> "SessionRegistry"
+  @router_session_read_model "LemonRouter." <> "SessionReadModel"
+  @router_registry_lookup "Registry.lookup(" <> @router_session_registry
+
   @rules [
     %{
       code: :router_outbound_payload,
@@ -35,6 +39,33 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       message: "Router must not depend on LemonChannels runtime/config helpers directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
       patterns: ["LemonChannels.GatewayConfig", "LemonChannels.EngineRegistry"]
+    },
+    %{
+      code: :router_gateway_engine_registry_dependency,
+      message: "Router must validate engines through LemonCore.EngineCatalog, not gateway registry",
+      files: ["apps/lemon_router/lib/**/*.ex"],
+      patterns: ["LemonGateway.EngineRegistry"]
+    },
+    %{
+      code: :router_gateway_cwd_dependency,
+      message: "Router must use LemonCore.Cwd instead of LemonGateway.Cwd",
+      files: ["apps/lemon_router/lib/**/*.ex"],
+      patterns: ["LemonGateway.Cwd"]
+    },
+    %{
+      code: :router_session_registry_boundary,
+      message: "Apps outside lemon_router must not reference router-internal session state",
+      files: ["apps/**/*.ex", "apps/**/*.exs"],
+      exclude: [
+        "apps/lemon_router/lib/**/*.ex",
+        "apps/lemon_router/test/**/*.exs",
+        "apps/lemon_core/test/lemon_core/quality/architecture_rules_check_test.exs"
+      ],
+      patterns: [
+        @router_session_registry,
+        @router_session_read_model,
+        @router_registry_lookup
+      ]
     },
     %{
       code: :router_resume_parser_leak,
@@ -78,6 +109,21 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ":telegram_pending_compaction",
         "auto_compacted",
         "build_pending_compaction_prompt"
+      ]
+    },
+    %{
+      code: :channels_engine_registry_format_validation,
+      message:
+        "Channels must use LemonCore.EngineCatalog and LemonCore.ResumeToken for validation/formatting; EngineRegistry is parsing-only",
+      files: ["apps/lemon_channels/lib/**/*.ex"],
+      exclude: ["apps/lemon_channels/lib/lemon_channels/engine_registry.ex"],
+      patterns: [
+        "EngineRegistry.get_engine(",
+        "EngineRegistry.engine_known?(",
+        "EngineRegistry.format_resume(",
+        "LemonChannels.EngineRegistry.get_engine(",
+        "LemonChannels.EngineRegistry.engine_known?(",
+        "LemonChannels.EngineRegistry.format_resume("
       ]
     },
     %{
@@ -132,11 +178,21 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_core/lib/lemon_core/progress_store.ex",
         "apps/lemon_core/lib/lemon_core/policy_store.ex",
         "apps/lemon_core/lib/lemon_core/introspection_store.ex",
-        "apps/lemon_core/lib/lemon_core/project_binding_store.ex"
+        "apps/lemon_core/lib/lemon_core/project_binding_store.ex",
+        "apps/lemon_core/lib/lemon_core/model_policy_store.ex",
+        "apps/lemon_core/lib/lemon_core/idempotency_store.ex"
       ],
       patterns: [
         "LemonCore.Store.append_introspection_event(",
         "LemonCore.Store.list_introspection_events(",
+        "LemonCore.Store.get(:model_policies",
+        "LemonCore.Store.put(:model_policies",
+        "LemonCore.Store.delete(:model_policies",
+        "LemonCore.Store.list(:model_policies",
+        "LemonCore.Store.get(:idempotency",
+        "LemonCore.Store.put(:idempotency",
+        "LemonCore.Store.delete(:idempotency",
+        "LemonCore.Store.list(:idempotency",
         "LemonCore.Store.get(:project_overrides",
         "LemonCore.Store.put(:project_overrides",
         "LemonCore.Store.delete(:project_overrides",
@@ -296,13 +352,32 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_control_plane/lib/lemon_control_plane/talk_mode_store.ex",
         "apps/lemon_control_plane/lib/lemon_control_plane/agent_file_store.ex",
         "apps/lemon_control_plane/lib/lemon_control_plane/device_pairing_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/agent_identity_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/update_store.ex",
+        "apps/lemon_control_plane/lib/lemon_control_plane/skills_config_store.ex",
         "apps/lemon_control_plane/lib/lemon_control_plane/node_store.ex",
         "apps/lemon_core/lib/lemon_core/store.ex"
       ],
       patterns: [
+        "LemonCore.Store.get(:agents",
+        "LemonCore.Store.put(:agents",
+        "LemonCore.Store.delete(:agents",
+        "LemonCore.Store.list(:agents",
         "LemonCore.Store.get(:system_config",
         "LemonCore.Store.put(:system_config",
         "LemonCore.Store.list(:system_config",
+        "LemonCore.Store.get(:update_config",
+        "LemonCore.Store.put(:update_config",
+        "LemonCore.Store.delete(:update_config",
+        "LemonCore.Store.list(:update_config",
+        "LemonCore.Store.get(:pending_update",
+        "LemonCore.Store.put(:pending_update",
+        "LemonCore.Store.delete(:pending_update",
+        "LemonCore.Store.list(:pending_update",
+        "LemonCore.Store.get(:skills_config",
+        "LemonCore.Store.put(:skills_config",
+        "LemonCore.Store.delete(:skills_config",
+        "LemonCore.Store.list(:skills_config",
         "LemonCore.Store.get(:tts_config",
         "LemonCore.Store.put(:tts_config",
         "LemonCore.Store.get(:voicewake_config",
@@ -338,6 +413,18 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.delete(:node_challenges",
         "LemonCore.Store.get(:node_invocations",
         "LemonCore.Store.put(:node_invocations"
+      ]
+    },
+    %{
+      code: :games_raw_store_bypass,
+      message: "LemonGames runtime modules must use app-local store wrappers",
+      files: ["apps/lemon_games/lib/**/*.ex"],
+      exclude: ["apps/lemon_games/lib/**/*store*.ex", "apps/lemon_core/lib/lemon_core/store.ex"],
+      patterns: [
+        "LemonCore.Store.get(",
+        "LemonCore.Store.put(",
+        "LemonCore.Store.delete(",
+        "LemonCore.Store.list("
       ]
     }
   ]
