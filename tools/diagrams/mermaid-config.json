@@ -1,0 +1,19 @@
+{
+  "theme": "default",
+  "themeVariables": {
+    "primaryColor": "#fef08a",
+    "primaryTextColor": "#1f2937",
+    "primaryBorderColor": "#fbbf24",
+    "lineColor": "#6b7280",
+    "secondaryColor": "#e5e7eb",
+    "tertiaryColor": "#f3f4f6",
+    "fontSize": "14px"
+  },
+  "flowchart": {
+    "htmlLabels": true,
+    "curve": "basis",
+    "padding": 20,
+    "nodeSpacing": 50,
+    "rankSpacing": 50
+  }
+}

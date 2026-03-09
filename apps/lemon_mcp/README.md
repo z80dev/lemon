@@ -1,10 +1,10 @@
 # LemonMCP
 
-MCP (Model Context Protocol) Client Foundation for the Lemon codebase.
+MCP (Model Context Protocol) client and server bridge for the Lemon codebase.
 
 ## Overview
 
-LemonMCP provides a client implementation for the Model Context Protocol (MCP), an open protocol that enables seamless integration between LLM applications and external data sources and tools.
+LemonMCP provides both client and server implementations for the Model Context Protocol (MCP), an open protocol that enables seamless integration between LLM applications and external data sources and tools. On the server side, it exposes CodingAgent tools over MCP so external clients can use them.
 
 This library targets MCP protocol version **"2024-11-05"**.
 
@@ -20,12 +20,25 @@ def deps do
 end
 ```
 
+## Dependencies
+
+- `coding_agent` (in_umbrella) - Tools exposed via MCP server
+- `agent_core` (in_umbrella) - Agent runtime support
+- `jason` - JSON encoding/decoding
+- `bandit` / `plug` - HTTP transport server
+- `uuid` - Request ID generation
+
 ## Modules
 
 - `LemonMCP` - Main module with protocol version
+- `LemonMCP.Application` - OTP application supervision tree
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
-- `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
 - `LemonMCP.Client` - GenServer client for managing MCP connections
+- `LemonMCP.Server` - MCP server process
+- `LemonMCP.Server.Handler` - Server request handler
+- `LemonMCP.ToolAdapter` - Adapter that exposes CodingAgent tools over MCP
+- `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
+- `LemonMCP.Transport.Http` - HTTP/SSE transport for MCP servers
 
 ## Usage
 

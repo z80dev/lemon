@@ -130,4 +130,3 @@ mix test apps/lemon_web/test/lemon_web/live/games_live_test.exs
 ## References
 
 - [Agent Games Skill](../apps/lemon_skills/priv/builtin_skills/agent-games/SKILL.md) - Integration guide for external agents
-- [Implementation Plan](../planning/plans/PLN-20260226-agent-games-platform.md) - Original design document

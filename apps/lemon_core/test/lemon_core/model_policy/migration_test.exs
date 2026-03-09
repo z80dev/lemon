@@ -132,6 +132,41 @@ defmodule LemonCore.ModelPolicy.MigrationTest do
       assert result.skipped == 1
     end
 
+    test "accepts valid string thinking levels without interning new atoms" do
+      LemonCore.Store.put(:telegram_default_model, {"default", 123, nil}, %{model: "test-model"})
+      Migration.migrate_telegram()
+
+      LemonCore.Store.put(:telegram_default_thinking, {"default", 123, nil}, %{
+        thinking_level: "high"
+      })
+
+      result = Migration.migrate_telegram()
+
+      assert result.migrated == 1
+
+      route = Route.new("telegram", "default", "123", nil)
+      assert {:ok, policy} = ModelPolicy.resolve(route)
+      assert policy.thinking_level == :high
+    end
+
+    test "ignores invalid string thinking levels" do
+      LemonCore.Store.put(:telegram_default_model, {"default", 123, nil}, %{model: "test-model"})
+      Migration.migrate_telegram()
+
+      LemonCore.Store.put(:telegram_default_thinking, {"default", 123, nil}, %{
+        thinking_level: "definitely_not_real"
+      })
+
+      result = Migration.migrate_telegram()
+
+      assert result.migrated == 0
+      assert result.skipped == 2
+
+      route = Route.new("telegram", "default", "123", nil)
+      assert {:ok, policy} = ModelPolicy.resolve(route)
+      refute Map.has_key?(policy, :thinking_level)
+    end
+
     test "uses custom channel_id" do
       LemonCore.Store.put(:telegram_default_model, {"default", 123, nil}, %{model: "test-model"})
 
@@ -148,7 +183,10 @@ defmodule LemonCore.ModelPolicy.MigrationTest do
       # Set up legacy data
       LemonCore.Store.put(:telegram_default_model, {"default", 111, nil}, %{model: "m1"})
       LemonCore.Store.put(:telegram_default_model, {"default", 222, nil}, %{model: "m2"})
-      LemonCore.Store.put(:telegram_default_thinking, {"default", 111, nil}, %{thinking_level: :high})
+
+      LemonCore.Store.put(:telegram_default_thinking, {"default", 111, nil}, %{
+        thinking_level: :high
+      })
 
       # Set up new policy
       ModelPolicy.set(

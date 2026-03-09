@@ -2,7 +2,7 @@
 
 ## Quick Orientation
 
-LemonGames is the game domain engine inside the `games-platform` Elixir umbrella. It owns game rules, match lifecycle, bot play, token auth, and rate limiting. It does NOT own HTTP routing or LiveView rendering -- those belong to `lemon_control_plane` and `lemon_web` respectively.
+LemonGames is the game domain engine inside the Lemon Elixir umbrella. It owns game rules, match lifecycle, bot play, token auth, and rate limiting. It does NOT own HTTP routing or LiveView rendering -- those belong to `lemon_control_plane` and `lemon_web` respectively.
 
 Core principles:
 - **Server-authoritative**: clients submit move intents, never full state

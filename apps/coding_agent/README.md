@@ -115,7 +115,7 @@ CodingAgent.Supervisor (one_for_one)
 | Web | `websearch`, `webfetch` |
 | Task / Agent | `task`, `agent`, `todo` |
 | Social | `post_to_x`, `get_x_mentions` |
-| System | `tool_auth`, `extensions_status`, `memory_topic` |
+| System | `tool_auth`, `extensions_status` |
 
 **Additional tools (not in default set):**
 
@@ -129,6 +129,8 @@ CodingAgent.Supervisor (one_for_one)
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `todoread` / `todowrite` | `Tools.TodoRead` / `Tools.TodoWrite` | Low-level todo primitives |
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
+| `memory_topic` | `Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
+| `glob` | `Tools.Glob` | File pattern matching |
 | `lsp_formatter` | `Tools.LspFormatter` | Format code via LSP |
 
 **Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.

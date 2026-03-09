@@ -252,5 +252,3 @@ mix test apps/lemon_games --trace
 ## See Also
 
 - `AGENTS.md` -- practical AI agent guide for working with this codebase
-- `planning/plans/PLN-20260226-agent-games-platform.md` -- full platform plan
-- `planning/plans/PLN-20260226-agent-games-platform-implementation-guide.md` -- implementation guide

@@ -2,7 +2,7 @@
   %{
     path: "docs/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-08],
     max_age_days: 60
   },
   %{
@@ -14,7 +14,7 @@
   %{
     path: "docs/architecture_boundaries.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-08],
     max_age_days: 60
   },
   %{
@@ -46,24 +46,6 @@
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
     max_age_days: 60
-  },
-  %{
-    path: "docs/foundry-tools-presentation.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/foundry-tools-tweets.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/games-platform.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 90
   },
   %{
     path: "docs/long-running-agent-harnesses.md",
@@ -116,19 +98,19 @@
   %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-08],
     max_age_days: 90
   },
   %{
     path: "docs/tools/web.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-08],
     max_age_days: 90
   },
   %{
     path: "docs/tools/wasm.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-08],
     max_age_days: 90
   },
   %{

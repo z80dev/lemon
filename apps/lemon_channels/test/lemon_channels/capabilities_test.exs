@@ -250,22 +250,6 @@ defmodule LemonChannels.CapabilitiesTest do
   end
 
   describe "legacy compatibility" do
-    test "defaults/0 returns legacy format" do
-      defaults = Capabilities.defaults()
-
-      assert defaults.edit_support == false
-      assert defaults.chunk_limit == 4096
-      assert defaults.thread_support == false
-    end
-
-    test "with_defaults/1 merges with defaults" do
-      caps = Capabilities.with_defaults(%{thread_support: true, chunk_limit: 2000})
-
-      assert caps.thread_support == true
-      assert caps.chunk_limit == 2000
-      assert caps.edit_support == false  # from defaults
-    end
-
     test "to_legacy/1 converts new format to legacy" do
       caps = Capabilities.new([
         :threads,

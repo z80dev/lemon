@@ -18,30 +18,30 @@ export FIRECRAWL_API_KEY="..."       # optional; used by webfetch fallback
 
 Key resolution behavior:
 
-- Brave search uses `agent.tools.web.search.api_key`, then `BRAVE_API_KEY`.
-- Perplexity search uses `agent.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
-- Firecrawl uses `agent.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
+- Brave search uses `runtime.tools.web.search.api_key`, then `BRAVE_API_KEY`.
+- Perplexity search uses `runtime.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
+- Firecrawl uses `runtime.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
 
 ## Config Example
 
 ```toml
-[agent.tools.web.search]
+[runtime.tools.web.search]
 enabled = true
 provider = "brave"                    # "brave" | "perplexity"
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
 
-[agent.tools.web.search.failover]
+[runtime.tools.web.search.failover]
 enabled = true
 provider = "perplexity"
 
-[agent.tools.web.search.perplexity]
+[runtime.tools.web.search.perplexity]
 api_key = "pplx-..."
 # base_url can be omitted; Lemon auto-selects Perplexity vs OpenRouter by key source/prefix.
 model = "perplexity/sonar-pro"
 
-[agent.tools.web.fetch]
+[runtime.tools.web.fetch]
 enabled = true
 max_chars = 50000
 timeout_seconds = 30
@@ -51,7 +51,7 @@ readability = true
 allow_private_network = false
 allowed_hostnames = []
 
-[agent.tools.web.fetch.firecrawl]
+[runtime.tools.web.fetch.firecrawl]
 # If enabled is omitted, fallback auto-enables when api_key exists.
 enabled = true
 api_key = "fc-..."
@@ -60,7 +60,7 @@ only_main_content = true
 max_age_ms = 172800000
 timeout_seconds = 60
 
-[agent.tools.web.cache]
+[runtime.tools.web.cache]
 persistent = true
 path = "~/.lemon/cache/web_tools"
 max_entries = 100
@@ -85,15 +85,15 @@ Config knobs:
 
 - Default `cache_ttl_minutes = 15` for both tools.
 - `cache_ttl_minutes = 0` disables writes (effectively no caching).
-- Global cache settings live under `agent.tools.web.cache`.
-- `agent.tools.web.cache.max_entries` defaults to `100` entries per tool.
-- `agent.tools.web.cache.persistent = true` persists cache to disk across restarts.
-- `agent.tools.web.cache.path` defaults to `~/.lemon/cache/web_tools`.
+- Global cache settings live under `runtime.tools.web.cache`.
+- `runtime.tools.web.cache.max_entries` defaults to `100` entries per tool.
+- `runtime.tools.web.cache.persistent = true` persists cache to disk across restarts.
+- `runtime.tools.web.cache.path` defaults to `~/.lemon/cache/web_tools`.
 - Cache hits include `"cached": true` in tool output.
 
 ## Troubleshooting
 
-- `missing_brave_api_key`: set `BRAVE_API_KEY` or `agent.tools.web.search.api_key`.
+- `missing_brave_api_key`: set `BRAVE_API_KEY` or `runtime.tools.web.search.api_key`.
 - `missing_perplexity_api_key`: set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` (or config key).
 - `freshness is only supported by the Brave websearch provider`: remove `freshness` when using `provider = "perplexity"`.
 - `Invalid URL: must be http or https`: use a valid HTTP(S) URL.

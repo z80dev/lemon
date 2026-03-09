@@ -15,6 +15,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
   require Logger
 
   @thinking_levels ~w(off minimal low medium high xhigh)
+  @placeholder_model_id "_thinking_only"
 
   # ============================================================================
   # Session Overrides (ephemeral, per-session)
@@ -78,10 +79,12 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
         else: nil
 
     chat_level = default_thinking_preference(account_id, chat_id, nil)
+    inherited_level = resolved_policy_thinking_level(account_id, chat_id, thread_id)
 
     cond do
       is_binary(topic_level) and topic_level != "" -> {topic_level, :topic}
       is_binary(chat_level) and chat_level != "" -> {chat_level, :chat}
+      is_binary(inherited_level) and inherited_level != "" -> {inherited_level, nil}
       true -> {nil, nil}
     end
   rescue
@@ -110,7 +113,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     account_id = account_id || "default"
     route = telegram_route(account_id, chat_id, thread_id)
 
-    case ModelPolicy.resolve_model_id(route) do
+    case resolve_policy_model(route) do
       nil -> resolve_legacy_model(account_id, chat_id, thread_id)
       model_id -> model_id
     end
@@ -125,11 +128,26 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
       when is_integer(chat_id) and is_binary(model) do
     account_id = account_id || "default"
     route = telegram_route(account_id, chat_id, thread_id)
+    existing = ModelPolicy.get(route)
+
+    policy_opts = [
+      set_by: "telegram",
+      reason: "Set via Telegram /model command"
+    ]
+
+    policy_opts =
+      case existing do
+        %{thinking_level: thinking_level} when not is_nil(thinking_level) ->
+          Keyword.put(policy_opts, :thinking_level, thinking_level)
+
+        _ ->
+          policy_opts
+      end
 
     policy =
-      ModelPolicy.new_policy(model,
-        set_by: "telegram",
-        reason: "Set via Telegram /model command"
+      ModelPolicy.new_policy(
+        model,
+        policy_opts
       )
 
     ModelPolicy.set(route, policy)
@@ -147,15 +165,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
   @spec default_thinking_preference(binary() | nil, term(), term()) :: binary() | nil
   def default_thinking_preference(account_id, chat_id, thread_id)
       when is_binary(account_id) and is_integer(chat_id) do
-    route = telegram_route(account_id, chat_id, thread_id)
-
-    case ModelPolicy.resolve_thinking_level(route) do
-      nil ->
-        resolve_legacy_thinking(account_id, chat_id, thread_id)
-
-      level when is_atom(level) ->
-        Atom.to_string(level)
-    end
+    exact_thinking_preference(account_id, chat_id, thread_id)
   rescue
     _ -> nil
   end
@@ -174,7 +184,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     if is_binary(normalized) and normalized != "" do
       account_id = account_id || "default"
       route = telegram_route(account_id, chat_id, thread_id)
-      thinking_atom = String.to_existing_atom(normalized)
+      thinking_atom = thinking_level_atom(normalized)
 
       # Get or create a policy at this route
       existing = ModelPolicy.get(route)
@@ -184,7 +194,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
           nil ->
             # Create a minimal policy just for thinking level.
             # Use a placeholder model_id since ModelPolicy requires one.
-            ModelPolicy.new_policy("_thinking_only",
+            ModelPolicy.new_policy(@placeholder_model_id,
               thinking_level: thinking_atom,
               set_by: "telegram",
               reason: "Set via Telegram /thinking command"
@@ -215,17 +225,26 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
 
     route = telegram_route(account_id, chat_id, thread_id)
+    legacy_key = {account_id, chat_id, thread_id}
 
     case ModelPolicy.get(route) do
       nil ->
-        # Try clearing legacy too
-        legacy_key = {account_id, chat_id, thread_id}
-        _ = StateStore.delete_default_thinking(legacy_key)
+        :ok
 
-      policy ->
+      %{thinking_level: _} = policy ->
         updated = Map.delete(policy, :thinking_level)
-        ModelPolicy.set(route, updated)
+
+        if placeholder_only_policy?(updated) do
+          ModelPolicy.clear(route)
+        else
+          ModelPolicy.set(route, updated)
+        end
+
+      _ ->
+        :ok
     end
+
+    _ = StateStore.delete_default_thinking(legacy_key)
 
     had_override?
   rescue
@@ -261,6 +280,42 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     Route.new("telegram", account_id, to_string(chat_id), thread_str)
   end
 
+  defp resolve_policy_model(%Route{} = route) do
+    route
+    |> Route.precedence_keys()
+    |> Enum.find_value(fn key ->
+      key
+      |> Route.from_key()
+      |> ModelPolicy.get()
+      |> policy_model_id()
+    end)
+  end
+
+  defp exact_thinking_preference(account_id, chat_id, thread_id)
+       when is_binary(account_id) and is_integer(chat_id) do
+    route = telegram_route(account_id, chat_id, thread_id)
+
+    case exact_policy_thinking_level(route) do
+      nil -> resolve_legacy_thinking(account_id, chat_id, thread_id)
+      level -> level
+    end
+  end
+
+  defp exact_policy_thinking_level(%Route{} = route) do
+    case ModelPolicy.get(route) do
+      %{thinking_level: level} -> normalize_thinking_level(level)
+      _ -> nil
+    end
+  end
+
+  defp resolved_policy_thinking_level(account_id, chat_id, thread_id)
+       when is_binary(account_id) and is_integer(chat_id) do
+    account_id
+    |> telegram_route(chat_id, thread_id)
+    |> ModelPolicy.resolve_thinking_level()
+    |> normalize_thinking_level()
+  end
+
   defp resolve_legacy_model(account_id, chat_id, thread_id) when is_integer(chat_id) do
     key = {account_id, chat_id, thread_id}
 
@@ -285,6 +340,41 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
     end
   rescue
     _ -> nil
+  end
+
+  defp policy_model_id(%{model_id: model_id}) when is_binary(model_id),
+    do: normalize_model_id(model_id)
+
+  defp policy_model_id(_), do: nil
+
+  defp normalize_model_id(model_id) when is_binary(model_id) do
+    normalized = String.trim(model_id)
+
+    if normalized != "" and normalized != @placeholder_model_id do
+      normalized
+    else
+      nil
+    end
+  end
+
+  defp normalize_model_id(_), do: nil
+
+  defp placeholder_only_policy?(policy) when is_map(policy) do
+    is_nil(Map.get(policy, :thinking_level)) and
+      is_nil(normalize_model_id(Map.get(policy, :model_id)))
+  end
+
+  defp placeholder_only_policy?(_policy), do: false
+
+  defp thinking_level_atom(level) when is_binary(level) do
+    case level do
+      "off" -> :off
+      "minimal" -> :minimal
+      "low" -> :low
+      "medium" -> :medium
+      "high" -> :high
+      "xhigh" -> :xhigh
+    end
   end
 
   defp normalize_thinking_level(nil), do: nil

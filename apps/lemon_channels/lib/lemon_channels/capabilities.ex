@@ -380,20 +380,6 @@ defmodule LemonChannels.Capabilities do
   @typedoc "A capabilities map"
   @type t :: %{atom() => Capability.t()}
 
-  # Legacy capability types for backward compatibility
-  @typedoc "Legacy capability map (deprecated, use Capability structs)"
-  @type legacy_t :: %{
-          edit_support: boolean(),
-          delete_support: boolean(),
-          chunk_limit: non_neg_integer(),
-          rate_limit: non_neg_integer() | nil,
-          voice_support: boolean(),
-          image_support: boolean(),
-          file_support: boolean(),
-          reaction_support: boolean(),
-          thread_support: boolean()
-        }
-
   @doc """
   Creates a new capabilities map from a list of capability specs.
 
@@ -612,44 +598,12 @@ defmodule LemonChannels.Capabilities do
     }
   end
 
-  # Legacy functions for backward compatibility
-
-  @doc """
-  Default capabilities for a channel (legacy format).
-
-  Deprecated: Use `new/1` or `default_capabilities/0` instead.
-  """
-  @spec defaults() :: legacy_t()
-  def defaults do
-    %{
-      edit_support: false,
-      delete_support: false,
-      chunk_limit: 4096,
-      rate_limit: nil,
-      voice_support: false,
-      image_support: false,
-      file_support: false,
-      reaction_support: false,
-      thread_support: false
-    }
-  end
-
-  @doc """
-  Merge capabilities with defaults (legacy format).
-
-  Deprecated: Use `merge/2` instead.
-  """
-  @spec with_defaults(map()) :: legacy_t()
-  def with_defaults(caps) do
-    Map.merge(defaults(), caps)
-  end
-
   @doc """
   Converts new capability format to legacy format.
 
   This is a temporary function for migration purposes.
   """
-  @spec to_legacy(t()) :: legacy_t()
+  @spec to_legacy(t()) :: map()
   def to_legacy(caps) when is_map(caps) do
     %{
       edit_support: supports?(caps, :edit),
@@ -667,7 +621,7 @@ defmodule LemonChannels.Capabilities do
   @doc """
   Converts legacy capability format to new format.
   """
-  @spec from_legacy(legacy_t()) :: t()
+  @spec from_legacy(map()) :: t()
   def from_legacy(legacy) when is_map(legacy) do
     specs =
       []

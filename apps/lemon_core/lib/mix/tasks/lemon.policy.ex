@@ -44,6 +44,9 @@ defmodule Mix.Tasks.Lemon.Policy do
   alias LemonCore.ModelPolicy
   alias LemonCore.ModelPolicy.Route
 
+  @placeholder_model_id "_thinking_only"
+  @thinking_levels ~w(off minimal low medium high xhigh)
+
   @impl true
   def run(args) do
     Mix.Task.run("app.start")
@@ -103,8 +106,8 @@ defmodule Mix.Tasks.Lemon.Policy do
 
       Enum.each(policies, fn {route, policy} ->
         route_str = format_route(route)
-        model_str = Map.get(policy, :model_id, "(inherited)")
-        thinking_str = Map.get(policy, :thinking_level, "(inherited)")
+        model_str = display_model_id(Map.get(policy, :model_id))
+        thinking_str = display_thinking_level(Map.get(policy, :thinking_level), "(inherited)")
 
         Mix.shell().info("  #{route_str}")
         Mix.shell().info("    Model:    #{model_str}")
@@ -128,13 +131,29 @@ defmodule Mix.Tasks.Lemon.Policy do
     end
 
     route = build_route(channel, opts)
+    existing = ModelPolicy.get(route)
 
-    # If only thinking is set without a model, use a placeholder
-    effective_model = model || "_thinking_only"
+    effective_model =
+      cond do
+        real_model_id?(model) ->
+          model
+
+        real_model_id?(existing && existing[:model_id]) ->
+          existing[:model_id]
+
+        true ->
+          @placeholder_model_id
+      end
+
+    effective_thinking =
+      cond do
+        normalized_thinking_level(thinking) != nil -> thinking
+        true -> existing && existing[:thinking_level]
+      end
 
     policy =
       ModelPolicy.new_policy(effective_model,
-        thinking_level: thinking,
+        thinking_level: effective_thinking,
         reason: opts[:reason],
         set_by: "mix lemon.policy"
       )
@@ -155,10 +174,13 @@ defmodule Mix.Tasks.Lemon.Policy do
       {:error, :not_found} ->
         Mix.shell().info("No policy found for #{format_route(route)}")
 
-      {:ok, policy} ->
+      {:ok, _policy} ->
         Mix.shell().info("Effective policy for #{format_route(route)}:")
-        Mix.shell().info("  Model:    #{policy[:model_id] || "(none)"}")
-        Mix.shell().info("  Thinking: #{policy[:thinking_level] || "(none)"}")
+        Mix.shell().info("  Model:    #{resolve_effective_model(route) || "(none)"}")
+
+        Mix.shell().info(
+          "  Thinking: #{display_thinking_level(ModelPolicy.resolve_thinking_level(route), "(none)")}"
+        )
     end
   end
 
@@ -190,4 +212,57 @@ defmodule Mix.Tasks.Lemon.Policy do
 
     Enum.join(parts, "/")
   end
+
+  defp resolve_effective_model(%Route{} = route) do
+    route
+    |> Route.precedence_keys()
+    |> Enum.find_value(fn key ->
+      key
+      |> Route.from_key()
+      |> ModelPolicy.get()
+      |> then(fn
+        %{model_id: model_id} when is_binary(model_id) ->
+          if real_model_id?(model_id), do: model_id, else: nil
+
+        _ ->
+          nil
+      end)
+    end)
+  end
+
+  defp display_model_id(model_id) when is_binary(model_id) do
+    if real_model_id?(model_id), do: model_id, else: "(none)"
+  end
+
+  defp display_model_id(_model_id), do: "(none)"
+
+  defp display_thinking_level(level, _fallback) when is_atom(level) do
+    Atom.to_string(level)
+  end
+
+  defp display_thinking_level(level, _fallback) when is_binary(level) do
+    level
+  end
+
+  defp display_thinking_level(_level, fallback), do: fallback
+
+  defp normalized_thinking_level(level) when is_atom(level) do
+    level
+    |> Atom.to_string()
+    |> normalized_thinking_level()
+  end
+
+  defp normalized_thinking_level(level) when is_binary(level) do
+    normalized = String.downcase(String.trim(level))
+    if normalized in @thinking_levels, do: normalized, else: nil
+  end
+
+  defp normalized_thinking_level(_level), do: nil
+
+  defp real_model_id?(model_id) when is_binary(model_id) do
+    normalized = String.trim(model_id)
+    normalized != "" and normalized != @placeholder_model_id
+  end
+
+  defp real_model_id?(_model_id), do: false
 end

@@ -9,7 +9,7 @@ export FIRECRAWL_API_KEY="fc-..."
 ```
 
 ```toml
-[agent.tools.web.fetch.firecrawl]
+[runtime.tools.web.fetch.firecrawl]
 # If omitted, fallback is auto-enabled when api_key is present.
 enabled = true
 api_key = "fc-..."                    # or use FIRECRAWL_API_KEY

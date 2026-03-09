@@ -1,6 +1,6 @@
-# CodingAgent.Skills - Skill Definitions and Loading
+# LemonSkills - Skill Definitions and Loading
 
-This document describes the `CodingAgent.Skills` module for managing reusable knowledge modules that get injected into agent context when relevant.
+This document describes the `LemonSkills` module for managing reusable knowledge modules that get injected into agent context when relevant.
 
 ## Overview
 
@@ -8,7 +8,7 @@ Skills are markdown files with YAML frontmatter that contain domain-specific kno
 
 ## Location
 
-File: `apps/coding_agent/lib/coding_agent/skills.ex`
+File: `apps/lemon_skills/lib/lemon_skills.ex`
 
 ## Skill File Structure
 
@@ -68,72 +68,97 @@ await Bun.write("./output.txt", "Hello, World!");
 
 ### list/1
 
-List all available skills for a working directory.
+List all available skills.
 
 ```elixir
-skills = CodingAgent.Skills.list("/path/to/project")
-# => [
-#   %{
-#     name: "bun-file-io",
-#     description: "Use this when working on file operations...",
-#     content: "## When to use\n...",
-#     path: "/path/to/project/.lemon/skill/bun-file-io/SKILL.md"
-#   }
-# ]
+skills = LemonSkills.list()
+skills = LemonSkills.list(cwd: "/path/to/project")
+# => [%LemonSkills.Entry{key: "bun-file-io", ...}, ...]
 ```
+
+**Options:**
+- `:cwd` - Project working directory (optional, defaults to current directory)
+- `:refresh` - Force refresh from disk (default: false)
 
 ### get/2
 
-Get a specific skill by name.
+Get a specific skill by key.
 
 ```elixir
-skill = CodingAgent.Skills.get("/path/to/project", "bun-file-io")
-# => %{name: "bun-file-io", description: "...", content: "...", path: "..."}
-
-# Returns nil if not found
-nil = CodingAgent.Skills.get("/path/to/project", "nonexistent")
+{:ok, skill} = LemonSkills.get("bun-file-io")
+:error = LemonSkills.get("nonexistent")
 ```
 
-### find_relevant/3
+**Options:**
+- `:cwd` - Project working directory (optional)
+
+### find_relevant/2
 
 Find skills relevant to a given context/query using keyword matching.
 
 ```elixir
-# Find skills related to file operations
-skills = CodingAgent.Skills.find_relevant(
-  "/path/to/project",
-  "I need to read and write files",
-  3  # max results
-)
-# => [%{name: "bun-file-io", ...}]
+skills = LemonSkills.find_relevant("I need to read and write files", max_results: 3)
+# => [%LemonSkills.Entry{key: "bun-file-io", ...}]
 ```
 
-The function scores skills based on:
-- Name match (10 points if skill name appears in context)
-- Description word matches (3 points each)
-- Content word matches (1 point each)
+**Options:**
+- `:cwd` - Project working directory (optional)
+- `:max_results` - Maximum number of skills to return (default: 3)
 
-### format_for_prompt/1
+### status/2
 
-Format skills for injection into the system prompt.
+Check the status of a skill (whether required binaries/config are present).
 
 ```elixir
-formatted = CodingAgent.Skills.format_for_prompt(skills)
-# => """
-# <skill name="bun-file-io">
-# ## When to use
-# ...
-# </skill>
-# """
+%{ready: true} = LemonSkills.status("simple-skill")
+%{ready: false, missing_bins: ["kubectl"]} = LemonSkills.status("k8s-skill")
 ```
 
-### format_for_description/1
+### install/2
 
-Format skill list for display to users.
+Install a skill from a git repository or local path.
 
 ```elixir
-description = CodingAgent.Skills.format_for_description("/path/to/project")
-# => "- bun-file-io: Use this when working on file operations...\n- react-hooks: ..."
+{:ok, entry} = LemonSkills.install("https://github.com/user/skill-repo")
+{:ok, entry} = LemonSkills.install("/local/path/to/skill", global: false)
+```
+
+**Options:**
+- `:cwd` - Project working directory for local installation
+- `:global` - Install globally (default: true)
+- `:approve` - Pre-approve installation (default: false)
+
+### update/2
+
+Update an installed skill.
+
+```elixir
+{:ok, entry} = LemonSkills.update("my-skill")
+```
+
+### uninstall/2
+
+Uninstall a skill.
+
+```elixir
+:ok = LemonSkills.uninstall("my-skill")
+```
+
+### enable/2, disable/2
+
+Enable or disable a skill.
+
+```elixir
+:ok = LemonSkills.enable("my-skill")
+:ok = LemonSkills.disable("my-skill")
+```
+
+### refresh/1
+
+Force a reload of all skills from disk.
+
+```elixir
+:ok = LemonSkills.refresh()
 ```
 
 ## Creating Skills
@@ -190,11 +215,11 @@ EOF
 ### 3. Test the skill
 
 ```elixir
-iex> CodingAgent.Skills.list("/path/to/project")
-[%{name: "my-skill", ...}]
+iex> LemonSkills.list(cwd: "/path/to/project")
+[%LemonSkills.Entry{key: "my-skill", ...}]
 
-iex> CodingAgent.Skills.find_relevant("/path/to/project", "working on X")
-[%{name: "my-skill", ...}]
+iex> LemonSkills.find_relevant("working on X", cwd: "/path/to/project")
+[%LemonSkills.Entry{key: "my-skill", ...}]
 ```
 
 ## Example Skills
@@ -305,21 +330,12 @@ Skills are typically used during session initialization:
 
 ```elixir
 # In session setup
-skills = CodingAgent.Skills.list(cwd)
+skills = LemonSkills.list(cwd: cwd)
 
 # Or find relevant skills based on user query
-relevant = CodingAgent.Skills.find_relevant(cwd, user_query, 3)
+relevant = LemonSkills.find_relevant(user_query, cwd: cwd, max_results: 3)
 
-# Format for system prompt
-skill_content = CodingAgent.Skills.format_for_prompt(relevant)
-
-system_prompt = """
-You are a coding assistant.
-
-#{skill_content}
-
-Follow the patterns and practices described in the skills above.
-"""
+# Skills are automatically injected into the system prompt when relevant
 ```
 
 ## Project vs Global Skills

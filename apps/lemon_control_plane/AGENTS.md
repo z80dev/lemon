@@ -723,7 +723,6 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
 | `coding_agent` | Compile-time only (not started at runtime); `CodingAgent.TaskStore` for task queries |
 | `ai` | AI model listing and configuration |
-| `agent_core` | Agent profile and identity queries |
 
 ## Key Dependencies
 

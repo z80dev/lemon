@@ -16,7 +16,7 @@ Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar
 WASM tools are opt-in and disabled by default.
 
 ```toml
-[agent.tools.wasm]
+[runtime.tools.wasm]
 enabled = true
 auto_build = true
 runtime_path = ""
@@ -33,7 +33,7 @@ Discovery roots:
 
 1. `<cwd>/.lemon/wasm-tools`
 2. `~/.lemon/agent/wasm-tools`
-3. `agent.tools.wasm.tool_paths`
+3. `runtime.tools.wasm.tool_paths`
 
 Each module is discovered as:
 

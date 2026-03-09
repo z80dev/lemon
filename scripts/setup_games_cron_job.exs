@@ -22,8 +22,6 @@ at games.zeebot.xyz. Each run you should make meaningful, focused progress. One 
 
 ## Key Files
 
-- Design plan: planning/plans/PLN-20260226-agent-games-platform.md
-- Implementation guide: planning/plans/PLN-20260226-agent-games-platform-implementation-guide.md
 - Game engines: apps/lemon_games/lib/lemon_games/games/ (RPS, Connect4)
 - Match service: apps/lemon_games/lib/lemon_games/matches/service.ex
 - HTTP API: apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex

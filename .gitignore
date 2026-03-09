@@ -60,3 +60,14 @@ telethon_ping/test_session.session
 
 # Stress test results
 telethon_ping/stress_test_results_*.json
+
+# One-off debug/scratch scripts at repo root
+/debug_*.exs
+/tmp_*.exs
+/test_*.exs
+/abort_*.exs
+/reload.exs
+/*.py
+
+# Session analyzer output (may contain sensitive data)
+tools/session-analyzer/output/

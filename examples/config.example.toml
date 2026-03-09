@@ -17,7 +17,7 @@ api_key = "your-google-api-key-here"
 
 [defaults]
 provider = "anthropic"
-model = "anthropic:claude-sonnet-4-20250514"
+model = "claude-sonnet-4-20250514"
 thinking_level = "medium"
 engine = "lemon"
 
@@ -41,6 +41,19 @@ auto_approve = false
 
 [runtime.cli.claude]
 dangerously_skip_permissions = true
+# yolo = false
+# allowed_tools = []
+# scrub_env = false
+# env_allowlist = []
+# env_allow_prefixes = []
+
+[runtime.cli.opencode]
+# model = ""
+
+[runtime.cli.pi]
+# extra_args = []
+# model = ""
+# provider = ""
 
 [runtime.cli.kimi]
 extra_args = []
@@ -57,6 +70,10 @@ default_engine = "lemon"
 default_cwd = "~/"
 auto_resume = false
 enable_telegram = false
+enable_discord = false
+enable_email = false
+enable_farcaster = false
+enable_webhook = false
 enable_xmtp = false
 require_engine_lock = true
 engine_lock_timeout_ms = 60000
@@ -114,5 +131,63 @@ queue_mode = "collect"
 cli_path = "lemon"
 enabled = true
 
+# --- Logging ---
+
+# [logging]
+# file = ""
+# level = "info"
+# max_no_bytes = 10485760
+# max_no_files = 5
+# compress_on_rotate = true
+
+# --- Web Tool Configuration ---
+
+# [runtime.tools.web.search]
+# enabled = true
+# provider = "brave"      # "brave" | "perplexity"
+# max_results = 5
+# timeout_seconds = 30
+# cache_ttl_minutes = 15
+
+# [runtime.tools.web.search.perplexity]
+# api_key = "pplx-..."
+# model = "perplexity/sonar-pro"
+
+# [runtime.tools.web.fetch]
+# enabled = true
+# max_chars = 50000
+# timeout_seconds = 30
+
+# [runtime.tools.web.fetch.firecrawl]
+# enabled = true
+# api_key = "fc-..."
+
+# --- WASM Tool Configuration ---
+
+# [runtime.tools.wasm]
+# enabled = false
+# auto_build = true
+# tool_paths = []
+# default_memory_limit = 10485760
+# default_timeout_ms = 60000
+
+# --- Discord Configuration ---
+
+# [gateway.discord]
+# bot_token = ""
+# allowed_guild_ids = []
+# allowed_channel_ids = []
+# deny_unbound_channels = false
+
+# --- Profiles ---
+
 [profiles.default]
 name = "Default Agent"
+# description = ""
+# model = ""
+# system_prompt = ""
+
+# [profiles.default.tool_policy]
+# allow = "all"
+# deny = []
+# require_approval = ["bash", "write", "edit"]

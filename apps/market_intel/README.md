@@ -478,7 +478,7 @@ MarketIntel.Config.x_account_handle()         # nil (default)
 
 ## Implementation Status
 
-Several features are stubs awaiting full implementation. Known debt is tracked in `planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1).
+Several features are stubs awaiting full implementation.
 
 - **Twitter/X mention fetch**: `TwitterMentions.fetch_mentions/1` returns `[]`. X API search integration is not implemented.
 - **DB persistence for DexScreener**: `DexScreener.persist_to_db/2` is a no-op returning `:ok`.

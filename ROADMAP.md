@@ -62,7 +62,7 @@ This file is a **living roadmap** for improvement areas, experiments, and future
 - [ ] Encrypted secrets store as preferred secret access path [area:security] [status:planned] [impact:H] [effort:M] [updated:2026-02-23]
   - Outcome: All API keys/tokens/credentials resolved through the encrypted store; env vars become fallback only.
   - Next: Extract reusable store-first resolution from `MarketIntel.Secrets` into `LemonCore.Secrets.resolve/2`.
-  - Refs: `planning/plans/PLN-20260223-secrets-store-preferred.md`, `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/market_intel/lib/market_intel/secrets.ex`
+  - Refs: `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/market_intel/lib/market_intel/secrets.ex`
 
 ## Next (Loose Priority)
 

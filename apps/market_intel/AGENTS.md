@@ -342,7 +342,7 @@ Located in `test/fixtures/`:
 
 ## Implementation Status (Stubs)
 
-These are known stubs tracked in `planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1):
+Known stubs:
 
 | Stub | Location | Current Behavior |
 |------|----------|-----------------|

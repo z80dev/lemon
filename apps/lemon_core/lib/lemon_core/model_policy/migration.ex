@@ -23,6 +23,15 @@ defmodule LemonCore.ModelPolicy.Migration do
 
   require Logger
 
+  @thinking_levels %{
+    "off" => :off,
+    "minimal" => :minimal,
+    "low" => :low,
+    "medium" => :medium,
+    "high" => :high,
+    "xhigh" => :xhigh
+  }
+
   @typedoc "Migration result statistics"
   @type result :: %{
           migrated: non_neg_integer(),
@@ -191,7 +200,15 @@ defmodule LemonCore.ModelPolicy.Migration do
     end)
   end
 
-  defp migrate_single_policy(channel_id, account_id, chat_id, thread_id, model_id, thinking_level, dry_run?) do
+  defp migrate_single_policy(
+         channel_id,
+         account_id,
+         chat_id,
+         thread_id,
+         model_id,
+         thinking_level,
+         dry_run?
+       ) do
     route = build_route(channel_id, account_id, chat_id, thread_id)
 
     # Check if policy already exists
@@ -266,13 +283,22 @@ defmodule LemonCore.ModelPolicy.Migration do
   defp extract_model_id(model) when is_binary(model), do: model
   defp extract_model_id(_), do: nil
 
-  defp extract_thinking_level(%{thinking_level: level}) when is_atom(level), do: level
-  defp extract_thinking_level(%{thinking_level: level}) when is_binary(level), do: String.to_atom(level)
-  defp extract_thinking_level(%{"thinking_level" => level}) when is_binary(level), do: String.to_atom(level)
-  defp extract_thinking_level(%{"thinking_level" => level}) when is_atom(level), do: level
-  defp extract_thinking_level(level) when is_atom(level), do: level
-  defp extract_thinking_level(level) when is_binary(level), do: String.to_atom(level)
-  defp extract_thinking_level(_), do: nil
+  defp extract_thinking_level(%{thinking_level: level}), do: normalize_thinking_level(level)
+  defp extract_thinking_level(%{"thinking_level" => level}), do: normalize_thinking_level(level)
+  defp extract_thinking_level(level), do: normalize_thinking_level(level)
+
+  defp normalize_thinking_level(level) when is_atom(level) do
+    if level in Map.values(@thinking_levels), do: level, else: nil
+  end
+
+  defp normalize_thinking_level(level) when is_binary(level) do
+    level
+    |> String.trim()
+    |> String.downcase()
+    |> then(&Map.get(@thinking_levels, &1))
+  end
+
+  defp normalize_thinking_level(_level), do: nil
 
   defp list_legacy_policies(table) do
     LemonCore.Store.list(table)

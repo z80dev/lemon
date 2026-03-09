@@ -10,7 +10,6 @@
 
 - **Start here** if you need to understand how Lemon works at a system level.
 - **Per-app docs** live in each app's own `README.md` and `AGENTS.md` (see `apps/*/`).
-- **Planning docs** live in `planning/` (plans, ideas, reviews, merges).
 - **Every file in `docs/`** must be registered in [`catalog.exs`](catalog.exs) with `owner`, `last_reviewed`, and `max_age_days`. Run `mix lemon.quality` to enforce freshness.
 
 ---
@@ -62,7 +61,7 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `data-flow.excalidraw` / `.svg` | Four data paths: direct, control plane, channel, automation |
 | `event-bus.excalidraw` / `.svg` | Event bus topology and pub/sub messaging |
 | `orchestration.excalidraw` / `.svg` | Run orchestration: scheduling, lane queues, engine dispatch |
-| `supervision-tree.excalidraw` / `.svg` | OTP supervision tree across all 15 applications |
+| `supervision-tree.excalidraw` / `.svg` | OTP supervision tree across all 17 applications |
 | `tool-execution.excalidraw` / `.svg` | Tool execution pipeline: registry, policy, approval, execution |
 
 ---
@@ -76,7 +75,6 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `AGENTS.md` (root) | Project-wide agent guide (navigation, team composition, conventions) |
 | `README.md` (root) | Project overview, quickstart, architecture deep-dive |
 | `ROADMAP.md` | Living roadmap: Now/Next/Later/Explore items with metadata |
-| `planning/INDEX.md` | Planning board: active plans, ideas, merges, reviews |
 | `config/` | Elixir application configuration (config.exs, runtime.exs, etc.) |
 | `examples/config.example.toml` | Annotated example TOML configuration |
 
@@ -88,4 +86,4 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
 5. **Review cycle**: docs are checked for staleness based on `max_age_days` in the catalog.
 
-*Last reviewed: 2026-02-27*
+*Last reviewed: 2026-03-08*

@@ -146,13 +146,14 @@ apps/
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
-├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
+├── lemon_control_plane/ # HTTP/WebSocket API server with 112+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_games/         # Agent-vs-agent game platform (RPS, Connect4, event-sourced matches)
-├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
+├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
+├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
 ├── lemon_router/        # Message routing, agent directory, run orchestration
-├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
+├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_skills/        # Skill registry, discovery, installation
 ├── lemon_web/           # Phoenix LiveView web interface
 └── market_intel/        # Market data ingestion, analysis (Ecto/SQLite, GenStage)
@@ -260,17 +261,17 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_gateway, ai, coding_agent*
+lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_games, lemon_skills, lemon_automation, ai, coding_agent*
 lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
-lemon_gateway ────────→ lemon_core, agent_core, ai, coding_agent, lemon_channels*
-lemon_games ────────────→ lemon_core
+lemon_gateway ────────→ lemon_core, agent_core, coding_agent, lemon_channels*
+lemon_games ──────────→ lemon_core
 lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
+lemon_mcp ────────────→ coding_agent, agent_core
 lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
-lemon_games ──────────→ lemon_core
 lemon_web ────────────→ lemon_core, lemon_games, lemon_router
 market_intel ─────────→ lemon_core, agent_core, lemon_channels*
 lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
@@ -309,7 +310,7 @@ Key env vars:
 ### Adding a New Tool
 
 1. Create module in `apps/coding_agent/lib/coding_agent/tools/`
-2. Implement `CodingAgent.Tool` behaviour
+2. Implement the tool pattern (see existing tools in the `CodingAgent.Tools.*` namespace)
 3. Add to `CodingAgent.Tools` registry
 4. Update tool policy if needed
 
@@ -330,7 +331,7 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 
 ### Adding a Gateway Engine
 
-Engines are in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Current: `claude.ex`, `codex.ex`, `pi.ex`, `lemon.ex`, `opencode.ex`, `echo.ex`.
+Engines are in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Current: `claude.ex`, `codex.ex`, `pi.ex`, `lemon.ex`, `opencode.ex`, `echo.ex`, `cli_adapter.ex`.
 
 1. Create engine module implementing `LemonGateway.Engine` behaviour
 2. Register in engine registry
@@ -450,9 +451,10 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |
 | lemon_services | `apps/lemon_services/AGENTS.md` |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
+| lemon_mcp | `apps/lemon_mcp/README.md` *(no AGENTS.md yet)* |
 | market_intel | `apps/market_intel/AGENTS.md` |
 | coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
 
 ---
 
-*Last updated: 2026-03-04* (added lemon_sim app references and dependency boundary notes)
+*Last updated: 2026-03-08* (added lemon_mcp, fixed dependency graph, corrected RPC/engine counts)
