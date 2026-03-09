@@ -125,7 +125,7 @@ defmodule LemonSim.State do
   end
 
   def put_world(%__MODULE__{} = state, updates) when is_map(updates) do
-    %{state | world: Map.merge(state.world, updates)}
+    %{state | world: Map.merge(state.world, updates), version: state.version + 1}
   end
 
   @doc """
@@ -133,7 +133,7 @@ defmodule LemonSim.State do
   """
   @spec update_world(t(), (map() -> map())) :: t()
   def update_world(%__MODULE__{} = state, updater) when is_function(updater, 1) do
-    %{state | world: updater.(state.world)}
+    %{state | world: updater.(state.world), version: state.version + 1}
   end
 
   @doc """
@@ -160,7 +160,7 @@ defmodule LemonSim.State do
       (state.plan_history ++ [normalized])
       |> Enum.take(-max_steps)
 
-    %{state | plan_history: history}
+    %{state | plan_history: history, version: state.version + 1}
   end
 
   defp fetch(map, atom_key, string_key, default) do

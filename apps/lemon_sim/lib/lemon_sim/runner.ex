@@ -30,22 +30,22 @@ defmodule LemonSim.Runner do
           {:ok, LemonSim.State.t(), LemonSim.DecisionSignal.t()} | {:error, term()}
   def ingest_events(state, events, updater, opts \\ [])
       when is_list(events) and is_atom(updater) do
-    coalesced_events = maybe_coalesce(events, opts)
+    with {:ok, coalesced_events} <- maybe_coalesce(events, opts) do
+      Enum.reduce_while(coalesced_events, {:ok, state, :skip}, fn event,
+                                                                  {:ok, acc_state, _signal} ->
+        case updater.apply_event(acc_state, event, opts) do
+          {:ok, next_state, signal} ->
+            if DecisionSignal.decide?(signal) do
+              {:halt, {:ok, next_state, signal}}
+            else
+              {:cont, {:ok, next_state, signal}}
+            end
 
-    Enum.reduce_while(coalesced_events, {:ok, state, :skip}, fn event,
-                                                                {:ok, acc_state, _signal} ->
-      case updater.apply_event(acc_state, event, opts) do
-        {:ok, next_state, signal} ->
-          if DecisionSignal.decide?(signal) do
-            {:halt, {:ok, next_state, signal}}
-          else
-            {:cont, {:ok, next_state, signal}}
-          end
-
-        {:error, _reason} = error ->
-          {:halt, error}
-      end
-    end)
+          {:error, _reason} = error ->
+            {:halt, error}
+        end
+      end)
+    end
   end
 
   @doc """
@@ -116,7 +116,7 @@ defmodule LemonSim.Runner do
   end
 
   defp do_run_until_terminal(state, modules, opts, terminal?, turn) do
-    max_turns = Keyword.get(opts, :max_turns, 50)
+    max_turns = Keyword.get(opts, :driver_max_turns, Keyword.get(opts, :max_turns, 50))
 
     cond do
       terminal?.(state) ->
@@ -142,14 +142,13 @@ defmodule LemonSim.Runner do
   defp maybe_coalesce(events, opts) do
     case Keyword.get(opts, :coalescer) do
       nil ->
-        events
+        {:ok, events}
 
       coalescer when is_atom(coalescer) ->
         if function_exported?(coalescer, :coalesce, 2) do
-          coalescer.coalesce(events, opts)
+          {:ok, coalescer.coalesce(events, opts)}
         else
-          raise ArgumentError,
-                "coalescer #{inspect(coalescer)} must implement #{inspect(EventCoalescer)}"
+          {:error, {:invalid_coalescer, coalescer}}
         end
     end
   end

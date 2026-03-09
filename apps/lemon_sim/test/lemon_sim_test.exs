@@ -56,6 +56,18 @@ defmodule LemonSimTest do
            ]
   end
 
+  test "state bumps version for non-event mutations" do
+    state = State.new(sim_id: "sim-version", world: %{status: "in_progress"})
+
+    next_state =
+      state
+      |> State.put_world(status: "won")
+      |> State.update_world(&Map.put(&1, :winner, "X"))
+      |> State.append_plan_step(%{summary: "finish game"})
+
+    assert next_state.version == 3
+  end
+
   test "runner stops when updater requests a decision" do
     state = State.new(sim_id: "sim-2", world: %{"hp" => 100})
     events = [%{kind: "tick"}, %{kind: "enemy_visible"}]
@@ -64,6 +76,18 @@ defmodule LemonSimTest do
              Runner.ingest_events(state, events, __MODULE__.UpdaterStub)
 
     assert reason == "enemy spotted"
+  end
+
+  test "runner returns an error for invalid coalescers" do
+    state = State.new(sim_id: "sim-coalesce", world: %{})
+
+    assert {:error, {:invalid_coalescer, __MODULE__.MissingCoalescerStub}} =
+             Runner.ingest_events(
+               state,
+               [%{kind: "tick"}],
+               __MODULE__.UpdaterStub,
+               coalescer: __MODULE__.MissingCoalescerStub
+             )
   end
 
   test "runner decides once using action space/projector/decider modules" do
@@ -174,6 +198,26 @@ defmodule LemonSimTest do
                  updater: __MODULE__.CounterUpdaterStub
                },
                max_turns: 5,
+               terminal?: fn state -> state.world["turns"] >= 3 end
+             )
+
+    assert final_state.world["turns"] == 3
+  end
+
+  test "runner and decider budgets are independent" do
+    state = State.new(sim_id: "sim-budget", world: %{"turns" => 0})
+
+    assert {:ok, final_state} =
+             Runner.run_until_terminal(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.CounterDeciderStub,
+                 updater: __MODULE__.CounterUpdaterStub
+               },
+               driver_max_turns: 3,
+               decision_max_turns: 1,
                terminal?: fn state -> state.world["turns"] >= 3 end
              )
 

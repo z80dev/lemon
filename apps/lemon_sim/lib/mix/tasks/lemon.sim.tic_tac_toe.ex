@@ -36,7 +36,7 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
         run_opts =
           []
           |> maybe_put(:persist?, opts[:persist])
-          |> maybe_put(:max_turns, opts[:max_turns] || opts[:max_driver_turns])
+          |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
           |> maybe_put(:model, resolve_model(opts[:model]))
 
         case LemonSim.Examples.TicTacToe.run(run_opts) do

@@ -46,6 +46,18 @@ Phase 1 adds:
 | `LemonSim.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider driven by a pluggable tool policy |
 | `LemonSim.Memory.Tools` | Optional scoped file-memory tool bundle for long-term notes |
 
+`LemonSim.Deciders.ToolLoopDecider` expects the model to terminate turns with a
+tool call. If the assistant responds without any tool call, it returns
+`{:error, {:tool_call_required, details}}` instead of producing a text-only
+decision that `Runner.step/3` cannot ingest.
+
+`Runner.run_until_terminal/3` and `ToolLoopDecider` use separate turn budgets:
+
+- `driver_max_turns` limits outer simulation steps
+- `decision_max_turns` limits inner LLM/tool loop retries
+
+Both still fall back to `max_turns` for backward compatibility.
+
 ## Decision Event Flow
 
 `Runner.step/3` prefers direct event-bearing decisions before consulting a
@@ -54,6 +66,9 @@ decision adapter:
 - if a decider returns top-level `"event"` / `"events"`, the runner ingests
   them immediately
 - otherwise, the configured `DecisionAdapter` is used
+
+If an invalid coalescer is configured, `Runner.ingest_events/4` returns
+`{:error, {:invalid_coalescer, module}}` instead of raising.
 
 `LemonSim.Deciders.ToolPolicies.SingleTerminal` also copies any
 `result_details.event(s)` from terminal tool calls onto the returned decision as
@@ -67,6 +82,14 @@ plumbing while still preserving `result_details`.
 | `lemon_core` | Persistent store and pubsub/event transport |
 | `agent_core` | Tool contract (`AgentTool`) for legal action generation |
 | `ai` | Shared model context types (`Ai.Types.Context`) |
+
+## Notes
+
+- `State.version` increments on all state mutations, not only event appends.
+- Memory tools consistently bootstrap their scoped workspace (`index.md`) before
+  file operations.
+- Sim code should either keep a consistent world-map key convention or use
+  `LemonCore.MapHelpers.get_key/2` when reading persisted state.
 
 ## Test
 

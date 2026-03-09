@@ -3,6 +3,7 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
 
   @behaviour LemonSim.Updater
 
+  alias LemonCore.MapHelpers
   alias LemonSim.State
   alias LemonSim.Examples.TicTacToe.{Events, Outcome}
 
@@ -17,24 +18,28 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
   end
 
   defp apply_place_mark(%State{} = state, event) do
-    player = state.world[:current_player]
+    player = MapHelpers.get_key(state.world, :current_player)
 
     with :ok <- ensure_in_progress(state),
          {:ok, row, col} <- parse_coords(event.payload),
          :ok <- ensure_empty_cell(state.world, row, col) do
-      board_after = put_in(state.world, [:board, Access.at(row), Access.at(col)], player)
-      move_count = (state.world[:move_count] || 0) + 1
-      outcome = resolve_outcome(board_after, player)
+      board_after =
+        state.world
+        |> MapHelpers.get_key(:board)
+        |> put_in([Access.at(row), Access.at(col)], player)
+
+      move_count = (MapHelpers.get_key(state.world, :move_count) || 0) + 1
+      outcome = resolve_outcome(%{board: board_after}, player)
 
       next_state =
         state
-        |> State.put_world(%{
-          board: board_after[:board],
+        |> State.put_world(world_updates(state.world, %{
+          board: board_after,
           current_player: outcome.next_player,
           status: outcome.status,
           winner: outcome.winner,
           move_count: move_count
-        })
+        }))
         |> State.append_event(Events.move_applied(player, row, col, move_count))
         |> State.append_events(outcome.events)
 
@@ -76,16 +81,17 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
   defp raw_coords(_), do: {nil, nil}
 
   defp ensure_in_progress(%State{world: world}) do
-    if world[:status] in [nil, "in_progress"], do: :ok, else: {:error, :game_over}
+    if MapHelpers.get_key(world, :status) in [nil, "in_progress"], do: :ok, else: {:error, :game_over}
   end
 
   defp ensure_empty_cell(world, row, col) do
-    cell = get_in(world, [:board, Access.at(row), Access.at(col)])
+    board = MapHelpers.get_key(world, :board)
+    cell = get_in(board, [Access.at(row), Access.at(col)])
     if cell == " ", do: :ok, else: {:error, :occupied_cell}
   end
 
   defp winner?(board_world, player) do
-    board = board_world[:board]
+    board = MapHelpers.get_key(board_world, :board)
 
     lines = [
       [at(board, 0, 0), at(board, 0, 1), at(board, 0, 2)],
@@ -102,7 +108,7 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
   end
 
   defp board_full?(board_world) do
-    board = board_world[:board]
+    board = MapHelpers.get_key(board_world, :board)
     board |> List.flatten() |> Enum.all?(&(&1 != " "))
   end
 
@@ -148,5 +154,23 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
 
   defp rejection_message(reason, player, row, col) do
     "Move rejected (#{reason}): #{player} at (#{inspect(row)}, #{inspect(col)})"
+  end
+
+  defp world_updates(world, updates) do
+    Enum.into(updates, %{}, fn {key, value} ->
+      normalized_key =
+        cond do
+          Map.has_key?(world, key) ->
+            key
+
+          Map.has_key?(world, Atom.to_string(key)) ->
+            Atom.to_string(key)
+
+          true ->
+            key
+        end
+
+      {normalized_key, value}
+    end)
   end
 end

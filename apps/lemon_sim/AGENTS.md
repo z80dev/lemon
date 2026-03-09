@@ -39,6 +39,11 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
 - Keep memory policy out of the core harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.Memory.Tools`).
 - Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
+- `ToolLoopDecider` is tool-first: assistant replies without tool calls are treated as errors, not text decisions.
+- Use `driver_max_turns` for outer sim loops and `decision_max_turns` for inner model/tool retries; `max_turns` remains a backward-compatible fallback.
+- `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
+- `State.version` tracks all state mutations, not just appended events.
+- When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
 
 ## Testing
 

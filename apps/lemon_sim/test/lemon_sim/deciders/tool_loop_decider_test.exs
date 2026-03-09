@@ -78,7 +78,7 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
     assert File.read!(memory_file) == "alliance pending"
   end
 
-  test "returns assistant text decision when no tool call is produced" do
+  test "returns a clear error when no tool call is produced" do
     complete_fn = fn _model, _ctx, _stream_opts ->
       {:ok,
        %AssistantMessage{
@@ -91,7 +91,7 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
 
     context = Context.new(system_prompt: "Return a direct instruction")
 
-    assert {:ok, decision} =
+    assert {:error, {:tool_call_required, details}} =
              ToolLoopDecider.decide(
                context,
                [],
@@ -99,8 +99,8 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
                complete_fn: complete_fn
              )
 
-    assert decision["type"] == "assistant_text"
-    assert decision["text"] == "hold position"
+    assert details.assistant_text == "hold position"
+    assert details.executed_calls == []
   end
 
   test "returns error when model is missing" do

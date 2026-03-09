@@ -4,6 +4,7 @@ defmodule LemonSim.Examples.TicTacToe do
   """
 
   alias LemonCore.Config.{Modular, Providers}
+  alias LemonCore.MapHelpers
   alias LemonSim.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.TicTacToe.{
@@ -61,11 +62,11 @@ defmodule LemonSim.Examples.TicTacToe do
             title: "Current Board",
             format: :json,
             content: %{
-              "board" => frame.world[:board],
-              "current_player" => frame.world[:current_player],
-              "status" => frame.world[:status],
-              "winner" => frame.world[:winner],
-              "move_count" => frame.world[:move_count]
+              "board" => MapHelpers.get_key(frame.world, :board),
+              "current_player" => MapHelpers.get_key(frame.world, :current_player),
+              "status" => MapHelpers.get_key(frame.world, :status),
+              "winner" => MapHelpers.get_key(frame.world, :winner),
+              "move_count" => MapHelpers.get_key(frame.world, :move_count)
             }
           }
         end,
@@ -110,7 +111,7 @@ defmodule LemonSim.Examples.TicTacToe do
     |> Kernel.++(
       model: model,
       stream_options: stream_options,
-      max_turns: @default_max_turns,
+      driver_max_turns: @default_max_turns,
       persist?: true,
       terminal?: &terminal?/1,
       on_before_step: &announce_turn/2,
@@ -143,10 +144,10 @@ defmodule LemonSim.Examples.TicTacToe do
     end
   end
 
-  defp terminal?(state), do: state.world[:status] in ["won", "draw"]
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in ["won", "draw"]
 
   defp announce_turn(turn, state) do
-    IO.puts("Turn #{turn} | player=#{state.world[:current_player]}")
+    IO.puts("Turn #{turn} | player=#{MapHelpers.get_key(state.world, :current_player)}")
   end
 
   defp print_step(_turn, %{state: next_state}) do
@@ -156,13 +157,13 @@ defmodule LemonSim.Examples.TicTacToe do
   defp print_step(_turn, _result), do: :ok
 
   defp print_board(state) do
-    board = state.world[:board]
+    board = MapHelpers.get_key(state.world, :board)
 
     IO.puts("Board:")
     Enum.each(board, fn row -> IO.puts(Enum.join(row, " | ")) end)
 
     IO.puts(
-      "status=#{state.world[:status]} winner=#{inspect(state.world[:winner])} next=#{inspect(state.world[:current_player])}"
+      "status=#{MapHelpers.get_key(state.world, :status)} winner=#{inspect(MapHelpers.get_key(state.world, :winner))} next=#{inspect(MapHelpers.get_key(state.world, :current_player))}"
     )
   end
 

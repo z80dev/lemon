@@ -89,6 +89,20 @@ defmodule LemonSim.Memory.ToolsTest do
              read.execute.("r1", %{"path" => "../outside.md"}, nil, nil)
   end
 
+  test "read tool bootstraps the workspace before reporting missing files" do
+    tmp_dir = System.tmp_dir!()
+    namespace = "sim_mem_read_bootstrap_#{System.unique_integer([:positive])}"
+    root = Path.join(tmp_dir, namespace)
+    tools = Tools.build(memory_root: tmp_dir, memory_namespace: namespace)
+    read = find_tool!(tools, "memory_read_file")
+
+    assert {:error, "Memory file not found"} =
+             read.execute.("r1", %{"path" => "notes/missing.md"}, nil, nil)
+
+    assert File.dir?(root)
+    assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
+  end
+
   defp find_tool!(tools, name) do
     Enum.find(tools, fn tool -> tool.name == name end) ||
       raise "tool not found: #{name}"

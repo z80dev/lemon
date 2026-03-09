@@ -38,7 +38,7 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   end
 
   defp run_loop(state, model, opts, turn) do
-    max_turns = Keyword.get(opts, :max_turns, @default_max_turns)
+    max_turns = Keyword.get(opts, :decision_max_turns, Keyword.get(opts, :max_turns, @default_max_turns))
 
     max_tool_calls_per_turn =
       Keyword.get(opts, :max_tool_calls_per_turn, @default_max_tool_calls_per_turn)
@@ -56,7 +56,7 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
         with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
           case tool_calls do
             [] ->
-              {:ok, text_decision(assistant, state.executed_calls)}
+              {:error, tool_call_required_error(assistant, state.executed_calls)}
 
             calls ->
               with {:ok, resolved_calls} <- resolve_tool_calls(calls, state.tools),
@@ -263,12 +263,12 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
 
   defp decision_from_tool_call(_policy, _call, _tool, _result, _is_error, _opts), do: nil
 
-  defp text_decision(%AssistantMessage{} = assistant, executed_calls) do
-    %{
-      "type" => "assistant_text",
-      "text" => Ai.get_text(assistant),
-      "executed_calls" => executed_calls
-    }
+  defp tool_call_required_error(%AssistantMessage{} = assistant, executed_calls) do
+    {:tool_call_required,
+     %{
+       assistant_text: Ai.get_text(assistant),
+       executed_calls: executed_calls
+     }}
   end
 
   defp put_executed_calls(%{} = decision, executed_calls) do

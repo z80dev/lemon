@@ -4,12 +4,13 @@ defmodule LemonSim.Examples.TicTacToe.ActionSpace do
   @behaviour LemonSim.ActionSpace
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonCore.MapHelpers
   alias LemonSim.Examples.TicTacToe.Events
 
   @impl true
   def tools(state, _opts) do
-    if state.world[:status] == "in_progress" do
-      player = state.world[:current_player]
+    if MapHelpers.get_key(state.world, :status) == "in_progress" do
+      player = MapHelpers.get_key(state.world, :current_player)
       {:ok, [place_mark_tool(player)]}
     else
       {:ok, []}

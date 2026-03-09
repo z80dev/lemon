@@ -85,6 +85,7 @@ defmodule LemonSim.Memory.Tools do
       },
       execute: fn _id, params, _signal, _on_update ->
         with {:ok, path} <- fetch_string(params, "path"),
+             :ok <- ensure_workspace(root),
              {:ok, abs_path} <- resolve_memory_path(root, path),
              {:ok, content} <- File.read(abs_path) do
           cap = normalize_positive_int(Map.get(params, "max_bytes"), max_bytes)
@@ -190,6 +191,7 @@ defmodule LemonSim.Memory.Tools do
              {:ok, target} <- fetch_string(params, "target"),
              {:ok, replacement} <- fetch_string(params, "replacement"),
              true <- target != "" or {:error, :empty_target},
+             :ok <- ensure_workspace(root),
              {:ok, abs_path} <- resolve_memory_path(root, path),
              {:ok, content} <- File.read(abs_path),
              {updated, replacements} <- replace_content(content, target, replacement, params),
@@ -287,6 +289,7 @@ defmodule LemonSim.Memory.Tools do
       },
       execute: fn _id, params, _signal, _on_update ->
         with {:ok, path} <- fetch_string(params, "path"),
+             :ok <- ensure_workspace(root),
              {:ok, abs_path} <- resolve_memory_path(root, path),
              :ok <- File.rm(abs_path) do
           {:ok,

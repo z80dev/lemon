@@ -5,6 +5,8 @@ defmodule LemonSim.Examples.TicTacToeTest do
 
   alias Ai.Types.{AssistantMessage, Model, ToolCall}
   alias LemonSim.Examples.TicTacToe
+  alias LemonSim.Examples.TicTacToe.{ActionSpace, Updater}
+  alias LemonSim.State
 
   test "example runs to completion with scripted tool calls" do
     {:ok, moves} =
@@ -59,6 +61,38 @@ defmodule LemonSim.Examples.TicTacToeTest do
 
     assert output =~ "Starting Tic Tac Toe self-play"
     assert output =~ "Final state:"
+  end
+
+  test "action space and updater tolerate string-keyed world state" do
+    state =
+      State.new(
+        sim_id: "tic_tac_toe_string_keys",
+        world: %{
+          "board" => [
+            [" ", " ", " "],
+            [" ", " ", " "],
+            [" ", " ", " "]
+          ],
+          "current_player" => "X",
+          "status" => "in_progress",
+          "winner" => nil,
+          "move_count" => 0
+        }
+      )
+
+    assert {:ok, [tool]} = ActionSpace.tools(state, [])
+    assert tool.name == "place_mark"
+
+    assert {:ok, next_state, {:decide, "next turn"}} =
+             Updater.apply_event(
+               state,
+               %{"kind" => "place_mark", "payload" => %{"player" => "X", "row" => 0, "col" => 0}},
+               []
+             )
+
+    assert get_in(next_state.world, ["board", Access.at(0), Access.at(0)]) == "X"
+    assert next_state.world["current_player"] == "O"
+    assert next_state.world["move_count"] == 1
   end
 
   defp fake_model do
