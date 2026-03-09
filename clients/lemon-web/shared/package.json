@@ -9,10 +9,12 @@
     "build": "tsup src/index.ts --format esm --dts --clean",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.0.18",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.0.18"

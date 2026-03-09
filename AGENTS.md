@@ -184,6 +184,9 @@ mix compile
 # Run all tests
 mix test
 
+# Run umbrella tests with coverage
+mix test --cover --exclude integration
+
 # Run tests for specific app
 mix test apps/ai
 mix test apps/coding_agent
@@ -204,6 +207,7 @@ mix lemon.quality
 cd clients/lemon-tui
 npm install
 npm run build
+npm run test:coverage
 npm run dev      # Watch mode
 ```
 
@@ -214,6 +218,7 @@ cd clients/lemon-web
 npm install
 npm run dev      # Start web server + frontend
 npm run build    # Build shared/server/web packages
+npm run test:coverage
 ```
 
 ### Browser Node Client (TypeScript)
@@ -222,6 +227,7 @@ npm run build    # Build shared/server/web packages
 cd clients/lemon-browser-node
 npm install
 npm run build
+npm run test:coverage
 npm run dev      # Watch mode
 ```
 

@@ -43,7 +43,7 @@ jobs:
         run: mix deps.get
 
       - name: Compile
-        run: mix compile
+        run: mix compile --warnings-as-errors
 
       - name: Guard against skipped ExUnit tests
         run: |
@@ -105,10 +105,10 @@ jobs:
         run: mix deps.get
 
       - name: Compile
-        run: mix compile
+        run: mix compile --warnings-as-errors
 
       - name: Run umbrella tests
-        run: mix test --exclude integration
+        run: mix test --cover --exclude integration
 
   clients:
     runs-on: ubuntu-latest
@@ -146,19 +146,19 @@ jobs:
 
       - name: lemon-web shared tests
         working-directory: clients/lemon-web
-        run: npm --workspace shared run test
+        run: npm --workspace shared run test:coverage
 
       - name: lemon-web server tests
         working-directory: clients/lemon-web
-        run: npm --workspace server run test
+        run: npm --workspace server run test:coverage
 
       - name: lemon-web tests
         working-directory: clients/lemon-web
-        run: npm --workspace web run test
+        run: npm --workspace web run test:coverage
 
       - name: lemon-web audit
         working-directory: clients/lemon-web
-        run: npm audit --audit-level=high || true
+        run: npm audit --omit=dev --audit-level=high
 
       # --- lemon-tui ---
       - name: Install lemon-tui deps
@@ -179,11 +179,11 @@ jobs:
 
       - name: lemon-tui tests
         working-directory: clients/lemon-tui
-        run: npm test
+        run: npm run test:coverage
 
       - name: lemon-tui audit
         working-directory: clients/lemon-tui
-        run: npm audit --audit-level=high || true
+        run: npm audit --omit=dev --audit-level=high
 
       # --- lemon-browser-node ---
       - name: Install lemon-browser-node deps
@@ -204,8 +204,8 @@ jobs:
 
       - name: lemon-browser-node tests
         working-directory: clients/lemon-browser-node
-        run: npm test
+        run: npm run test:coverage
 
       - name: lemon-browser-node audit
         working-directory: clients/lemon-browser-node
-        run: npm audit --audit-level=high || true
+        run: npm audit --omit=dev --audit-level=high
