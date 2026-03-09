@@ -20,6 +20,20 @@ Phase 1 adds:
 - `ToolLoopDecider` for real model/tool-call decision execution with pluggable tool policies
 - file-scoped memory tools (`index.md` + read/write/patch/list/delete) as an optional bundle
 
+## Examples
+
+- `LemonSim.Examples.TicTacToe` is the minimal self-play example.
+- `LemonSim.Examples.Skirmish` is the main dogfood example for richer sims: it
+  exercises phase advancement, derived updater events, deterministic RNG, and a
+  larger tactical action space.
+
+Run them with:
+
+```bash
+mix lemon.sim.tic_tac_toe
+mix lemon.sim.skirmish
+```
+
 ## Module Inventory
 
 | Module | Purpose |

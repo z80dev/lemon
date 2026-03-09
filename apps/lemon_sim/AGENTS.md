@@ -6,6 +6,11 @@ LemonSim is a reusable simulation harness core for tool-first LLM agents. It is 
 
 Use this app when you need a fresh-context-per-decision loop backed by structured world state and compact historical context.
 
+## Current Dogfood Examples
+
+- `LemonSim.Examples.TicTacToe` is the smallest end-to-end example.
+- `LemonSim.Examples.Skirmish` is the preferred dogfood case for more complex sims. It adds deterministic combat resolution, derived events, AP-based turn continuation, and turn advancement without making the core harness domain-specific.
+
 ## Key Files
 
 | File | Module | Purpose |
@@ -30,6 +35,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 | `lib/lemon_sim/store.ex` | `LemonSim.Store` | `LemonCore.Store` persistence wrapper |
 | `lib/lemon_sim/bus.ex` | `LemonSim.Bus` | `LemonCore.Bus` topic helpers |
 | `lib/lemon_sim/memory/tools.ex` | `LemonSim.Memory.Tools` | Scoped memory file tools (`memory_*`) |
+| `lib/lemon_sim/examples/skirmish.ex` | `LemonSim.Examples.Skirmish` | Tactical combat dogfood example for phased/derived-event sims |
 
 ## Design Boundaries
 
@@ -51,4 +57,4 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 mix test apps/lemon_sim
 ```
 
-Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, and tool-loop decider behavior.
+Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the skirmish example's action space/updater/RNG path.
