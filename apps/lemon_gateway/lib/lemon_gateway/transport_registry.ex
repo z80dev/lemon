@@ -13,6 +13,7 @@ defmodule LemonGateway.TransportRegistry do
   @type transport_mod :: module()
 
   @reserved_ids ~w(default all)
+  @channels_owned_transport_ids ~w(discord)
   @id_regex ~r/^[a-z][a-z0-9_-]*$/
 
   def start_link(_opts) do
@@ -46,7 +47,16 @@ defmodule LemonGateway.TransportRegistry do
       |> Enum.reduce(%{}, fn mod, acc ->
         id = mod.id()
         validate_id!(id)
-        Map.put(acc, id, mod)
+
+        if id in @channels_owned_transport_ids do
+          Logger.warning(
+            "transport #{inspect(id)} is owned by lemon_channels; remove #{inspect(mod)} from :transports"
+          )
+
+          acc
+        else
+          Map.put(acc, id, mod)
+        end
       end)
 
     maybe_warn_dual_gate(map)
@@ -130,7 +140,6 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)
-  defp transport_enabled?("discord"), do: get_config_boolean(:enable_discord)
   defp transport_enabled?("farcaster"), do: get_config_boolean(:enable_farcaster)
   defp transport_enabled?("email"), do: get_config_boolean(:enable_email)
   defp transport_enabled?("xmtp"), do: get_config_boolean(:enable_xmtp)

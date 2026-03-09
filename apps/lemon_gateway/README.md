@@ -187,7 +187,6 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Transports.Farcaster.FrameServer` | `transports/farcaster/frame_server.ex` | Farcaster Frame HTTP server |
 | `LemonGateway.Transports.Farcaster.HubClient` | `transports/farcaster/hub_client.ex` | Farcaster Hub validation client |
 | `LemonGateway.Transports.Farcaster.CastHandler` | `transports/farcaster/cast_handler.ex` | Cast processing handler |
-| `LemonGateway.Transports.Discord` | `transports/discord.ex` | Discord transport helpers |
 | `LemonGateway.Transports.Voice` | `transports/voice.ex` | Voice call transport |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
@@ -365,6 +364,10 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 | `enable_email` | `false` | Enable email transport |
 | `enable_xmtp` | `false` | Enable XMTP transport |
 | `enable_webhook` | `false` | Enable webhook transport |
+
+Discord is not a gateway transport. If a `discord` module is added to `:transports`,
+`TransportRegistry` ignores it and logs a warning; Discord ownership lives in
+`lemon_channels`.
 
 ### Legacy Queue Options (`[gateway.queue]`)
 

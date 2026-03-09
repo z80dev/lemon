@@ -146,6 +146,16 @@ defmodule LemonGateway.TransportRegistryTest do
     def start_link(_opts), do: :ignore
   end
 
+  defmodule MockDiscordTransportRegistry do
+    use Elixir.LemonGateway.Transport
+
+    @impl true
+    def id, do: "discord"
+
+    @impl true
+    def start_link(_opts), do: :ignore
+  end
+
   defp restart_registry do
     supervisor = Elixir.LemonGateway.Supervisor
 
@@ -282,32 +292,9 @@ defmodule LemonGateway.TransportRegistryTest do
     assert "mock" in enabled_ids
   end
 
-  test "discord transport disabled when enable_discord is false" do
+  test "discord transport ids are ignored because discord is channels-owned" do
     Application.put_env(:lemon_gateway, :transports, [
-      Elixir.LemonGateway.Transports.Discord,
-      MockTransport
-    ])
-
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-      max_concurrent_runs: 1,
-      default_engine: "echo",
-      enable_telegram: false,
-      enable_discord: false
-    })
-
-    {:ok, _} = restart_config_and_registry()
-
-    enabled_ids =
-      TransportRegistry.enabled_transports()
-      |> Enum.map(fn {id, _mod} -> id end)
-
-    refute "discord" in enabled_ids
-    assert "mock" in enabled_ids
-  end
-
-  test "discord transport enabled when enable_discord is true" do
-    Application.put_env(:lemon_gateway, :transports, [
-      Elixir.LemonGateway.Transports.Discord,
+      MockDiscordTransportRegistry,
       MockTransport
     ])
 
@@ -318,14 +305,18 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_discord: true
     })
 
-    {:ok, _} = restart_config_and_registry()
+    log =
+      capture_log(fn ->
+        {:ok, _} = restart_config_and_registry()
+      end)
 
     enabled_ids =
       TransportRegistry.enabled_transports()
       |> Enum.map(fn {id, _mod} -> id end)
 
-    assert "discord" in enabled_ids
+    refute "discord" in enabled_ids
     assert "mock" in enabled_ids
+    assert log =~ "transport \"discord\" is owned by lemon_channels"
   end
 
   test "logs warning when farcaster is enabled but transport is missing" do

@@ -529,9 +529,9 @@ LemonGateway.Config.get(:auto_resume)
 - Next run starts fresh without resume token
 
 **Transport not starting**:
-- Check enable flag: `LemonGateway.Config.get(:enable_discord)`
+- Discord is channels-owned; check `LemonChannels.Application` / adapter boot, not gateway transport startup
 - Check `TransportRegistry.enabled_transports()`
-- Transport returns `:ignore` from `start_link/1` when disabled
+- Gateway transport startup here applies only to gateway-native transports
 
 ## Introspection Events
 
