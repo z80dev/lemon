@@ -317,8 +317,8 @@ defmodule LemonSim.Examples.Skirmish.Updater do
       |> get(:units, %{})
       |> Enum.any?(fn {unit_id, unit} ->
         unit_id != moving_unit_id and MapHelpers.get_key(unit, :status) != "dead" and
-          get(get(unit, :pos, %{}), :x) == x and
-          get(get(unit, :pos, %{}), :y) == y
+          get(get(unit, :pos, %{}), :x, nil) == x and
+          get(get(unit, :pos, %{}), :y, nil) == y
       end)
 
     if occupied?, do: {:error, :tile_occupied}, else: :ok
@@ -397,8 +397,6 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp fetch(map, atom_key, string_key, default \\ nil) do
     Map.get(map, atom_key, Map.get(map, string_key, default))
   end
-
-  defp get(map, key, default \\ nil)
 
   defp get(map, key, default) when is_map(map) and is_atom(key) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))
