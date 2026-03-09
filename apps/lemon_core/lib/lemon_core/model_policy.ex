@@ -49,7 +49,7 @@ defmodule LemonCore.ModelPolicy do
   @type model_id :: String.t()
 
   @typedoc "Thinking level for reasoning models"
-  @type thinking_level :: :minimal | :low | :medium | :high | :xhigh | nil
+  @type thinking_level :: :off | :minimal | :low | :medium | :high | :xhigh | nil
 
   @typedoc "Policy metadata map"
   @type metadata :: %{
@@ -356,7 +356,7 @@ defmodule LemonCore.ModelPolicy do
   defp normalize_thinking_level(nil), do: nil
 
   defp normalize_thinking_level(level) when is_atom(level) do
-    if level in [:minimal, :low, :medium, :high, :xhigh] do
+    if level in [:off, :minimal, :low, :medium, :high, :xhigh] do
       level
     else
       nil
@@ -365,6 +365,7 @@ defmodule LemonCore.ModelPolicy do
 
   defp normalize_thinking_level(level) when is_binary(level) do
     case String.downcase(level) do
+      "off" -> :off
       "minimal" -> :minimal
       "low" -> :low
       "medium" -> :medium

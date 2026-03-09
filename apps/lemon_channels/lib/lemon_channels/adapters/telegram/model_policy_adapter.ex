@@ -2,33 +2,10 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
   @moduledoc """
   Adapter that integrates Telegram with the unified ModelPolicy system.
 
-  This module provides a compatibility layer between Telegram's existing
-  model preference storage and the new ModelPolicy system. It:
-
-  1. Reads from the new ModelPolicy system first
-  2. Falls back to legacy storage for backward compatibility
-  3. Provides functions to migrate data to the new system
-
-  ## Usage
-
-  Use this module instead of direct legacy storage access for model resolution:
-
-      # Old way (legacy typed store access)
-      StateStore.get_default_model(key)
-
-      # New way (unified policy resolution)
-      ModelPolicyAdapter.resolve_model(state, chat_id, thread_id)
-      ModelPolicyAdapter.resolve_thinking(account_id, chat_id, thread_id)
-
-  ## Migration
-
-  To migrate existing Telegram policies to the unified system:
-
-      mix lemon.policy migrate_telegram
-
-  Or programmatically:
-
-      LemonCore.ModelPolicy.Migration.migrate_telegram()
+  Provides model and thinking-level resolution for the Telegram transport,
+  with session overrides (ephemeral) and persistent policy storage via
+  `LemonCore.ModelPolicy`. Falls back to legacy `StateStore` for backward
+  compatibility with data written before the ModelPolicy system existed.
   """
 
   alias LemonCore.ModelPolicy
@@ -37,157 +14,234 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   require Logger
 
-  @doc """
-  Resolves the effective model ID for a Telegram chat/thread.
+  @thinking_levels ~w(off minimal low medium high xhigh)
 
-  Checks in order:
-  1. New ModelPolicy system
-  2. Legacy telegram_default_model storage (backward compatibility)
+  # ============================================================================
+  # Session Overrides (ephemeral, per-session)
+  # ============================================================================
 
-  ## Examples
+  @spec session_model_override(term()) :: binary() | nil
+  def session_model_override(session_key) when is_binary(session_key) do
+    case StateStore.get_session_model(session_key) do
+      model when is_binary(model) and model != "" -> model
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
 
-      iex> ModelPolicyAdapter.resolve_model(state, -1001234567890, nil)
-      "claude-sonnet-4-20250514"
+  def session_model_override(_session_key), do: nil
 
-      iex> ModelPolicyAdapter.resolve_model(state, -1001234567890, 456)
-      nil
-  """
-  @spec resolve_model(map(), integer(), integer() | nil) :: String.t() | nil
-  def resolve_model(state, chat_id, thread_id) when is_integer(chat_id) do
-    account_id = state.account_id || "default"
-    route = Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
+  @spec put_session_model_override(term(), term()) :: :ok
+  def put_session_model_override(session_key, model)
+      when is_binary(session_key) and is_binary(model) do
+    StateStore.put_session_model(session_key, model)
+    :ok
+  rescue
+    _ -> :ok
+  end
 
-    # First try the new ModelPolicy system
+  def put_session_model_override(_session_key, _model), do: :ok
+
+  # ============================================================================
+  # Combined Resolution (session + policy + legacy fallback)
+  # ============================================================================
+
+  @spec resolve_model_hint(binary() | nil, term(), term(), term()) ::
+          {binary() | nil, :session | :future | nil}
+  def resolve_model_hint(account_id, session_key, chat_id, thread_id)
+      when is_binary(session_key) and is_integer(chat_id) do
+    case session_model_override(session_key) do
+      model when is_binary(model) and model != "" ->
+        {model, :session}
+
+      _ ->
+        case default_model_preference(account_id, chat_id, thread_id) do
+          model when is_binary(model) and model != "" -> {model, :future}
+          _ -> {nil, nil}
+        end
+    end
+  rescue
+    _ -> {nil, nil}
+  end
+
+  def resolve_model_hint(_account_id, _session_key, _chat_id, _thread_id), do: {nil, nil}
+
+  @spec resolve_thinking_hint(binary() | nil, term(), term()) ::
+          {binary() | nil, :topic | :chat | nil}
+  def resolve_thinking_hint(account_id, chat_id, thread_id) when is_integer(chat_id) do
+    account_id = account_id || "default"
+
+    topic_level =
+      if is_integer(thread_id),
+        do: default_thinking_preference(account_id, chat_id, thread_id),
+        else: nil
+
+    chat_level = default_thinking_preference(account_id, chat_id, nil)
+
+    cond do
+      is_binary(topic_level) and topic_level != "" -> {topic_level, :topic}
+      is_binary(chat_level) and chat_level != "" -> {chat_level, :chat}
+      true -> {nil, nil}
+    end
+  rescue
+    _ -> {nil, nil}
+  end
+
+  def resolve_thinking_hint(_account_id, _chat_id, _thread_id), do: {nil, nil}
+
+  @spec format_thinking_line(term(), term()) :: binary()
+  def format_thinking_line(level, source) when is_binary(level) and level != "" do
+    case source do
+      :topic -> "#{level} (topic default)"
+      :chat -> "#{level} (chat default)"
+      _ -> level
+    end
+  end
+
+  def format_thinking_line(_level, _source), do: "(default)"
+
+  # ============================================================================
+  # Persistent Model Preferences (ModelPolicy -> legacy fallback)
+  # ============================================================================
+
+  @spec default_model_preference(binary() | nil, term(), term()) :: binary() | nil
+  def default_model_preference(account_id, chat_id, thread_id) when is_integer(chat_id) do
+    account_id = account_id || "default"
+    route = telegram_route(account_id, chat_id, thread_id)
+
     case ModelPolicy.resolve_model_id(route) do
-      nil ->
-        # Fall back to legacy storage for backward compatibility
-        resolve_legacy_model(state, chat_id, thread_id)
-
-      model_id ->
-        model_id
+      nil -> resolve_legacy_model(account_id, chat_id, thread_id)
+      model_id -> model_id
     end
+  rescue
+    _ -> nil
   end
 
-  def resolve_model(_state, _chat_id, _thread_id), do: nil
+  def default_model_preference(_account_id, _chat_id, _thread_id), do: nil
 
-  @doc """
-  Resolves the effective thinking level for a Telegram chat/thread.
-
-  Checks in order:
-  1. New ModelPolicy system
-  2. Legacy telegram_default_thinking storage (backward compatibility)
-
-  ## Examples
-
-      iex> ModelPolicyAdapter.resolve_thinking("default", -1001234567890, nil)
-      :high
-
-      iex> ModelPolicyAdapter.resolve_thinking("default", -1001234567890, 456)
-      nil
-  """
-  @spec resolve_thinking(String.t(), integer(), integer() | nil) :: atom() | nil
-  def resolve_thinking(account_id, chat_id, thread_id)
-      when is_binary(account_id) and is_integer(chat_id) do
-    route = Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
-
-    # First try the new ModelPolicy system
-    case ModelPolicy.resolve_thinking_level(route) do
-      nil ->
-        # Fall back to legacy storage for backward compatibility
-        resolve_legacy_thinking(account_id, chat_id, thread_id)
-
-      level ->
-        level
-    end
-  end
-
-  def resolve_thinking(_account_id, _chat_id, _thread_id), do: nil
-
-  @doc """
-  Sets a model policy for a Telegram chat/thread using the new ModelPolicy system.
-
-  ## Examples
-
-      iex> ModelPolicyAdapter.set_model(state, -1001234567890, nil, "claude-sonnet-4-20250514")
-      :ok
-  """
-  @spec set_model(map(), integer(), integer() | nil, String.t()) :: :ok | {:error, term()}
-  def set_model(state, chat_id, thread_id, model)
+  @spec put_default_model_preference(binary() | nil, term(), term(), term()) :: :ok
+  def put_default_model_preference(account_id, chat_id, thread_id, model)
       when is_integer(chat_id) and is_binary(model) do
-    account_id = state.account_id || "default"
-    route = Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
+    account_id = account_id || "default"
+    route = telegram_route(account_id, chat_id, thread_id)
 
     policy =
       ModelPolicy.new_policy(model,
-        set_by: "telegram_adapter",
-        reason: "Set via Telegram adapter"
+        set_by: "telegram",
+        reason: "Set via Telegram /model command"
       )
 
     ModelPolicy.set(route, policy)
+    :ok
+  rescue
+    _ -> :ok
   end
 
-  def set_model(_state, _chat_id, _thread_id, _model), do: :ok
+  def put_default_model_preference(_account_id, _chat_id, _thread_id, _model), do: :ok
 
-  @doc """
-  Sets a thinking level policy for a Telegram chat/thread.
+  # ============================================================================
+  # Persistent Thinking Preferences (ModelPolicy -> legacy fallback)
+  # ============================================================================
 
-  If a model policy already exists at this route, the thinking level is merged
-  into it. Otherwise, the operation is skipped (thinking requires a model).
+  @spec default_thinking_preference(binary() | nil, term(), term()) :: binary() | nil
+  def default_thinking_preference(account_id, chat_id, thread_id)
+      when is_binary(account_id) and is_integer(chat_id) do
+    route = telegram_route(account_id, chat_id, thread_id)
 
-  ## Examples
+    case ModelPolicy.resolve_thinking_level(route) do
+      nil ->
+        resolve_legacy_thinking(account_id, chat_id, thread_id)
 
-      iex> ModelPolicyAdapter.set_thinking("default", -1001234567890, nil, :high)
-      :ok
-  """
-  @spec set_thinking(String.t(), integer(), integer() | nil, atom()) :: :ok | {:error, term()}
-  def set_thinking(account_id, chat_id, thread_id, level)
-      when is_binary(account_id) and is_integer(chat_id) and is_atom(level) do
-    route = Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
+      level when is_atom(level) ->
+        Atom.to_string(level)
+    end
+  rescue
+    _ -> nil
+  end
+
+  def default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
+
+  # Arity-4 variant accepted by transport delegates (ignores _levels)
+  def default_thinking_preference(account_id, chat_id, thread_id, _levels),
+    do: default_thinking_preference(account_id, chat_id, thread_id)
+
+  @spec put_default_thinking_preference(binary() | nil, term(), term(), term()) :: :ok
+  def put_default_thinking_preference(account_id, chat_id, thread_id, level)
+      when is_integer(chat_id) and is_binary(level) do
+    normalized = normalize_thinking_level(level)
+
+    if is_binary(normalized) and normalized != "" do
+      account_id = account_id || "default"
+      route = telegram_route(account_id, chat_id, thread_id)
+      thinking_atom = String.to_existing_atom(normalized)
+
+      # Get or create a policy at this route
+      existing = ModelPolicy.get(route)
+
+      policy =
+        case existing do
+          nil ->
+            # Create a minimal policy just for thinking level.
+            # Use a placeholder model_id since ModelPolicy requires one.
+            ModelPolicy.new_policy("_thinking_only",
+              thinking_level: thinking_atom,
+              set_by: "telegram",
+              reason: "Set via Telegram /thinking command"
+            )
+
+          policy ->
+            Map.put(policy, :thinking_level, thinking_atom)
+        end
+
+      ModelPolicy.set(route, policy)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  def put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
+
+  # Arity-5 variant accepted by transport delegates (ignores _levels)
+  def put_default_thinking_preference(account_id, chat_id, thread_id, level, _levels),
+    do: put_default_thinking_preference(account_id, chat_id, thread_id, level)
+
+  @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
+  def clear_default_thinking_preference(account_id, chat_id, thread_id)
+      when is_integer(chat_id) do
+    account_id = account_id || "default"
+    had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
+
+    route = telegram_route(account_id, chat_id, thread_id)
 
     case ModelPolicy.get(route) do
       nil ->
-        Logger.warning(
-          "Cannot set thinking level without a model policy. " <>
-            "Set a model first for route=#{inspect(Route.to_key(route))}"
-        )
+        # Try clearing legacy too
+        legacy_key = {account_id, chat_id, thread_id}
+        _ = StateStore.delete_default_thinking(legacy_key)
 
-        {:error, :no_model_policy}
-
-      existing_policy ->
-        updated_policy = Map.put(existing_policy, :thinking_level, level)
-        ModelPolicy.set(route, updated_policy)
+      policy ->
+        updated = Map.delete(policy, :thinking_level)
+        ModelPolicy.set(route, updated)
     end
+
+    had_override?
+  rescue
+    _ -> false
   end
 
-  def set_thinking(_account_id, _chat_id, _thread_id, _level), do: :ok
+  def clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false
 
-  @doc """
-  Clears the model policy for a Telegram chat/thread.
+  # Arity-4 variant accepted by transport delegates (ignores _levels)
+  def clear_default_thinking_preference(account_id, chat_id, thread_id, _levels),
+    do: clear_default_thinking_preference(account_id, chat_id, thread_id)
 
-  ## Examples
+  # ============================================================================
+  # Route helpers
+  # ============================================================================
 
-      iex> ModelPolicyAdapter.clear_model(state, -1001234567890, nil)
-      :ok
-  """
-  @spec clear_model(map(), integer(), integer() | nil) :: :ok | {:error, term()}
-  def clear_model(state, chat_id, thread_id) when is_integer(chat_id) do
-    account_id = state.account_id || "default"
-    route = Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
-    ModelPolicy.clear(route)
-  end
-
-  def clear_model(_state, _chat_id, _thread_id), do: :ok
-
-  @doc """
-  Returns the ModelPolicy Route for a Telegram chat/thread.
-
-  Useful for direct ModelPolicy operations.
-
-  ## Examples
-
-      iex> ModelPolicyAdapter.route_for(state, -1001234567890, 456)
-      %Route{channel_id: "telegram", account_id: "default", peer_id: "-1001234567890", thread_id: "456"}
-  """
   @spec route_for(map() | String.t(), integer(), integer() | nil) :: Route.t()
   def route_for(%{account_id: account_id}, chat_id, thread_id) do
     route_for(account_id || "default", chat_id, thread_id)
@@ -195,15 +249,20 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   def route_for(account_id, chat_id, thread_id)
       when is_binary(account_id) and is_integer(chat_id) do
-    Route.new("telegram", account_id, to_string(chat_id), to_string(thread_id))
+    telegram_route(account_id, chat_id, thread_id)
   end
 
   # ============================================================================
-  # Private Functions - Legacy Compatibility
+  # Private — legacy fallback + helpers
   # ============================================================================
 
-  defp resolve_legacy_model(state, chat_id, thread_id) when is_integer(chat_id) do
-    key = {state.account_id || "default", chat_id, thread_id}
+  defp telegram_route(account_id, chat_id, thread_id) do
+    thread_str = if is_integer(thread_id), do: to_string(thread_id), else: nil
+    Route.new("telegram", account_id, to_string(chat_id), thread_str)
+  end
+
+  defp resolve_legacy_model(account_id, chat_id, thread_id) when is_integer(chat_id) do
+    key = {account_id, chat_id, thread_id}
 
     case StateStore.get_default_model(key) do
       %{model: model} when is_binary(model) and model != "" -> model
@@ -229,17 +288,15 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
   end
 
   defp normalize_thinking_level(nil), do: nil
-  defp normalize_thinking_level(level) when is_atom(level), do: level
+
+  defp normalize_thinking_level(level) when is_atom(level) do
+    str = Atom.to_string(level)
+    if str in @thinking_levels, do: str, else: nil
+  end
 
   defp normalize_thinking_level(level) when is_binary(level) do
-    case String.downcase(String.trim(level)) do
-      "minimal" -> :minimal
-      "low" -> :low
-      "medium" -> :medium
-      "high" -> :high
-      "xhigh" -> :xhigh
-      _ -> nil
-    end
+    normalized = String.downcase(String.trim(level))
+    if normalized in @thinking_levels, do: normalized, else: nil
   end
 
   defp normalize_thinking_level(_), do: nil

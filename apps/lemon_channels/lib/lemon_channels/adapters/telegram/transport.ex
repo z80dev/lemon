@@ -23,7 +23,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
-  alias LemonChannels.Adapters.Telegram.Transport.ModelPreferences
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.Poller
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
@@ -1030,7 +1030,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp resolve_model_hint(state, session_key, chat_id, thread_id),
     do:
-      ModelPreferences.resolve_model_hint(
+      ModelPolicyAdapter.resolve_model_hint(
         state.account_id || "default",
         session_key,
         chat_id,
@@ -1038,20 +1038,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       )
 
   defp resolve_thinking_hint(state, chat_id, thread_id),
-    do: ModelPreferences.resolve_thinking_hint(state.account_id || "default", chat_id, thread_id)
+    do: ModelPolicyAdapter.resolve_thinking_hint(state.account_id || "default", chat_id, thread_id)
 
   defp format_thinking_line(level, source),
-    do: ModelPreferences.format_thinking_line(level, source)
+    do: ModelPolicyAdapter.format_thinking_line(level, source)
 
   defp session_model_override(session_key),
-    do: ModelPreferences.session_model_override(session_key)
+    do: ModelPolicyAdapter.session_model_override(session_key)
 
   defp put_session_model_override(session_key, model),
-    do: ModelPreferences.put_session_model_override(session_key, model)
+    do: ModelPolicyAdapter.put_session_model_override(session_key, model)
 
   defp default_model_preference(state, chat_id, thread_id),
     do:
-      ModelPreferences.default_model_preference(
+      ModelPolicyAdapter.default_model_preference(
         state.account_id || "default",
         chat_id,
         thread_id
@@ -1059,7 +1059,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp put_default_model_preference(state, chat_id, thread_id, model),
     do:
-      ModelPreferences.put_default_model_preference(
+      ModelPolicyAdapter.put_default_model_preference(
         state.account_id || "default",
         chat_id,
         thread_id,
@@ -1067,32 +1067,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       )
 
   defp default_thinking_preference(account_id, chat_id, thread_id),
-    do:
-      ModelPreferences.default_thinking_preference(
-        account_id,
-        chat_id,
-        thread_id,
-        @thinking_levels
-      )
+    do: ModelPolicyAdapter.default_thinking_preference(account_id, chat_id, thread_id)
 
   defp put_default_thinking_preference(account_id, chat_id, thread_id, level),
-    do:
-      ModelPreferences.put_default_thinking_preference(
-        account_id,
-        chat_id,
-        thread_id,
-        level,
-        @thinking_levels
-      )
+    do: ModelPolicyAdapter.put_default_thinking_preference(account_id, chat_id, thread_id, level)
 
   defp clear_default_thinking_preference(account_id, chat_id, thread_id),
-    do:
-      ModelPreferences.clear_default_thinking_preference(
-        account_id,
-        chat_id,
-        thread_id,
-        @thinking_levels
-      )
+    do: ModelPolicyAdapter.clear_default_thinking_preference(account_id, chat_id, thread_id)
 
   # Update only last_engine in chat state, preserving last_resume_token and other fields.
   defp update_chat_state_last_engine(session_key, engine),

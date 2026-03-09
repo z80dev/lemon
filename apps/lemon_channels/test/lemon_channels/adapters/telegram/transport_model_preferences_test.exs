@@ -1,9 +1,8 @@
-defmodule LemonChannels.Adapters.Telegram.TransportModelPreferencesTest do
+defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
   use ExUnit.Case, async: true
 
-  alias LemonChannels.Adapters.Telegram.Transport.ModelPreferences
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.StateStore
-  alias LemonCore.ChatScope
 
   test "resolve_model_hint prefers the session override over future defaults" do
     chat_id = System.unique_integer([:positive])
@@ -16,12 +15,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportModelPreferencesTest do
     end)
 
     :ok =
-      ModelPreferences.put_default_model_preference("default", chat_id, topic_id, "openai:gpt-5")
+      ModelPolicyAdapter.put_default_model_preference("default", chat_id, topic_id, "openai:gpt-5")
 
-    :ok = ModelPreferences.put_session_model_override(session_key, "anthropic:claude-opus-4.1")
+    :ok = ModelPolicyAdapter.put_session_model_override(session_key, "anthropic:claude-opus-4.1")
 
     assert {"anthropic:claude-opus-4.1", :session} =
-             ModelPreferences.resolve_model_hint("default", session_key, chat_id, topic_id)
+             ModelPolicyAdapter.resolve_model_hint("default", session_key, chat_id, topic_id)
   end
 
   test "resolve_thinking_hint prefers topic overrides over chat defaults" do
@@ -33,26 +32,15 @@ defmodule LemonChannels.Adapters.Telegram.TransportModelPreferencesTest do
       _ = StateStore.delete_default_thinking({"default", chat_id, topic_id})
     end)
 
-    :ok = ModelPreferences.put_default_thinking_preference("default", chat_id, nil, "low")
-    :ok = ModelPreferences.put_default_thinking_preference("default", chat_id, topic_id, "high")
+    :ok = ModelPolicyAdapter.put_default_thinking_preference("default", chat_id, nil, "low")
+    :ok = ModelPolicyAdapter.put_default_thinking_preference("default", chat_id, topic_id, "high")
 
-    assert {"high", :topic} = ModelPreferences.resolve_thinking_hint("default", chat_id, topic_id)
+    assert {"high", :topic} = ModelPolicyAdapter.resolve_thinking_hint("default", chat_id, topic_id)
   end
 
-  test "render_thinking_status reports the effective scope" do
-    chat_id = System.unique_integer([:positive])
-    topic_id = System.unique_integer([:positive])
-    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
-
-    on_exit(fn ->
-      _ = StateStore.delete_default_thinking({"default", chat_id, topic_id})
-    end)
-
-    :ok = ModelPreferences.put_default_thinking_preference("default", chat_id, topic_id, "medium")
-
-    text = ModelPreferences.render_thinking_status("default", scope)
-
-    assert text =~ "Thinking level for this topic: medium (topic default)"
-    assert text =~ "Topic override: medium."
+  test "format_thinking_line reports the effective scope" do
+    assert "high (topic default)" = ModelPolicyAdapter.format_thinking_line("high", :topic)
+    assert "low (chat default)" = ModelPolicyAdapter.format_thinking_line("low", :chat)
+    assert "(default)" = ModelPolicyAdapter.format_thinking_line(nil, nil)
   end
 end

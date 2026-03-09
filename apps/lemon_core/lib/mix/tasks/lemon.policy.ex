@@ -34,20 +34,9 @@ defmodule Mix.Tasks.Lemon.Policy do
     * `--peer` - Peer/chat identifier (e.g., Discord channel ID, Telegram chat ID)
     * `--thread` - Thread/topic identifier
     * `--model` - Model ID (e.g., "claude-sonnet-4-20250514", "gpt-4o")
-    * `--thinking` - Thinking level (minimal, low, medium, high, xhigh)
+    * `--thinking` - Thinking level (off, minimal, low, medium, high, xhigh)
     * `--reason` - Reason for setting this policy (stored in metadata)
     * `--all` - For clear command: clear all policies for the channel
-
-  ## Examples
-
-      # Set cheaper model for a specific Discord channel
-      mix lemon.policy set discord --account bot1 --peer "123456789012345678" \
-        --model "gpt-4o-mini" --reason "Cost optimization for general chat"
-
-      # Set high-reasoning model for a specific thread
-      mix lemon.policy set telegram --account default --peer "-1001234567890" \
-        --thread "456" --model "claude-opus-4-6" --thinking high \
-        --reason "Deep reasoning required for this topic"
   """
 
   use Mix.Task
@@ -100,11 +89,10 @@ defmodule Mix.Tasks.Lemon.Policy do
   defp list_policies(channels, _opts) do
     policies =
       if channels == [] do
-        ModelPolicy.list_all()
+        ModelPolicy.list()
       else
         channels
-        |> Enum.map(&ModelPolicy.list_for_channel/1)
-        |> List.flatten()
+        |> Enum.flat_map(&ModelPolicy.list/1)
       end
 
     if policies == [] do
@@ -114,15 +102,15 @@ defmodule Mix.Tasks.Lemon.Policy do
       Mix.shell().info(String.duplicate("-", 80))
 
       Enum.each(policies, fn {route, policy} ->
-        route_str = Route.to_string(route)
-        model_str = policy.model_id || "(inherited)"
-        thinking_str = policy.thinking_level || "(inherited)"
+        route_str = format_route(route)
+        model_str = Map.get(policy, :model_id, "(inherited)")
+        thinking_str = Map.get(policy, :thinking_level, "(inherited)")
 
         Mix.shell().info("  #{route_str}")
         Mix.shell().info("    Model:    #{model_str}")
         Mix.shell().info("    Thinking: #{thinking_str}")
 
-        if policy.metadata[:reason] do
+        if policy[:metadata][:reason] do
           Mix.shell().info("    Reason:   #{policy.metadata.reason}")
         end
 
@@ -139,15 +127,13 @@ defmodule Mix.Tasks.Lemon.Policy do
       Mix.raise("At least one of --model or --thinking must be specified")
     end
 
-    route = %Route{
-      channel_id: channel,
-      account_id: opts[:account],
-      peer_id: opts[:peer],
-      thread_id: opts[:thread]
-    }
+    route = build_route(channel, opts)
+
+    # If only thinking is set without a model, use a placeholder
+    effective_model = model || "_thinking_only"
 
     policy =
-      ModelPolicy.new_policy(model,
+      ModelPolicy.new_policy(effective_model,
         thinking_level: thinking,
         reason: opts[:reason],
         set_by: "mix lemon.policy"
@@ -155,7 +141,7 @@ defmodule Mix.Tasks.Lemon.Policy do
 
     case ModelPolicy.set(route, policy) do
       :ok ->
-        Mix.shell().info("Policy set for #{Route.to_string(route)}")
+        Mix.shell().info("Policy set for #{format_route(route)}")
 
       {:error, reason} ->
         Mix.raise("Failed to set policy: #{inspect(reason)}")
@@ -163,48 +149,45 @@ defmodule Mix.Tasks.Lemon.Policy do
   end
 
   defp get_policy(channel, opts) do
-    route = %Route{
-      channel_id: channel,
-      account_id: opts[:account],
-      peer_id: opts[:peer],
-      thread_id: opts[:thread]
-    }
+    route = build_route(channel, opts)
 
     case ModelPolicy.resolve(route) do
-      nil ->
-        Mix.shell().info("No policy found for #{Route.to_string(route)}")
+      {:error, :not_found} ->
+        Mix.shell().info("No policy found for #{format_route(route)}")
 
-      policy ->
-        Mix.shell().info("Effective policy for #{Route.to_string(route)}:")
-        Mix.shell().info("  Model:    #{policy.model_id || "(none)"}")
-        Mix.shell().info("  Thinking: #{policy.thinking_level || "(none)"}")
-
-        if policy.metadata[:matched_route] do
-          Mix.shell().info("  (inherited from #{Route.to_string(policy.metadata.matched_route)})")
-        end
+      {:ok, policy} ->
+        Mix.shell().info("Effective policy for #{format_route(route)}:")
+        Mix.shell().info("  Model:    #{policy[:model_id] || "(none)"}")
+        Mix.shell().info("  Thinking: #{policy[:thinking_level] || "(none)"}")
     end
   end
 
   defp clear_policy(channel, opts) do
     if opts[:all] do
-      # Clear all policies for the channel
-      count = ModelPolicy.clear_for_channel(channel)
-      Mix.shell().info("Cleared #{count} policies for #{channel}")
+      ModelPolicy.clear_channel(channel)
+      Mix.shell().info("Cleared all policies for #{channel}")
     else
-      route = %Route{
-        channel_id: channel,
-        account_id: opts[:account],
-        peer_id: opts[:peer],
-        thread_id: opts[:thread]
-      }
+      route = build_route(channel, opts)
 
       case ModelPolicy.clear(route) do
         :ok ->
-          Mix.shell().info("Policy cleared for #{Route.to_string(route)}")
+          Mix.shell().info("Policy cleared for #{format_route(route)}")
 
         {:error, reason} ->
           Mix.raise("Failed to clear policy: #{inspect(reason)}")
       end
     end
+  end
+
+  defp build_route(channel, opts) do
+    Route.new(channel, opts[:account], opts[:peer], opts[:thread])
+  end
+
+  defp format_route(%Route{} = route) do
+    parts =
+      [route.channel_id, route.account_id, route.peer_id, route.thread_id]
+      |> Enum.reject(&is_nil/1)
+
+    Enum.join(parts, "/")
   end
 end

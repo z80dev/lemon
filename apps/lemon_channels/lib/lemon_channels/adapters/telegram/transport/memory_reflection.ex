@@ -1,7 +1,8 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   @moduledoc false
 
-  alias LemonChannels.Adapters.Telegram.Transport.{ModelPreferences, PerChatState}
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
+  alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonCore.{ChatScope, RouterBridge, RunRequest, RunStore}
 
   @type callbacks :: %{
@@ -45,7 +46,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
       agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
       {thinking_hint, _source} =
-        ModelPreferences.resolve_thinking_hint(state.account_id, scope.chat_id, scope.topic_id)
+        ModelPolicyAdapter.resolve_thinking_hint(state.account_id, scope.chat_id, scope.topic_id)
 
       thread_generation = callbacks.current_thread_generation.(state, chat_id, thread_id)
 
