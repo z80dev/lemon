@@ -71,3 +71,6 @@ telethon_ping/stress_test_results_*.json
 
 # Session analyzer output (may contain sensitive data)
 tools/session-analyzer/output/
+
+# Generated diagram output
+tools/diagrams/output/
