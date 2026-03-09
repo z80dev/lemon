@@ -3,6 +3,7 @@ defmodule LemonCore.ConfigReloaderTest do
   Tests for the ConfigReloader GenServer.
   """
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
 
   alias LemonCore.ConfigReloader
 
@@ -59,6 +60,24 @@ defmodule LemonCore.ConfigReloaderTest do
       assert status.reload_count == 0
       assert status.last_error == nil
       assert status.has_snapshot == true
+    end
+
+    test "logs and records initial snapshot failures" do
+      log =
+        capture_log(fn ->
+          pid =
+            start_reloader!(
+              initial_snapshot: fn _state ->
+                raise "snapshot boom"
+              end
+            )
+
+          status = GenServer.call(pid, :status)
+          assert status.has_snapshot == false
+          assert status.last_error == "snapshot boom"
+        end)
+
+      assert log =~ "Initial snapshot failed"
     end
   end
 

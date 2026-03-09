@@ -14,6 +14,8 @@ defmodule LemonCore.Store.SqliteBackend do
 
   @behaviour LemonCore.Store.Backend
 
+  require Logger
+
   alias Exqlite.Sqlite3
   alias Exqlite.Error, as: ExqliteError
 
@@ -138,9 +140,9 @@ defmodule LemonCore.Store.SqliteBackend do
       with :ok <- bind_statement(state.statements.get, [table_name, {:blob, encoded_key}]) do
         case Sqlite3.step(state.conn, state.statements.get) do
           {:row, [value_blob]} ->
-            case decode(value_blob) do
-              nil -> {:ok, nil, state}
-              value -> {:ok, value, state}
+            case decode(value_blob, table: table, field: :value, key: key) do
+              {:ok, value} -> {:ok, value, state}
+              {:error, reason} -> {:error, reason}
             end
 
           :done ->
@@ -191,19 +193,9 @@ defmodule LemonCore.Store.SqliteBackend do
 
       with :ok <- bind_statement(state.statements.list, [table_name]),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list) do
-        items =
-          Enum.flat_map(rows, fn [key_blob, value_blob] ->
-            key = decode(key_blob)
-            value = decode(value_blob)
-            # Filter out corrupted entries
-            if key != nil and value != nil do
-              [{key, value}]
-            else
-              []
-            end
-          end)
-
-        {:ok, items, state}
+        with {:ok, items} <- decode_rows(rows, table) do
+          {:ok, items, state}
+        end
       else
         {:error, reason} -> {:error, reason}
         other -> {:error, {:sqlite_list_failed, other}}
@@ -234,19 +226,9 @@ defmodule LemonCore.Store.SqliteBackend do
 
       with :ok <- bind_statement(state.statements.list_recent, [table_name, limit]),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list_recent) do
-        items =
-          Enum.flat_map(rows, fn [key_blob, value_blob] ->
-            key = decode(key_blob)
-            value = decode(value_blob)
-
-            if key != nil and value != nil do
-              [{key, value}]
-            else
-              []
-            end
-          end)
-
-        {:ok, items, state}
+        with {:ok, items} <- decode_rows(rows, table) do
+          {:ok, items, state}
+        end
       else
         {:error, reason} -> {:error, reason}
         other -> {:error, {:sqlite_list_recent_failed, other}}
@@ -279,10 +261,17 @@ defmodule LemonCore.Store.SqliteBackend do
   @spec close(map()) :: :ok
   def close(%{conn: conn, statements: statements}) do
     Enum.each(Map.values(statements), fn stmt ->
-      _ = Sqlite3.release(conn, stmt)
+      case Sqlite3.release(conn, stmt) do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("SQLite statement release failed: #{inspect(reason)}")
+      end
     end)
 
-    _ = Sqlite3.close(conn)
+    case Sqlite3.close(conn) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("SQLite connection close failed: #{inspect(reason)}")
+    end
+
     :ok
   end
 
@@ -388,12 +377,28 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   defp encode(term), do: :erlang.term_to_binary(term)
-  
-  defp decode(binary) do
-    :erlang.binary_to_term(binary)
+
+  defp decode(binary, context) do
+    {:ok, :erlang.binary_to_term(binary)}
   rescue
-    ArgumentError -> 
-      # Corrupted or invalid binary data
-      nil
+    error in ArgumentError ->
+      reason = {:sqlite_corrupt_data, Enum.into(context, %{}), Exception.message(error)}
+      Logger.warning("SQLite decode failed: #{inspect(reason)}")
+      {:error, reason}
+  end
+
+  defp decode_rows(rows, table) do
+    Enum.reduce_while(rows, {:ok, []}, fn [key_blob, value_blob], {:ok, acc} ->
+      with {:ok, key} <- decode(key_blob, table: table, field: :key),
+           {:ok, value} <- decode(value_blob, table: table, field: :value, key: key) do
+        {:cont, {:ok, [{key, value} | acc]}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.reverse(items)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

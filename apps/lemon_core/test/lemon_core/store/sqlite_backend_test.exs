@@ -4,6 +4,7 @@ defmodule LemonCore.Store.SqliteBackendTest do
   """
   use ExUnit.Case, async: false
 
+  alias Exqlite.Sqlite3
   alias LemonCore.Store.SqliteBackend
 
   setup do
@@ -731,5 +732,55 @@ defmodule LemonCore.Store.SqliteBackendTest do
       # Ephemeral tables fall back to Enum.take, so we just verify the count
       assert length(items) == 2
     end
+  end
+
+  describe "corrupt SQLite payloads" do
+    setup %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      on_exit(fn -> SqliteBackend.close(state) end)
+      {:ok, state: state}
+    end
+
+    test "get returns an error for corrupted values", %{state: state} do
+      insert_corrupt_row!(state, :mytable, "bad-key", <<0>>)
+
+      assert {:error, {:sqlite_corrupt_data, context, _message}} =
+               SqliteBackend.get(state, :mytable, "bad-key")
+
+      assert context.table == :mytable
+      assert context.field == :value
+      assert context.key == "bad-key"
+    end
+
+    test "list returns an error for corrupted rows", %{state: state} do
+      insert_corrupt_row!(state, :mytable, "bad-key", <<0>>)
+
+      assert {:error, {:sqlite_corrupt_data, context, _message}} =
+               SqliteBackend.list(state, :mytable)
+
+      assert context.table == :mytable
+    end
+
+    test "list_recent returns an error for corrupted rows", %{state: state} do
+      insert_corrupt_row!(state, :mytable, "bad-key", <<0>>)
+
+      assert {:error, {:sqlite_corrupt_data, context, _message}} =
+               SqliteBackend.list_recent(state, :mytable, 5)
+
+      assert context.table == :mytable
+    end
+  end
+
+  defp insert_corrupt_row!(state, table, key, corrupt_value_blob) do
+    table_name = Atom.to_string(table)
+    key_blob = :erlang.term_to_binary(key) |> Base.encode16(case: :upper)
+    value_blob = Base.encode16(corrupt_value_blob, case: :upper)
+
+    sql = """
+    INSERT INTO lemon_store_kv (table_name, key_blob, value_blob, updated_at_ms)
+    VALUES ('#{table_name}', X'#{key_blob}', X'#{value_blob}', 0)
+    """
+
+    assert :ok = Sqlite3.execute(state.conn, sql)
   end
 end

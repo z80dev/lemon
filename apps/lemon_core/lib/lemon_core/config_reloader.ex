@@ -101,6 +101,7 @@ defmodule LemonCore.ConfigReloader do
   @impl true
   def init(opts) do
     cwd = Keyword.get(opts, :cwd)
+    initial_snapshot = Keyword.get(opts, :initial_snapshot, &default_initial_snapshot/1)
 
     state = %{
       cwd: cwd,
@@ -109,7 +110,8 @@ defmodule LemonCore.ConfigReloader do
       last_reload_at: nil,
       last_error: nil,
       reload_count: 0,
-      lock: false
+      lock: false,
+      initial_snapshot: initial_snapshot
     }
 
     # Take an initial snapshot so we have a baseline for diffing
@@ -390,13 +392,20 @@ defmodule LemonCore.ConfigReloader do
 
   defp take_initial_snapshot(state) do
     try do
-      config = LemonCore.Config.load(state.cwd)
-      digests = compute_digests(@default_sources, state.cwd)
-
-      %{state | last_snapshot: config, digests: digests}
+      state.initial_snapshot.(state)
     rescue
-      _ -> state
+      error ->
+        message = Exception.message(error)
+        Logger.warning("[ConfigReloader] Initial snapshot failed: #{message}")
+        %{state | last_error: message}
     end
+  end
+
+  defp default_initial_snapshot(state) do
+    config = LemonCore.Config.load(state.cwd)
+    digests = compute_digests(@default_sources, state.cwd)
+
+    %{state | last_snapshot: config, digests: digests}
   end
 
   defp config_file_paths(cwd) do

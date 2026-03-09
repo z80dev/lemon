@@ -85,6 +85,8 @@ LemonCore.ConfigReloader.reload/1
   └─ Broadcast :config_reloaded on "system" topic
 ```
 
+`LemonCore.ConfigReloader` logs and stores `last_error` when the initial snapshot fails during startup instead of silently ignoring the failure.
+
 ### Access Patterns
 
 ```elixir
@@ -207,6 +209,8 @@ widget = MyApp.WidgetStore.get(id)
 ```
 
 Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
+
+`LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
 Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, and `LemonCore.ExecApprovalStore`.
 
