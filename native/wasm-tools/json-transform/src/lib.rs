@@ -1,4 +1,5 @@
 use serde_json::{Map, Value, json};
+use wasm_tools_common::parse_params;
 
 wit_bindgen::generate!({
     path: "../../lemon-wasm-runtime/wit",
@@ -69,8 +70,7 @@ impl Guest for JsonTransformTool {
 export!(JsonTransformTool);
 
 fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
+    let params = parse_params(params_raw)?;
 
     let mut value = extract_input_value(&params)?;
 

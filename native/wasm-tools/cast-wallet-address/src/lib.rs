@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use wasm_tools_common::{append_signing_args, execute_command_tool};
 
 wit_bindgen::generate!({
     path: "../../lemon-wasm-runtime/wit",
@@ -6,7 +7,6 @@ wit_bindgen::generate!({
 });
 
 use exports::near::agent::tool::{Guest, Request, Response};
-use near::agent::host;
 
 struct CastWalletAddressTool;
 
@@ -54,50 +54,19 @@ export!(CastWalletAddressTool);
 
 fn build_args(params: &Value) -> Vec<String> {
     let mut args: Vec<String> = vec!["wallet".to_string(), "address".to_string()];
-
-    if params["use_keystore"].as_bool().unwrap_or(true) {
-        args.push("--account".to_string());
-        args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
-        args.push("--password".to_string());
-        args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
-    } else {
-        let secret_name = params["secret_name"].as_str().unwrap_or("ETH_PRIVATE_KEY");
-        args.push("--private-key".to_string());
-        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
-    }
-
+    append_signing_args(&mut args, params);
     args
 }
 
 fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
-    let args = build_args(&params);
-
-    let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
-
-    let result = host::exec_command("cast", &args_json, "{}", Some(30_000))
-        .map_err(|err| format!("exec failed: {err}"))?;
-
-    if result.exit_code != 0 {
-        let stderr = result.stderr.trim();
-        return Err(format!(
-            "cast wallet address failed (exit {}): {}",
-            result.exit_code,
-            if stderr.is_empty() {
-                &result.stdout
-            } else {
-                stderr
-            }
-        ));
-    }
-
-    Ok(json!({
-        "address": result.stdout.trim(),
-        "exit_code": result.exit_code
-    })
-    .to_string())
+    execute_command_tool(
+        params_raw,
+        |params| Ok(build_args(params)),
+        "cast",
+        30_000,
+        "cast wallet address",
+        "address",
+    )
 }
 
 #[cfg(test)]

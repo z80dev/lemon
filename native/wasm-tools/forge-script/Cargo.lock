@@ -31,6 +31,7 @@ name = "forge_script"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "wasm_tools_common",
  "wit-bindgen",
 ]
 
@@ -322,6 +323,14 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm_tools_common"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
 ]
 
 [[package]]

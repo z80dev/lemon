@@ -2,6 +2,8 @@
 
 Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar runtime.
 
+The Foundry/cast command tools under `native/wasm-tools/` share a support crate at `native/wasm-tools/common`. That crate owns common JSON param parsing, Ethereum address validation, secret placeholder injection, and host command execution/error formatting so credential-handling logic is reviewed in one place.
+
 ## Scope
 
 - ABI: strict `tool.wit` parity (copied from Ironclaw).

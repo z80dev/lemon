@@ -1,4 +1,8 @@
 use serde_json::{Value, json};
+use wasm_tools_common::{
+    append_signing_args, append_string_array, execute_command_tool, required_string,
+    secret_placeholder,
+};
 
 wit_bindgen::generate!({
     path: "../../lemon-wasm-runtime/wit",
@@ -6,7 +10,6 @@ wit_bindgen::generate!({
 });
 
 use exports::near::agent::tool::{Guest, Request, Response};
-use near::agent::host;
 
 struct ForgeCreateTool;
 
@@ -90,24 +93,14 @@ impl Guest for ForgeCreateTool {
 export!(ForgeCreateTool);
 
 fn build_args(params: &Value) -> Result<Vec<String>, String> {
-    let contract = params["contract"]
-        .as_str()
-        .ok_or("'contract' is required and must be a string")?;
-    let rpc_url = params["rpc_url"]
-        .as_str()
-        .ok_or("'rpc_url' is required and must be a string")?;
+    let contract = required_string(params, "contract")?;
+    let rpc_url = required_string(params, "rpc_url")?;
 
     let mut args: Vec<String> = vec!["create".to_string(), contract.to_string()];
 
-    if let Some(constructor_args) = params["constructor_args"].as_array() {
+    if params["constructor_args"].is_array() {
         args.push("--constructor-args".to_string());
-        for arg in constructor_args {
-            args.push(
-                arg.as_str()
-                    .ok_or("each element in 'constructor_args' must be a string")?
-                    .to_string(),
-            );
-        }
+        append_string_array(&mut args, params, "constructor_args")?;
     }
 
     if let Some(constructor_args_path) = params["constructor_args_path"].as_str() {
@@ -128,65 +121,25 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
 
         if let Some(etherscan_secret) = params["etherscan_api_key_secret"].as_str() {
             args.push("--etherscan-api-key".to_string());
-            args.push(format!("{{{{SECRET:{etherscan_secret}}}}}"));
+            args.push(secret_placeholder(etherscan_secret));
         }
     }
 
-    if params["use_keystore"].as_bool().unwrap_or(true) {
-        args.push("--account".to_string());
-        args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
-        args.push("--password".to_string());
-        args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
-    } else {
-        let secret_name = params["secret_name"]
-            .as_str()
-            .unwrap_or("ETH_PRIVATE_KEY");
-        args.push("--private-key".to_string());
-        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
-    }
-
-    if let Some(extra) = params["extra_args"].as_array() {
-        for arg in extra {
-            args.push(
-                arg.as_str()
-                    .ok_or("each element in 'extra_args' must be a string")?
-                    .to_string(),
-            );
-        }
-    }
+    append_signing_args(&mut args, params);
+    append_string_array(&mut args, params, "extra_args")?;
 
     Ok(args)
 }
 
 fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
-    let args = build_args(&params)?;
-
-    let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
-
-    let result = host::exec_command("forge", &args_json, "{}", Some(120_000))
-        .map_err(|err| format!("exec failed: {err}"))?;
-
-    if result.exit_code != 0 {
-        let stderr = result.stderr.trim();
-        return Err(format!(
-            "forge create failed (exit {}): {}",
-            result.exit_code,
-            if stderr.is_empty() {
-                &result.stdout
-            } else {
-                stderr
-            }
-        ));
-    }
-
-    Ok(json!({
-        "output": result.stdout.trim(),
-        "exit_code": result.exit_code
-    })
-    .to_string())
+    execute_command_tool(
+        params_raw,
+        build_args,
+        "forge",
+        120_000,
+        "forge create",
+        "output",
+    )
 }
 
 #[cfg(test)]

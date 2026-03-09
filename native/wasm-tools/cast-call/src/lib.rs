@@ -1,4 +1,7 @@
 use serde_json::{Value, json};
+use wasm_tools_common::{
+    append_string_array, execute_command_tool, required_string, validate_address,
+};
 
 wit_bindgen::generate!({
     path: "../../lemon-wasm-runtime/wit",
@@ -6,7 +9,6 @@ wit_bindgen::generate!({
 });
 
 use exports::near::agent::tool::{Guest, Request, Response};
-use near::agent::host;
 
 struct CastCallTool;
 
@@ -75,76 +77,19 @@ impl Guest for CastCallTool {
 export!(CastCallTool);
 
 fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
-    let args = build_args(&params)?;
-
-    let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
-
-    let result = host::exec_command("cast", &args_json, "{}", Some(30_000))
-        .map_err(|err| format!("exec failed: {err}"))?;
-
-    if result.exit_code != 0 {
-        let stderr = result.stderr.trim();
-        return Err(format!(
-            "cast call failed (exit {}): {}",
-            result.exit_code,
-            if stderr.is_empty() {
-                &result.stdout
-            } else {
-                stderr
-            }
-        ));
-    }
-
-    Ok(json!({
-        "output": result.stdout.trim(),
-        "exit_code": result.exit_code
-    })
-    .to_string())
-}
-
-fn validate_address(addr: &str) -> Result<(), String> {
-    if !addr.starts_with("0x") || addr.len() != 42 {
-        return Err(format!(
-            "invalid Ethereum address '{}': must be 0x-prefixed 40-hex-char string",
-            addr
-        ));
-    }
-    if !addr[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!(
-            "invalid Ethereum address '{}': contains non-hex characters",
-            addr
-        ));
-    }
-    Ok(())
+    execute_command_tool(params_raw, build_args, "cast", 30_000, "cast call", "output")
 }
 
 fn build_args(params: &Value) -> Result<Vec<String>, String> {
-    let to = params["to"]
-        .as_str()
-        .ok_or("'to' is required and must be a string")?;
-    let sig = params["sig"]
-        .as_str()
-        .ok_or("'sig' is required and must be a string")?;
-    let rpc_url = params["rpc_url"]
-        .as_str()
-        .ok_or("'rpc_url' is required and must be a string")?;
+    let to = required_string(params, "to")?;
+    let sig = required_string(params, "sig")?;
+    let rpc_url = required_string(params, "rpc_url")?;
 
     validate_address(to)?;
 
     let mut args: Vec<String> = vec!["call".to_string(), to.to_string(), sig.to_string()];
 
-    if let Some(call_args) = params["args"].as_array() {
-        for arg in call_args {
-            args.push(
-                arg.as_str()
-                    .ok_or("each element in 'args' must be a string")?
-                    .to_string(),
-            );
-        }
-    }
+    append_string_array(&mut args, params, "args")?;
 
     args.push("--rpc-url".to_string());
     args.push(rpc_url.to_string());
