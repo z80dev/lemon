@@ -98,6 +98,20 @@ defmodule LemonMCP.Server.HandlerTest do
 
       assert response.error[:code] == Protocol.error_code(:invalid_request)
     end
+
+    test "rejects non-map params", %{server: server} do
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "initialize",
+        params: nil
+      }
+
+      response = Handler.handle_initialize(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:invalid_request)
+      assert response.error[:message] == "params must be an object"
+    end
   end
 
   # ============================================================================
@@ -192,6 +206,38 @@ defmodule LemonMCP.Server.HandlerTest do
       response = Handler.handle_tools_call(request, server)
 
       assert response.error[:code] == Protocol.error_code(:invalid_params)
+    end
+
+    test "returns error for non-map params", %{server: server} do
+      Server.mark_initialized(server)
+
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "tools/call",
+        params: nil
+      }
+
+      response = Handler.handle_tools_call(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:invalid_params)
+      assert response.error[:message] == "params must be an object"
+    end
+
+    test "returns error for non-map arguments", %{server: server} do
+      Server.mark_initialized(server)
+
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "tools/call",
+        params: %{"name" => "greet", "arguments" => "Alice"}
+      }
+
+      response = Handler.handle_tools_call(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:invalid_params)
+      assert response.error[:message] == "'arguments' must be an object"
     end
 
     test "successfully calls a tool", %{server: server} do

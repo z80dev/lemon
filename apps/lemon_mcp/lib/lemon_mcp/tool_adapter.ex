@@ -20,6 +20,7 @@ defmodule LemonMCP.ToolAdapter do
 
   require Logger
 
+  alias AgentCore.Types.AgentToolResult
   alias LemonMCP.Protocol
 
   defstruct [:cwd, :tool_opts, :tool_modules]
@@ -240,18 +241,7 @@ defmodule LemonMCP.ToolAdapter do
   rescue
     error ->
       Logger.error("Tool execution failed: #{inspect(error)}")
-
-      error_result = %Protocol.ToolCallResult{
-        content: [
-          %{
-            type: "text",
-            text: "Error: #{Exception.message(error)}"
-          }
-        ],
-        isError: true
-      }
-
-      {:ok, error_result}
+      {:error, {:tool_crash, Exception.message(error)}}
   end
 
   defp build_tool_call(name, arguments) do
@@ -292,6 +282,41 @@ defmodule LemonMCP.ToolAdapter do
     }
   end
 
+  defp convert_result_to_mcp({:ok, result}) do
+    convert_result_to_mcp(result)
+  end
+
+  defp convert_result_to_mcp({:error, reason}) do
+    %Protocol.ToolCallResult{
+      content: [
+        %{
+          type: "text",
+          text: format_error_text(reason)
+        }
+      ],
+      isError: true
+    }
+  end
+
+  defp convert_result_to_mcp(%AgentToolResult{} = result) do
+    content =
+      Enum.map(result.content, fn
+        %{type: type, text: text} when is_binary(type) and is_binary(text) ->
+          %{type: type, text: text}
+
+        %{text: text} when is_binary(text) ->
+          %{type: "text", text: text}
+
+        other ->
+          %{type: "text", text: inspect(other)}
+      end)
+
+    %Protocol.ToolCallResult{
+      content: if(content == [], do: [%{type: "text", text: ""}], else: content),
+      isError: false
+    }
+  end
+
   defp convert_result_to_mcp(result) when is_map(result) do
     # Handle different result formats from CodingAgent tools
     text = result["output"] || result[:output] || result["result"] || result[:result]
@@ -328,4 +353,7 @@ defmodule LemonMCP.ToolAdapter do
       isError: false
     }
   end
+
+  defp format_error_text(reason) when is_binary(reason), do: reason
+  defp format_error_text(reason), do: inspect(reason)
 end

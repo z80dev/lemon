@@ -63,25 +63,29 @@ defmodule LemonMCP.Server.Handler do
   @spec handle_initialize(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
           Protocol.JSONRPCResponse.t()
   def handle_initialize(%Protocol.JSONRPCRequest{id: id, params: params}, server) do
-    client_version = get_in(params, ["protocolVersion"]) || get_in(params, [:protocolVersion])
+    with {:ok, params} <- require_params_map(params, :invalid_request),
+         {:ok, client_version} <-
+           fetch_required_string(params, "protocolVersion", :protocolVersion, :invalid_request) do
+      if compatible_version?(client_version) do
+        result = Server.get_initialize_result(server)
 
-    # Check protocol version compatibility
-    if compatible_version?(client_version) do
-      result = Server.get_initialize_result(server)
+        response_data = %{
+          protocolVersion: result.result.protocolVersion,
+          capabilities: result.result.capabilities,
+          serverInfo: result.result.serverInfo
+        }
 
-      response_data = %{
-        protocolVersion: result.result.protocolVersion,
-        capabilities: result.result.capabilities,
-        serverInfo: result.result.serverInfo
-      }
-
-      Protocol.create_response(id, response_data)
+        Protocol.create_response(id, response_data)
+      else
+        Protocol.create_error_response(
+          id,
+          Protocol.error_code(:invalid_request),
+          "Unsupported protocol version: #{client_version}"
+        )
+      end
     else
-      Protocol.create_error_response(
-        id,
-        Protocol.error_code(:invalid_request),
-        "Unsupported protocol version: #{client_version}"
-      )
+      {:error, {code, message}} ->
+        Protocol.create_error_response(id, Protocol.error_code(code), message)
     end
   end
 
@@ -132,10 +136,9 @@ defmodule LemonMCP.Server.Handler do
           Protocol.JSONRPCResponse.t()
   def handle_tools_call(%Protocol.JSONRPCRequest{id: id, params: params}, server) do
     if Server.initialized?(server) do
-      tool_name = get_in(params, ["name"]) || get_in(params, [:name])
-      arguments = get_in(params, ["arguments"]) || get_in(params, [:arguments]) || %{}
-
-      if is_binary(tool_name) do
+      with {:ok, params} <- require_params_map(params, :invalid_params),
+           {:ok, tool_name} <- fetch_required_string(params, "name", :name, :invalid_params),
+           {:ok, arguments} <- fetch_optional_map(params, "arguments", :arguments) do
         case Server.call_tool(server, tool_name, arguments) do
           {:ok, %Protocol.ToolCallResult{} = result} ->
             Protocol.create_response(id, Protocol.tool_result_to_map(result))
@@ -158,11 +161,8 @@ defmodule LemonMCP.Server.Handler do
             )
         end
       else
-        Protocol.create_error_response(
-          id,
-          Protocol.error_code(:invalid_params),
-          "Missing or invalid 'name' parameter"
-        )
+        {:error, {code, message}} ->
+          Protocol.create_error_response(id, Protocol.error_code(code), message)
       end
     else
       Protocol.create_error_response(
@@ -209,6 +209,27 @@ defmodule LemonMCP.Server.Handler do
   end
 
   defp compatible_version?(_), do: false
+
+  defp require_params_map(params, _code) when is_map(params), do: {:ok, params}
+  defp require_params_map(_params, code), do: {:error, {code, "params must be an object"}}
+
+  defp fetch_required_string(params, string_key, atom_key, code) do
+    value = Map.get(params, string_key) || Map.get(params, atom_key)
+
+    if is_binary(value) and value != "" do
+      {:ok, value}
+    else
+      {:error, {code, "Missing or invalid '#{string_key}' parameter"}}
+    end
+  end
+
+  defp fetch_optional_map(params, string_key, atom_key) do
+    case Map.get(params, string_key) || Map.get(params, atom_key) do
+      nil -> {:ok, %{}}
+      value when is_map(value) -> {:ok, value}
+      _ -> {:error, {:invalid_params, "'#{string_key}' must be an object"}}
+    end
+  end
 
   defp supported_versions do
     [

@@ -91,6 +91,13 @@ end
 
 - `JSONRPCError` - JSON-RPC 2.0 error responses with standard error codes
 
+The server validates that lifecycle/tool params are maps, that required string fields are present, and that tool `arguments` are maps when provided.
+
+`LemonMCP.ToolAdapter` distinguishes between:
+
+- tool-declared failures, which return MCP tool results with `isError: true`
+- adapter/tool crashes, which surface as server/transport errors instead of successful tool responses
+
 ## Client State Machine
 
 The client progresses through these states:

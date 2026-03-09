@@ -213,12 +213,14 @@ defmodule LemonMCP.Transport.Stdio do
       env: state.env
     ]
 
-    case Port.open({:spawn_executable, find_executable(state.command)}, port_options) do
-      port when is_port(port) ->
-        {:ok, port}
+    with {:ok, executable} <- find_executable(state.command) do
+      case Port.open({:spawn_executable, executable}, port_options) do
+        port when is_port(port) ->
+          {:ok, port}
 
-      error ->
-        {:error, {:port_open_failed, error}}
+        error ->
+          {:error, {:port_open_failed, error}}
+      end
     end
   rescue
     e ->
@@ -226,12 +228,18 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   defp find_executable(command) do
-    case System.find_executable(command) do
-      nil ->
-        raise "Executable not found: #{command}"
+    cond do
+      not is_binary(command) ->
+        {:error, {:invalid_command, "command must be a string"}}
 
-      path ->
-        path
+      String.trim(command) == "" ->
+        {:error, {:invalid_command, "command cannot be empty"}}
+
+      true ->
+        case System.find_executable(command) do
+          nil -> {:error, {:invalid_command, "Executable not found: #{command}"}}
+          path -> {:ok, path}
+        end
     end
   end
 
