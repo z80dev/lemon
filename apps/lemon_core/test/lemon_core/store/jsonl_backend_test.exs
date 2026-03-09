@@ -380,6 +380,20 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state2} = JsonlBackend.init(path: tmp_dir)
       assert {:ok, ^complex_data, _} = JsonlBackend.get(state2, :mytable, "complex")
     end
+
+    test "preserves nested atom keys across restart", %{tmp_dir: tmp_dir} do
+      world = %{
+        status: :in_progress,
+        board: %{center: :empty, corners: [:x, :o]},
+        meta: %{current_player: :x, turn: 3}
+      }
+
+      {:ok, state1} = JsonlBackend.init(path: tmp_dir)
+      {:ok, _state1} = JsonlBackend.put(state1, :sim_states, "sim-1", %{world: world})
+
+      {:ok, state2} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, %{world: ^world}, _} = JsonlBackend.get(state2, :sim_states, "sim-1")
+    end
   end
 
   describe "encoding/decoding edge cases" do

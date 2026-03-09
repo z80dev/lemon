@@ -364,7 +364,9 @@ Implementing a new backend requires the `LemonCore.Store.Backend` behaviour:
 @callback list(state(), table()) :: {:ok, [{key(), value()}], state()}
 ```
 
-Keys and values are serialized with `:erlang.term_to_binary/1` in the SQLite backend.
+SQLite serializes keys and values with `:erlang.term_to_binary/1`. The JSONL
+backend uses a JSON codec that preserves atoms, tuples, structs, and nested map
+keys for portable append-only files.
 
 ## Event Bus
 
@@ -551,7 +553,8 @@ Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `
 - Keep module interfaces stable -- other apps depend on them
 - `Config.load/2` uses the cache by default; `Config.reload/2` forces a disk read
 - Secret values are never logged or returned by list/status APIs
-- Store backends serialize with `:erlang.term_to_binary/1`
+- SQLite store values serialize with `:erlang.term_to_binary/1`; JSONL uses a
+  JSON codec with Elixir-term markers for portable persistence
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered
 - `Dedupe.Ets` uses monotonic time for TTL; `Idempotency` uses wall-clock time

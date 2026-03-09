@@ -757,7 +757,8 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
 - Secrets values are never logged or returned by list/status APIs
 - Secret reads (`get/2`) update usage metadata (`usage_count`, `last_used_at`) but do not mutate `updated_at`
-- Store backends serialize with `:erlang.term_to_binary/1`; keys and values can be any Erlang term
+- SQLite serializes keys and values with `:erlang.term_to_binary/1`; JSONL uses
+  a JSON codec that preserves atoms, tuples, structs, and nested map keys
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time

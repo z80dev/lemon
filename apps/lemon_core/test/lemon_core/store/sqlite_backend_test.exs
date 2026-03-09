@@ -267,6 +267,24 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
   end
 
+  describe "persistence across reopen" do
+    test "preserves nested atom keys in persisted maps", %{tmp_dir: tmp_dir} do
+      world = %{
+        status: :in_progress,
+        board: %{center: :empty, corners: [:x, :o]},
+        meta: %{current_player: :x, turn: 3}
+      }
+
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, state} = SqliteBackend.put(state, :sim_states, "sim-1", %{world: world})
+      :ok = SqliteBackend.close(state)
+
+      {:ok, reopened} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, %{world: ^world}, _} = SqliteBackend.get(reopened, :sim_states, "sim-1")
+      :ok = SqliteBackend.close(reopened)
+    end
+  end
+
   describe "delete/3" do
     setup %{tmp_dir: tmp_dir} do
       {:ok, state} = SqliteBackend.init(path: tmp_dir)
