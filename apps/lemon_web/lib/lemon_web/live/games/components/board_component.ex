@@ -111,14 +111,14 @@ defmodule LemonWeb.Games.Components.BoardComponent do
   end
 
   def rps_throw(assigns) do
-    icon = case @throw do
+    icon = case assigns.throw do
       "rock" -> "✊"
       "paper" -> "✋"
       "scissors" -> "✌️"
       _ -> "❓"
     end
 
-    color = case @throw do
+    color = case assigns.throw do
       nil -> "bg-slate-200 text-slate-400"
       _ -> "bg-white text-slate-900 shadow-md"
     end

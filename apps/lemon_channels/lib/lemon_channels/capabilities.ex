@@ -182,7 +182,7 @@ defmodule LemonChannels.Capabilities.Capability do
     end)
   end
 
-  defp mime_match?(mime, "*/*"), do: true
+  defp mime_match?(_mime, "*/*"), do: true
 
   defp mime_match?(mime, pattern) when is_binary(pattern) do
     if String.ends_with?(pattern, "/*") do
@@ -428,7 +428,6 @@ defmodule LemonChannels.Capabilities do
     case Map.get(caps, capability_type) do
       nil -> false
       %{enabled: enabled} -> enabled
-      %Capability{enabled: enabled} -> enabled
       _ -> false
     end
   end

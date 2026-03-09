@@ -31,7 +31,7 @@ defmodule CodingAgent.SessionFork do
   @spec fork_session(GenServer.server(), fork_options()) ::
           {:ok, fork_result()} | {:error, term()}
   def fork_session(original_session, opts \\ []) do
-    reason = Keyword.get(opts, :reason, :rate_limit_recovery)
+    _reason = Keyword.get(opts, :reason, :rate_limit_recovery)
     preserve_messages = Keyword.get(opts, :preserve_messages, 10)
     auto_terminate = Keyword.get(opts, :auto_terminate_original, false)
 

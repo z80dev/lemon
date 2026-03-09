@@ -302,10 +302,6 @@ defmodule LemonMCP.Transport.HTTP do
 
       {:ok, error_response} when is_map(error_response) ->
         error_response
-
-      {:error, reason} ->
-        Logger.warning("Failed to process MCP request: #{inspect(reason)}")
-        nil
     end
   end
 

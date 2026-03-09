@@ -196,7 +196,7 @@ defmodule LemonGames.Games.Battleship do
 
   defp place_ships([], placed, _attempts), do: placed
 
-  defp place_ships([ship | rest], placed, attempts) when length(attempts) > 1000 do
+  defp place_ships([_ship | _rest], _placed, attempts) when length(attempts) > 1000 do
     # Too many attempts, start over
     place_ships(@ships, [], [])
   end

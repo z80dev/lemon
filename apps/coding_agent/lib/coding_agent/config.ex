@@ -321,13 +321,6 @@ defmodule CodingAgent.Config do
           fallback_strategy: atom()
         }
   def rate_limit_healing_config do
-    defaults = [
-      enabled: true,
-      max_probe_attempts: 10,
-      probe_interval_ms: 30_000,
-      fallback_strategy: :reset_backoff
-    ]
-
     config = Application.get_env(:coding_agent, :rate_limit_healing, [])
 
     %{

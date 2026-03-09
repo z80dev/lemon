@@ -104,7 +104,7 @@ defmodule Ai.ModelsTest do
   end
 
   # ============================================================================
-  # list_models/0 (and deprecated all/0)
+  # list_models/0
   # ============================================================================
 
   describe "list_models/0" do

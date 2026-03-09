@@ -11,11 +11,9 @@ defmodule LemonSkills.McpSource do
   require Logger
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
 
   @default_cache_ttl_ms :timer.minutes(5)
   @default_refresh_interval_ms :timer.minutes(1)
-  @default_tool_timeout_ms :timer.seconds(30)
 
   @typedoc "MCP server configuration"
   @type server_config ::

@@ -6,7 +6,7 @@ defmodule LemonSim.Runner do
   required, which supports multiplayer/turn-based pacing.
   """
 
-  alias LemonSim.{DecisionFrame, DecisionSignal, EventCoalescer}
+  alias LemonSim.{DecisionFrame, DecisionSignal}
   alias LemonSim.DecisionAdapters.ToolResultEvents
 
   @type decision_modules :: %{

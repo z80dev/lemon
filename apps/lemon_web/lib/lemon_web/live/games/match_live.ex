@@ -91,7 +91,7 @@ defmodule LemonWeb.Games.MatchLive do
   end
 
   def status_indicator(assigns) do
-    {color, label} = case @status do
+    {color, label} = case assigns.status do
       "active" -> {"bg-emerald-500", "Live"}
       "pending_accept" -> {"bg-amber-500", "Waiting"}
       "finished" -> {"bg-slate-400", "Finished"}
@@ -109,7 +109,7 @@ defmodule LemonWeb.Games.MatchLive do
   end
 
   def player_card(assigns) do
-    {name, avatar, bot} = case @player do
+    {name, avatar, bot} = case assigns.player do
       %{"display_name" => name, "agent_type" => "lemon_bot"} -> {name, "🤖", true}
       %{"display_name" => name} -> {name, "👤", false}
       _ -> {"Unknown", "❓", false}
@@ -166,11 +166,4 @@ defmodule LemonWeb.Games.MatchLive do
     end
   end
 
-  defp players_label(players) when is_map(players) do
-    p1 = get_in(players, ["p1", "display_name"]) || "p1"
-    p2 = get_in(players, ["p2", "display_name"]) || "pending"
-    "#{p1} vs #{p2}"
-  end
-
-  defp players_label(_), do: "unknown"
 end

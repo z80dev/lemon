@@ -213,8 +213,6 @@ defmodule LemonServices.Runtime.PortManager do
   end
 
   defp get_os_pid(port) do
-    # This is a hack to get the OS PID from a port
-    # In practice, we might need a different approach
     case Port.info(port, :os_pid) do
       {:os_pid, pid} when is_integer(pid) -> pid
       _ -> nil

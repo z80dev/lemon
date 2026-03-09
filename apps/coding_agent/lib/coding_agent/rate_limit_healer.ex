@@ -35,8 +35,6 @@ defmodule CodingAgent.RateLimitHealer do
   use GenServer
   require Logger
 
-  alias Ai.Error
-
   # ============================================================================
   # Configuration
   # ============================================================================
@@ -405,7 +403,7 @@ defmodule CodingAgent.RateLimitHealer do
   This can be overridden per provider to do a more thorough check.
   """
   @spec verify_provider_connectivity(t()) :: :ok | {:error, term()}
-  def verify_provider_connectivity(state) do
+  def verify_provider_connectivity(_state) do
     # Default implementation: just check rate limiter
     # Providers can implement more sophisticated checks
     :ok

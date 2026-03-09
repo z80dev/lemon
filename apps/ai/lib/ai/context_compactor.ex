@@ -161,7 +161,7 @@ defmodule Ai.ContextCompactor do
   # Compaction Strategies
   # ============================================================================
 
-  defp do_compact(context, :truncation, opts) do
+  defp do_compact(%Context{} = context, :truncation, opts) do
     preserve_recent = Keyword.get(opts, :preserve_recent, @default_preserve_recent)
     _target_tokens = Keyword.get(opts, :target_tokens)
 

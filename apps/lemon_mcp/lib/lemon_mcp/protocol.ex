@@ -61,28 +61,6 @@ defmodule LemonMCP.Protocol do
   # Message Structs
   # ============================================================================
 
-  defmodule JSONRPCRequest do
-    @moduledoc "Generic JSON-RPC 2.0 request"
-    @type t :: %__MODULE__{
-            jsonrpc: String.t(),
-            id: Protocol.request_id(),
-            method: String.t(),
-            params: map()
-          }
-    defstruct jsonrpc: "2.0", id: nil, method: "", params: %{}
-  end
-
-  defmodule JSONRPCResponse do
-    @moduledoc "Generic JSON-RPC 2.0 response"
-    @type t :: %__MODULE__{
-            jsonrpc: String.t(),
-            id: Protocol.request_id(),
-            result: term(),
-            error: Protocol.JSONRPCError.t() | nil
-          }
-    defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
-  end
-
   defmodule InitializeRequest do
     @moduledoc "MCP initialize request"
     @type t :: %__MODULE__{
@@ -259,7 +237,7 @@ defmodule LemonMCP.Protocol do
   @spec initialize_request(keyword()) :: InitializeRequest.t()
   def initialize_request(opts \\ []) do
     id = opts[:id] || generate_id()
-    protocol_version = opts[:protocol_version] || LemonMCP.protocol_version()
+    protocol_version = opts[:protocol_version] || protocol_version()
     client_name = opts[:client_name] || "lemon-mcp"
     client_version = opts[:client_version] || "0.1.0"
     capabilities = opts[:capabilities] || %{}

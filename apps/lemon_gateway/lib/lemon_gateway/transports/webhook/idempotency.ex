@@ -15,7 +15,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   @spec context(Plug.Conn.t(), map(), binary(), map(), map()) ::
           {:ok, map() | nil} | {:duplicate, integer(), map()}
-  def context(conn, payload, integration_id, integration, webhook_config)
+  def context(conn, _payload, integration_id, integration, webhook_config)
       when is_binary(integration_id) and is_map(integration) and is_map(webhook_config) do
     case resolve_idempotency_key(conn, integration, webhook_config) do
       nil ->
