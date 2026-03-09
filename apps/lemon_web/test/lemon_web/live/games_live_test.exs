@@ -5,7 +5,7 @@ defmodule LemonWeb.Live.GamesLiveTest do
   import Phoenix.LiveViewTest
 
   alias LemonCore.Event
-  alias LemonGames.Matches.Service
+  alias LemonGames.Matches.{Service, Store}
 
   @endpoint LemonWeb.Endpoint
 
@@ -50,6 +50,17 @@ defmodule LemonWeb.Live.GamesLiveTest do
     assert html =~ "connect4-board"
     assert html =~ "Back to lobby"
     assert html =~ "VS"
+  end
+
+  test "GET /games/:match_id tolerates invalid game_state" do
+    {:ok, match_id} = create_active_match()
+    match = Store.get(match_id) |> Map.put("game_state", nil)
+    :ok = Store.put(match_id, match)
+
+    conn = get(build_conn(), "/games/#{match_id}")
+    html = html_response(conn, 200)
+
+    assert html =~ "Turn #1"
   end
 
   test "match live updates after game event" do

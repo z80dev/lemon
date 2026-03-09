@@ -43,6 +43,7 @@ defmodule LemonWeb.Games.MatchLive do
         <% p1 = get_in(@match, ["players", "p1"]) %>
         <% p2 = get_in(@match, ["players", "p2"]) %>
         <% winner = @match["result"]["winner"] %>
+        <% game_state = if is_map(@match["game_state"]), do: @match["game_state"], else: %{} %>
 
         <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div class="flex items-center justify-between">
@@ -57,7 +58,7 @@ defmodule LemonWeb.Games.MatchLive do
           </div>
 
           <div class="mt-8 flex justify-center">
-            <BoardComponent.board game_type={@match["game_type"]} game_state={@match["game_state"]} />
+            <BoardComponent.board game_type={@match["game_type"]} game_state={game_state} />
           </div>
 
           <%= if @match["status"] == "finished" do %>
