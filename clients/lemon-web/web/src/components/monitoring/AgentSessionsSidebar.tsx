@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
 import type { MonitoringSession } from '../../../../shared/src/monitoringTypes';
 
@@ -33,6 +33,17 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
   const [tab, setTab] = useState<SidebarTab>(sidebarTab ?? 'sessions');
   const [scope, setScope] = useState<SessionScope>('focus');
   const [includeSystem, setIncludeSystem] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, []);
 
   // Merge active + historical, dedup, sort by updatedAt desc
   const allSessions = useMemo<MonitoringSession[]>(() => {
@@ -56,7 +67,6 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
   );
 
   const filteredSessions = useMemo(() => {
-    const now = Date.now();
     const recentThreshold = now - 24 * 60 * 60 * 1000;
 
     const isSystemLike = (session: MonitoringSession): boolean => {
@@ -80,7 +90,7 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
       const isChannelBound = Boolean(session.channelId);
       return isLive || hasMeaningfulHistory || (recentlyActive && isChannelBound);
     });
-  }, [allSessions, includeSystem, scope]);
+  }, [allSessions, includeSystem, now, scope]);
 
   const activeTabStyle = (isActive: boolean): React.CSSProperties => ({
     flex: 1,

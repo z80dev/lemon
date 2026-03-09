@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
 import type { ControlPlaneConnectionState } from '../../rpc/controlPlaneTransport';
 
@@ -42,11 +42,22 @@ export function StatusStrip({ connectionState }: StatusStripProps) {
   const dotColor = CONNECTION_COLORS[connectionState] ?? '#ff4444';
   const connectedChannels = system.channels.filter((c) => isHealthyChannelStatus(c.status)).length;
   const enabledTransports = system.transports.filter((t) => t.enabled).length;
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const heartbeatFresh = useMemo(() => {
     if (instance.lastUpdatedMs == null) return false;
-    return Date.now() - instance.lastUpdatedMs < 30_000;
-  }, [instance.lastUpdatedMs]);
+    return now - instance.lastUpdatedMs < 30_000;
+  }, [instance.lastUpdatedMs, now]);
 
   return (
     <>

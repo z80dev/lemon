@@ -102,7 +102,7 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
       ids.add(task.agentId);
     }
     return Array.from(ids).sort();
-  }, [allSessionTasks, session?.agentId]);
+  }, [allSessionTasks, session]);
 
   const liveRuns = useMemo(() => {
     if (!sessionKey) return [];

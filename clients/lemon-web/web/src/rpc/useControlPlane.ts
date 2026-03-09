@@ -83,7 +83,7 @@ export function useControlPlane(
         setConnectionState('connected');
         setSnapshot(snap);
       },
-      onDisconnected: (_reason) => {
+      onDisconnected: () => {
         setConnectionState('disconnected');
       },
       onEvent: (eventName, payload, seq, stateVersion) => {
@@ -91,7 +91,6 @@ export function useControlPlane(
         onEventRef.current?.(eventName, payload, seq, stateVersion);
       },
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty — transport is long-lived
 
   // Derive the WebSocket URL once.

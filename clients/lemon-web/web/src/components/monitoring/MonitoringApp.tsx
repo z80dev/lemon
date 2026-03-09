@@ -563,7 +563,7 @@ export function MonitoringApp() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [isConnected, loadMonitoringData, activeRunCount]);
+  }, [isConnected, loadMonitoringData, activeRunCount, request]);
 
   // Load session detail when selected session changes
   const selectedSessionKey = useMonitoringStore((s) => s.ui.selectedSessionKey);
