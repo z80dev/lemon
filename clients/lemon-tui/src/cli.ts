@@ -32,6 +32,14 @@ interface CLIArgs {
   wsAgentId?: string;
 }
 
+function writeStdout(message: string): void {
+  process.stdout.write(message);
+}
+
+function writeStderr(message: string): void {
+  process.stderr.write(message);
+}
+
 function parseArgs(): CLIArgs {
   const args = process.argv.slice(2);
   const options: CLIArgs = {};
@@ -109,7 +117,7 @@ function parseArgs(): CLIArgs {
 
       case '--help':
       case '-h':
-        console.log(`
+        writeStdout(`
 Lemon TUI - Terminal interface for Lemon coding agent
 
 Usage: lemon-tui [options]
@@ -144,7 +152,7 @@ Configuration:
 
       default:
         if (arg.startsWith('-')) {
-          console.error(`Unknown option: ${arg}`);
+          writeStderr(`Unknown option: ${arg}\n`);
           process.exit(1);
         }
     }

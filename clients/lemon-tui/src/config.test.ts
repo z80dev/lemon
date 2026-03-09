@@ -6,6 +6,11 @@ import * as path from 'path';
 import * as toml from '@iarna/toml';
 
 const ORIGINAL_ENV = { ...process.env };
+type ParsedToml = toml.JsonMap & {
+  agent?: toml.JsonMap;
+  providers?: toml.JsonMap;
+  tui?: toml.JsonMap;
+};
 
 function resetEnv() {
   process.env = { ...ORIGINAL_ENV };
@@ -561,12 +566,12 @@ describe('saveConfig', () => {
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = toml.parse(content) as any;
+    const parsed = toml.parse(content) as ParsedToml;
 
-    expect(parsed.agent.default_provider).toBe('openai');
-    expect(parsed.agent.default_model).toBe('gpt-4-turbo');
-    expect(parsed.providers.openai.api_key).toBe('test-key');
-    expect(parsed.tui.theme).toBe('custom');
+    expect((parsed.agent as toml.JsonMap | undefined)?.default_provider).toBe('openai');
+    expect((parsed.agent as toml.JsonMap | undefined)?.default_model).toBe('gpt-4-turbo');
+    expect(((parsed.providers as toml.JsonMap | undefined)?.openai as toml.JsonMap | undefined)?.api_key).toBe('test-key');
+    expect((parsed.tui as toml.JsonMap | undefined)?.theme).toBe('custom');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -590,10 +595,10 @@ describe('saveConfig', () => {
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = toml.parse(content) as any;
+    const parsed = toml.parse(content) as ParsedToml;
 
-    expect(parsed.agent.default_provider).toBe('new');
-    expect(parsed.agent.default_model).toBe('new-model');
+    expect((parsed.agent as toml.JsonMap | undefined)?.default_provider).toBe('new');
+    expect((parsed.agent as toml.JsonMap | undefined)?.default_model).toBe('new-model');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -634,7 +639,7 @@ describe('saveConfig', () => {
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = content.trim() === '' ? {} : (toml.parse(content) as any);
+    const parsed = (content.trim() === '' ? {} : toml.parse(content)) as ParsedToml;
 
     expect(parsed).toEqual({});
 

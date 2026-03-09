@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { StateStore, type ToolExecution } from './state.js';
+import { StateStore, type AppState, type ToolExecution } from './state.js';
 import type {
   UIRequestMessage,
   AssistantMessage,
@@ -514,7 +514,7 @@ describe('StateStore', () => {
   describe('state listeners', () => {
     it('should notify listeners on state change', () => {
       let notified = false;
-      let receivedState: any = null;
+      let receivedState: AppState | null = null;
 
       store.subscribe((state, prevState) => {
         notified = true;
@@ -524,7 +524,12 @@ describe('StateStore', () => {
       store.setStatus('test', 'value');
 
       expect(notified).toBe(true);
-      expect(receivedState?.status.get('test')).toBe('value');
+      if (!receivedState) {
+        throw new Error('Expected listener to receive state');
+      }
+
+      const nextState = receivedState as AppState;
+      expect(nextState.status.get('test')).toBe('value');
     });
 
     it('should allow unsubscribing', () => {
@@ -564,8 +569,8 @@ describe('StateStore', () => {
     });
 
     it('should notify listeners with the real previous state snapshot', () => {
-      let observedState: any = null;
-      let observedPrevState: any = null;
+      let observedState: AppState | null = null;
+      let observedPrevState: AppState | null = null;
 
       store.setStatus('model', 'test-model');
       store.setWidget('spinner', 'Loading');
@@ -583,10 +588,13 @@ describe('StateStore', () => {
         throw new Error('Expected listener to receive both state snapshots');
       }
 
-      expect(observedState).not.toBe(observedPrevState);
-      expect(observedState.status.size).toBe(0);
-      expect(observedPrevState.status.get('model')).toBe('test-model');
-      expect(observedPrevState.widgets.get('spinner')?.content).toEqual(['Loading']);
+      const resetState = observedState as AppState;
+      const previousState = observedPrevState as AppState;
+
+      expect(resetState).not.toBe(previousState);
+      expect(resetState.status.size).toBe(0);
+      expect(previousState.status.get('model')).toBe('test-model');
+      expect(previousState.widgets.get('spinner')?.content).toEqual(['Loading']);
     });
   });
 

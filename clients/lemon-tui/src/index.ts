@@ -27,6 +27,14 @@ import { MessageRenderer } from './message-renderer.js';
 import { OverlayManager } from './overlay-manager.js';
 import { BorderBox } from './components/border-box.js';
 
+function formatRuntimeError(err: unknown): string {
+  if (err instanceof Error && err.message.trim() !== '') {
+    return err.message;
+  }
+
+  return String(err);
+}
+
 // ============================================================================
 // Main Application
 // ============================================================================
@@ -1855,13 +1863,13 @@ export class LemonTUI {
   // ============================================================================
 
   async start(): Promise<void> {
-    console.log('Starting Lemon TUI...');
+    process.stdout.write('Starting Lemon TUI...\n');
 
     try {
       await this.connection.start();
       this.tui.start();
     } catch (err) {
-      console.error('Failed to start:', err);
+      process.stderr.write(`Failed to start: ${formatRuntimeError(err)}\n`);
       process.exit(1);
     }
   }

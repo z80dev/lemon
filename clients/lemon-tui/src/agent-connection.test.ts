@@ -105,8 +105,8 @@ import fs from 'node:fs';
  * Creates a mock child process for testing.
  */
 function createMockProcess(): {
-  process: ChildProcess;
-  stdin: Writable & { write: Mock };
+  process: ChildProcess & { killed: boolean };
+  stdin: Writable & { write: Mock; writable: boolean };
   stdout: Readable;
   stderr: Readable;
   emitter: EventEmitter;
@@ -115,7 +115,7 @@ function createMockProcess(): {
   const stdin = {
     writable: true,
     write: vi.fn().mockReturnValue(true),
-  } as unknown as Writable & { write: Mock };
+  } as unknown as Writable & { write: Mock; writable: boolean };
 
   const stdout = new EventEmitter() as Readable;
   const stderr = new EventEmitter() as Readable;
@@ -127,7 +127,7 @@ function createMockProcess(): {
     killed: false,
     kill: vi.fn(),
     pid: 12345,
-  }) as unknown as ChildProcess;
+  }) as unknown as ChildProcess & { killed: boolean };
 
   return { process: mockProcess, stdin, stdout, stderr, emitter };
 }
@@ -707,7 +707,7 @@ describe('AgentConnection', () => {
 
     it('should throw error if stdin is not writable', async () => {
       // Make stdin not writable
-      (mockProcess.stdin as any).writable = false;
+      mockProcess.stdin.writable = false;
 
       expect(() => connection.send({ type: 'ping' })).toThrow(
         'Agent not connected'
@@ -1304,7 +1304,7 @@ describe('AgentConnection', () => {
       await startPromise;
 
       // Mark as already killed
-      (mockProcess.process as any).killed = true;
+      mockProcess.process.killed = true;
 
       connection.stop();
       vi.advanceTimersByTime(1000);

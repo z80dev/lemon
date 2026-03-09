@@ -222,6 +222,14 @@ export interface StateStoreOptions {
   cwd?: string;
 }
 
+function formatListenerError(err: unknown): string {
+  if (err instanceof Error && err.message.trim() !== '') {
+    return `State listener error: ${err.message}`;
+  }
+
+  return `State listener error: ${String(err)}`;
+}
+
 export class StateStore {
   private state: AppState;
   private listeners: Set<StateListener> = new Set();
@@ -410,7 +418,7 @@ export class StateStore {
       try {
         listener(this.state, prevState);
       } catch (err) {
-        console.error('State listener error:', err);
+        this.state = { ...this.state, error: formatListenerError(err) };
       }
     }
   }
@@ -1404,7 +1412,7 @@ export class StateStore {
       try {
         listener(this.state, prevState);
       } catch (err) {
-        console.error('State listener error:', err);
+        this.state = { ...this.state, error: formatListenerError(err) };
       }
     }
   }
