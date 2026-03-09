@@ -47,7 +47,10 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
   end
 
   defp ensure_runtime_started! do
-    Mix.Task.run("app.start")
+    case Application.ensure_all_started(:lemon_sim) do
+      {:ok, _started} -> :ok
+      {:error, reason} -> Mix.raise("failed to start lemon_sim runtime: #{inspect(reason)}")
+    end
   end
 
   defp resolve_model(nil), do: nil
