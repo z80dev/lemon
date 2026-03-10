@@ -605,7 +605,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp telegram_config do
     config = telegram_runtime_config()
-    token = config[:bot_token] || config["bot_token"]
+    token = config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config)
 
     api_mod =
       case fetch_config(config, :api_mod) do
@@ -615,6 +615,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       |> normalize_api_mod()
 
     {token, api_mod}
+  end
+
+  defp resolve_bot_token_secret(config) do
+    secret_name = config[:bot_token_secret] || config["bot_token_secret"]
+
+    if is_binary(secret_name) and secret_name != "" do
+      LemonCore.Secrets.fetch_value(secret_name)
+    else
+      nil
+    end
   end
 
   defp telegram_use_markdown do

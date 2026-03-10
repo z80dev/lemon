@@ -265,7 +265,7 @@ defmodule LemonCore.Config.Gateway do
 
     Enum.map(bindings, fn binding ->
       %{
-        transport: binding["transport"],
+        transport: if(binding["transport"], do: safe_to_atom(binding["transport"])),
         chat_id: binding["chat_id"],
         topic_id: binding["topic_id"],
         project: binding["project"],
@@ -306,11 +306,18 @@ defmodule LemonCore.Config.Gateway do
   defp resolve_telegram(settings) do
     telegram = settings["telegram"] || %{}
 
-    %{
+    # Pass through all telegram config keys (atomized) so the transport sees
+    # allowed_chat_ids, poll_interval_ms, debounce_ms, deny_unbound_chats, etc.
+    base =
+      Enum.reduce(telegram, %{}, fn {k, v}, acc ->
+        Map.put(acc, safe_to_atom(k), v)
+      end)
+
+    Map.merge(base, %{
       token: resolve_telegram_token(telegram),
       bot_token_secret: normalize_optional_string(telegram["bot_token_secret"]),
       compaction: resolve_telegram_compaction(telegram)
-    }
+    })
   end
 
   defp resolve_telegram_token(telegram) do

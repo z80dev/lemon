@@ -24,6 +24,10 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
 
     children =
       if is_binary(token) and token != "" do
+        # Ensure the resolved token is available as :bot_token in the config
+        # so the Transport can find it via cfg_get(config, :bot_token).
+        config = Map.put(config, :bot_token, token)
+
         [
           {Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor},
           # Start the inbound transport (polling)
