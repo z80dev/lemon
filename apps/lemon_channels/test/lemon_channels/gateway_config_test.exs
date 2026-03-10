@@ -3,24 +3,18 @@ defmodule LemonChannels.GatewayConfigTest do
 
   alias LemonChannels.GatewayConfig
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   defmodule MockApi do
   end
 
   setup do
-    old_gateway_env = Application.get_env(:lemon_channels, :gateway)
-    old_telegram_env = Application.get_env(:lemon_channels, :telegram)
-    old_xmtp_env = Application.get_env(:lemon_channels, :xmtp)
+    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     _ = Application.stop(:lemon_channels)
 
-    Application.delete_env(:lemon_channels, :gateway)
-    Application.delete_env(:lemon_channels, :telegram)
-    Application.delete_env(:lemon_channels, :xmtp)
-
     on_exit(fn ->
-      restore_env(:lemon_channels, :gateway, old_gateway_env)
-      restore_env(:lemon_channels, :telegram, old_telegram_env)
-      restore_env(:lemon_channels, :xmtp, old_xmtp_env)
+      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
       _ = Application.ensure_all_started(:lemon_channels)
     end)
 
@@ -28,15 +22,15 @@ defmodule LemonChannels.GatewayConfigTest do
   end
 
   test "reads config from LemonCore baseline when no runtime overrides are set" do
+    Application.delete_env(:lemon_gateway, @gateway_config_key)
     assert GatewayConfig.get(:__missing_key__, :fallback) == :fallback
-    refute GatewayConfig.get(:max_concurrent_runs, :fallback) == :fallback
   end
 
-  test "applies :lemon_channels gateway env overrides" do
-    Application.put_env(:lemon_channels, :gateway, %{
-      "enable_telegram" => true,
+  test "reads gateway env from full-replacement config" do
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      enable_telegram: true,
       max_concurrent_runs: 9,
-      telegram: %{"bot_token" => "from-config", debounce_ms: 111}
+      telegram: %{bot_token: "from-config", debounce_ms: 111}
     })
 
     assert GatewayConfig.get(:enable_telegram, false) == true
@@ -47,43 +41,29 @@ defmodule LemonChannels.GatewayConfigTest do
     assert fetch(telegram, :debounce_ms) == 111
   end
 
-  test "merges :telegram runtime overrides on top of gateway telegram config" do
-    Application.put_env(:lemon_channels, :gateway, %{
+  test "full-replacement config supports nested adapter sections" do
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
       telegram: %{
         bot_token: "from-config",
-        poll_interval_ms: 100
+        poll_interval_ms: 100,
+        api_mod: MockApi
       }
-    })
-
-    Application.put_env(:lemon_channels, :telegram, %{
-      poll_interval_ms: 25,
-      api_mod: MockApi
     })
 
     telegram = GatewayConfig.get(:telegram, %{})
 
     assert fetch(telegram, :bot_token) == "from-config"
-    assert fetch(telegram, :poll_interval_ms) == 25
+    assert fetch(telegram, :poll_interval_ms) == 100
     assert fetch(telegram, :api_mod) == MockApi
   end
 
-  test "ignores non-map gateway runtime config" do
-    baseline = GatewayConfig.get(:bindings, :missing)
-    Application.put_env(:lemon_channels, :gateway, [:not, :a, :map])
-    assert GatewayConfig.get(:bindings, :missing) == baseline
-  end
-
-  test "merges :xmtp runtime overrides on top of gateway xmtp config" do
-    Application.put_env(:lemon_channels, :gateway, %{
+  test "full-replacement config supports xmtp section" do
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
       xmtp: %{
-        connect_timeout_ms: 1000,
-        require_live: true
+        connect_timeout_ms: 2500,
+        require_live: true,
+        poll_interval_ms: 300
       }
-    })
-
-    Application.put_env(:lemon_channels, :xmtp, %{
-      connect_timeout_ms: 2500,
-      poll_interval_ms: 300
     })
 
     xmtp = GatewayConfig.get(:xmtp, %{})
@@ -93,7 +73,18 @@ defmodule LemonChannels.GatewayConfigTest do
     assert fetch(xmtp, :poll_interval_ms) == 300
   end
 
-  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  test "ignores non-map full-replacement config" do
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{bindings: [:something]})
+    assert GatewayConfig.get(:bindings, :missing) == [:something]
+
+    # Non-map values like plain strings are rejected by full_replacement_config
+    Application.put_env(:lemon_gateway, @gateway_config_key, "not a map at all")
+    # Falls through to TOML base, so :bindings won't be :something anymore
+    result = GatewayConfig.get(:bindings, :missing)
+    refute result == [:something]
+  end
+
+  defp restore_env(_app, _key, nil), do: Application.delete_env(:lemon_gateway, @gateway_config_key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do

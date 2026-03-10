@@ -10,6 +10,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge, SessionKey}
+  alias LemonCore.Secrets
 
   @default_poll_interval_ms 1_500
   @default_connect_timeout_ms 15_000
@@ -172,7 +173,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   def config do
     GatewayConfig.get(:xmtp, %{})
     |> normalize_map()
-    |> merge_config(Application.get_env(:lemon_channels, :xmtp, %{}))
+    |> resolve_secret_refs()
+    |> resolve_env_refs()
   rescue
     _ -> %{}
   end
@@ -1369,6 +1371,39 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   end
 
   defp normalize_map(_), do: %{}
+
+  defp resolve_secret_refs(config) when is_map(config) do
+    case fetch_meta(config, :wallet_key_secret) do
+      secret_name when is_binary(secret_name) and secret_name != "" ->
+        case Secrets.resolve(secret_name, env_fallback: true) do
+          {:ok, wallet_key, _source} when is_binary(wallet_key) and wallet_key != "" ->
+            Map.put(config, :wallet_key, wallet_key)
+
+          _ ->
+            config
+        end
+
+      _ ->
+        config
+    end
+  rescue
+    _ -> config
+  catch
+    :exit, _ -> config
+  end
+
+  defp resolve_env_refs(config) when is_map(config) do
+    Enum.into(config, %{}, fn {key, value} -> {key, resolve_env_ref(value)} end)
+  end
+
+  defp resolve_env_ref("${" <> rest) do
+    case String.split(rest, "}", parts: 2) do
+      [env_var, ""] -> System.get_env(env_var)
+      _ -> "${" <> rest
+    end
+  end
+
+  defp resolve_env_ref(value), do: value
 
   defp drop_nil_values(map) when is_map(map) do
     map

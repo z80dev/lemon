@@ -111,15 +111,17 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     end
   end
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   setup do
-    old = Application.get_env(:lemon_channels, :telegram)
+    old = Application.get_env(:lemon_gateway, @gateway_config_key)
     MockApiPhotoRateLimitedOnce.reset()
 
     on_exit(fn ->
       if old == nil do
-        Application.delete_env(:lemon_channels, :telegram)
+        Application.delete_env(:lemon_gateway, @gateway_config_key)
       else
-        Application.put_env(:lemon_channels, :telegram, old)
+        Application.put_env(:lemon_gateway, @gateway_config_key, old)
       end
 
       MockApiPhotoRateLimitedOnce.clear()
@@ -477,7 +479,9 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
 
   defp put_telegram_config(config) when is_map(config) do
     base = %{files: %{outbound_send_delay_ms: 0}}
-    Application.put_env(:lemon_channels, :telegram, deep_merge(base, config))
+    telegram = deep_merge(base, config)
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :telegram, telegram))
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do

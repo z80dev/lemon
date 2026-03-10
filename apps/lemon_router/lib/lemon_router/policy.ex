@@ -156,20 +156,10 @@ defmodule LemonRouter.Policy do
   @spec command_allowed?(map(), binary()) :: boolean()
   def command_allowed?(policy, command) do
     blocked = policy[:blocked_commands] || []
+    allowed = policy[:allowed_commands]
 
-    # Check blocked first
-    if command_matches_any?(command, blocked) do
-      false
-    else
-      allowed = policy[:allowed_commands]
-
-      # If no allowed list, everything is allowed
-      if is_nil(allowed) or Enum.empty?(allowed) do
-        true
-      else
-        command_matches_any?(command, allowed)
-      end
-    end
+    not command_matches_any?(command, blocked) and
+      (allowed in [nil, []] or command_matches_any?(command, allowed))
   end
 
   defp command_matches_any?(command, patterns) do
@@ -179,18 +169,13 @@ defmodule LemonRouter.Policy do
     end)
   end
 
-  # Load agent policy from store or config
+  # Load agent policy from store
   defp get_agent_policy(nil), do: %{}
 
   defp get_agent_policy(agent_id) do
     case LemonCore.PolicyStore.get_agent(agent_id) do
-      nil ->
-        # Fall back to application config
-        Application.get_env(:lemon_router, :agent_policies, %{})
-        |> Map.get(agent_id, %{})
-
-      policy when is_map(policy) ->
-        policy
+      nil -> %{}
+      policy when is_map(policy) -> policy
     end
   rescue
     _ -> %{}
@@ -242,15 +227,11 @@ defmodule LemonRouter.Policy do
     _ -> %{}
   end
 
-  # Load operator runtime overrides from config or store
+  # Load operator runtime overrides from store
   defp get_runtime_policy do
     case LemonCore.PolicyStore.get_runtime() do
-      nil ->
-        # Fall back to application config
-        Application.get_env(:lemon_router, :runtime_policy, %{})
-
-      policy when is_map(policy) ->
-        policy
+      nil -> %{}
+      policy when is_map(policy) -> policy
     end
   rescue
     _ -> %{}

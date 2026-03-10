@@ -2,6 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.BindingResolver
   alias LemonChannels.Telegram.StateStore
   alias LemonCore.ChatScope
@@ -61,12 +62,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     end
   end
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   setup do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
-    old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     :persistent_term.put({TestRouter, :pid}, self())
 
@@ -92,8 +94,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
       _ = LemonChannels.Registry.unregister("telegram")
       restore_router_bridge(old_router_bridge)
-      restore_gateway_config_env(old_gateway_config_env)
-      restore_telegram_env(old_telegram_env)
+      restore_gateway_env(old_gateway_env)
     end)
 
     :ok
@@ -252,8 +253,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert inbound.meta[:thinking_scope] == :topic
     assert inbound.meta[:topic_id] == topic_id
 
-    stored = StateStore.get_default_thinking({"default", chat_id, topic_id})
-    assert stored[:thinking_level] == "high"
+    stored = ModelPolicyAdapter.default_thinking_preference("default", chat_id, topic_id)
+    assert stored == "high"
   end
 
   test "/thinking clear removes topic thinking override" do
@@ -291,32 +292,29 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       }
       |> Map.merge(overrides)
 
-    Application.put_env(:lemon_channels, :telegram, %{bot_token: token, api_mod: MockAPI})
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.merge(existing, %{telegram: %{bot_token: token, api_mod: MockAPI}})
+    )
 
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
   end
 
   defp set_bindings(bindings) do
-    cfg =
-      case Application.get_env(:lemon_channels, :gateway) do
-        map when is_map(map) -> map
-        list when is_list(list) -> Enum.into(list, %{})
-        _ -> %{}
-      end
-
-    Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :bindings, bindings))
   end
 
-  defp restore_gateway_config_env(nil) do
-    Application.delete_env(:lemon_channels, :gateway)
+  defp restore_gateway_env(nil) do
+    Application.delete_env(:lemon_gateway, @gateway_config_key)
   end
 
-  defp restore_gateway_config_env(env) do
-    Application.put_env(:lemon_channels, :gateway, env)
+  defp restore_gateway_env(env) do
+    Application.put_env(:lemon_gateway, @gateway_config_key, env)
   end
-
-  defp restore_telegram_env(nil), do: Application.delete_env(:lemon_channels, :telegram)
-  defp restore_telegram_env(env), do: Application.put_env(:lemon_channels, :telegram, env)
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)

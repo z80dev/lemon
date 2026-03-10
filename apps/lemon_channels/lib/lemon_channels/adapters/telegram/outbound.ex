@@ -603,8 +603,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  # Transport merges runtime overrides from `Application.get_env(:lemon_channels, :telegram)`;
-  # do the same here so tests can inject a mock api module without hitting the network.
   defp telegram_config do
     config = telegram_runtime_config()
     token = config[:bot_token] || config["bot_token"]
@@ -636,28 +634,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp telegram_runtime_config do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
-
-    overrides =
-      case Application.get_env(:lemon_channels, :telegram) do
-        nil ->
-          %{}
-
-        m when is_map(m) ->
-          m
-
-        kw when is_list(kw) ->
-          if Keyword.keyword?(kw) do
-            Enum.into(kw, %{})
-          else
-            %{}
-          end
-
-        _ ->
-          %{}
-      end
-
-    Map.merge(base, overrides)
+    LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
   end
 
   defp fetch_config(config, key) when is_map(config) and is_atom(key) do

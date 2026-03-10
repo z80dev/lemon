@@ -481,10 +481,9 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 
 ## GatewayConfig
 
-Merges config from three sources (highest priority first):
-1. `Application.get_env(:lemon_channels, :telegram | :xmtp)` -- runtime per-adapter overrides
-2. `Application.get_env(:lemon_channels, :gateway)` -- runtime gateway overrides
-3. `LemonCore.Config.cached().gateway` -- TOML-backed base config
+Gateway transport config comes only from the canonical TOML `[gateway]` section via `LemonCore.GatewayConfig`. There are no runtime `Application.get_env` transport overlays in production.
+
+In test mode (`config_test_mode`), a full-replacement app env layer is supported for test isolation.
 
 ```elixir
 LemonChannels.GatewayConfig.get(:enable_telegram)
@@ -492,6 +491,8 @@ LemonChannels.GatewayConfig.get(:bindings, [])
 LemonChannels.GatewayConfig.get(:default_engine)
 LemonChannels.GatewayConfig.get(:projects, %{})
 ```
+
+Direct `Application.get_env(:lemon_channels, :telegram)`, `Application.get_env(:lemon_channels, :discord)`, `Application.get_env(:lemon_channels, :xmtp)`, and `Application.get_env(:lemon_channels, :gateway)` reads are forbidden in runtime modules. Use `LemonChannels.GatewayConfig` or `LemonCore.GatewayConfig` instead.
 
 ## Common Tasks
 

@@ -43,19 +43,19 @@ cd apps/lemon_gateway
 ./priv/voice_setup.sh
 ```
 
-Or manually configure in `config/runtime.exs`:
+Or configure the canonical Lemon TOML file (`~/.lemon/config.toml` or `.lemon/config.toml`):
 
-```elixir
-config :lemon_gateway,
-  voice_enabled: true,
-  voice_websocket_port: 4047,
-  voice_public_url: "your-domain.com",
-  twilio_account_sid: "your_account_sid",
-  twilio_auth_token: "your_auth_token",
-  twilio_phone_number: "+1234567890",
-  deepgram_api_key: "your_deepgram_key",
-  elevenlabs_api_key: "your_elevenlabs_key",
-  elevenlabs_output_format: "ulaw_8000"
+```toml
+[gateway.voice]
+enabled = true
+websocket_port = 4047
+public_url = "https://your-domain.com"
+twilio_account_sid_secret = "twilio_account_sid"
+twilio_auth_token_secret = "twilio_auth_token"
+twilio_phone_number = "+1234567890"
+deepgram_api_key_secret = "deepgram_api_key"
+elevenlabs_api_key_secret = "elevenlabs_api_key"
+elevenlabs_output_format = "ulaw_8000"
 ```
 
 ### 3. Configure Twilio Webhook
@@ -90,24 +90,24 @@ ngrok http 4047
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `voice_enabled` | `false` | Enable/disable voice transport |
-| `voice_websocket_port` | `4047` | Port for WebSocket server |
-| `voice_public_url` | `nil` | Public URL for Twilio webhooks |
+| `gateway.voice.enabled` | `false` | Enable/disable voice transport |
+| `gateway.voice.websocket_port` | `4047` | Port for WebSocket server |
+| `gateway.voice.public_url` | `nil` | Public URL for Twilio webhooks |
 | `elevenlabs_voice_id` | `"21m00Tcm4TlvDq8ikWAM"` | ElevenLabs voice (Rachel) |
 | `elevenlabs_output_format` | `"ulaw_8000"` | ElevenLabs output format (Twilio-compatible) |
-| `voice_llm_model` | `"gpt-4o-mini"` | LLM for responses |
-| `voice_max_call_duration_seconds` | `600` | Max call length (10 min) |
-| `voice_silence_timeout_ms` | `5000` | End call after silence |
+| `gateway.voice.llm_model` | `"gpt-4o-mini"` | LLM for responses |
+| `gateway.voice.max_call_duration_seconds` | `600` | Max call length (10 min) |
+| `gateway.voice.silence_timeout_ms` | `5000` | End call after silence |
 
 ## Customizing the Voice
 
 ### Change Voice Persona
 
-Edit the system prompt in `config/runtime.exs`:
+Edit the system prompt in your Lemon TOML config:
 
-```elixir
-config :lemon_gateway,
-  voice_system_prompt: """
+```toml
+[gateway.voice]
+system_prompt = """
   You are zeebot, the first AI built on the Lemon framework...
   """
 ```
@@ -117,7 +117,7 @@ config :lemon_gateway,
 1. Go to https://elevenlabs.io/voice-library
 2. Find a voice you like
 3. Copy the Voice ID
-4. Set in config: `elevenlabs_voice_id: "your_voice_id"`
+4. Set in config: `gateway.voice.elevenlabs_voice_id = "your_voice_id"`
 
 ### Clone Your Own Voice
 

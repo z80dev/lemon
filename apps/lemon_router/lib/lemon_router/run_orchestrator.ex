@@ -244,7 +244,7 @@ defmodule LemonRouter.RunOrchestrator do
       profile_model = map_get(agent_profile, :model)
       profile_default_engine = map_get(agent_profile, :default_engine)
       profile_system_prompt = map_get(agent_profile, :system_prompt)
-      default_model = Application.get_env(:lemon_router, :default_model)
+      default_model = default_model_from_config()
 
       explicit_model = request_model || map_get(meta, :model)
       explicit_system_prompt = map_get(meta, :system_prompt)
@@ -519,6 +519,12 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp map_get(_map, _key), do: nil
+
+  defp default_model_from_config do
+    LemonCore.Config.cached().agent.default_model
+  rescue
+    _ -> nil
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

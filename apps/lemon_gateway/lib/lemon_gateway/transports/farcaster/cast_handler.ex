@@ -449,13 +449,7 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   defp decode_state(_), do: %{}
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} ->
-      key = if is_atom(k), do: Atom.to_string(k), else: to_string(k)
-      value = if is_map(v), do: stringify_keys(v), else: v
-      {key, value}
-    end)
-  end
+  defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
   defp fetch_any(map, keys) when is_map(map) and is_list(keys) do
     Enum.find_value(keys, fn key ->

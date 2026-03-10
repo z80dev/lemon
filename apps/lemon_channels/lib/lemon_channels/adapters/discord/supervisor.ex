@@ -17,10 +17,9 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
     config =
       base
-      |> merge_config(Application.get_env(:lemon_channels, :discord))
       |> merge_config(Keyword.get(opts, :config))
 
-    token = config[:bot_token] || config["bot_token"] || resolve_token()
+    token = config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config) || resolve_token()
 
     children =
       if is_binary(token) and String.trim(token) != "" do
@@ -32,18 +31,17 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp merge_config(config, nil), do: config
-  defp merge_config(config, opts) when is_map(opts), do: Map.merge(config, opts)
+  defp merge_config(base, opts), do: LemonCore.MapHelpers.merge_config(base, opts)
 
-  defp merge_config(config, opts) when is_list(opts) do
-    if Keyword.keyword?(opts) do
-      Map.merge(config, Enum.into(opts, %{}))
+  defp resolve_bot_token_secret(config) do
+    secret_name = config[:bot_token_secret] || config["bot_token_secret"]
+
+    if is_binary(secret_name) and secret_name != "" do
+      Secrets.fetch_value(secret_name)
     else
-      config
+      nil
     end
   end
-
-  defp merge_config(config, _opts), do: config
 
   defp resolve_token do
     # Try secrets store first, then fall back to environment variable

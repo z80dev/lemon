@@ -17,17 +17,18 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     end
   end
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   setup do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_channels, :gateway)
-    old_xmtp_env = Application.get_env(:lemon_channels, :xmtp)
+    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     :persistent_term.put({XmtpTestRouter, :pid}, self())
     LemonCore.RouterBridge.configure(router: XmtpTestRouter)
 
-    Application.put_env(:lemon_channels, :gateway, %{
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_xmtp: true,
       default_engine: "echo",
       xmtp: %{
@@ -37,14 +38,11 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
       }
     })
 
-    Application.put_env(:lemon_channels, :xmtp, %{})
-
     on_exit(fn ->
       stop_transport()
       :persistent_term.erase({XmtpTestRouter, :pid})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_channels, :gateway, old_gateway_env)
-      restore_env(:lemon_channels, :xmtp, old_xmtp_env)
+      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
     end)
 
     :ok
@@ -186,6 +184,33 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     assert normalized.prompt =~ "Please send text."
     assert normalized.raw_content_type == "image"
     assert normalized.raw_content == event["content"]
+  end
+
+  test "config resolves wallet_key_secret into wallet_key" do
+    secret_env = "XMTP_TEST_WALLET_KEY_#{System.unique_integer([:positive])}"
+    System.put_env(secret_env, "0xsecret-wallet-key")
+
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      enable_xmtp: true,
+      xmtp: %{wallet_key_secret: secret_env}
+    })
+
+    on_exit(fn -> System.delete_env(secret_env) end)
+
+    assert Transport.config()[:wallet_key] == "0xsecret-wallet-key"
+  end
+
+  test "config resolves ${ENV_VAR} interpolation for xmtp values" do
+    System.put_env("XMTP_TEST_WALLET_ADDRESS", "0x1111111111111111111111111111111111111111")
+
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      enable_xmtp: true,
+      xmtp: %{wallet_address: "${XMTP_TEST_WALLET_ADDRESS}"}
+    })
+
+    on_exit(fn -> System.delete_env("XMTP_TEST_WALLET_ADDRESS") end)
+
+    assert Transport.config()[:wallet_address] == "0x1111111111111111111111111111111111111111"
   end
 
   test "placeholder helper marks non-text input as non-runtime and sanitizes reply text" do

@@ -249,11 +249,7 @@ defmodule LemonChannels.Adapters.Xmtp.PortServer do
     error -> {:error, error}
   end
 
-  defp stringify_keys(map) do
-    map
-    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
-    |> Map.new()
-  end
+  defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
   defp normalize_config(cfg) when is_map(cfg), do: cfg
 

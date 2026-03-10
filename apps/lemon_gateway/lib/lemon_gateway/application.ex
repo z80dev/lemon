@@ -85,9 +85,7 @@ defmodule LemonGateway.Application do
   end
 
   defp voice_server_child_spec do
-    port =
-      Application.get_env(:lemon_gateway, :voice_websocket_port, default_voice_port())
-      |> maybe_test_voice_port()
+    port = LemonGateway.Voice.Config.websocket_port() |> maybe_test_voice_port()
 
     %{
       id: LemonGateway.Voice.Server,
@@ -99,15 +97,7 @@ defmodule LemonGateway.Application do
   end
 
   defp voice_enabled? do
-    Application.get_env(:lemon_gateway, :voice_enabled, false)
-  end
-
-  defp default_voice_port do
-    if test_env?() do
-      0
-    else
-      4047
-    end
+    LemonGateway.Voice.Config.enabled?()
   end
 
   defp maybe_test_voice_port(4047) do

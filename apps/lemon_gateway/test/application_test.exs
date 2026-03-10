@@ -81,7 +81,7 @@ defmodule LemonGateway.ApplicationTest do
         children
       end
 
-    if Application.get_env(:lemon_gateway, :voice_enabled, false) do
+    if LemonGateway.Voice.Config.enabled?() do
       children ++ [Elixir.LemonGateway.Voice.Server]
     else
       children

@@ -55,13 +55,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
-    # Source of truth is TOML-backed LemonCore config, with explicit
-    # :lemon_channels runtime overrides and per-process opts.
     base = LemonChannels.GatewayConfig.get(:telegram, %{})
 
     config =
       base
-      |> merge_config(Application.get_env(:lemon_channels, :telegram))
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 

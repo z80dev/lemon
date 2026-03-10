@@ -60,14 +60,24 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       do: {:ok, %{"ok" => true, "result" => %{"status" => "administrator"}}}
   end
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   setup do
     FileTransferMockAPI.register_sent(self())
-    previous_telegram_env = Application.get_env(:lemon_channels, :telegram)
+    previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
-    Application.put_env(:lemon_channels, :telegram, %{
-      bot_token: "token",
-      api_mod: FileTransferMockAPI
-    })
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.merge(existing, %{
+        telegram: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI
+        }
+      })
+    )
 
     case LemonChannels.Registry.register(LemonChannels.Adapters.Telegram) do
       :ok -> :ok
@@ -91,10 +101,10 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
       _ = LemonChannels.Registry.unregister("telegram")
 
-      if previous_telegram_env == nil do
-        Application.delete_env(:lemon_channels, :telegram)
+      if previous_gateway_env == nil do
+        Application.delete_env(:lemon_gateway, @gateway_config_key)
       else
-        Application.put_env(:lemon_channels, :telegram, previous_telegram_env)
+        Application.put_env(:lemon_gateway, @gateway_config_key, previous_gateway_env)
       end
 
       :persistent_term.erase({FileTransferMockAPI, :sent})

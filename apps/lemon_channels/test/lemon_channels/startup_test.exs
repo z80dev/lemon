@@ -38,6 +38,8 @@ defmodule LemonChannels.StartupTest do
     def answer_callback_query(_token, _cb_id, _opts), do: {:ok, %{"ok" => true}}
   end
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   setup do
     _ = Application.stop(:lemon_channels)
     _ = Application.stop(:lemon_router)
@@ -55,22 +57,18 @@ defmodule LemonChannels.StartupTest do
     StartupMockTelegramAPI.stop()
     {:ok, _} = StartupMockTelegramAPI.start_link()
 
-    Application.put_env(:lemon_channels, :gateway, %{
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
       max_concurrent_runs: 1,
       default_engine: "echo",
       enable_telegram: true,
       bindings: [],
       telegram: %{
         bot_token: "test_token",
+        api_mod: StartupMockTelegramAPI,
         poll_interval_ms: 50,
         dedupe_ttl_ms: 60_000,
         debounce_ms: 10
       }
-    })
-
-    Application.put_env(:lemon_channels, :telegram, %{
-      api_mod: StartupMockTelegramAPI,
-      poll_interval_ms: 50
     })
 
     on_exit(fn ->
@@ -78,16 +76,24 @@ defmodule LemonChannels.StartupTest do
       _ = Application.stop(:lemon_channels)
       _ = Application.stop(:lemon_router)
       _ = Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_channels, :gateway)
-      Application.delete_env(:lemon_channels, :telegram)
 
       # Restore a baseline for the rest of the lemon_channels suite. This module
       # intentionally stops applications as part of boot validation.
-      Application.put_env(:lemon_channels, :gateway, %{
+      Application.put_env(:lemon_gateway, @gateway_config_key, %{
         enable_telegram: false,
+        enable_discord: false,
         enable_xmtp: false,
         max_concurrent_runs: 1,
-        default_engine: "lemon"
+        default_engine: "lemon",
+        telegram: %{
+          bot_token: nil,
+          allowed_chat_ids: nil,
+          deny_unbound_chats: false,
+          drop_pending_updates: false,
+          files: %{}
+        },
+        xmtp: %{},
+        discord: %{bot_token: nil}
       })
 
       Application.put_env(:lemon_channels, :engines, [
@@ -98,14 +104,6 @@ defmodule LemonChannels.StartupTest do
         "opencode",
         "pi"
       ])
-
-      Application.put_env(:lemon_channels, :telegram, %{
-        bot_token: nil,
-        allowed_chat_ids: nil,
-        deny_unbound_chats: false,
-        drop_pending_updates: false,
-        files: %{}
-      })
 
       _ = Application.ensure_all_started(:lemon_channels)
     end)

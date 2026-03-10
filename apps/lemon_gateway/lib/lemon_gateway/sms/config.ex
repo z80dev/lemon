@@ -1,4 +1,6 @@
 defmodule LemonGateway.Sms.Config do
+  require Logger
+
   @moduledoc """
   Configuration reader for SMS webhook settings.
 
@@ -79,8 +81,19 @@ defmodule LemonGateway.Sms.Config do
   end
 
   def auth_token do
-    normalize_blank(LemonCore.Secrets.fetch_value("TWILIO_AUTH_TOKEN")) ||
+    resolve_auth_token_secret() ||
+      normalize_blank(LemonCore.Secrets.fetch_value("TWILIO_AUTH_TOKEN")) ||
       normalize_blank(sms_cfg(:auth_token))
+  end
+
+  defp resolve_auth_token_secret do
+    secret_name = sms_cfg(:auth_token_secret)
+
+    if is_binary(secret_name) and String.trim(secret_name) != "" do
+      normalize_blank(LemonCore.Secrets.fetch_value(secret_name))
+    else
+      nil
+    end
   end
 
   def webhook_url_override do
@@ -102,7 +115,9 @@ defmodule LemonGateway.Sms.Config do
         _ -> %{}
       end
     rescue
-      _ -> %{}
+      e ->
+        Logger.warning("Failed to load SMS config: #{Exception.message(e)}")
+        %{}
     end
   end
 

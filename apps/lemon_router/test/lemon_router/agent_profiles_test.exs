@@ -43,24 +43,24 @@ defmodule LemonRouter.AgentProfilesTest do
     project: project
   } do
     File.write!(Path.join([home, ".lemon", "config.toml"]), """
-    [agents.global_only]
+    [profiles.global_only]
     name = "Global Agent"
     default_engine = "lemon"
     model = "global-model"
 
-    [agents.shared]
+    [profiles.shared]
     name = "Shared Global"
     default_engine = "lemon"
     model = "shared-global-model"
     """)
 
     File.write!(Path.join([project, ".lemon", "config.toml"]), """
-    [agents.project_only]
+    [profiles.project_only]
     name = "Project Agent"
     default_engine = "lemon"
     model = "project-model"
 
-    [agents.shared]
+    [profiles.shared]
     name = "Shared Project"
     default_engine = "lemon"
     model = "shared-project-model"

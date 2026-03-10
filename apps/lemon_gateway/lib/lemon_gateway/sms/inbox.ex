@@ -218,18 +218,7 @@ defmodule LemonGateway.Sms.Inbox do
     end
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} ->
-      key =
-        cond do
-          is_binary(k) -> k
-          is_atom(k) -> Atom.to_string(k)
-          true -> inspect(k)
-        end
-
-      {key, v}
-    end)
-  end
+  defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
   defp extract_default_codes(body) when is_binary(body) do
     Regex.scan(~r/\b\d{4,8}\b/, body)

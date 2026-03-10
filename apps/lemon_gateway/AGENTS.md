@@ -101,6 +101,8 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 
 ### Configuration and Resolution
 
+Gateway config comes from the canonical TOML `[gateway]` section only, via `LemonCore.GatewayConfig`. Transport config (Telegram, Discord, XMTP) is read exclusively from the canonical gateway config path -- not from `Application.get_env` overlays. Test-only override via `Application.get_env(:lemon_gateway, LemonGateway.Config)` is allowed only in test env.
+
 | File | Module | Notes |
 |------|--------|-------|
 | `lib/lemon_gateway/config.ex` | `Config` | GenServer holding all runtime config. Access via `Config.get/0` or `Config.get(:key)`. |

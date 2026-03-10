@@ -62,7 +62,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     config =
       base
-      |> merge_config(Application.get_env(:lemon_channels, :discord))
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
@@ -481,14 +480,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp parse_id(_), do: nil
 
-  defp merge_config(config, nil), do: config
-  defp merge_config(config, opts) when is_map(opts), do: Map.merge(config, opts)
-
-  defp merge_config(config, opts) when is_list(opts) do
-    if Keyword.keyword?(opts), do: Map.merge(config, Enum.into(opts, %{})), else: config
-  end
-
-  defp merge_config(config, _), do: config
+  defp merge_config(base, opts), do: LemonCore.MapHelpers.merge_config(base, opts)
 
   defp cfg_get(config, key, default \\ nil) when is_map(config) do
     Map.get(config, key, Map.get(config, Atom.to_string(key), default))
