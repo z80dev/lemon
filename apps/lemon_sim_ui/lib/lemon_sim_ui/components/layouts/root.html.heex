@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <title><%= assigns[:page_title] || "LemonSim" %></title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              fog: 'rgba(0,0,0,0.35)',
+            }
+          }
+        }
+      }
+    </script>
+    <script defer phx-track-static type="module" src={~p"/assets/app.js"}></script>
+    <style>
+      /* Custom scrollbar for webkit */
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 4px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      
+      .scroll-bottom { overflow-y: auto; scroll-behavior: smooth; }
+      @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 4px rgba(59,130,246,0.5); } 50% { box-shadow: 0 0 12px rgba(59,130,246,0.8); } }
+      .active-unit { animation: pulse-glow 2s ease-in-out infinite; }
+      .fog-overlay { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.06) 4px, rgba(0,0,0,0.06) 8px); }
+    </style>
+  </head>
+  <body class="min-h-screen bg-gray-950 text-gray-100 antialiased">
+    <%= @inner_content %>
+  </body>
+</html>
