@@ -127,7 +127,8 @@ defmodule CodingAgent.Session.Lifecycle do
       ModelResolver.build_stream_options(
         model,
         settings_manager,
-        Keyword.get(opts, :stream_options)
+        Keyword.get(opts, :stream_options),
+        cwd
       )
 
     agent_registry_key = {session_manager.header.id, :main, 0}

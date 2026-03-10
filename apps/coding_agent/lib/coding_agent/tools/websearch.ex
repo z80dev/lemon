@@ -610,7 +610,10 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp resolve_api_config(_provider, runtime) do
-    api_key = normalize_optional_string(runtime.api_key) || env_optional("BRAVE_API_KEY")
+    api_key =
+      normalize_optional_string(runtime.api_key) ||
+        resolve_secret_ref(runtime.api_key_secret) ||
+        env_optional("BRAVE_API_KEY")
 
     if is_nil(api_key) do
       {:error,
@@ -627,6 +630,7 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp resolve_perplexity_api_key(perplexity_cfg) do
     normalize_optional_string(perplexity_cfg.api_key) ||
+      resolve_secret_ref(Map.get(perplexity_cfg, :api_key_secret)) ||
       env_optional("PERPLEXITY_API_KEY") ||
       env_optional("OPENROUTER_API_KEY")
   end
@@ -1024,6 +1028,15 @@ defmodule CodingAgent.Tools.WebSearch do
     if candidate == primary, do: nil, else: candidate
   end
 
+  defp resolve_secret_ref(nil), do: nil
+  defp resolve_secret_ref(""), do: nil
+
+  defp resolve_secret_ref(secret_name) when is_binary(secret_name) do
+    normalize_optional_string(Secrets.fetch_value(secret_name))
+  end
+
+  defp resolve_secret_ref(_), do: nil
+
   defp env_optional(name), do: normalize_optional_string(Secrets.fetch_value(name))
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
@@ -1069,6 +1082,7 @@ defmodule CodingAgent.Tools.WebSearch do
         secondary_provider: secondary_provider,
         enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
         api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
+        api_key_secret: normalize_optional_string(get_map_value(search_cfg, :api_key_secret, nil)),
         max_results: resolve_max_results(search_cfg),
         timeout_ms: cache_settings.timeout_ms,
         cache_ttl_ms: cache_settings.cache_ttl_ms,
@@ -1204,6 +1218,7 @@ defmodule CodingAgent.Tools.WebSearch do
     %{
       perplexity: %{
         api_key: normalize_optional_string(get_map_value(perplexity_cfg, :api_key, nil)),
+        api_key_secret: normalize_optional_string(get_map_value(perplexity_cfg, :api_key_secret, nil)),
         base_url: normalize_optional_string(get_map_value(perplexity_cfg, :base_url, nil)),
         model:
           normalize_optional_string(

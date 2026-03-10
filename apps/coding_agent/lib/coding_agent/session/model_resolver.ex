@@ -166,35 +166,80 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  @spec build_stream_options(Ai.Types.Model.t(), CodingAgent.SettingsManager.t(), map() | nil) ::
-          map() | nil
+  @spec build_stream_options(
+          Ai.Types.Model.t(),
+          CodingAgent.SettingsManager.t(),
+          map() | nil,
+          String.t() | nil
+        ) :: Ai.Types.StreamOptions.t()
   def build_stream_options(
         %{provider: :google_vertex} = _model,
-        settings_manager,
-        existing_opts
+        _settings_manager,
+        existing_opts,
+        cwd
       ) do
-    provider_cfg = provider_config(settings_manager.providers, "google_vertex")
+    base_opts = normalize_stream_options(existing_opts, cwd)
 
-    # Resolve Vertex-specific secrets
-    project = resolve_vertex_secret(provider_cfg, :project_secret, "google_vertex_project")
-    location = resolve_vertex_secret(provider_cfg, :location_secret, "google_vertex_location")
-
-    service_account_json =
-      resolve_vertex_secret(
-        provider_cfg,
-        :service_account_json_secret,
-        "google_vertex_service_account_json"
+    resolved =
+      LemonCore.ProviderConfigResolver.resolve_for_provider(
+        :google_vertex,
+        stream_options_to_map(base_opts)
       )
 
-    base_opts = existing_opts || %{}
-
     base_opts
-    |> maybe_put(:project, project)
-    |> maybe_put(:location, location)
-    |> maybe_put(:service_account_json, service_account_json)
+    |> maybe_put_struct(:project, resolved[:project])
+    |> maybe_put_struct(:location, resolved[:location])
+    |> maybe_put_struct(:service_account_json, resolved[:service_account_json])
   end
 
-  def build_stream_options(_model, _settings_manager, existing_opts), do: existing_opts
+  def build_stream_options(
+        %{api: :azure_openai_responses},
+        _settings_manager,
+        existing_opts,
+        cwd
+      ) do
+    base_opts = normalize_stream_options(existing_opts, cwd)
+
+    resolved =
+      LemonCore.ProviderConfigResolver.resolve_for_provider(
+        :azure_openai_responses,
+        stream_options_to_map(base_opts)
+      )
+
+    thinking_budgets =
+      base_opts.thinking_budgets
+      |> maybe_put(:azure_api_version, resolved[:api_version])
+      |> maybe_put(:azure_base_url, resolved[:base_url])
+      |> maybe_put(:azure_resource_name, resolved[:resource_name])
+      |> maybe_put(:azure_deployment_name_map, resolved[:deployment_name_map])
+
+    base_opts
+    |> maybe_put_struct(:api_key, resolved[:api_key])
+    |> Map.put(:thinking_budgets, thinking_budgets)
+  end
+
+  def build_stream_options(
+        %{api: :bedrock_converse_stream},
+        _settings_manager,
+        existing_opts,
+        cwd
+      ) do
+    base_opts = normalize_stream_options(existing_opts, cwd)
+
+    resolved =
+      LemonCore.ProviderConfigResolver.resolve_for_provider(
+        :bedrock_converse_stream,
+        stream_options_to_map(base_opts)
+      )
+
+    resolved_headers = Map.get(resolved, :headers, %{})
+    headers = Map.merge(resolved_headers, base_opts.headers)
+    %{base_opts | headers: headers}
+  end
+
+  def build_stream_options(_model, _settings_manager, existing_opts, cwd) do
+    normalize_stream_options(existing_opts, cwd)
+  end
 
   # ============================================================================
   # Helpers
@@ -644,17 +689,24 @@ defmodule CodingAgent.Session.ModelResolver do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
   end
 
-  defp resolve_vertex_secret(provider_cfg, config_key, default_secret_name) do
-    # Try to get secret name from config, fall back to default
-    secret_name = provider_config_value(provider_cfg, config_key) || default_secret_name
-
-    if is_binary(secret_name) and secret_name != "" do
-      resolve_secret_api_key(secret_name)
-    else
-      nil
-    end
-  end
-
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp normalize_stream_options(nil, cwd), do: %Ai.Types.StreamOptions{cwd: cwd}
+
+  defp normalize_stream_options(%Ai.Types.StreamOptions{} = opts, cwd) do
+    %{opts | cwd: opts.cwd || cwd, headers: opts.headers || %{}, thinking_budgets: opts.thinking_budgets || %{}}
+  end
+
+  defp normalize_stream_options(opts, cwd) when is_map(opts) do
+    struct(Ai.Types.StreamOptions, Map.put(opts, :cwd, Map.get(opts, :cwd) || cwd))
+    |> normalize_stream_options(cwd)
+  end
+
+  defp normalize_stream_options(_opts, cwd), do: %Ai.Types.StreamOptions{cwd: cwd}
+
+  defp stream_options_to_map(%Ai.Types.StreamOptions{} = opts), do: Map.from_struct(opts)
+
+  defp maybe_put_struct(struct, _key, nil), do: struct
+  defp maybe_put_struct(struct, key, value), do: Map.put(struct, key, value)
 end

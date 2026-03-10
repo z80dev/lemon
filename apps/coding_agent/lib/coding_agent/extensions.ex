@@ -1188,12 +1188,8 @@ defmodule CodingAgent.Extensions do
   @spec validate_extension(module(), String.t() | nil) :: :ok | {:error, [String.t()]}
   def validate_extension(module, path \\ nil) do
     errors = []
-
-    # Check required callbacks exist and return correct types
     errors = validate_name_callback(module, errors)
     errors = validate_version_callback(module, errors)
-
-    # Check optional callbacks return correct types if implemented
     errors = validate_tools_callback(module, path, errors)
     errors = validate_hooks_callback(module, errors)
     errors = validate_capabilities_callback(module, errors)

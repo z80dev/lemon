@@ -8,10 +8,8 @@ defmodule Ai.Providers.GoogleVertex do
   ## Authentication
 
   Uses Application Default Credentials (ADC) or service account authentication.
-  The following environment variables are required:
-
-  - `GOOGLE_CLOUD_PROJECT` or `GCLOUD_PROJECT`: GCP project ID
-  - `GOOGLE_CLOUD_LOCATION`: Region (e.g., "us-central1")
+  Project and location should be resolved through canonical Lemon config or
+  passed in stream options.
 
   Authentication is handled via:
   - Application Default Credentials (gcloud auth)
@@ -93,9 +91,19 @@ defmodule Ai.Providers.GoogleVertex do
     output = init_output(model)
 
     try do
-      project = resolve_project(opts)
-      location = resolve_location(opts)
-      access_token = get_access_token(opts)
+      # Resolve provider config from canonical config + env + secrets
+      resolved =
+        try do
+          LemonCore.ProviderConfigResolver.resolve_for_provider(:google_vertex, opts)
+        rescue
+          e ->
+            Logger.warning("Failed to resolve Google Vertex provider config: #{Exception.message(e)}")
+            %{}
+        end
+
+      project = resolve_project(opts, resolved)
+      location = resolve_location(opts, resolved)
+      access_token = get_access_token(opts, resolved)
 
       url = build_url(project, location, model.id)
       headers = build_headers(access_token, model, opts)
@@ -127,38 +135,34 @@ defmodule Ai.Providers.GoogleVertex do
     }
   end
 
-  defp resolve_project(opts) do
-    project =
-      Map.get(opts, :project) ||
-        System.get_env("GOOGLE_CLOUD_PROJECT") ||
-        System.get_env("GCLOUD_PROJECT")
+  defp resolve_project(opts, resolved) do
+    project = Map.get(opts, :project) || Map.get(resolved, :project)
 
     unless project do
-      raise "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options."
+      raise "Vertex AI requires a project ID. Configure providers.google_vertex project settings or pass project in options."
     end
 
     project
   end
 
-  defp resolve_location(opts) do
-    location =
-      Map.get(opts, :location) ||
-        System.get_env("GOOGLE_CLOUD_LOCATION")
+  defp resolve_location(opts, resolved) do
+    location = Map.get(opts, :location) || Map.get(resolved, :location)
 
     unless location do
-      raise "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options."
+      raise "Vertex AI requires a location. Configure providers.google_vertex location settings or pass location in options."
     end
 
     location
   end
 
-  defp get_access_token(opts) do
+  defp get_access_token(opts, resolved) do
     # Try to get token from opts first
     if token = Map.get(opts, :access_token) do
       token
     else
-      # Try service account JSON from opts (set via secrets)
-      service_account_json = Map.get(opts, :service_account_json)
+      # Try service account JSON from opts, then resolved config (set via secrets)
+      service_account_json =
+        Map.get(opts, :service_account_json) || Map.get(resolved, :service_account_json)
 
       cond do
         service_account_json && service_account_json != "" ->

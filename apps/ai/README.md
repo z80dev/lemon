@@ -363,6 +363,10 @@ Events emitted by `Ai.EventStream`:
 
 ## Environment Variables
 
+Provider env vars are consumed through Lemon's central config resolution path.
+New provider code should not add direct `System.get_env/1` fallbacks for
+config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
+
 | Variable | Provider/Module | Purpose |
 |----------|-----------------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic | API authentication |

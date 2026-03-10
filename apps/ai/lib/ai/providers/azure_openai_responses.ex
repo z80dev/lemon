@@ -14,12 +14,9 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   ## Configuration
 
-  The provider uses the following environment variables:
-  - `AZURE_OPENAI_API_KEY` - API key for Azure OpenAI
-  - `AZURE_OPENAI_BASE_URL` - Full base URL (optional)
-  - `AZURE_OPENAI_RESOURCE_NAME` - Azure resource name (if not using base URL)
-  - `AZURE_OPENAI_API_VERSION` - API version (default: "v1")
-  - `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` - Comma-separated model=deployment mappings
+  Azure-specific settings should be resolved through canonical Lemon config
+  before requests reach this provider. Stream options still take precedence for
+  per-request overrides.
 
   ## Usage
 
@@ -106,18 +103,28 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
     {:ok, task_pid} =
       Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        deployment_name = resolve_deployment_name(model, opts)
+        # Resolve provider config from canonical config + env + secrets
+        resolved =
+          try do
+            LemonCore.ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, opts)
+          rescue
+            e ->
+              Logger.warning("Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}")
+              %{}
+          end
+
+        deployment_name = resolve_deployment_name(model, opts, resolved)
         output = initial_output(model)
 
         try do
-          api_key = opts.api_key || get_env_api_key()
+          api_key = opts.api_key || Map.get(resolved, :api_key)
 
           if !api_key || api_key == "" do
-            raise "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument."
+            raise "Azure OpenAI API key is required. Configure providers.azure_openai_responses or pass it in stream options."
           end
 
           # Build request
-          {url, headers, body} = build_request(model, context, opts, api_key, deployment_name)
+          {url, headers, body} = build_request(model, context, opts, api_key, deployment_name, resolved)
 
           EventStream.push_async(stream, {:start, output})
 
@@ -153,14 +160,16 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   # Deployment Name Resolution
   # ============================================================================
 
-  defp resolve_deployment_name(model, opts) do
+  defp resolve_deployment_name(model, opts, resolved) do
     # Check options first
     azure_opts = opts.thinking_budgets || %{}
 
     case Map.get(azure_opts, :azure_deployment_name) do
       nil ->
-        # Try environment variable mapping
-        deployment_map = parse_deployment_name_map()
+        # Try resolved config deployment map, then per-request override map.
+        resolved_map = Map.get(resolved, :deployment_name_map) || %{}
+        override_map = Map.get(azure_opts, :azure_deployment_name_map) || %{}
+        deployment_map = Map.merge(resolved_map, override_map)
 
         case Map.get(deployment_map, model.id) do
           nil -> model.id
@@ -172,55 +181,30 @@ defmodule Ai.Providers.AzureOpenAIResponses do
     end
   end
 
-  defp parse_deployment_name_map do
-    case System.get_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP") do
-      nil ->
-        %{}
-
-      value ->
-        value
-        |> String.split(",")
-        |> Enum.reduce(%{}, fn entry, acc ->
-          entry = String.trim(entry)
-
-          case String.split(entry, "=", parts: 2) do
-            [model_id, deployment_name] ->
-              Map.put(acc, String.trim(model_id), String.trim(deployment_name))
-
-            _ ->
-              acc
-          end
-        end)
-    end
-  end
-
   # ============================================================================
   # Azure Configuration Resolution
   # ============================================================================
 
-  defp resolve_azure_config(model, opts) do
+  defp resolve_azure_config(model, opts, resolved) do
     azure_opts = opts.thinking_budgets || %{}
 
     api_version =
       Map.get(azure_opts, :azure_api_version) ||
-        System.get_env("AZURE_OPENAI_API_VERSION") ||
+        Map.get(resolved, :api_version) ||
         @default_api_version
 
-    # Try multiple sources for base URL
     base_url =
       case Map.get(azure_opts, :azure_base_url) do
         nil ->
-          case System.get_env("AZURE_OPENAI_BASE_URL") do
+          case Map.get(resolved, :base_url) do
             nil ->
-              # Try to build from resource name
               resource_name =
                 Map.get(azure_opts, :azure_resource_name) ||
-                  System.get_env("AZURE_OPENAI_RESOURCE_NAME")
+                  Map.get(resolved, :resource_name)
 
               if resource_name do
                 build_default_base_url(resource_name)
               else
-                # Fall back to model base URL
                 model.base_url
               end
 
@@ -233,7 +217,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
       end
 
     if !base_url || base_url == "" do
-      raise "Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, or pass azureBaseUrl, azureResourceName, or model.base_url."
+      raise "Azure OpenAI base URL is required. Configure providers.azure_openai_responses, pass azure_base_url/azure_resource_name in stream options, or set model.base_url."
     end
 
     {normalize_base_url(base_url), api_version}
@@ -251,8 +235,8 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   # Request Building
   # ============================================================================
 
-  defp build_request(model, context, opts, api_key, deployment_name) do
-    {base_url, api_version} = resolve_azure_config(model, opts)
+  defp build_request(model, context, opts, api_key, deployment_name, resolved) do
+    {base_url, api_version} = resolve_azure_config(model, opts, resolved)
 
     messages = OpenAIResponsesShared.convert_messages(model, context, @tool_call_providers)
 

@@ -302,7 +302,12 @@ defmodule CodingAgent.BudgetEnforcer do
   # ============================================================================
 
   defp create_budget_for_run(run_id, opts) do
-    defaults = Application.get_env(:coding_agent, :budget_defaults, %{})
+    # app env (for test override) -> canonical config -> hardcoded default
+    defaults =
+      case Application.get_env(:coding_agent, :budget_defaults) do
+        nil -> resolve_config_budget_defaults()
+        app_defaults -> app_defaults
+      end
 
     budget =
       BudgetTracker.create_budget(
@@ -315,13 +320,24 @@ defmodule CodingAgent.BudgetEnforcer do
     budget
   end
 
+  defp resolve_config_budget_defaults do
+    config = LemonCore.Config.cached()
+    config.agent.budget_defaults || %{}
+  rescue
+    e ->
+      Logger.warning("Failed to resolve config budget defaults: #{Exception.message(e)}")
+      %{}
+  end
+
   defp get_parent_id(run_id) do
     case CodingAgent.RunGraph.get(run_id) do
       {:ok, record} -> Map.get(record, :parent)
       _ -> nil
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.debug("Failed to get parent ID for run #{inspect(run_id)}: #{Exception.message(e)}")
+      nil
   end
 
   defp format_budget_error(details) do

@@ -7,9 +7,9 @@ defmodule Ai.Providers.Bedrock do
 
   ## Configuration
 
-  AWS credentials can be provided via:
-  - Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
-  - Options passed to stream/3
+  AWS credentials and region should be resolved through canonical Lemon config
+  before requests reach this provider. Stream options still take precedence for
+  per-request overrides.
 
   ## Usage
 
@@ -30,8 +30,6 @@ defmodule Ai.Providers.Bedrock do
   alias Ai.Types.{TextContent, ThinkingContent, ToolCall}
   alias Ai.Types.{UserMessage, ToolResultMessage}
   alias Ai.Providers.TextSanitizer
-  alias LemonCore.Secrets
-
   require Logger
 
   # ============================================================================
@@ -80,8 +78,20 @@ defmodule Ai.Providers.Bedrock do
     output = init_output(model)
     trace_id = HttpTrace.new_trace_id("bedrock")
 
-    region = get_region(opts)
-    credentials = get_credentials(opts)
+    # Resolve provider config from canonical config + env + secrets
+    resolved =
+      try do
+        LemonCore.ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, opts)
+      rescue
+        e ->
+          Logger.warning("Failed to resolve Bedrock provider config: #{Exception.message(e)}")
+          %{}
+      end
+
+    resolved_headers = Map.get(resolved, :headers, %{})
+
+    region = get_region(opts, resolved_headers)
+    credentials = get_credentials(opts, resolved_headers)
 
     case credentials do
       {:error, reason} ->
@@ -190,26 +200,24 @@ defmodule Ai.Providers.Bedrock do
   # AWS Configuration
   # ============================================================================
 
-  defp get_region(opts) do
-    # Check options, then environment
+  defp get_region(opts, resolved_headers) do
     Map.get(opts.headers, "aws_region") ||
-      System.get_env("AWS_REGION") ||
-      System.get_env("AWS_DEFAULT_REGION") ||
+      Map.get(resolved_headers, "aws_region") ||
       "us-east-1"
   end
 
-  defp get_credentials(opts) do
+  defp get_credentials(opts, resolved_headers) do
     access_key =
       Map.get(opts.headers, "aws_access_key_id") ||
-        Secrets.fetch_value("AWS_ACCESS_KEY_ID")
+        Map.get(resolved_headers, "aws_access_key_id")
 
     secret_key =
       Map.get(opts.headers, "aws_secret_access_key") ||
-        Secrets.fetch_value("AWS_SECRET_ACCESS_KEY")
+        Map.get(resolved_headers, "aws_secret_access_key")
 
     session_token =
       Map.get(opts.headers, "aws_session_token") ||
-        Secrets.fetch_value("AWS_SESSION_TOKEN")
+        Map.get(resolved_headers, "aws_session_token")
 
     cond do
       is_nil(access_key) ->

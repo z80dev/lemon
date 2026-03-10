@@ -90,14 +90,7 @@ defmodule CodingAgent.Wasm.Config do
 
   defp extract_wasm_map(_), do: %{}
 
-  defp stringify_keys(map) when is_map(map) do
-    map
-    |> Enum.map(fn {k, v} -> {to_string(k), stringify_keys(v)} end)
-    |> Map.new()
-  end
-
-  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
-  defp stringify_keys(value), do: value
+  defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
   defp parse_boolean(nil, default), do: default
   defp parse_boolean(value, _default) when value in [true, "true", "1", 1], do: true

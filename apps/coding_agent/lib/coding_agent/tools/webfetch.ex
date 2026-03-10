@@ -803,6 +803,15 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp normalize_optional_string(_), do: nil
 
+  defp resolve_secret_ref(nil), do: nil
+  defp resolve_secret_ref(""), do: nil
+
+  defp resolve_secret_ref(secret_name) when is_binary(secret_name) do
+    normalize_optional_string(Secrets.fetch_value(secret_name))
+  end
+
+  defp resolve_secret_ref(_), do: nil
+
   defp present?(value), do: not is_nil(normalize_optional_string(value))
 
   defp elapsed_ms(started_ms), do: System.monotonic_time(:millisecond) - started_ms
@@ -878,8 +887,11 @@ defmodule CodingAgent.Tools.WebFetch do
         _ -> nil
       end
 
+    firecrawl_api_key_secret = normalize_optional_string(get_map_value(firecrawl_cfg, :api_key_secret, nil))
+
     firecrawl_api_key =
       normalize_optional_string(get_map_value(firecrawl_cfg, :api_key, nil)) ||
+        resolve_secret_ref(firecrawl_api_key_secret) ||
         normalize_optional_string(Secrets.fetch_value("FIRECRAWL_API_KEY"))
 
     firecrawl_timeout =

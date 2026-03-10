@@ -468,28 +468,30 @@ defmodule CodingAgent.SettingsManagerTest do
       File.mkdir_p!(config_dir)
 
       config_content = """
-      [agent]
-      default_provider = "openai"
-      default_model = "gpt-4"
-      default_thinking_level = "low"
+      [defaults]
+      provider = "openai"
+      model = "gpt-4"
+      thinking_level = "low"
+
+      [runtime]
       theme = "light"
       extension_paths = ["/custom/extensions"]
 
-      [agent.compaction]
+      [runtime.compaction]
       enabled = false
       reserve_tokens = 4096
       keep_recent_tokens = 5000
 
-      [agent.retry]
+      [runtime.retry]
       enabled = true
       max_retries = 5
       base_delay_ms = 500
 
-      [agent.shell]
+      [runtime.shell]
       path = "/bin/bash"
       command_prefix = "export PATH=/usr/local/bin:$PATH &&"
 
-      [agent.tools]
+      [runtime.tools]
       auto_resize_images = false
       """
 

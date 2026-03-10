@@ -571,6 +571,10 @@ Run with: `mix test --include integration`
 
 ## Environment Variables
 
+Provider env vars are part of Lemon's canonical override layer and should be
+resolved centrally through `LemonCore.ProviderConfigResolver` / provider config,
+not by adding new direct env reads inside provider modules.
+
 | Variable | Used By | Purpose |
 |----------|---------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic provider | API authentication |
