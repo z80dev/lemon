@@ -49,14 +49,14 @@ defmodule LemonRouter.SessionCoordinatorTest do
         Application.get_env(:lemon_router, :session_coordinator_supervisor)
 
     if is_pid(Process.whereis(LemonRouter.SessionCoordinatorSupervisor)) do
-      Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+      safe_unregister(LemonRouter.SessionCoordinatorSupervisor)
     end
 
     Process.register(coord_supervisor, LemonRouter.SessionCoordinatorSupervisor)
 
     on_exit(fn ->
       if is_pid(Process.whereis(LemonRouter.SessionCoordinatorSupervisor)) do
-        Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+        safe_unregister(LemonRouter.SessionCoordinatorSupervisor)
       end
 
       if is_pid(original) do
@@ -175,7 +175,10 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert SessionCoordinator.active_run_for_session(session_key) == {:ok, "run1"}
 
     assert [%{session_key: ^session_key, run_id: "run1"}] =
-             Enum.filter(SessionCoordinator.list_active_sessions(), &(&1.session_key == session_key))
+             Enum.filter(
+               SessionCoordinator.list_active_sessions(),
+               &(&1.session_key == session_key)
+             )
 
     SessionCoordinator.cancel(session_key, :user_requested)
     assert_receive {:aborted, "run1", :user_requested}, 500
@@ -235,5 +238,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     :ok
+  end
+
+  defp safe_unregister(name) do
+    Process.unregister(name)
+  rescue
+    ArgumentError -> :ok
   end
 end

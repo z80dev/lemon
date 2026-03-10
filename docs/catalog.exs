@@ -2,8 +2,62 @@
   %{
     path: "docs/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-08],
+    last_reviewed: ~D[2026-03-10],
     max_age_days: 60
+  },
+  %{
+    path: "docs/for-dummies/README.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/01-big-picture.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/02-message-journey.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/03-the-front-door.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/04-the-traffic-cop.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/05-the-engine-room.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/06-the-agent.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/07-talking-to-llms.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/for-dummies/08-the-foundation.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-10],
+    max_age_days: 90
   },
   %{
     path: "docs/assistant_bootstrap_contract.md",
@@ -14,7 +68,7 @@
   %{
     path: "docs/architecture_boundaries.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-08],
+    last_reviewed: ~D[2026-03-10],
     max_age_days: 60
   },
   %{
@@ -74,7 +128,7 @@
   %{
     path: "docs/quality_harness.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-03-10],
     max_age_days: 60
   },
   %{

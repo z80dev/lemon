@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Lemon.Quality do
   use Mix.Task
 
   alias LemonCore.Config.Modular
-  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureRulesCheck, DocsCheck}
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureDocs, ArchitectureRulesCheck, DocsCheck}
 
   @shortdoc "Run docs and architecture quality checks"
   @moduledoc """
@@ -39,10 +39,11 @@ defmodule Mix.Tasks.Lemon.Quality do
       end
 
     # Run duplicate test module guard
-    duplicate_test_result = run_duplicate_test_check()
+    duplicate_test_result = run_duplicate_test_check(root)
 
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
+      {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
       {:architecture, fn -> ArchitectureCheck.run(root: root) end},
       {:architecture_rules, fn -> ArchitectureRulesCheck.run(root: root) end}
     ]
@@ -83,10 +84,11 @@ defmodule Mix.Tasks.Lemon.Quality do
     end
   end
 
-  defp run_duplicate_test_check do
+  defp run_duplicate_test_check(root) do
     Mix.shell().info("Running duplicate test module check...")
+
     try do
-      Mix.Task.rerun("lemon.check_duplicate_tests")
+      Mix.Task.rerun("lemon.check_duplicate_tests", ["--root", root])
       Mix.shell().info("[ok] duplicate test module check passed")
       :ok
     rescue

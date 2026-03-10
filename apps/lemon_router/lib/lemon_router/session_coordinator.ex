@@ -10,8 +10,7 @@ defmodule LemonRouter.SessionCoordinator do
   require Logger
 
   alias LemonGateway.ExecutionRequest
-
-  @followup_debounce_ms 500
+  alias LemonRouter.{SessionState, SessionTransitions}
 
   @type submission :: %{
           required(:run_id) => binary(),
@@ -107,14 +106,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   @impl true
   def init(opts) do
-    {:ok,
-     %{
-       conversation_key: Keyword.fetch!(opts, :conversation_key),
-       active: nil,
-       queue: [],
-       last_followup_at_ms: nil,
-       pending_steers: %{}
-     }}
+    {:ok, SessionState.new(opts)}
   end
 
   @impl true
@@ -130,94 +122,100 @@ defmodule LemonRouter.SessionCoordinator do
 
   def handle_call({:submit, submission}, _from, state) do
     submission = normalize_submission(submission)
-    mode = normalize_queue_mode(submission.queue_mode)
 
-    state =
-      submission
-      |> maybe_promote_auto_followup(mode, state)
-      |> enqueue_by_mode(state)
+    {:reply, reply, next_state} =
+      apply_transition(
+        SessionTransitions.submit(state, submission, System.monotonic_time(:millisecond)),
+        state,
+        reply?: true
+      )
 
-    {state, start_result} = maybe_start_next(state, return_result?: true)
-
-    case start_result do
-      {:error, reason} -> {:reply, {:error, reason}, state}
-      _ -> {:reply, :ok, state}
-    end
+    {:reply, reply, next_state}
   end
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    state =
-      state
-      |> clear_queue()
-      |> clear_pending_steers()
-      |> maybe_cancel_active(reason)
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.cancel(state, reason), state)
 
-    {:noreply, state}
+    {:noreply, next_state}
   end
 
   def handle_cast({:cancel_session, session_key, reason}, state) do
-    state =
-      if session_present?(state, session_key) do
-        maybe_cancel_active_for_session(state, session_key, reason)
-      else
-        state
-      end
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.cancel_session(state, session_key, reason), state)
 
-    {:noreply, state}
+    {:noreply, next_state}
   end
 
   def handle_cast({:abort_session, session_key, reason}, state) do
-    state =
-      if session_present?(state, session_key) do
-        state
-        |> drop_session_queue(session_key)
-        |> drop_session_pending_steers(session_key)
-        |> maybe_cancel_active_for_session(session_key, reason)
-      else
-        state
-      end
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.abort_session(state, session_key, reason), state)
 
-    {:noreply, state}
+    {:noreply, next_state}
   end
 
   @impl true
   def handle_info(
         {:DOWN, mon_ref, :process, pid, _reason},
-        %{active: %{pid: pid, mon_ref: mon_ref}} = state
+        %SessionState{active: %{pid: pid, mon_ref: mon_ref}} = state
       ) do
-    state =
-      state
-      |> clear_active_session_registry()
-      |> flush_pending_steers_for_active()
-      |> Map.put(:active, nil)
+    state = clear_active_session_registry(state)
 
-    send(self(), :maybe_start_next)
-    {:noreply, state}
+    {:noreply, next_state} =
+      apply_transition(
+        SessionTransitions.active_down(state, pid, mon_ref, System.monotonic_time(:millisecond)),
+        state
+      )
+
+    {:noreply, next_state}
   end
 
   def handle_info({:steer_accepted, %ExecutionRequest{} = request}, state) do
-    {:noreply, clear_pending_steer(state, request.run_id)}
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+
+    {:noreply, next_state}
   end
 
   def handle_info({:steer_backlog_accepted, %ExecutionRequest{} = request}, state) do
-    {:noreply, clear_pending_steer(state, request.run_id)}
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+
+    {:noreply, next_state}
   end
 
   def handle_info({:steer_rejected, %ExecutionRequest{} = request}, state) do
-    state = fallback_pending_steer(state, request.run_id)
-    send(self(), :maybe_start_next)
-    {:noreply, state}
+    {:noreply, next_state} =
+      apply_transition(
+        SessionTransitions.steer_rejected(
+          state,
+          request.run_id,
+          System.monotonic_time(:millisecond)
+        ),
+        state
+      )
+
+    {:noreply, next_state}
   end
 
   def handle_info({:steer_backlog_rejected, %ExecutionRequest{} = request}, state) do
-    state = fallback_pending_steer(state, request.run_id)
-    send(self(), :maybe_start_next)
-    {:noreply, state}
+    {:noreply, next_state} =
+      apply_transition(
+        SessionTransitions.steer_rejected(
+          state,
+          request.run_id,
+          System.monotonic_time(:millisecond)
+        ),
+        state
+      )
+
+    {:noreply, next_state}
   end
 
   def handle_info(:maybe_start_next, state) do
-    {:noreply, maybe_start_next(state)}
+    {next_state, _result} = maybe_start_next(state, return_result?: false)
+    {:noreply, next_state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -247,6 +245,67 @@ defmodule LemonRouter.SessionCoordinator do
     :ok
   end
 
+  defp apply_transition({:ok, transitioned_state, effects}, original_state, opts \\ []) do
+    {next_state, reply} = apply_effects(transitioned_state, effects, original_state, opts)
+
+    if opts[:reply?] do
+      {:reply, reply, next_state}
+    else
+      {:noreply, next_state}
+    end
+  end
+
+  defp apply_effects(state, effects, original_state, opts) do
+    Enum.reduce(effects, {state, :ok}, fn effect, {state_acc, reply_acc} ->
+      apply_effect(effect, state_acc, reply_acc, original_state, opts)
+    end)
+  end
+
+  defp apply_effect(:maybe_start_next, state, reply_acc, _original_state, opts) do
+    {next_state, start_result} =
+      maybe_start_next(state, return_result?: Keyword.get(opts, :reply?, false))
+
+    {next_state, merge_reply(reply_acc, start_result)}
+  end
+
+  defp apply_effect({:cancel_active, reason}, state, reply_acc, _original_state, _opts) do
+    {maybe_cancel_active(state, reason), reply_acc}
+  end
+
+  defp apply_effect(
+         {:dispatch_steer, active_run_id, steer_mode, submission, _fallback_mode},
+         state,
+         reply_acc,
+         _original_state,
+         _opts
+       ) do
+    case dispatch_steer(active_run_id, steer_mode, submission.execution_request) do
+      :ok ->
+        {state, reply_acc}
+
+      :error ->
+        {:ok, next_state, extra_effects} =
+          SessionTransitions.dispatch_steer_failed(
+            state,
+            submission.run_id,
+            System.monotonic_time(:millisecond)
+          )
+
+        apply_effects(next_state, extra_effects, state, [])
+        |> then(fn {resolved_state, _} -> {resolved_state, reply_acc} end)
+    end
+  end
+
+  defp apply_effect(:noop, state, reply_acc, _original_state, _opts), do: {state, reply_acc}
+
+  defp merge_reply(:ok, :noop), do: :ok
+  defp merge_reply(:ok, :started), do: :ok
+  defp merge_reply(:ok, {:error, reason}), do: {:error, reason}
+  defp merge_reply(reply, :ok), do: reply
+  defp merge_reply(reply, :noop), do: reply
+  defp merge_reply(reply, :started), do: reply
+  defp merge_reply(reply, {:error, _reason}), do: reply
+
   defp normalize_submission(submission) do
     execution_request = fetch(submission, :execution_request)
 
@@ -269,145 +328,13 @@ defmodule LemonRouter.SessionCoordinator do
     }
   end
 
-  defp normalize_queue_mode(:collect), do: :collect
-  defp normalize_queue_mode(:followup), do: :followup
-  defp normalize_queue_mode(:steer), do: :steer
-  defp normalize_queue_mode(:steer_backlog), do: :steer_backlog
-  defp normalize_queue_mode(:interrupt), do: :interrupt
-  defp normalize_queue_mode(_), do: :collect
-
-  defp maybe_promote_auto_followup(submission, :followup, %{active: %{}}) do
-    meta = submission.meta || %{}
-
-    if fetch(meta, :task_auto_followup) == true or fetch(meta, :delegated_auto_followup) == true do
-      %{submission | queue_mode: :steer_backlog}
-    else
-      submission
-    end
-  end
-
-  defp maybe_promote_auto_followup(submission, _mode, _state), do: submission
-
-  defp enqueue_by_mode(%{queue_mode: :collect} = submission, state) do
-    %{state | queue: state.queue ++ [submission]}
-  end
-
-  defp enqueue_by_mode(%{queue_mode: :followup} = submission, state) do
-    now = System.monotonic_time(:millisecond)
-
-    case maybe_merge_followup(state.queue, submission, state.last_followup_at_ms, now) do
-      {:merged, queue} -> %{state | queue: queue, last_followup_at_ms: now}
-      :no_merge -> %{state | queue: state.queue ++ [submission], last_followup_at_ms: now}
-    end
-  end
-
-  defp enqueue_by_mode(%{queue_mode: :steer} = submission, state) do
-    steer_or_fallback(submission, :followup, :steer, state)
-  end
-
-  defp enqueue_by_mode(%{queue_mode: :steer_backlog} = submission, state) do
-    steer_or_fallback(submission, :collect, :steer_backlog, state)
-  end
-
-  defp enqueue_by_mode(%{queue_mode: :interrupt} = submission, state) do
-    state = maybe_cancel_active(state, :interrupted)
-    %{state | queue: [submission | state.queue]}
-  end
-
-  defp enqueue_by_mode(submission, state) do
-    %{state | queue: state.queue ++ [submission]}
-  end
-
-  defp steer_or_fallback(
-         submission,
-         fallback_mode,
-         steer_mode,
-         %{active: %{run_id: active_run_id}} = state
-       )
-       when is_binary(active_run_id) do
-    case gateway_run_pid(active_run_id) do
-      nil ->
-        enqueue_by_mode(%{submission | queue_mode: fallback_mode}, state)
-
-      run_pid ->
-        GenServer.cast(run_pid, {steer_mode, submission.execution_request, self()})
-
-        pending = Map.get(state.pending_steers, active_run_id, [])
-
-        %{
-          state
-          | pending_steers:
-              Map.put(state.pending_steers, active_run_id, [{submission, fallback_mode} | pending])
-        }
-    end
-  rescue
-    _ -> enqueue_by_mode(%{submission | queue_mode: fallback_mode}, state)
-  end
-
-  defp steer_or_fallback(submission, fallback_mode, _steer_mode, state) do
-    enqueue_by_mode(%{submission | queue_mode: fallback_mode}, state)
-  end
-
-  defp maybe_merge_followup(queue, submission, last_followup_at_ms, now_ms) do
-    cond do
-      is_nil(last_followup_at_ms) ->
-        :no_merge
-
-      now_ms - last_followup_at_ms > @followup_debounce_ms ->
-        :no_merge
-
-      queue == [] ->
-        :no_merge
-
-      true ->
-        case List.pop_at(queue, -1) do
-          {nil, _rest} ->
-            :no_merge
-
-          {%{queue_mode: :followup} = previous, rest} ->
-            {:merged, rest ++ [merge_followup_submission(previous, submission)]}
-
-          {_other, _rest} ->
-            :no_merge
-        end
-    end
-  end
-
-  defp merge_followup_submission(previous, current) do
-    merged_prompt =
-      merge_prompt(previous.execution_request.prompt, current.execution_request.prompt)
-
-    previous_request = previous.execution_request
-
-    meta = merge_user_message_meta(previous.meta || %{}, current.meta || %{})
-
-    %{
-      previous
-      | run_id: current.run_id,
-        session_key: current.session_key,
-        meta: meta,
-        execution_request: %{
-          previous_request
-          | run_id: current.run_id,
-            prompt: merged_prompt,
-            meta:
-              merge_user_message_meta(
-                previous_request.meta || %{},
-                current.execution_request.meta || %{}
-              )
-        }
-    }
-  end
-
-  defp maybe_start_next(state, opts \\ [])
-
-  defp maybe_start_next(%{active: nil, queue: [next | rest]} = state, opts) do
+  defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
     case start_run_process(next, self(), state.conversation_key) do
       {:ok, pid} when is_pid(pid) ->
         mon_ref = Process.monitor(pid)
         put_active_session_registry(next)
 
-        next_state = %{
+        next_state = %SessionState{
           state
           | active: %{
               pid: pid,
@@ -418,24 +345,22 @@ defmodule LemonRouter.SessionCoordinator do
             queue: rest
         }
 
-        if opts[:return_result?], do: {next_state, :started}, else: next_state
+        if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
       {:error, reason} ->
         Logger.warning(
           "SessionCoordinator failed to start run run_id=#{inspect(next.run_id)} key=#{inspect(state.conversation_key)} reason=#{inspect(reason)}"
         )
 
-        next_state = %{state | queue: rest}
+        next_state = %SessionState{state | queue: rest}
 
-        if opts[:return_result?], do: {next_state, {:error, reason}}, else: next_state
+        if opts[:return_result?], do: {next_state, {:error, reason}}, else: {next_state, :ok}
     end
   end
 
-  defp maybe_start_next(state, opts) do
-    if opts[:return_result?], do: {state, :noop}, else: state
-  end
+  defp maybe_start_next(state, _opts), do: {state, :noop}
 
-  defp maybe_cancel_active(%{active: %{pid: pid}} = state, reason) when is_pid(pid) do
+  defp maybe_cancel_active(%SessionState{active: %{pid: pid}} = state, reason) when is_pid(pid) do
     LemonRouter.RunProcess.abort(pid, reason)
     state
   rescue
@@ -444,16 +369,19 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_cancel_active(state, _reason), do: state
 
-  defp maybe_cancel_active_for_session(
-         %{active: %{session_key: session_key}} = state,
-         session_key,
-         reason
-       )
-       when is_binary(session_key) do
-    maybe_cancel_active(state, reason)
-  end
+  defp dispatch_steer(active_run_id, steer_mode, %ExecutionRequest{} = request)
+       when steer_mode in [:steer, :steer_backlog] do
+    case gateway_run_pid(active_run_id) do
+      nil ->
+        :error
 
-  defp maybe_cancel_active_for_session(state, _session_key, _reason), do: state
+      run_pid ->
+        GenServer.cast(run_pid, {steer_mode, request, self()})
+        :ok
+    end
+  rescue
+    _ -> :error
+  end
 
   defp put_active_session_registry(%{session_key: session_key, run_id: run_id}) do
     if is_binary(session_key) do
@@ -467,7 +395,7 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp clear_active_session_registry(
-         %{active: %{session_key: session_key, run_id: run_id}} = state
+         %SessionState{active: %{session_key: session_key, run_id: run_id}} = state
        )
        when is_binary(session_key) do
     case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
@@ -484,91 +412,6 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp clear_active_session_registry(state), do: state
-
-  defp clear_pending_steer(state, submission_run_id) do
-    update_pending_steers(state, submission_run_id, :clear)
-  end
-
-  defp fallback_pending_steer(state, submission_run_id) do
-    case take_pending_steer(state.pending_steers, submission_run_id) do
-      {nil, pending_steers} ->
-        %{state | pending_steers: pending_steers}
-
-      {{submission, fallback_mode, _active_run_id}, pending_steers} ->
-        enqueue_by_mode(%{submission | queue_mode: fallback_mode}, %{
-          state
-          | pending_steers: pending_steers
-        })
-    end
-  end
-
-  defp flush_pending_steers_for_active(%{active: %{run_id: active_run_id}} = state)
-       when is_binary(active_run_id) do
-    pending = Map.get(state.pending_steers, active_run_id, [])
-    pending_steers = Map.delete(state.pending_steers, active_run_id)
-
-    Enum.reduce(pending, %{state | pending_steers: pending_steers}, fn {submission, fallback_mode},
-                                                                       acc ->
-      enqueue_by_mode(%{submission | queue_mode: fallback_mode}, acc)
-    end)
-  end
-
-  defp flush_pending_steers_for_active(state), do: state
-
-  defp update_pending_steers(state, submission_run_id, op) do
-    {found, updated} =
-      Enum.reduce(state.pending_steers, {nil, %{}}, fn {active_run_id, entries},
-                                                       {found_acc, acc} ->
-        {matched, rest} =
-          Enum.split_with(entries, fn {submission, _mode} ->
-            submission.run_id == submission_run_id
-          end)
-
-        found_acc =
-          case {found_acc, matched} do
-            {nil, [{submission, fallback_mode} | _]} -> {submission, fallback_mode, active_run_id}
-            _ -> found_acc
-          end
-
-        if rest == [] do
-          {found_acc, acc}
-        else
-          {found_acc, Map.put(acc, active_run_id, rest)}
-        end
-      end)
-
-    state = %{state | pending_steers: updated}
-
-    case {op, found} do
-      {:clear, _} ->
-        state
-
-      {:fallback, nil} ->
-        state
-
-      {:fallback, {submission, fallback_mode, _}} ->
-        enqueue_by_mode(%{submission | queue_mode: fallback_mode}, state)
-    end
-  end
-
-  defp take_pending_steer(pending_steers, submission_run_id) do
-    Enum.reduce_while(pending_steers, {nil, %{}}, fn {active_run_id, entries}, {found, acc} ->
-      {matched, rest} =
-        Enum.split_with(entries, fn {submission, _mode} ->
-          submission.run_id == submission_run_id
-        end)
-
-      acc = if rest == [], do: acc, else: Map.put(acc, active_run_id, rest)
-
-      case {found, matched} do
-        {nil, [{submission, fallback_mode} | _]} ->
-          {:cont, {{submission, fallback_mode, active_run_id}, acc}}
-
-        _ ->
-          {:cont, {found, acc}}
-      end
-    end)
-  end
 
   defp gateway_run_pid(run_id) when is_binary(run_id) do
     case Registry.lookup(LemonGateway.RunRegistry, run_id) do
@@ -617,74 +460,9 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp resume_conversation_key(_), do: nil
 
-  defp session_present?(state, session_key) do
-    active_session?(state.active, session_key) or
-      Enum.any?(state.queue, &(&1.session_key == session_key)) or
-      pending_steer_session?(state.pending_steers, session_key)
-  end
-
-  defp active_session?(%{session_key: session_key}, session_key) when is_binary(session_key),
-    do: true
-
-  defp active_session?(_, _), do: false
-
-  defp pending_steer_session?(pending_steers, session_key) do
-    Enum.any?(pending_steers, fn {_run_id, entries} ->
-      Enum.any?(entries, fn {submission, _mode} -> submission.session_key == session_key end)
-    end)
-  end
-
-  defp clear_queue(state), do: %{state | queue: []}
-
-  defp clear_pending_steers(state), do: %{state | pending_steers: %{}}
-
-  defp drop_session_queue(state, session_key) do
-    %{state | queue: Enum.reject(state.queue, &(&1.session_key == session_key))}
-  end
-
-  defp drop_session_pending_steers(state, session_key) do
-    pending_steers =
-      state.pending_steers
-      |> Enum.reduce(%{}, fn {active_run_id, entries}, acc ->
-        kept =
-          Enum.reject(entries, fn {submission, _mode} ->
-            submission.session_key == session_key
-          end)
-
-        if kept == [] do
-          acc
-        else
-          Map.put(acc, active_run_id, kept)
-        end
-      end)
-
-    %{state | pending_steers: pending_steers}
-  end
-
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
-
-  defp merge_prompt(nil, right), do: right || ""
-  defp merge_prompt(left, nil), do: left
-  defp merge_prompt(left, right), do: left <> "\n" <> right
-
-  defp merge_user_message_meta(left, right) when is_map(left) and is_map(right) do
-    right_user_msg_id = fetch(right, :user_msg_id)
-
-    if is_nil(right_user_msg_id) do
-      Map.merge(left, right)
-    else
-      left
-      |> Map.merge(right)
-      |> Map.put(:user_msg_id, right_user_msg_id)
-      |> Map.delete("user_msg_id")
-    end
-  end
-
-  defp merge_user_message_meta(left, _right) when is_map(left), do: left
-  defp merge_user_message_meta(_left, right) when is_map(right), do: right
-  defp merge_user_message_meta(_left, _right), do: %{}
 
   defp start_run_process(submission, coordinator_pid, conversation_key) do
     run_id = submission.run_id

@@ -12,6 +12,7 @@ Lemon now uses a multi-layer quality harness:
 ```bash
 # Docs + architecture checks
 mix lemon.quality
+mix lemon.architecture.docs --check
 
 # Coding eval harness
 mix lemon.eval
@@ -35,3 +36,4 @@ mix lemon.cleanup --apply --retention-days 21
 ## CI Gate
 
 Quality checks are wired in `.github/workflows/quality.yml` so pull requests fail when the quality harness fails.
+The architecture dependency table in `docs/architecture_boundaries.md` is generated from the canonical policy in `LemonCore.Quality.ArchitecturePolicy`; refresh it with `mix lemon.architecture.docs`.

@@ -6,6 +6,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
 
   import ExUnit.CaptureIO
 
+  alias LemonCore.Quality.ArchitecturePolicy
   alias Mix.Tasks.Lemon.Quality
 
   # Get the repo root (4 levels up from this test file)
@@ -139,5 +140,119 @@ defmodule Mix.Tasks.Lemon.QualityTest do
           assert function_exported?(Mix.Tasks.Lemon.Quality, :run, 1)
       end
     end
+  end
+
+  describe "architecture docs integration" do
+    test "reports stale architecture docs as a failing quality check" do
+      tmp_dir = create_tmp_quality_repo()
+
+      try do
+        stderr =
+          capture_io(:stderr, fn ->
+            stdout =
+              capture_io(:stdio, fn ->
+                try do
+                  Quality.run(["--root", tmp_dir])
+                rescue
+                  Mix.Error -> :ok
+                end
+              end)
+
+            send(self(), {:captured_stdout, stdout})
+          end)
+
+        assert_received {:captured_stdout, stdout}
+        output = stdout <> stderr
+
+        assert output =~ "[error] architecture_docs check failed"
+        assert output =~ "Architecture boundaries doc is stale"
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+  end
+
+  defp create_tmp_quality_repo do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_quality_repo_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(tmp_dir, "docs"))
+    File.write!(Path.join(tmp_dir, "docs/README.md"), "# Docs\n")
+
+    File.write!(
+      Path.join(tmp_dir, "docs/architecture_boundaries.md"),
+      """
+      # Architecture Boundaries
+
+      ## Direct Dependency Policy
+
+      <!-- architecture_policy:start -->
+      stale
+      <!-- architecture_policy:end -->
+
+      ## Enforcement
+      """
+    )
+
+    File.write!(
+      Path.join(tmp_dir, "docs/catalog.exs"),
+      """
+      [
+        %{path: "docs/README.md", owner: "@test", last_reviewed: ~D[2026-03-10], max_age_days: 60},
+        %{path: "docs/architecture_boundaries.md", owner: "@test", last_reviewed: ~D[2026-03-10], max_age_days: 60}
+      ]
+      """
+    )
+
+    ArchitecturePolicy.allowed_direct_deps()
+    |> Enum.each(fn {app, deps} ->
+      app_dir = Path.join(tmp_dir, "apps/#{app}")
+      File.mkdir_p!(app_dir)
+      File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
+    end)
+
+    tmp_dir
+  end
+
+  defp mix_file_for(app, deps) do
+    deps_source =
+      deps
+      |> Enum.map_join(",\n      ", fn dep -> "{:#{dep}, in_umbrella: true}" end)
+
+    deps_body =
+      case deps_source do
+        "" -> "[]"
+        _ -> "[\n      #{deps_source}\n    ]"
+      end
+
+    module_name =
+      app
+      |> Atom.to_string()
+      |> Macro.camelize()
+
+    """
+    defmodule #{module_name}.MixProject do
+      use Mix.Project
+
+      def project do
+        [
+          app: :#{app},
+          version: "0.1.0",
+          deps: deps()
+        ]
+      end
+
+      def application do
+        [extra_applications: [:logger]]
+      end
+
+      defp deps do
+        #{deps_body}
+      end
+    end
+    """
   end
 end

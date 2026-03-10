@@ -39,6 +39,9 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.EventBridge` | Cross-app event translation |
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel (Telegram, SMS, etc.) |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
+| `LemonCore.RunPhase` | Canonical cross-subsystem run lifecycle phase vocabulary |
+| `LemonCore.RunPhaseGraph` | Valid transition graph for canonical run lifecycle phases |
+| `LemonCore.RunPhaseEvent` | Canonical run phase-change payload builder for bus/event emission |
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
@@ -449,6 +452,10 @@ Anthropic provider auth is API-key based; use `mix lemon.secrets.set llm_anthrop
 ```bash
 # Run all quality checks
 mix lemon.quality
+
+# Verify or refresh the generated architecture dependency table
+mix lemon.architecture.docs --check
+mix lemon.architecture.docs
 
 # With config validation
 mix lemon.quality --validate-config

@@ -29,7 +29,15 @@ defmodule LemonGateway.Run do
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonCore.{ChatStateStore, ProgressStore, RunStore}
+  alias LemonCore.{
+    ChatStateStore,
+    ProgressStore,
+    RunPhase,
+    RunPhaseEvent,
+    RunPhaseGraph,
+    RunStore
+  }
+
   alias LemonGateway.{ChatState, Cwd, Event, ExecutionRequest}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
@@ -101,6 +109,8 @@ defmodule LemonGateway.Run do
           completed: false,
           lock_release_fn: release_fn,
           last_resume: job.resume,
+          current_phase: nil,
+          cancelled: false,
           delta_seq: 0,
           start_ts_ms: System.system_time(:millisecond),
           # Accumulated answer text for final event
@@ -197,6 +207,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_continue({:start_run, %{job: job}}, state) do
+    state = maybe_emit_phase_change(state, :dispatched_to_gateway)
     engine_id = engine_id_for(job)
     engine = resolve_engine(engine_id)
 
@@ -225,6 +236,7 @@ defmodule LemonGateway.Run do
       finalize(state, completed)
       {:stop, :normal, state}
     else
+      state = maybe_emit_phase_change(state, :starting_engine)
       renderer_state = state.renderer.init(%{engine: engine})
 
       # Resolve cwd from explicit job value; otherwise use gateway default/home.
@@ -323,6 +335,12 @@ defmodule LemonGateway.Run do
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     RunStore.append_event(run_ref, event)
 
+    state =
+      cond do
+        is_action_event(event) -> maybe_emit_phase_change(state, :streaming)
+        true -> state
+      end
+
     cond do
       is_started(event) ->
         Logger.debug(
@@ -375,6 +393,7 @@ defmodule LemonGateway.Run do
   # Handle delta events from engine (for streaming)
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
+    state = maybe_emit_phase_change(state, :streaming)
     new_seq = state.delta_seq + 1
 
     # Emit first_token telemetry on first delta
@@ -456,6 +475,7 @@ defmodule LemonGateway.Run do
           session_key: state.session_key
         })
 
+      state = %{state | cancelled: true}
       finalize(state, completed)
       {:stop, :normal, %{state | completed: true}}
     end
@@ -524,6 +544,13 @@ defmodule LemonGateway.Run do
 
   defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
+    terminal_phase = terminal_phase_for_completion(state, completed)
+
+    state =
+      case terminal_phase do
+        :completed -> maybe_emit_phase_change(state, :finalizing)
+        _ -> state
+      end
 
     # Release engine lock first (if acquired)
     if is_function(state.lock_release_fn) do
@@ -601,6 +628,9 @@ defmodule LemonGateway.Run do
 
     maybe_store_chat_state(state.job, completed)
     unregister_progress_mapping(state.job)
+
+    maybe_emit_phase_change(state, terminal_phase)
+    :ok
   end
 
   defp log_run_failure(state, %{__event__: :completed} = completed) do
@@ -669,6 +699,70 @@ defmodule LemonGateway.Run do
     meta = Map.merge(%{run_id: run_id}, extra_meta)
     event = DependencyManager.build_event(event_type, payload, meta)
     DependencyManager.broadcast(topic, event)
+  end
+
+  defp maybe_emit_phase_change(%{run_id: run_id} = state, phase) when is_binary(run_id) do
+    previous_phase = Map.get(state, :current_phase)
+
+    cond do
+      previous_phase == phase ->
+        state
+
+      not RunPhase.valid?(phase) ->
+        Logger.warning(
+          "Gateway run phase emission skipped run_id=#{inspect(run_id)} invalid_phase=#{inspect(phase)}"
+        )
+
+        state
+
+      is_nil(previous_phase) ->
+        emit_phase_change(state, phase, previous_phase)
+        %{state | current_phase: phase}
+
+      true ->
+        case RunPhaseGraph.transition(previous_phase, phase) do
+          :ok ->
+            emit_phase_change(state, phase, previous_phase)
+            %{state | current_phase: phase}
+
+          {:error, {:invalid_transition, _, _}} ->
+            Logger.warning(
+              "Gateway run phase emission skipped run_id=#{inspect(run_id)} previous_phase=#{inspect(previous_phase)} phase=#{inspect(phase)}"
+            )
+
+            state
+        end
+    end
+  end
+
+  defp maybe_emit_phase_change(state, _phase), do: state
+
+  defp emit_phase_change(state, phase, previous_phase) do
+    payload =
+      RunPhaseEvent.build(
+        run_id: state.run_id,
+        session_key: state.session_key,
+        phase: phase,
+        previous_phase: previous_phase,
+        source: :lemon_gateway_run
+      )
+
+    emit_to_bus(state.run_id, :run_phase_changed, payload, build_event_meta(state))
+  end
+
+  defp terminal_phase_for_completion(%{cancelled: true}, _completed), do: :aborted
+
+  defp terminal_phase_for_completion(_state, %{__event__: :completed} = completed) do
+    cond do
+      Map.get(completed, :ok) == true ->
+        :completed
+
+      Map.get(completed, :error) in [:user_requested, :interrupted, :new_session, :aborted] ->
+        :aborted
+
+      true ->
+        :failed
+    end
   end
 
   # Helper to build standard meta from state

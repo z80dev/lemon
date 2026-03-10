@@ -1,7 +1,7 @@
 defmodule LemonCore.Quality.ArchitectureCheckTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Quality.ArchitectureCheck
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitecturePolicy}
 
   @repo_root Path.expand("../../../../..", __DIR__)
 
@@ -46,6 +46,11 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert is_list(deps.lemon_core)
     end
 
+    test "delegates to architecture policy" do
+      assert ArchitectureCheck.allowed_direct_deps() ==
+               ArchitecturePolicy.allowed_direct_deps()
+    end
+
     test "lemon_core has no allowed dependencies" do
       deps = ArchitectureCheck.allowed_direct_deps()
       assert deps.lemon_core == []
@@ -58,6 +63,14 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert :lemon_core in known_apps
       assert :ai in known_apps
       assert :agent_core in known_apps
+    end
+
+    test "dependency lists are sorted deterministically" do
+      deps = ArchitecturePolicy.allowed_direct_deps()
+
+      assert Enum.all?(deps, fn {_app, allowed} ->
+               allowed == Enum.sort(allowed)
+             end)
     end
   end
 

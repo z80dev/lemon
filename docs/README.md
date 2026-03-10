@@ -37,6 +37,7 @@
 ## Product and Capability Docs
 
 - [`docs/skills.md`](skills.md)
+- [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/games-platform.md`](games-platform.md) - Agent-vs-Agent game platform (REST API + LiveView spectator)
 - [`docs/benchmarks.md`](benchmarks.md)
 - [`docs/tools/web.md`](tools/web.md)
@@ -86,4 +87,4 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
 5. **Review cycle**: docs are checked for staleness based on `max_age_days` in the catalog.
 
-*Last reviewed: 2026-03-08*
+*Last reviewed: 2026-03-10*

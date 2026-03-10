@@ -7,6 +7,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   - each app's source files do not reference forbidden umbrella namespaces
   """
 
+  alias LemonCore.Quality.ArchitecturePolicy
+
   @type issue :: %{
           code: atom(),
           message: String.t(),
@@ -21,43 +23,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
           issues: [issue()],
           actual_dependencies: %{optional(atom()) => [atom()]}
         }
-
-  @allowed_direct_deps %{
-    agent_core: [:ai, :lemon_core],
-    ai: [:lemon_core],
-    coding_agent: [:agent_core, :ai, :lemon_core, :lemon_skills],
-    coding_agent_ui: [:coding_agent],
-    lemon_automation: [:lemon_core, :lemon_router],
-    lemon_channels: [:lemon_core],
-    lemon_control_plane: [
-      :ai,
-      :coding_agent,
-      :lemon_automation,
-      :lemon_channels,
-      :lemon_core,
-      :lemon_games,
-      :lemon_gateway,
-      :lemon_router,
-      :lemon_skills
-    ],
-    lemon_core: [],
-    lemon_games: [:lemon_core],
-    lemon_gateway: [
-      :agent_core,
-      :ai,
-      :coding_agent,
-      :lemon_automation,
-      :lemon_channels,
-      :lemon_core
-    ],
-    lemon_mcp: [:agent_core, :coding_agent],
-    lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core, :lemon_gateway],
-    lemon_sim: [:agent_core, :ai, :lemon_core],
-    lemon_services: [],
-    lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    lemon_web: [:lemon_core, :lemon_games, :lemon_router],
-    market_intel: [:agent_core, :lemon_channels, :lemon_core]
-  }
 
   @app_namespaces %{
     agent_core: ["AgentCore"],
@@ -141,7 +106,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   Used for validating the architecture boundary constraints.
   """
   @spec allowed_direct_deps() :: %{optional(atom()) => [atom()]}
-  def allowed_direct_deps, do: @allowed_direct_deps
+  def allowed_direct_deps, do: ArchitecturePolicy.allowed_direct_deps()
 
   @spec load_actual_dependencies(String.t()) :: %{optional(atom()) => [atom()]}
   defp load_actual_dependencies(root) do
@@ -223,8 +188,10 @@ defmodule LemonCore.Quality.ArchitectureCheck do
 
   @spec check_unknown_apps([issue()], %{optional(atom()) => [atom()]}) :: [issue()]
   defp check_unknown_apps(issues, actual) do
+    allowed_direct_deps = allowed_direct_deps()
+
     Enum.reduce(actual, issues, fn {app, _deps}, acc ->
-      if Map.has_key?(@allowed_direct_deps, app) do
+      if Map.has_key?(allowed_direct_deps, app) do
         acc
       else
         [
@@ -242,7 +209,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
 
   @spec check_missing_apps([issue()], %{optional(atom()) => [atom()]}) :: [issue()]
   defp check_missing_apps(issues, actual) do
-    Enum.reduce(@allowed_direct_deps, issues, fn {app, _deps}, acc ->
+    Enum.reduce(allowed_direct_deps(), issues, fn {app, _deps}, acc ->
       if Map.has_key?(actual, app) do
         acc
       else
@@ -261,8 +228,10 @@ defmodule LemonCore.Quality.ArchitectureCheck do
 
   @spec check_dependency_violations([issue()], %{optional(atom()) => [atom()]}) :: [issue()]
   defp check_dependency_violations(issues, actual) do
+    allowed_direct_deps = allowed_direct_deps()
+
     Enum.reduce(actual, issues, fn {app, deps}, acc ->
-      allowed = Map.get(@allowed_direct_deps, app, [])
+      allowed = Map.get(allowed_direct_deps, app, [])
       forbidden = deps -- allowed
 
       Enum.reduce(forbidden, acc, fn dep, inner_acc ->
@@ -283,8 +252,10 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @spec check_namespace_violations([issue()], String.t(), %{optional(atom()) => [atom()]}) ::
           [issue()]
   defp check_namespace_violations(issues, root, actual) do
+    allowed_direct_deps = allowed_direct_deps()
+
     Enum.reduce(actual, issues, fn {app, _deps}, acc ->
-      allowed_owners = MapSet.new([app | Map.get(@allowed_direct_deps, app, [])])
+      allowed_owners = MapSet.new([app | Map.get(allowed_direct_deps, app, [])])
 
       app
       |> app_source_files(root)
@@ -377,7 +348,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   defp allowed_list(app) do
-    @allowed_direct_deps
+    allowed_direct_deps()
     |> Map.get(app, [])
     |> Enum.map(&to_string/1)
     |> Enum.join(", ")
