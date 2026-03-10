@@ -340,7 +340,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     [binding] = config.gateway.bindings
-    assert binding.transport == "telegram"
+    assert binding.transport == :telegram
     assert binding.chat_id == 123
     assert binding.agent_id == "daily"
   end

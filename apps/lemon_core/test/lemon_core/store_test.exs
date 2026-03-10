@@ -27,67 +27,6 @@ defmodule LemonCore.StoreTest do
     def list(_state, _table), do: {:error, :sqlite_busy}
   end
 
-  defmodule BlobTooBigBackend do
-    @behaviour LemonCore.Store.Backend
-
-    @impl true
-    def init(_opts) do
-      tid = :ets.new(:store_blob_too_big_backend, [:set, :public])
-      :ets.insert(tid, {:run_history_put_count, 0})
-      {:ok, %{tid: tid}}
-    end
-
-    @impl true
-    def put(%{tid: tid} = state, table, key, value) do
-      case table do
-        :run_history ->
-          [{:run_history_put_count, count}] = :ets.lookup(tid, :run_history_put_count)
-          :ets.insert(tid, {:run_history_put_count, count + 1})
-
-          if count == 0 do
-            {:error, {:sqlite_bind_failed, :blob_too_big}}
-          else
-            :ets.insert(tid, {{table, key}, value})
-            {:ok, state}
-          end
-
-        _ ->
-          :ets.insert(tid, {{table, key}, value})
-          {:ok, state}
-      end
-    end
-
-    @impl true
-    def get(%{tid: tid} = state, table, key) do
-      value =
-        case :ets.lookup(tid, {table, key}) do
-          [{{^table, ^key}, found}] -> found
-          _ -> nil
-        end
-
-      {:ok, value, state}
-    end
-
-    @impl true
-    def delete(%{tid: tid} = state, table, key) do
-      :ets.delete(tid, {table, key})
-      {:ok, state}
-    end
-
-    @impl true
-    def list(%{tid: tid} = state, table) do
-      items =
-        tid
-        |> :ets.tab2list()
-        |> Enum.flat_map(fn
-          {{^table, key}, value} -> [{key, value}]
-          _ -> []
-        end)
-
-      {:ok, items, state}
-    end
-  end
-
   defp unique_token do
     System.unique_integer([:positive, :monotonic])
   end
@@ -195,38 +134,31 @@ defmodule LemonCore.StoreTest do
       assert Enum.map(history, fn {_run_id, data} -> data.started_at end) == [3_000, 2_000, 1_000]
     end
 
-    test "applies ordering/limit consistently for canonical run_history rows" do
+    test "applies ordering/limit consistently via RunHistoryStore" do
       token = unique_token()
-      session_key = session_key(token)
+      session_key = "agent:rhs_ordering_#{token}:main"
 
       older_run = run_id(token, :older)
       newer_run = run_id(token, :newer)
 
-      :ok =
-        Store.put(
-          :run_history,
-          {session_key, 2_000, older_run},
-          %{
-            events: [%{kind: :older}],
-            summary: %{session_key: session_key},
-            session_key: session_key,
-            run_id: older_run,
-            started_at: 2_000
-          }
-        )
+      LemonCore.RunHistoryStore.put(session_key, 2_000, older_run, %{
+        events: [%{kind: :older}],
+        summary: %{session_key: session_key},
+        session_key: session_key,
+        run_id: older_run,
+        started_at: 2_000
+      })
 
-      :ok =
-        Store.put(
-          :run_history,
-          {session_key, 3_000, newer_run},
-          %{
-            events: [%{kind: :newer}],
-            summary: %{session_key: session_key},
-            session_key: session_key,
-            run_id: newer_run,
-            started_at: 3_000
-          }
-        )
+      LemonCore.RunHistoryStore.put(session_key, 3_000, newer_run, %{
+        events: [%{kind: :newer}],
+        summary: %{session_key: session_key},
+        session_key: session_key,
+        run_id: newer_run,
+        started_at: 3_000
+      })
+
+      # Use a synchronous call as a barrier to ensure async casts are applied
+      _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
 
       session_history = Store.get_run_history(session_key, limit: 10)
       assert Enum.map(session_history, &elem(&1, 0)) == [newer_run, older_run]
@@ -454,48 +386,29 @@ defmodule LemonCore.StoreTest do
       assert Process.alive?(Process.whereis(Store))
     end
 
-    test "finalize_run retries run_history write with compact payload on blob-too-big errors" do
-      {:ok, backend_state} = BlobTooBigBackend.init([])
-      original_state = swap_store_backend(BlobTooBigBackend, backend_state)
-      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
-
+    test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)
-      rid = run_id(token, :blob_retry)
-      long_text = String.duplicate("x", 25_000)
+      rid = run_id(token, :history_delegate)
 
       assert :ok =
                Store.put(:runs, rid, %{
-                 events: [%{type: :prompt, text: long_text}],
+                 events: [%{type: :prompt, text: "hello"}],
                  summary: nil,
                  started_at: 1_000
                })
 
       assert :ok =
                Store.finalize_run(rid, %{
-                 session_key: key,
-                 prompt: long_text,
-                 completed: %{ok: true, answer: long_text}
+                 session_key: key
                })
 
-      history = Store.get_run_history(key, limit: 5)
-      assert [{^rid, data}] = history
-      assert data.events == []
+      # Allow async cast to RunHistoryStore to complete
+      Process.sleep(100)
 
-      summary = data.summary || %{}
-      completed = summary[:completed] || summary["completed"] || %{}
-      answer = completed[:answer] || completed["answer"] || ""
-      prompt = summary[:prompt] || summary["prompt"] || ""
-
-      assert is_binary(answer)
-      assert is_binary(prompt)
-      assert String.contains?(answer, "[truncated")
-      assert String.contains?(prompt, "[truncated")
-
-      store_state = :sys.get_state(Store)
-
-      [{:run_history_put_count, 2}] =
-        :ets.lookup(store_state.backend_state.tid, :run_history_put_count)
+      history = Store.get_run_history(key, limit: 50)
+      assert {^rid, data} = Enum.find(history, fn {id, _} -> id == rid end)
+      assert data.session_key == key
     end
   end
 

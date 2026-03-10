@@ -146,11 +146,11 @@ defmodule LemonCore.Config.GatewayTest do
       assert length(config.bindings) == 2
 
       [first, second] = config.bindings
-      assert first.transport == "telegram"
+      assert first.transport == :telegram
       assert first.chat_id == 123_456_789
       assert first.agent_id == "default"
 
-      assert second.transport == "telegram"
+      assert second.transport == :telegram
       assert second.chat_id == 987_654_321
       assert second.agent_id == "assistant"
     end

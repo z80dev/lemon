@@ -30,8 +30,6 @@ defmodule LemonCore.Store do
   @session_policy_table :session_policies
   @runtime_policy_table :runtime_policy
   @runtime_policy_key :global
-  @compact_history_answer_bytes 16_000
-  @compact_history_prompt_bytes 8_000
   @default_introspection_retention_days 7
   @default_introspection_retention_ms @default_introspection_retention_days * 24 * 60 * 60 * 1000
   @default_introspection_query_limit 100
@@ -577,52 +575,10 @@ defmodule LemonCore.Store do
   end
 
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
-    limit = Keyword.get(opts, :limit, 10)
-
-    # Try the optimized path first: fetch a limited number of recent rows
-    # from SQL (avoids loading the entire table). If the backend doesn't
-    # support list_recent/3, fall back to a full table scan.
-    result =
-      if function_exported?(state.backend, :list_recent, 3) do
-        # Fetch more rows than needed because other sessions' entries
-        # may be interleaved. If we still don't get enough matches
-        # after filtering, we fall back to a full scan below.
-        prefetch_limit = limit * 20
-        state.backend.list_recent(state.backend_state, :run_history, prefetch_limit)
-      else
-        state.backend.list(state.backend_state, :run_history)
-      end
-
-    case result do
-      {:ok, entries, backend_state} ->
-        history = filter_run_history(entries, session_key, limit)
-
-        # If we used list_recent and didn't find enough matching entries,
-        # the session's history may be buried deeper — fall back to full scan.
-        {history, backend_state} =
-          if function_exported?(state.backend, :list_recent, 3) and
-               length(history) < limit do
-            case state.backend.list(state.backend_state, :run_history) do
-              {:ok, all_entries, bs} ->
-                {filter_run_history(all_entries, session_key, limit), bs}
-
-              _ ->
-                {history, backend_state}
-            end
-          else
-            {history, backend_state}
-          end
-
-        {:reply, history, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:list, :run_history, session_key, reason)
-        {:reply, [], state}
-
-      other ->
-        log_backend_unexpected(:list, :run_history, session_key, other)
-        {:reply, [], state}
-    end
+    # Delegate to the dedicated RunHistoryStore GenServer to avoid
+    # blocking the main Store with potentially large history I/O.
+    result = LemonCore.RunHistoryStore.get(session_key, opts)
+    {:reply, result, state}
   end
 
   def handle_call({:list_introspection_events, opts}, _from, state) do
@@ -854,12 +810,11 @@ defmodule LemonCore.Store do
             session_key = Map.get(summary, :session_key)
             started_at = record.started_at
 
-            # Store by session_key.
+            # Store history in the dedicated RunHistoryStore (separate SQLite DB)
+            # and update the sessions index in the main store.
             backend_state =
               cond do
                 is_binary(session_key) and session_key != "" ->
-                  history_key = {session_key, started_at, run_id}
-
                   history_data = %{
                     events: record.events,
                     summary: summary,
@@ -868,19 +823,14 @@ defmodule LemonCore.Store do
                     started_at: started_at
                   }
 
-                  case put_run_history_with_fallback(
-                         state.backend,
-                         backend_state,
-                         history_key,
-                         history_data
-                       ) do
-                    {:ok, bs} ->
-                      update_sessions_index(state.backend, bs, session_key, summary, started_at)
+                  LemonCore.RunHistoryStore.put(
+                    session_key,
+                    started_at,
+                    run_id,
+                    history_data
+                  )
 
-                    {:error, reason} ->
-                      log_backend_error(:put, :run_history, history_key, reason)
-                      backend_state
-                  end
+                  update_sessions_index(state.backend, backend_state, session_key, summary, started_at)
 
                 true ->
                   backend_state
@@ -1002,169 +952,6 @@ defmodule LemonCore.Store do
   end
 
   defp parse_agent_id(_), do: "default"
-
-  defp put_run_history_with_fallback(backend, backend_state, history_key, history_data) do
-    case backend.put(backend_state, :run_history, history_key, history_data) do
-      {:ok, backend_state} ->
-        {:ok, backend_state}
-
-      {:error, reason} = error ->
-        if blob_too_big_reason?(reason) do
-          compact = compact_history_payload(history_data)
-
-          Logger.warning(
-            "[LemonCore.Store] run_history payload too large; retrying compact write key=#{inspect(history_key)}"
-          )
-
-          case backend.put(backend_state, :run_history, history_key, compact) do
-            {:ok, compact_state} ->
-              {:ok, compact_state}
-
-            {:error, compact_reason} ->
-              {:error, {:compact_run_history_write_failed, compact_reason}}
-
-            other ->
-              {:error, {:compact_run_history_write_unexpected, other}}
-          end
-        else
-          error
-        end
-
-      other ->
-        {:error, {:run_history_write_unexpected, other}}
-    end
-  end
-
-  defp blob_too_big_reason?({:sqlite_bind_failed, :blob_too_big}), do: true
-
-  defp blob_too_big_reason?(reason) when is_binary(reason) do
-    String.contains?(String.downcase(reason), "too big")
-  end
-
-  defp blob_too_big_reason?(_), do: false
-
-  defp compact_history_payload(%{} = history_data) do
-    summary = Map.get(history_data, :summary)
-
-    history_data
-    |> Map.put(:events, [])
-    |> Map.put(:summary, compact_summary(summary))
-  end
-
-  defp compact_history_payload(other), do: other
-
-  defp compact_summary(nil), do: nil
-
-  defp compact_summary(summary) when is_map(summary) do
-    completed =
-      summary
-      |> map_get_any([:completed, "completed"])
-      |> compact_completed()
-
-    summary
-    |> map_put_any([:completed, "completed"], completed)
-    |> map_update_any(
-      [:prompt, "prompt"],
-      &truncate_binary_field(&1, @compact_history_prompt_bytes)
-    )
-    |> deep_truncate_text(@compact_history_answer_bytes)
-  end
-
-  defp compact_summary(other), do: other
-
-  defp compact_completed(nil), do: nil
-
-  defp compact_completed(completed) when is_map(completed) do
-    completed
-    |> map_update_any(
-      [:answer, "answer"],
-      &truncate_binary_field(&1, @compact_history_answer_bytes)
-    )
-    |> map_update_any(
-      [:error, "error"],
-      &truncate_binary_field(&1, @compact_history_prompt_bytes)
-    )
-  end
-
-  defp compact_completed(other), do: other
-
-  defp map_get_any(map, keys) when is_map(map) and is_list(keys) do
-    Enum.find_value(keys, fn key ->
-      Map.get(map, key)
-    end)
-  end
-
-  defp map_get_any(_map, _keys), do: nil
-
-  defp map_put_any(map, keys, value) when is_map(map) and is_list(keys) do
-    cond do
-      Enum.any?(keys, &Map.has_key?(map, &1)) ->
-        Enum.reduce(keys, map, fn key, acc ->
-          if Map.has_key?(acc, key), do: Map.put(acc, key, value), else: acc
-        end)
-
-      true ->
-        Map.put(map, hd(keys), value)
-    end
-  end
-
-  defp map_put_any(map, _keys, _value), do: map
-
-  defp map_update_any(map, keys, fun)
-       when is_map(map) and is_list(keys) and is_function(fun, 1) do
-    Enum.reduce(keys, map, fn key, acc ->
-      if Map.has_key?(acc, key), do: Map.update!(acc, key, fun), else: acc
-    end)
-  end
-
-  defp map_update_any(map, _keys, _fun), do: map
-
-  defp deep_truncate_text(term, max_bytes) when is_binary(term) do
-    truncate_binary_field(term, max_bytes)
-  end
-
-  defp deep_truncate_text(list, max_bytes) when is_list(list) do
-    Enum.map(list, &deep_truncate_text(&1, max_bytes))
-  end
-
-  defp deep_truncate_text(%{__struct__: _} = struct, max_bytes) do
-    struct
-    |> Map.from_struct()
-    |> deep_truncate_text(max_bytes)
-  end
-
-  defp deep_truncate_text(map, max_bytes) when is_map(map) do
-    Map.new(map, fn {k, v} -> {k, deep_truncate_text(v, max_bytes)} end)
-  end
-
-  defp deep_truncate_text(tuple, max_bytes) when is_tuple(tuple) do
-    tuple
-    |> Tuple.to_list()
-    |> Enum.map(&deep_truncate_text(&1, max_bytes))
-    |> List.to_tuple()
-  end
-
-  defp deep_truncate_text(term, _max_bytes), do: term
-
-  defp truncate_binary_field(value, max_bytes)
-       when is_binary(value) and byte_size(value) > max_bytes do
-    prefix = value |> binary_part(0, max_bytes) |> trim_to_valid_utf8()
-    "#{prefix}...[truncated #{byte_size(value) - byte_size(prefix)} bytes]"
-  end
-
-  defp truncate_binary_field(value, _max_bytes), do: value
-
-  defp trim_to_valid_utf8(<<>>), do: ""
-
-  defp trim_to_valid_utf8(binary) when is_binary(binary) do
-    if String.valid?(binary) do
-      binary
-    else
-      binary
-      |> binary_part(0, byte_size(binary) - 1)
-      |> trim_to_valid_utf8()
-    end
-  end
 
   defp normalize_introspection_event(event) when is_map(event) do
     event_id = MapHelpers.get_key(event, :event_id)
@@ -1298,6 +1085,11 @@ defmodule LemonCore.Store do
 
   defp normalize_introspection_limit(_), do: @default_introspection_query_limit
 
+  # 48 hours for idempotency entries
+  @idempotency_retention_ms 48 * 60 * 60 * 1000
+  # 48 hours for cron run entries
+  @cron_runs_retention_ms 48 * 60 * 60 * 1000
+
   @impl true
   def handle_info(:sweep_expired_chat_states, state) do
     backend_state = sweep_expired_chat_states(state.backend, state.backend_state)
@@ -1308,6 +1100,9 @@ defmodule LemonCore.Store do
         backend_state,
         state.introspection_retention_ms
       )
+
+    backend_state = sweep_expired_idempotency(state.backend, backend_state)
+    backend_state = sweep_expired_cron_runs(state.backend, backend_state)
 
     schedule_sweep()
     {:noreply, %{state | backend_state: backend_state}}
@@ -1402,20 +1197,60 @@ defmodule LemonCore.Store do
 
   defp introspection_event_timestamp(_key, _event), do: nil
 
-  # Shared filter/sort/limit logic for run history entries.
-  # Canonical run history key format: {session_key, started_at_ms, run_id}
-  defp filter_run_history(entries, session_key, limit) do
-    entries
-    |> Enum.filter(fn
-      {{key, _ts, _run_id}, _data} -> key == session_key
-      _ -> false
-    end)
-    |> Enum.sort_by(
-      fn {{_s, ts, _run_id}, _data} -> ts end,
-      :desc
-    )
-    |> Enum.take(limit)
-    |> Enum.map(fn {{_scope, _ts, run_id}, data} -> {run_id, data} end)
+  defp sweep_expired_idempotency(backend, backend_state) do
+    case backend.list(backend_state, :idempotency) do
+      {:ok, entries, backend_state} ->
+        cutoff_ms = System.system_time(:millisecond) - @idempotency_retention_ms
+
+        Enum.reduce(entries, backend_state, fn {key, value}, acc_state ->
+          inserted_at =
+            case value do
+              %{"inserted_at_ms" => ts} when is_integer(ts) -> ts
+              _ -> nil
+            end
+
+          if is_integer(inserted_at) and inserted_at < cutoff_ms do
+            case backend.delete(acc_state, :idempotency, key) do
+              {:ok, next_state} -> next_state
+              _ -> acc_state
+            end
+          else
+            acc_state
+          end
+        end)
+
+      _ ->
+        backend_state
+    end
+  end
+
+  defp sweep_expired_cron_runs(backend, backend_state) do
+    case backend.list(backend_state, :cron_runs) do
+      {:ok, entries, backend_state} ->
+        cutoff_ms = System.system_time(:millisecond) - @cron_runs_retention_ms
+
+        Enum.reduce(entries, backend_state, fn {key, value}, acc_state ->
+          # Use started_at_ms as the age reference for cron runs
+          started_at =
+            case value do
+              %{started_at_ms: ts} when is_integer(ts) -> ts
+              %{"started_at_ms" => ts} when is_integer(ts) -> ts
+              _ -> nil
+            end
+
+          if is_integer(started_at) and started_at < cutoff_ms do
+            case backend.delete(acc_state, :cron_runs, key) do
+              {:ok, next_state} -> next_state
+              _ -> acc_state
+            end
+          else
+            acc_state
+          end
+        end)
+
+      _ ->
+        backend_state
+    end
   end
 
   defp log_backend_error(op, table, key, reason) do

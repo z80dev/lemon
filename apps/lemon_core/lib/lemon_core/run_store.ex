@@ -4,6 +4,7 @@ defmodule LemonCore.RunStore do
   """
 
   alias LemonCore.Store
+  alias LemonCore.RunHistoryStore
 
   @spec get(binary()) :: term()
   def get(run_id), do: Store.get_run(run_id)
@@ -15,7 +16,7 @@ defmodule LemonCore.RunStore do
   def finalize(run_id, summary), do: Store.finalize_run(run_id, summary)
 
   @spec history(term(), keyword()) :: list()
-  def history(session_key, opts \\ []), do: Store.get_run_history(session_key, opts)
+  def history(session_key, opts \\ []), do: RunHistoryStore.get(session_key, opts)
 
   @spec list_sessions() :: [{term(), map()}]
   def list_sessions, do: Store.list(:sessions_index)
@@ -25,16 +26,7 @@ defmodule LemonCore.RunStore do
 
   @spec delete_history(term()) :: :ok
   def delete_history(session_key) do
-    Store.list(:run_history)
-    |> Enum.each(fn
-      {{^session_key, _ts, _run_id} = key, _value} ->
-        Store.delete(:run_history, key)
-
-      _ ->
-        :ok
-    end)
-
-    :ok
+    RunHistoryStore.delete_session(session_key)
   end
 
   @spec delete_session(term()) :: :ok

@@ -45,6 +45,7 @@ defmodule LemonCore.Application do
       {Phoenix.PubSub, name: LemonCore.PubSub},
       {LemonCore.ConfigCache, config_cache_opts},
       LemonCore.Store,
+      LemonCore.RunHistoryStore,
       LemonCore.ConfigReloader,
       LemonCore.ConfigReloader.Watcher,
       LemonCore.Browser.LocalServer
