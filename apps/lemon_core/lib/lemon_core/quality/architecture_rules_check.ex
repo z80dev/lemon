@@ -426,6 +426,61 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.delete(",
         "LemonCore.Store.list("
       ]
+    },
+    %{
+      code: :forbidden_channels_transport_app_env,
+      message:
+        "Runtime modules must not read transport config from Application.get_env; use LemonCore.GatewayConfig",
+      files: [
+        "apps/lemon_channels/lib/**/*.ex",
+        "apps/lemon_gateway/lib/**/*.ex",
+        "apps/lemon_core/lib/**/*.ex"
+      ],
+      exclude: [
+        "apps/lemon_core/lib/lemon_core/gateway_config.ex"
+      ],
+      patterns: [
+        "Application.get_env(:lemon_channels, :telegram)",
+        "Application.get_env(:lemon_channels, :discord)",
+        "Application.get_env(:lemon_channels, :xmtp)",
+        "Application.get_env(:lemon_channels, :gateway)"
+      ]
+    },
+    %{
+      code: :forbidden_router_policy_app_env,
+      message:
+        "Runtime modules must not read router policy from Application.get_env; use config defaults or PolicyStore",
+      files: [
+        "apps/lemon_router/lib/**/*.ex"
+      ],
+      exclude: [],
+      patterns: [
+        "Application.get_env(:lemon_router, :default_model)",
+        "Application.get_env(:lemon_router, :agent_policies)",
+        "Application.get_env(:lemon_router, :runtime_policy)"
+      ]
+    },
+    %{
+      code: :forbidden_provider_direct_env,
+      message:
+        "Provider modules must resolve config-backed provider env vars via LemonCore.ProviderConfigResolver",
+      files: [
+        "apps/ai/lib/ai/providers/google_vertex.ex",
+        "apps/ai/lib/ai/providers/azure_openai_responses.ex",
+        "apps/ai/lib/ai/providers/bedrock.ex"
+      ],
+      exclude: [],
+      patterns: [
+        ~s|System.get_env("GOOGLE_CLOUD_PROJECT")|,
+        ~s|System.get_env("GCLOUD_PROJECT")|,
+        ~s|System.get_env("GOOGLE_CLOUD_LOCATION")|,
+        ~s|System.get_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")|,
+        ~s|System.get_env("AZURE_OPENAI_API_VERSION")|,
+        ~s|System.get_env("AZURE_OPENAI_BASE_URL")|,
+        ~s|System.get_env("AZURE_OPENAI_RESOURCE_NAME")|,
+        ~s|System.get_env("AWS_REGION")|,
+        ~s|System.get_env("AWS_DEFAULT_REGION")|
+      ]
     }
   ]
 

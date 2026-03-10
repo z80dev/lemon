@@ -52,7 +52,9 @@ defmodule LemonCore.Config.Agent do
     :retry,
     :shell,
     :extension_paths,
-    :theme
+    :theme,
+    :budget_defaults,
+    :cli
   ]
 
   @type t :: %__MODULE__{
@@ -74,7 +76,9 @@ defmodule LemonCore.Config.Agent do
             command_prefix: String.t() | nil
           },
           extension_paths: [String.t()],
-          theme: String.t()
+          theme: String.t(),
+          budget_defaults: %{max_children: integer()},
+          cli: map()
         }
 
   @doc """
@@ -94,7 +98,9 @@ defmodule LemonCore.Config.Agent do
       retry: resolve_retry(agent_settings),
       shell: resolve_shell(agent_settings),
       extension_paths: resolve_extension_paths(agent_settings),
-      theme: resolve_theme(agent_settings)
+      theme: resolve_theme(agent_settings),
+      budget_defaults: resolve_budget_defaults(agent_settings),
+      cli: resolve_cli(agent_settings)
     }
   end
 
@@ -189,6 +195,93 @@ defmodule LemonCore.Config.Agent do
   defp resolve_theme(settings) do
     Helpers.get_env("LEMON_THEME", settings["theme"] || "lemon")
   end
+
+  defp resolve_budget_defaults(settings) do
+    budget = settings["budget_defaults"] || %{}
+
+    %{
+      max_children:
+        Helpers.get_env_int(
+          "LEMON_BUDGET_MAX_CHILDREN",
+          budget["max_children"] || 5
+        )
+    }
+  end
+
+  defp resolve_cli(settings) do
+    cli = settings["cli"] || %{}
+
+    %{
+      codex: resolve_codex_cli(cli["codex"] || %{}),
+      kimi: resolve_kimi_cli(cli["kimi"] || %{}),
+      opencode: resolve_opencode_cli(cli["opencode"] || %{}),
+      pi: resolve_pi_cli(cli["pi"] || %{}),
+      claude: resolve_claude_cli(cli["claude"] || %{})
+    }
+  end
+
+  defp resolve_codex_cli(codex) do
+    %{
+      extra_args: parse_string_list(codex["extra_args"]),
+      auto_approve: codex["auto_approve"] || false
+    }
+  end
+
+  defp resolve_kimi_cli(kimi) do
+    %{
+      extra_args: parse_string_list(kimi["extra_args"])
+    }
+  end
+
+  defp resolve_opencode_cli(opencode) do
+    %{
+      model: normalize_optional_string(opencode["model"])
+    }
+  end
+
+  defp resolve_pi_cli(pi) do
+    %{
+      extra_args: parse_string_list(pi["extra_args"]),
+      model: normalize_optional_string(pi["model"]),
+      provider: normalize_optional_string(pi["provider"])
+    }
+  end
+
+  defp resolve_claude_cli(claude) do
+    %{
+      dangerously_skip_permissions:
+        if(is_nil(claude["dangerously_skip_permissions"]),
+          do: true,
+          else: claude["dangerously_skip_permissions"]
+        ),
+      allowed_tools: parse_string_list(claude["allowed_tools"]),
+      scrub_env: normalize_scrub_env(claude["scrub_env"]),
+      env_allowlist: parse_string_list(claude["env_allowlist"]),
+      env_allow_prefixes: parse_string_list(claude["env_allow_prefixes"]),
+      env_overrides: normalize_env_overrides(claude["env_overrides"])
+    }
+  end
+
+  defp parse_string_list(nil), do: []
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  defp normalize_optional_string(nil), do: nil
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
+
+  defp normalize_scrub_env(nil), do: :auto
+  defp normalize_scrub_env("auto"), do: :auto
+  defp normalize_scrub_env("true"), do: true
+  defp normalize_scrub_env("false"), do: false
+  defp normalize_scrub_env(true), do: true
+  defp normalize_scrub_env(false), do: false
+  defp normalize_scrub_env(_), do: :auto
+
+  defp normalize_env_overrides(nil), do: %{}
+  defp normalize_env_overrides(map) when is_map(map), do: map
+  defp normalize_env_overrides(_), do: %{}
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

@@ -37,6 +37,15 @@ config :lemon_web, LemonWeb.Endpoint,
 config :lemon_web, :access_token, nil
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
+config :lemon_sim_ui, LemonSimUi.Endpoint,
+  url: [host: "localhost"],
+  render_errors: [
+    formats: [html: LemonSimUi.ErrorHTML, json: LemonSimUi.ErrorJSON],
+    layout: false
+  ],
+  pubsub_server: LemonCore.PubSub,
+  live_view: [signing_salt: "lemonsimuilv"]
+
 # MarketIntel ingestion feature flags.
 # Each flag gates the corresponding worker in the supervision tree.
 # Core infrastructure (Cache, Repo) always starts regardless.

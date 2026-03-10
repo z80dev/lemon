@@ -161,88 +161,35 @@ defmodule LemonCore.ExecApprovals do
   defp check_existing_approval(tool, action, session_key, agent_id, node_id) do
     action_hash = hash_action(action)
 
-    case check_global_approval(tool, action_hash) do
-      {:approved, :global} ->
-        {:approved, :global}
+    # Check scopes in priority order: global > node > agent > session
+    checks = [
+      {:global, fn -> ExecApprovalStore.get_global_policy(tool, action_hash) end,
+       fn -> ExecApprovalStore.get_global_policy(tool, :any) end},
+      if(node_id,
+        do:
+          {:node, fn -> ExecApprovalStore.get_node_policy(node_id, tool, action_hash) end,
+           fn -> ExecApprovalStore.get_node_policy(node_id, tool, :any) end}
+      ),
+      {:agent, fn -> ExecApprovalStore.get_agent_policy(agent_id, tool, action_hash) end,
+       fn -> ExecApprovalStore.get_agent_policy(agent_id, tool, :any) end},
+      {:session, fn -> ExecApprovalStore.get_session_policy(session_key, tool, action_hash) end,
+       fn -> ExecApprovalStore.get_session_policy(session_key, tool, :any) end}
+    ]
 
-      :not_approved ->
-        node_result =
-          if node_id do
-            case check_node_approval(node_id, tool, action_hash) do
-              {:approved, :node} -> {:approved, :node}
-              _ -> nil
-            end
-          else
-            nil
-          end
-
-        case node_result do
-          {:approved, :node} ->
-            {:approved, :node}
-
-          _ ->
-            case check_agent_approval(agent_id, tool, action_hash) do
-              {:approved, :agent} ->
-                {:approved, :agent}
-
-              :not_approved ->
-                case check_session_approval(session_key, tool, action_hash) do
-                  {:approved, :session} -> {:approved, :session}
-                  :not_approved -> :not_approved
-                end
-            end
-        end
-    end
+    checks
+    |> Enum.reject(&is_nil/1)
+    |> Enum.find_value(:not_approved, fn {scope, exact_fn, wildcard_fn} ->
+      check_approval_level(scope, exact_fn, wildcard_fn)
+    end)
   end
 
-  defp check_global_approval(tool, action_hash) do
-    case ExecApprovalStore.get_global_policy(tool, action_hash) do
-      %{approved: true} ->
-        {:approved, :global}
-
+  defp check_approval_level(scope, exact_fn, wildcard_fn) do
+    case exact_fn.() do
+      %{approved: true} -> {:approved, scope}
       _ ->
-        case ExecApprovalStore.get_global_policy(tool, :any) do
-          %{approved: true} -> {:approved, :global}
-          _ -> :not_approved
-        end
-    end
-  end
-
-  defp check_node_approval(node_id, tool, action_hash) do
-    case ExecApprovalStore.get_node_policy(node_id, tool, action_hash) do
-      %{approved: true} ->
-        {:approved, :node}
-
-      _ ->
-        case ExecApprovalStore.get_node_policy(node_id, tool, :any) do
-          %{approved: true} -> {:approved, :node}
-          _ -> :not_approved
-        end
-    end
-  end
-
-  defp check_agent_approval(agent_id, tool, action_hash) do
-    case ExecApprovalStore.get_agent_policy(agent_id, tool, action_hash) do
-      %{approved: true} ->
-        {:approved, :agent}
-
-      _ ->
-        case ExecApprovalStore.get_agent_policy(agent_id, tool, :any) do
-          %{approved: true} -> {:approved, :agent}
-          _ -> :not_approved
-        end
-    end
-  end
-
-  defp check_session_approval(session_key, tool, action_hash) do
-    case ExecApprovalStore.get_session_policy(session_key, tool, action_hash) do
-      %{approved: true} ->
-        {:approved, :session}
-
-      _ ->
-        case ExecApprovalStore.get_session_policy(session_key, tool, :any) do
-          %{approved: true} -> {:approved, :session}
-          _ -> :not_approved
+        case wildcard_fn.() do
+          %{approved: true} -> {:approved, scope}
+          _ -> nil
         end
     end
   end

@@ -50,9 +50,9 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
-      default_provider = "anthropic"
+      [defaults]
+      model = "claude-sonnet-4"
+      provider = "anthropic"
       """)
 
       output =
@@ -70,8 +70,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Capture both stdout and stderr
@@ -109,8 +109,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
+      [defaults]
+      model = "claude-sonnet-4"
       """)
 
       output =
@@ -129,8 +129,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "global-model"
+      [defaults]
+      model = "global-model"
       """)
 
       # Create project config with errors
@@ -139,8 +139,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(project_config)
 
       File.write!(Path.join(project_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Capture both stdout and stderr
@@ -177,9 +177,9 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
-      default_provider = "anthropic"
+      [defaults]
+      model = "claude-sonnet-4"
+      provider = "anthropic"
 
       [logging]
       level = "info"
@@ -249,8 +249,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "valid-model"
+      [defaults]
+      model = "valid-model"
       """)
 
       # Should not exit
@@ -267,8 +267,8 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       assert_raise Mix.Error, fn ->

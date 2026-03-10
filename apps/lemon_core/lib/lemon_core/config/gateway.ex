@@ -16,6 +16,11 @@ defmodule LemonCore.Config.Gateway do
       default_cwd = "~/workspace"
       auto_resume = false
       enable_telegram = true
+      enable_discord = false
+      enable_farcaster = false
+      enable_email = false
+      enable_xmtp = false
+      enable_webhook = false
       require_engine_lock = true
       engine_lock_timeout_ms = 60000
 
@@ -25,7 +30,7 @@ defmodule LemonCore.Config.Gateway do
       agent_id = "default"
 
       [gateway.telegram]
-      token = "${TELEGRAM_BOT_TOKEN}"
+      bot_token_secret = "telegram_bot_token"
 
       [gateway.telegram.compaction]
       enabled = true
@@ -50,6 +55,11 @@ defmodule LemonCore.Config.Gateway do
     :default_cwd,
     :auto_resume,
     :enable_telegram,
+    :enable_discord,
+    :enable_farcaster,
+    :enable_email,
+    :enable_xmtp,
+    :enable_webhook,
     :require_engine_lock,
     :engine_lock_timeout_ms,
     :projects,
@@ -57,6 +67,12 @@ defmodule LemonCore.Config.Gateway do
     :sms,
     :queue,
     :telegram,
+    :discord,
+    :farcaster,
+    :email,
+    :xmtp,
+    :webhook,
+    :voice,
     :engines
   ]
 
@@ -81,7 +97,29 @@ defmodule LemonCore.Config.Gateway do
 
   @type telegram_config :: %{
           token: String.t() | nil,
+          bot_token_secret: String.t() | nil,
           compaction: telegram_compaction()
+        }
+
+  @type voice_config :: %{
+          enabled: boolean() | nil,
+          twilio_account_sid: String.t() | nil,
+          twilio_account_sid_secret: String.t() | nil,
+          twilio_auth_token: String.t() | nil,
+          twilio_auth_token_secret: String.t() | nil,
+          twilio_phone_number: String.t() | nil,
+          deepgram_api_key: String.t() | nil,
+          deepgram_api_key_secret: String.t() | nil,
+          elevenlabs_api_key: String.t() | nil,
+          elevenlabs_api_key_secret: String.t() | nil,
+          elevenlabs_voice_id: String.t() | nil,
+          elevenlabs_output_format: String.t() | nil,
+          websocket_port: integer() | nil,
+          public_url: String.t() | nil,
+          llm_model: String.t() | nil,
+          system_prompt: String.t() | nil,
+          max_call_duration_seconds: integer() | nil,
+          silence_timeout_ms: integer() | nil
         }
 
   @type t :: %__MODULE__{
@@ -90,6 +128,11 @@ defmodule LemonCore.Config.Gateway do
           default_cwd: String.t() | nil,
           auto_resume: boolean(),
           enable_telegram: boolean(),
+          enable_discord: boolean(),
+          enable_farcaster: boolean(),
+          enable_email: boolean(),
+          enable_xmtp: boolean(),
+          enable_webhook: boolean(),
           require_engine_lock: boolean(),
           engine_lock_timeout_ms: integer(),
           projects: map(),
@@ -97,6 +140,12 @@ defmodule LemonCore.Config.Gateway do
           sms: map(),
           queue: queue_config(),
           telegram: telegram_config(),
+          discord: map(),
+          farcaster: map(),
+          email: map(),
+          xmtp: map(),
+          webhook: map(),
+          voice: voice_config(),
           engines: map()
         }
 
@@ -115,6 +164,20 @@ defmodule LemonCore.Config.Gateway do
       default_cwd: resolve_default_cwd(gateway_settings),
       auto_resume: resolve_auto_resume(gateway_settings),
       enable_telegram: resolve_enable_telegram(gateway_settings),
+      enable_discord:
+        resolve_enable_flag(gateway_settings, "enable_discord", "LEMON_GATEWAY_ENABLE_DISCORD"),
+      enable_farcaster:
+        resolve_enable_flag(
+          gateway_settings,
+          "enable_farcaster",
+          "LEMON_GATEWAY_ENABLE_FARCASTER"
+        ),
+      enable_email:
+        resolve_enable_flag(gateway_settings, "enable_email", "LEMON_GATEWAY_ENABLE_EMAIL"),
+      enable_xmtp:
+        resolve_enable_flag(gateway_settings, "enable_xmtp", "LEMON_GATEWAY_ENABLE_XMTP"),
+      enable_webhook:
+        resolve_enable_flag(gateway_settings, "enable_webhook", "LEMON_GATEWAY_ENABLE_WEBHOOK"),
       require_engine_lock: resolve_require_engine_lock(gateway_settings),
       engine_lock_timeout_ms: resolve_engine_lock_timeout(gateway_settings),
       projects: resolve_projects(gateway_settings),
@@ -122,6 +185,12 @@ defmodule LemonCore.Config.Gateway do
       sms: resolve_sms(gateway_settings),
       queue: resolve_queue(gateway_settings),
       telegram: resolve_telegram(gateway_settings),
+      discord: resolve_discord(gateway_settings),
+      farcaster: resolve_passthrough(gateway_settings, "farcaster"),
+      email: resolve_passthrough(gateway_settings, "email"),
+      xmtp: resolve_xmtp(gateway_settings),
+      webhook: resolve_passthrough(gateway_settings, "webhook"),
+      voice: resolve_voice(gateway_settings),
       engines: resolve_engines(gateway_settings)
     }
   end
@@ -163,10 +232,20 @@ defmodule LemonCore.Config.Gateway do
     )
   end
 
+  defp resolve_enable_flag(settings, key, env_var) do
+    Helpers.get_env_bool(
+      env_var,
+      if(is_nil(settings[key]), do: false, else: settings[key])
+    )
+  end
+
   defp resolve_require_engine_lock(settings) do
     Helpers.get_env_bool(
       "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
-      if(is_nil(settings["require_engine_lock"]), do: true, else: settings["require_engine_lock"])
+      if(is_nil(settings["require_engine_lock"]),
+        do: true,
+        else: settings["require_engine_lock"]
+      )
     )
   end
 
@@ -188,13 +267,30 @@ defmodule LemonCore.Config.Gateway do
       %{
         transport: binding["transport"],
         chat_id: binding["chat_id"],
-        agent_id: binding["agent_id"]
+        topic_id: binding["topic_id"],
+        project: binding["project"],
+        agent_id: binding["agent_id"],
+        default_engine: binding["default_engine"],
+        queue_mode: binding["queue_mode"]
       }
     end)
   end
 
   defp resolve_sms(settings) do
-    settings["sms"] || %{}
+    sms = settings["sms"] || %{}
+
+    auth_token_secret = normalize_optional_string(sms["auth_token_secret"])
+
+    base =
+      if auth_token_secret do
+        Map.put(sms, "auth_token_secret", auth_token_secret)
+      else
+        sms
+      end
+
+    base
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Enum.into(%{})
   end
 
   defp resolve_queue(settings) do
@@ -212,19 +308,19 @@ defmodule LemonCore.Config.Gateway do
 
     %{
       token: resolve_telegram_token(telegram),
+      bot_token_secret: normalize_optional_string(telegram["bot_token_secret"]),
       compaction: resolve_telegram_compaction(telegram)
     }
   end
 
   defp resolve_telegram_token(telegram) do
-    token = telegram["token"]
+    token = telegram["bot_token"] || telegram["token"]
 
     cond do
       is_nil(token) ->
         nil
 
-      String.starts_with?(token, "${") and String.ends_with?(token, "}") ->
-        # Extract env var name from ${VAR_NAME}
+      is_binary(token) and String.starts_with?(token, "${") and String.ends_with?(token, "}") ->
         env_var = token |> String.slice(2..-2//1)
         Helpers.get_env(env_var)
 
@@ -260,8 +356,104 @@ defmodule LemonCore.Config.Gateway do
     }
   end
 
+  defp resolve_discord(settings) do
+    discord = settings["discord"] || %{}
+
+    base = %{
+      bot_token: normalize_optional_string(discord["bot_token"]),
+      bot_token_secret: normalize_optional_string(discord["bot_token_secret"]),
+      allowed_guild_ids: discord["allowed_guild_ids"],
+      allowed_channel_ids: discord["allowed_channel_ids"],
+      deny_unbound_channels: resolve_bool_field(discord["deny_unbound_channels"], false)
+    }
+
+    reject_nil_values(base)
+  end
+
+  defp resolve_xmtp(settings) do
+    xmtp = settings["xmtp"] || %{}
+
+    base = %{
+      wallet_key_secret: normalize_optional_string(xmtp["wallet_key_secret"])
+    }
+
+    xmtp
+    |> Enum.reduce(base, fn {k, v}, acc ->
+      atom_key = safe_to_atom(k)
+
+      if Map.has_key?(acc, atom_key) do
+        acc
+      else
+        Map.put(acc, atom_key, v)
+      end
+    end)
+    |> reject_nil_values()
+  end
+
+  defp resolve_voice(settings) do
+    voice = settings["voice"] || %{}
+
+    %{
+      enabled: resolve_bool_field(voice["enabled"], false),
+      twilio_account_sid: normalize_optional_string(voice["twilio_account_sid"]),
+      twilio_account_sid_secret: normalize_optional_string(voice["twilio_account_sid_secret"]),
+      twilio_auth_token: normalize_optional_string(voice["twilio_auth_token"]),
+      twilio_auth_token_secret: normalize_optional_string(voice["twilio_auth_token_secret"]),
+      twilio_phone_number: normalize_optional_string(voice["twilio_phone_number"]),
+      deepgram_api_key: normalize_optional_string(voice["deepgram_api_key"]),
+      deepgram_api_key_secret: normalize_optional_string(voice["deepgram_api_key_secret"]),
+      elevenlabs_api_key: normalize_optional_string(voice["elevenlabs_api_key"]),
+      elevenlabs_api_key_secret: normalize_optional_string(voice["elevenlabs_api_key_secret"]),
+      elevenlabs_voice_id: normalize_optional_string(voice["elevenlabs_voice_id"]),
+      elevenlabs_output_format: normalize_optional_string(voice["elevenlabs_output_format"]),
+      websocket_port: voice["websocket_port"],
+      public_url: normalize_optional_string(voice["public_url"]),
+      llm_model: normalize_optional_string(voice["llm_model"]),
+      system_prompt: normalize_optional_string(voice["system_prompt"]),
+      max_call_duration_seconds: voice["max_call_duration_seconds"],
+      silence_timeout_ms: voice["silence_timeout_ms"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp resolve_passthrough(settings, section) do
+    map = settings[section] || %{}
+
+    map
+    |> Enum.reduce(%{}, fn {k, v}, acc ->
+      Map.put(acc, safe_to_atom(k), v)
+    end)
+  end
+
   defp resolve_engines(settings) do
     settings["engines"] || %{}
+  end
+
+  defp resolve_bool_field(nil, default), do: default
+  defp resolve_bool_field(val, _default) when is_boolean(val), do: val
+  defp resolve_bool_field("true", _default), do: true
+  defp resolve_bool_field("false", _default), do: false
+  defp resolve_bool_field(_, default), do: default
+
+  defp normalize_optional_string(nil), do: nil
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
+
+  defp reject_nil_values(map) do
+    map
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Enum.into(%{})
+  end
+
+  defp safe_to_atom(key) when is_atom(key), do: key
+
+  defp safe_to_atom(key) when is_binary(key) do
+    try do
+      String.to_existing_atom(key)
+    rescue
+      ArgumentError -> String.to_atom(key)
+    end
   end
 
   @doc """
@@ -278,6 +470,11 @@ defmodule LemonCore.Config.Gateway do
       "default_cwd" => nil,
       "auto_resume" => false,
       "enable_telegram" => false,
+      "enable_discord" => false,
+      "enable_farcaster" => false,
+      "enable_email" => false,
+      "enable_xmtp" => false,
+      "enable_webhook" => false,
       "require_engine_lock" => true,
       "engine_lock_timeout_ms" => 60_000,
       "projects" => %{},
@@ -289,6 +486,12 @@ defmodule LemonCore.Config.Gateway do
         "drop" => nil
       },
       "telegram" => %{},
+      "discord" => %{},
+      "farcaster" => %{},
+      "email" => %{},
+      "xmtp" => %{},
+      "webhook" => %{},
+      "voice" => %{},
       "engines" => %{}
     }
   end

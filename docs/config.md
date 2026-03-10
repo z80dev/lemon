@@ -5,7 +5,11 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
 3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
-4. CLI arguments (highest priority, when applicable)
+4. Lemon secrets referenced from config (for secret-backed fields)
+
+Runtime state and policy are separate from config. Per-session or per-route "current"
+model/thinking values override config defaults at runtime, but they are not persisted in
+`config.toml`.
 
 ## Example
 
@@ -106,12 +110,27 @@ allowed_chat_ids = [12345678]
 [gateway.xmtp]
 env = "production"                  # production | dev | local
 wallet_address = "${XMTP_WALLET_ADDRESS}"
-wallet_key = "${XMTP_WALLET_KEY}"
+wallet_key_secret = "xmtp_wallet_key"
 db_path = "~/.lemon/xmtp-db"
 poll_interval_ms = 1500
 connect_timeout_ms = 15000
 require_live = true
 mock_mode = false
+
+[gateway.voice]
+enabled = false
+websocket_port = 4047
+public_url = "https://example.com"
+twilio_account_sid_secret = "twilio_account_sid"
+twilio_auth_token_secret = "twilio_auth_token"
+twilio_phone_number = "+1234567890"
+deepgram_api_key_secret = "deepgram_api_key"
+elevenlabs_api_key_secret = "elevenlabs_api_key"
+elevenlabs_voice_id = "21m00Tcm4TlvDq8ikWAM"
+elevenlabs_output_format = "ulaw_8000"
+llm_model = "gpt-4o-mini"
+max_call_duration_seconds = 600
+silence_timeout_ms = 5000
 
 [profiles.default]
 name = "Daily Assistant"
@@ -144,20 +163,24 @@ Environment variables override file values. Common overrides:
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
-## Preferred vs Legacy Sections
+## Canonical Sections
 
-Preferred section names:
+Use only these top-level sections:
 
-- `defaults` for model/provider/thinking/engine defaults
-- `runtime` for runtime/tool/CLI behavior
-- `profiles.<agent_id>` for assistant profiles
+- `defaults`
+- `runtime`
+- `profiles.<agent_id>`
+- `providers.<name>`
+- `gateway`
+- `tui`
+- `logging`
 
-Legacy aliases are still supported for backward compatibility:
+Deprecated sections now fail validation and runtime loading:
 
-- `agent` (legacy alias of `runtime`, and also source of `default_*` values)
-- `agents.<agent_id>` (legacy alias of `profiles.<agent_id>`)
-
-When both are present, preferred sections win for overlapping keys (`runtime` over `agent`, `profiles` over `agents`).
+- `[agent]` -> move defaults to `[defaults]` and runtime settings to `[runtime]`
+- `[agents.<id>]` -> move to `[profiles.<id>]`
+- `[agent.tools.*]` -> move to `[runtime.tools.*]`
+- `[tools.*]` -> move to `[runtime.tools.*]`
 
 ## Dotenv Autoload
 
@@ -323,7 +346,7 @@ max_tool_invoke_depth = 4
 - `runtime.retry`: retry settings.
 - `runtime.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `xmtp`, `projects`, `bindings`, and `engines`.
+- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, `bindings`, and `engines`.
 - `logging`: optional file logging configuration.
 
 ## Gateway Projects and Bindings
@@ -411,7 +434,7 @@ enable_xmtp = true
 [gateway.xmtp]
 env = "production"                  # production | dev | local
 wallet_address = "${XMTP_WALLET_ADDRESS}"
-wallet_key = "${XMTP_WALLET_KEY}"   # 64-char hex private key (or 0x-prefixed)
+wallet_key_secret = "XMTP_WALLET_KEY"  # secret ref; env fallback works if XMTP_WALLET_KEY is set
 db_path = "~/.lemon/xmtp-db"
 poll_interval_ms = 1500
 connect_timeout_ms = 15000
@@ -426,7 +449,33 @@ mock_mode = false                   # set true only for local bridge testing
 Notes:
 - When `enable_xmtp = true`, Lemon auto-registers and starts the XMTP channel adapter.
 - `require_live = true` keeps health/readiness red unless the bridge is truly live (not mock mode).
+- `wallet_key_secret` is the canonical credential field. It can point to a Lemon secret name or to an env var name when using secret resolution with env fallback.
 - Non-text XMTP messages currently receive a text-only fallback response.
+
+## Voice
+
+Voice transport is configured under `[gateway.voice]`.
+
+```toml
+[gateway.voice]
+enabled = true
+websocket_port = 4047
+public_url = "https://example.com"
+twilio_account_sid_secret = "twilio_account_sid"
+twilio_auth_token_secret = "twilio_auth_token"
+twilio_phone_number = "+1234567890"
+deepgram_api_key_secret = "deepgram_api_key"
+elevenlabs_api_key_secret = "elevenlabs_api_key"
+elevenlabs_voice_id = "21m00Tcm4TlvDq8ikWAM"
+elevenlabs_output_format = "ulaw_8000"
+llm_model = "gpt-4o-mini"
+system_prompt = "You are a helpful phone assistant."
+max_call_duration_seconds = 600
+silence_timeout_ms = 5000
+```
+
+Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
+fallbacks remain only as temporary compatibility shims and should not be used for new setup.
 
 ## Telegram Voice Transcription
 

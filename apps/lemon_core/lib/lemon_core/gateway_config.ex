@@ -2,34 +2,32 @@ defmodule LemonCore.GatewayConfig do
   @moduledoc """
   Unified gateway configuration access.
 
-  Merges config from multiple layers (highest priority wins):
-
-  1. Per-transport app env overrides (`:lemon_channels` `:telegram` / `:discord` / `:xmtp`)
-  2. Channels gateway override (`Application.get_env(:lemon_channels, :gateway)`)
-  3. Full-replacement app env (`Application.get_env(:lemon_gateway, LemonGateway.Config)`)
-     When set (even to `%{}`), this replaces the TOML base entirely (critical for test isolation).
-  4. TOML base from `LemonCore.Config.cached/1`
+  Gateway config comes from the canonical TOML `[gateway]` section only.
+  In test mode (`config_test_mode`), a full-replacement app env layer
+  (`Application.get_env(:lemon_gateway, LemonGateway.Config)`) is supported
+  for test isolation.
   """
 
   @doc """
-  Load the fully-merged gateway config map.
+  Load the gateway config map.
 
-  If `cwd` is given, it is forwarded to `LemonCore.Config.cached/1` for project-level
-  TOML overlay.
+  In production, reads from TOML base only.
+  In test mode, checks for full-replacement app env first.
   """
   @spec load(String.t() | nil) :: map()
   def load(cwd \\ nil) do
-    base = base_config(cwd)
-
-    base
-    |> deep_merge(channels_gateway_overrides())
-    |> merge_transport_overrides(:telegram)
-    |> merge_transport_overrides(:discord)
-    |> merge_transport_overrides(:xmtp)
+    if test_env?() do
+      case full_replacement_config() do
+        {:ok, config} -> config
+        :none -> toml_base(cwd)
+      end
+    else
+      toml_base(cwd)
+    end
   end
 
   @doc """
-  Get a single key from the merged gateway config.
+  Get a single key from the gateway config.
   """
   @spec get(atom(), term()) :: term()
   def get(key, default \\ nil) when is_atom(key) do
@@ -40,22 +38,13 @@ defmodule LemonCore.GatewayConfig do
   end
 
   # ---------------------------------------------------------------------------
-  # Layer 1: base config
+  # Config sources
   # ---------------------------------------------------------------------------
 
-  defp base_config(cwd) do
-    # When :lemon_gateway app env is set for LemonGateway.Config, use it as
-    # full-replacement (test isolation semantics).
-    case full_replacement_config() do
-      {:ok, config} ->
-        config
-
-      :none ->
-        # Fall through to TOML
-        case LemonCore.Config.cached(cwd) do
-          %{gateway: gateway} when is_map(gateway) -> gateway
-          _ -> %{}
-        end
+  defp toml_base(cwd) do
+    case LemonCore.Config.cached(cwd) do
+      %{gateway: gateway} when is_map(gateway) -> gateway
+      _ -> %{}
     end
   rescue
     _ -> %{}
@@ -81,40 +70,16 @@ defmodule LemonCore.GatewayConfig do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Layer 2: :lemon_channels :gateway overrides
-  # ---------------------------------------------------------------------------
-
-  defp channels_gateway_overrides do
-    Application.get_env(:lemon_channels, :gateway, %{})
-    |> normalize_map()
+  defp test_env? do
+    Application.get_env(:lemon_core, :config_test_mode, false)
   end
 
   # ---------------------------------------------------------------------------
-  # Layer 3: per-transport overrides from :lemon_channels app env
+  # Deep merge (kept public @doc false for downstream use)
   # ---------------------------------------------------------------------------
 
-  defp merge_transport_overrides(gateway, transport_key) when is_atom(transport_key) do
-    runtime = Application.get_env(:lemon_channels, transport_key, %{})
-
-    base =
-      gateway
-      |> fetch(transport_key, %{})
-      |> normalize_map()
-
-    merged = deep_merge(base, normalize_map(runtime))
-    string_key = Atom.to_string(transport_key)
-
-    gateway
-    |> Map.delete(string_key)
-    |> Map.put(transport_key, merged)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Deep merge with atom/string key coexistence
-  # ---------------------------------------------------------------------------
-
-  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+  @doc false
+  def deep_merge(left, right) when is_map(left) and is_map(right) do
     Enum.reduce(right, left, fn {right_key, right_value}, acc ->
       target_key = equivalent_key(acc, right_key) || right_key
       left_value = Map.get(acc, target_key)
@@ -123,7 +88,7 @@ defmodule LemonCore.GatewayConfig do
     end)
   end
 
-  defp deep_merge(_left, right), do: right
+  def deep_merge(_left, right), do: right
 
   @doc false
   def equivalent_key(map, key) when is_map(map) and is_binary(key) do
@@ -149,7 +114,8 @@ defmodule LemonCore.GatewayConfig do
   # Key fetch helpers (atom/string agnostic)
   # ---------------------------------------------------------------------------
 
-  defp fetch(map, key, default) when is_map(map) and is_atom(key) do
+  @doc false
+  def fetch(map, key, default) when is_map(map) and is_atom(key) do
     string_key = Atom.to_string(key)
 
     cond do
@@ -159,13 +125,14 @@ defmodule LemonCore.GatewayConfig do
     end
   end
 
-  defp fetch(_map, _key, default), do: default
+  def fetch(_map, _key, default), do: default
 
-  defp normalize_map(config) when is_map(config), do: config
+  @doc false
+  def normalize_map(config) when is_map(config), do: config
 
-  defp normalize_map(config) when is_list(config) do
+  def normalize_map(config) when is_list(config) do
     if Keyword.keyword?(config), do: Enum.into(config, %{}), else: %{}
   end
 
-  defp normalize_map(_), do: %{}
+  def normalize_map(_), do: %{}
 end

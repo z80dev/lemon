@@ -1,5 +1,6 @@
 defmodule LemonCore.Secrets.Crypto do
   alias LemonCore.MapHelpers
+  require Logger
 
   @moduledoc """
   Cryptographic helpers for encrypted secret storage.
@@ -54,7 +55,9 @@ defmodule LemonCore.Secrets.Crypto do
       _ -> {:error, :encrypt_failed}
     end
   rescue
-    _ -> {:error, :encrypt_failed}
+    e in [ArgumentError, ErlangError] ->
+      Logger.debug("Encryption failed: #{Exception.message(e)}")
+      {:error, :encrypt_failed}
   end
 
   def encrypt(_, _), do: {:error, :invalid_plaintext}
@@ -84,7 +87,9 @@ defmodule LemonCore.Secrets.Crypto do
       _ -> {:error, :decrypt_failed}
     end
   rescue
-    _ -> {:error, :decrypt_failed}
+    e in [ArgumentError, ErlangError] ->
+      Logger.debug("Decryption failed: #{Exception.message(e)}")
+      {:error, :decrypt_failed}
   end
 
   def decrypt(_, _), do: {:error, :invalid_payload}

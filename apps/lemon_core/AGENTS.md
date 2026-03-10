@@ -20,8 +20,8 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | Module | Purpose |
 |--------|---------|
 | `LemonCore` | Main module with module list |
-| `LemonCore.Config` | TOML config loading from `~/.lemon/config.toml` and project `.lemon/config.toml` |
-| `LemonCore.Config.Modular` | Alternative modular config loader with typed sub-structs per section |
+| `LemonCore.Config` | TOML config facade; delegates to `LemonCore.Config.Modular` for parsing/resolution and converts output into the legacy struct shape |
+| `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics) |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
@@ -56,7 +56,8 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Id` | UUID and unique ID generation |
 | `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
-| `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and per-transport overrides |
+| `LemonCore.GatewayConfig` | Unified gateway config access from canonical TOML gateway section only (test-mode full-replacement via app env is allowed for test isolation) |
+| `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, then passes concrete values to provider implementations |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
@@ -97,43 +98,49 @@ config = LemonCore.Config.load(cwd)
 config = LemonCore.Config.reload(cwd)
 
 # Access nested values
-provider = LemonCore.Config.get(config, [:agent, :default_provider], "anthropic")
+provider = LemonCore.Config.get(config, [:defaults, :provider], "anthropic")
 
-# Modular config interface (typed sub-structs, validation support)
+# Modular config interface (canonical, typed sub-structs, validation support)
 config = LemonCore.Config.Modular.load(project_dir: cwd)
 config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 {:ok, config} = LemonCore.Config.Modular.load_with_validation(project_dir: cwd)
 ```
 
-### Config Sections
+**Important**: `LemonCore.Config.Modular` is the canonical config implementation. `LemonCore.Config` is a facade that delegates to modular for parsing/resolution and converts the output into the legacy struct shape. Do not add independent parsing rules to the facade.
 
-- `providers` - LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google). `openai-codex` requires `auth_source` (`oauth` or `api_key`); `anthropic` uses API key inputs (`api_key` / `api_key_secret` / `ANTHROPIC_API_KEY`).
-- `defaults` - Preferred home for default provider/model/thinking level/engine
-- `runtime` - Preferred home for runtime behavior (compaction, retry, shell, tools, cli, extensions, theme)
-- `profiles` - Preferred home for per-agent profiles with tool policies
-- `agent` - Legacy alias for runtime/default settings (still supported)
-- `agents` - Legacy alias for profile settings (still supported)
-- `tui` - Theme, debug mode
-- `logging` - File logging, level, rotation
-- `gateway` - Max concurrent runs, engine bindings, Telegram settings, SMS, queue, projects
+### Config Sections (valid top-level TOML sections)
+
+- `[defaults]` - Default provider, model, thinking level, engine
+- `[runtime]` - Runtime behavior (compaction, retry, shell, tools, cli, extensions, theme, budget_defaults)
+- `[profiles.<id>]` - Per-agent profiles with tool policies
+- `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, kimi, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
+- `[gateway]` - Max concurrent runs, engine bindings, transport settings (Telegram, Discord, XMTP, SMS, Voice), projects. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
+- `[tui]` - Theme, debug mode
+- `[logging]` - File logging, level, rotation
+
+**Deprecated sections cause hard failure**: `[agent]`, `[agents.*]`, `[agent.tools.*]`, and top-level `[tools.*]` are no longer supported and will fail validation with migration guidance. Use `[defaults]`/`[runtime]` instead of `[agent]`, `[profiles.<id>]` instead of `[agents.<id>]`, and `[runtime.tools.*]` instead of `[agent.tools.*]` or `[tools.*]`.
+
+### Config vs Runtime State
+
+Config provides defaults; runtime state provides the current effective value. Current per-session/per-route/per-chat model and thinking overrides are managed by `LemonCore.PolicyStore` (runtime state), not config. Do not add app-env fallbacks that act as a second runtime policy plane.
 
 ### Environment Variable Overrides
 
 | Env Var | Overrides |
 |---------|-----------|
-| `LEMON_DEFAULT_PROVIDER` | `defaults.provider` (legacy: `agent.default_provider`) |
-| `LEMON_DEFAULT_MODEL` | `defaults.model` (legacy: `agent.default_model`) |
+| `LEMON_DEFAULT_PROVIDER` | `defaults.provider` |
+| `LEMON_DEFAULT_MODEL` | `defaults.model` |
 | `LEMON_DEBUG` | `tui.debug` |
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_CODEX_EXTRA_ARGS` | `runtime.cli.codex.extra_args` (legacy: `agent.cli.codex.extra_args`) |
-| `LEMON_CODEX_AUTO_APPROVE` | `runtime.cli.codex.auto_approve` (legacy: `agent.cli.codex.auto_approve`) |
-| `LEMON_CLAUDE_YOLO` | `runtime.cli.claude.dangerously_skip_permissions` (legacy: `agent.cli.claude.dangerously_skip_permissions`) |
-| `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` (legacy: `agent.tools.wasm.enabled`) |
-| `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` (legacy: `agent.tools.wasm.runtime_path`) |
-| `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` (legacy: `agent.tools.wasm.tool_paths`) |
-| `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` (legacy: `agent.tools.wasm.auto_build`) |
+| `LEMON_CODEX_EXTRA_ARGS` | `runtime.cli.codex.extra_args` |
+| `LEMON_CODEX_AUTO_APPROVE` | `runtime.cli.codex.auto_approve` |
+| `LEMON_CLAUDE_YOLO` | `runtime.cli.claude.dangerously_skip_permissions` |
+| `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |
+| `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` |
+| `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` |
+| `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` |
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
@@ -302,13 +309,12 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 
 ### Adding a New Config Key
 
-1. Add the default value to the appropriate `@default_*` map in `lib/lemon_core/config.ex`
-2. Add parsing in the corresponding `parse_*` function (e.g., `parse_agent/1`, `parse_gateway/1`)
-3. If the key needs an env override, add it to `apply_env_*_overrides/1`
-4. If using the Modular interface, update the relevant sub-module in `lib/lemon_core/config/`
-5. Add validation in `lib/lemon_core/config/validator.ex` if the key has constraints
-6. Update the env var table in AGENTS.md if adding an env override
-7. Add tests in `test/lemon_core/config_test.exs`
+1. Update the relevant sub-module in `lib/lemon_core/config/` (Modular is the canonical config implementation)
+2. Add validation in `lib/lemon_core/config/validator.ex` if the key has constraints
+3. If the key needs an env override, add it to the modular config env overlay
+4. If the key is for a provider, use `LemonCore.ProviderConfigResolver` for resolution
+5. Update the env var table in AGENTS.md if adding an env override
+6. Add tests in `test/lemon_core/config_test.exs`
 
 ### Adding a New Storage Backend
 
@@ -773,4 +779,5 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
-- The `LemonCore.Config.Modular` interface is the newer typed approach; the older `LemonCore.Config` struct is still the primary interface used by most of the codebase
+- `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
+- Provider config resolution is centralized in `LemonCore.ProviderConfigResolver`; provider modules must not read env vars directly for normal request paths

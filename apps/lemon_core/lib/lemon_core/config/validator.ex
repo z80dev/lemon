@@ -67,8 +67,6 @@ defmodule LemonCore.Config.Validator do
   end
 
   def validate(%LemonCore.Config{} = config) do
-    # Convert legacy config to modular format for validation
-    # Note: legacy config has no 'tools' field
     errors = []
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
@@ -81,6 +79,36 @@ defmodule LemonCore.Config.Validator do
       _ -> {:error, Enum.reverse(errors)}
     end
   end
+
+
+  @doc """
+  Validates settings for deprecated sections, returning an ok/error tuple.
+
+  Returns `:ok` if no deprecated sections are found, or `{:error, errors}`.
+  """
+  @spec validate_deprecated_sections(map()) :: :ok | {:error, [String.t()]}
+  def validate_deprecated_sections(settings) when is_map(settings) do
+    []
+    |> check_deprecated(is_map(settings["agent"]),
+      "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
+    )
+    |> check_deprecated(is_map(settings["agents"]),
+      "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
+    )
+    |> check_deprecated(is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
+      "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
+    )
+    |> check_deprecated(is_map(settings["tools"]),
+      "[tools.*] is deprecated. Use [runtime.tools.*] instead."
+    )
+    |> errors_to_result()
+  end
+
+  defp check_deprecated(errors, true, message), do: [message | errors]
+  defp check_deprecated(errors, false, _message), do: errors
+
+  defp errors_to_result([]), do: :ok
+  defp errors_to_result(errors), do: {:error, Enum.reverse(errors)}
 
   @doc """
   Validates agent configuration.

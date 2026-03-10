@@ -22,6 +22,15 @@ config :lemon_web, LemonWeb.Endpoint,
     "dev_secret_key_base_dev_secret_key_base_dev_secret_key_base_dev_secret_key_base",
   watchers: []
 
+config :lemon_sim_ui, LemonSimUi.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4090],
+  check_origin: false,
+  code_reloader: true,
+  debug_errors: true,
+  secret_key_base:
+    "dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base",
+  watchers: []
+
 # Voice transport configuration - zeebot phone integration
 config :lemon_gateway,
   voice_enabled: true,

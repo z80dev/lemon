@@ -57,9 +57,9 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
-      default_provider = "anthropic"
+      [defaults]
+      model = "claude-sonnet-4"
+      provider = "anthropic"
       """)
 
       # Capture both stdout and stderr
@@ -87,8 +87,8 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       output =

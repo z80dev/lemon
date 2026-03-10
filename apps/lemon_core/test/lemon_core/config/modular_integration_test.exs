@@ -44,13 +44,13 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
   describe "load/1 with validation" do
     test "loads config without validation by default", %{mock_home: mock_home} do
-      # Create a minimal valid config
+      # Create a minimal valid config using canonical sections
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "test-model"
+      [defaults]
+      model = "test-model"
       """)
 
       config = Modular.load()
@@ -60,13 +60,13 @@ defmodule LemonCore.Config.ModularIntegrationTest do
     end
 
     test "validates config when validate: true", %{mock_home: mock_home} do
-      # Create an invalid config (empty model)
+      # Create a config with empty model (validation warning)
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Should still return config but log warning
@@ -80,8 +80,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
+      [defaults]
+      model = "claude-sonnet-4"
 
       [logging]
       level = "info"
@@ -123,8 +123,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "valid-model"
+      [defaults]
+      model = "valid-model"
       """)
 
       config = Modular.load!()
@@ -138,8 +138,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       assert_raise ValidationError, fn ->
@@ -152,9 +152,9 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
-      default_provider = ""
+      [defaults]
+      model = ""
+      provider = ""
       """)
 
       try do
@@ -175,8 +175,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "valid-model"
+      [defaults]
+      model = "valid-model"
       """)
 
       assert {:ok, config} = Modular.load_with_validation()
@@ -188,8 +188,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       assert {:error, errors} = Modular.load_with_validation()
@@ -202,9 +202,9 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
-      default_provider = ""
+      [defaults]
+      model = ""
+      provider = ""
 
       [gateway]
       max_concurrent_runs = -1
@@ -228,8 +228,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "global-model"
+      [defaults]
+      model = "global-model"
       """)
 
       # Create project config
@@ -238,8 +238,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(project_config)
 
       File.write!(Path.join(project_config, "config.toml"), """
-      [agent]
-      default_model = "project-model"
+      [defaults]
+      model = "project-model"
       """)
 
       config = Modular.load(project_dir: project_dir)
@@ -253,8 +253,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "global-model"
+      [defaults]
+      model = "global-model"
       """)
 
       # Create project config with invalid values
@@ -263,8 +263,8 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       File.mkdir_p!(project_config)
 
       File.write!(Path.join(project_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       assert {:error, errors} = Modular.load_with_validation(project_dir: project_dir)
@@ -289,6 +289,36 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
       # Should return ok (all fields are optional)
       assert {:ok, _config} = Modular.load_with_validation()
+    end
+  end
+
+  describe "deprecated sections" do
+    test "raises on [agent] section", %{mock_home: mock_home} do
+      global_config = Path.join(mock_home, ".lemon")
+      File.mkdir_p!(global_config)
+
+      File.write!(Path.join(global_config, "config.toml"), """
+      [agent]
+      default_model = "test-model"
+      """)
+
+      assert_raise ValidationError, ~r/deprecated/i, fn ->
+        Modular.load()
+      end
+    end
+
+    test "raises on [agents] section", %{mock_home: mock_home} do
+      global_config = Path.join(mock_home, ".lemon")
+      File.mkdir_p!(global_config)
+
+      File.write!(Path.join(global_config, "config.toml"), """
+      [agents.default]
+      name = "Default"
+      """)
+
+      assert_raise ValidationError, ~r/deprecated/i, fn ->
+        Modular.load()
+      end
     end
   end
 end

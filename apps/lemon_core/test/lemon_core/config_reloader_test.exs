@@ -98,7 +98,7 @@ defmodule LemonCore.ConfigReloaderTest do
 
       # Modify the global config
       config_path = Path.join([mock_home, ".lemon", "config.toml"])
-      File.write!(config_path, "[agent]\ndefault_provider = \"openai\"\n")
+      File.write!(config_path, "[defaults]\nprovider = \"openai\"\n")
 
       # Small delay for mtime resolution
       Process.sleep(10)

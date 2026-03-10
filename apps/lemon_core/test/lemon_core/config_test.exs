@@ -22,9 +22,9 @@ defmodule LemonCore.ConfigTest do
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent]
-    default_provider = "anthropic"
-    default_model = "claude-sonnet-4-20250514"
+    [defaults]
+    provider = "anthropic"
+    model = "claude-sonnet-4-20250514"
 
     [providers.anthropic]
     api_key = "global-key"
@@ -34,8 +34,8 @@ defmodule LemonCore.ConfigTest do
     File.mkdir_p!(Path.join(project_dir, ".lemon"))
 
     File.write!(Path.join([project_dir, ".lemon", "config.toml"]), """
-    [agent]
-    default_model = "claude-opus-4-20250514"
+    [defaults]
+    model = "claude-opus-4-20250514"
 
     [providers.anthropic]
     api_key = "project-key"
@@ -53,8 +53,8 @@ defmodule LemonCore.ConfigTest do
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent]
-    default_model = "claude-sonnet-4-20250514"
+    [defaults]
+    model = "claude-sonnet-4-20250514"
 
     [providers.openai]
     api_key = "file-key"
@@ -104,44 +104,36 @@ defmodule LemonCore.ConfigTest do
     debug = false
     """)
 
-    System.put_env("LEMON_THEME", "ocean")
-    System.put_env("LEMON_DEBUG", "true")
+    System.put_env("LEMON_TUI_THEME", "ocean")
+    System.put_env("LEMON_TUI_DEBUG", "true")
 
     config = Config.load()
 
     assert config.tui.theme == "ocean"
     assert config.tui.debug == true
   after
-    System.delete_env("LEMON_THEME")
-    System.delete_env("LEMON_DEBUG")
+    System.delete_env("LEMON_TUI_THEME")
+    System.delete_env("LEMON_TUI_DEBUG")
   end
 
-  test "env overrides CLI settings", %{home: home} do
+  test "parses CLI settings from runtime section", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent.cli.codex]
+    [runtime.cli.codex]
     extra_args = ["-c", "notify=[]"]
     auto_approve = false
 
-    [agent.cli.claude]
+    [runtime.cli.claude]
     dangerously_skip_permissions = true
     """)
 
-    System.put_env("LEMON_CODEX_EXTRA_ARGS", "--foo bar")
-    System.put_env("LEMON_CODEX_AUTO_APPROVE", "1")
-    System.put_env("LEMON_CLAUDE_YOLO", "false")
-
     config = Config.load()
 
-    assert config.agent.cli.codex.extra_args == ["--foo", "bar"]
-    assert config.agent.cli.codex.auto_approve == true
-    assert config.agent.cli.claude.dangerously_skip_permissions == false
-  after
-    System.delete_env("LEMON_CODEX_EXTRA_ARGS")
-    System.delete_env("LEMON_CODEX_AUTO_APPROVE")
-    System.delete_env("LEMON_CLAUDE_YOLO")
+    assert config.agent.cli.codex.extra_args == ["-c", "notify=[]"]
+    assert config.agent.cli.codex.auto_approve == false
+    assert config.agent.cli.claude.dangerously_skip_permissions == true
   end
 
   test "env overrides provider base_url", %{home: home} do
@@ -176,18 +168,18 @@ defmodule LemonCore.ConfigTest do
     assert config.providers["openai"].api_key_secret == "llm_openai_api_key"
   end
 
-  test "parses agents from config (including tool_policy)", %{home: home} do
+  test "parses agents from profiles config (including tool_policy)", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agents.default]
+    [profiles.default]
     name = "Daily Assistant"
     default_engine = "lemon"
     system_prompt = "You are my daily assistant."
     model = "anthropic:claude-sonnet-4-20250514"
 
-    [agents.default.tool_policy]
+    [profiles.default.tool_policy]
     allow = "all"
     deny = ["process_kill"]
     require_approval = ["bash", "write"]
@@ -210,10 +202,10 @@ defmodule LemonCore.ConfigTest do
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agents.default]
+    [profiles.default]
     name = "Daily Assistant"
 
-    [agents.default.tool_policy]
+    [profiles.default.tool_policy]
     profile = "minimal_core"
     """)
 
@@ -279,21 +271,16 @@ defmodule LemonCore.ConfigTest do
     assert config.agents["worker"].default_engine == nil
   end
 
-  test "runtime and profiles override legacy agent and agents sections", %{home: home} do
+  test "runtime and profiles are the canonical config sections", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent]
-    default_model = "anthropic:legacy-model"
-    theme = "legacy-theme"
+    [defaults]
+    model = "anthropic:some-model"
 
     [runtime]
     theme = "runtime-theme"
-
-    [agents.default]
-    name = "Legacy Profile"
-    model = "anthropic:legacy-profile-model"
 
     [profiles.default]
     name = "Runtime Profile"
@@ -302,10 +289,38 @@ defmodule LemonCore.ConfigTest do
 
     config = Config.load()
 
-    assert config.agent.default_model == "anthropic:legacy-model"
+    assert config.agent.default_model == "anthropic:some-model"
     assert config.agent.theme == "runtime-theme"
     assert config.agents["default"].name == "Runtime Profile"
     assert config.agents["default"].model == "openai:new-profile-model"
+  end
+
+  test "deprecated [agent] section raises ValidationError", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent]
+    default_model = "anthropic:legacy-model"
+    """)
+
+    assert_raise LemonCore.Config.ValidationError, ~r/deprecated/i, fn ->
+      Config.load()
+    end
+  end
+
+  test "deprecated [agents] section raises ValidationError", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agents.default]
+    name = "Legacy Profile"
+    """)
+
+    assert_raise LemonCore.Config.ValidationError, ~r/deprecated/i, fn ->
+      Config.load()
+    end
   end
 
   test "parses gateway binding agent_id", %{home: home} do
@@ -382,28 +397,28 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_LOG_LEVEL")
   end
 
-  test "parses web tool configuration under agent.tools", %{home: home} do
+  test "parses web tool configuration under runtime.tools", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent.tools.web.search]
+    [runtime.tools.web.search]
     enabled = true
     provider = "perplexity"
     max_results = 7
     timeout_seconds = 42
     cache_ttl_minutes = 10
 
-    [agent.tools.web.search.failover]
+    [runtime.tools.web.search.failover]
     enabled = false
     provider = "brave"
 
-    [agent.tools.web.search.perplexity]
+    [runtime.tools.web.search.perplexity]
     api_key = "pplx-test"
     base_url = "https://api.perplexity.ai"
     model = "perplexity/sonar"
 
-    [agent.tools.web.fetch]
+    [runtime.tools.web.fetch]
     enabled = true
     max_chars = 64000
     timeout_seconds = 25
@@ -413,7 +428,7 @@ defmodule LemonCore.ConfigTest do
     allow_private_network = false
     allowed_hostnames = ["example.com"]
 
-    [agent.tools.web.fetch.firecrawl]
+    [runtime.tools.web.fetch.firecrawl]
     enabled = true
     api_key = "fc-test"
     base_url = "https://api.firecrawl.dev"
@@ -421,7 +436,7 @@ defmodule LemonCore.ConfigTest do
     max_age_ms = 123000
     timeout_seconds = 15
 
-    [agent.tools.web.cache]
+    [runtime.tools.web.cache]
     persistent = true
     path = "~/.lemon/cache/custom-web-tools"
     max_entries = 250
@@ -453,12 +468,12 @@ defmodule LemonCore.ConfigTest do
     assert tools.web.cache.max_entries == 250
   end
 
-  test "parses wasm tool configuration under agent.tools", %{home: home} do
+  test "parses wasm tool configuration under runtime.tools", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent.tools.wasm]
+    [runtime.tools.wasm]
     enabled = true
     auto_build = false
     runtime_path = "/tmp/lemon-wasm-runtime"
@@ -491,7 +506,7 @@ defmodule LemonCore.ConfigTest do
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
-    [agent.tools.wasm]
+    [runtime.tools.wasm]
     enabled = false
     auto_build = true
     runtime_path = "/tmp/from-file"

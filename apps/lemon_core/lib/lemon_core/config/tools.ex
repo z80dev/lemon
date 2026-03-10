@@ -165,10 +165,16 @@ defmodule LemonCore.Config.Tools do
           "LEMON_WEB_SEARCH_CACHE_TTL",
           search["cache_ttl_minutes"] || 15
         ),
+      api_key_secret: normalize_optional_string(search["api_key_secret"]),
       failover: resolve_search_failover(search),
       perplexity: resolve_perplexity(search)
     }
   end
+
+  defp normalize_optional_string(nil), do: nil
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
 
   defp resolve_search_failover(search) do
     failover = search["failover"] || %{}
@@ -188,8 +194,13 @@ defmodule LemonCore.Config.Tools do
 
     %{
       api_key: Helpers.get_env("LEMON_PERPLEXITY_API_KEY", perplexity["api_key"]),
+      api_key_secret: normalize_optional_string(perplexity["api_key_secret"]),
       base_url: Helpers.get_env("LEMON_PERPLEXITY_BASE_URL", perplexity["base_url"]),
-      model: Helpers.get_env("LEMON_PERPLEXITY_MODEL", perplexity["model"] || "perplexity/sonar-pro")
+      model:
+        Helpers.get_env(
+          "LEMON_PERPLEXITY_MODEL",
+          perplexity["model"] || "perplexity/sonar-pro"
+        )
     }
   end
 
@@ -259,6 +270,7 @@ defmodule LemonCore.Config.Tools do
           end
         end),
       api_key: Helpers.get_env("LEMON_FIRECRAWL_API_KEY", firecrawl["api_key"]),
+      api_key_secret: normalize_optional_string(firecrawl["api_key_secret"]),
       base_url:
         Helpers.get_env(
           "LEMON_FIRECRAWL_BASE_URL",

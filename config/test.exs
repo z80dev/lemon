@@ -19,6 +19,9 @@ config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
   backend_opts: []
 
+# Enable test-mode gateway config path (full-replacement via app env).
+config :lemon_core, config_test_mode: true
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 
@@ -57,6 +60,12 @@ config :lemon_gateway, :telegram, nil
 
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
+
+config :lemon_sim_ui, LemonSimUi.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4092],
+  secret_key_base:
+    "test_sim_ui_secret_key_base_test_sim_ui_secret_key_base_test_sim_ui_secret_key_base",
+  server: false
 
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],

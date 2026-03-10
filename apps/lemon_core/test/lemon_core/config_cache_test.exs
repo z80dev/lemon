@@ -61,8 +61,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "test-model"
+      [defaults]
+      model = "test-model"
       """)
 
       config = ConfigCache.get(nil, mtime_check_interval_ms: 100)
@@ -77,8 +77,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "global-model"
+      [defaults]
+      model = "global-model"
       """)
 
       # Create project config
@@ -86,8 +86,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(project_config)
 
       File.write!(Path.join(project_config, "config.toml"), """
-      [agent]
-      default_model = "project-model"
+      [defaults]
+      model = "project-model"
       """)
 
       config = ConfigCache.get(tmp_dir, mtime_check_interval_ms: 100)
@@ -101,8 +101,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "cached-model"
+      [defaults]
+      model = "cached-model"
       """)
 
       # First call should load from disk
@@ -110,8 +110,8 @@ defmodule LemonCore.ConfigCacheTest do
 
       # Modify the file
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "modified-model"
+      [defaults]
+      model = "modified-model"
       """)
 
       # Second call should return cached version (within TTL)
@@ -126,8 +126,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "original-model"
+      [defaults]
+      model = "original-model"
       """)
 
       # First call
@@ -136,8 +136,8 @@ defmodule LemonCore.ConfigCacheTest do
 
       # Modify the file
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "updated-model"
+      [defaults]
+      model = "updated-model"
       """)
 
       # Wait for TTL to expire
@@ -155,8 +155,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "original-model"
+      [defaults]
+      model = "original-model"
       """)
 
       # First call
@@ -165,8 +165,8 @@ defmodule LemonCore.ConfigCacheTest do
 
       # Modify the file
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "reloaded-model"
+      [defaults]
+      model = "reloaded-model"
       """)
 
       # Force reload
@@ -181,8 +181,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "cached-model"
+      [defaults]
+      model = "cached-model"
       """)
 
       # Load config
@@ -191,8 +191,8 @@ defmodule LemonCore.ConfigCacheTest do
 
       # Modify file
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "new-model"
+      [defaults]
+      model = "new-model"
       """)
 
       # Invalidate cache
@@ -233,8 +233,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "concurrent-model"
+      [defaults]
+      model = "concurrent-model"
       """)
 
       # Spawn multiple concurrent gets
@@ -256,8 +256,8 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "reload-model"
+      [defaults]
+      model = "reload-model"
       """)
 
       # First load
@@ -284,23 +284,23 @@ defmodule LemonCore.ConfigCacheTest do
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "global-model"
+      [defaults]
+      model = "global-model"
       """)
 
       # Create two different project configs
       project1 = Path.join(tmp_dir, "project1")
       File.mkdir_p!(Path.join(project1, ".lemon"))
       File.write!(Path.join(project1, ".lemon/config.toml"), """
-      [agent]
-      default_model = "project1-model"
+      [defaults]
+      model = "project1-model"
       """)
 
       project2 = Path.join(tmp_dir, "project2")
       File.mkdir_p!(Path.join(project2, ".lemon"))
       File.write!(Path.join(project2, ".lemon/config.toml"), """
-      [agent]
-      default_model = "project2-model"
+      [defaults]
+      model = "project2-model"
       """)
 
       # Get configs for different projects

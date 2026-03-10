@@ -87,14 +87,29 @@ defmodule LemonCore.Config.Providers do
   # Private functions for resolving each provider config
 
   defp resolve_provider(config) when is_map(config) do
-    %{
+    base = %{
       api_key: config["api_key"],
       base_url: config["base_url"],
       api_key_secret: normalize_optional_string(config["api_key_secret"]),
       auth_source: normalize_optional_string(config["auth_source"]),
-      oauth_secret: normalize_optional_string(config["oauth_secret"])
+      oauth_secret: normalize_optional_string(config["oauth_secret"]),
+      # Google Vertex fields
+      project_secret: normalize_optional_string(config["project_secret"]),
+      location_secret: normalize_optional_string(config["location_secret"]),
+      service_account_json_secret:
+        normalize_optional_string(config["service_account_json_secret"]),
+      # Azure OpenAI Responses fields
+      resource_name: normalize_optional_string(config["resource_name"]),
+      api_version: normalize_optional_string(config["api_version"]),
+      deployment_name_map: config["deployment_name_map"],
+      # Amazon Bedrock fields
+      region: normalize_optional_string(config["region"]),
+      access_key_id_secret: normalize_optional_string(config["access_key_id_secret"]),
+      secret_access_key_secret: normalize_optional_string(config["secret_access_key_secret"]),
+      session_token_secret: normalize_optional_string(config["session_token_secret"])
     }
-    |> reject_nil_values()
+
+    reject_nil_values(base)
   end
 
   defp normalize_optional_string(nil), do: nil

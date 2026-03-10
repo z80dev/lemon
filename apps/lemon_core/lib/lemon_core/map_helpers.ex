@@ -48,4 +48,58 @@ defmodule LemonCore.MapHelpers do
   end
 
   def get_key(_, _), do: nil
+
+  @doc """
+  Recursively converts all map keys to strings.
+
+  Traverses nested maps and lists, converting atom keys (and any other key
+  types) to their string representation via `to_string/1`.
+
+  ## Examples
+
+      iex> LemonCore.MapHelpers.stringify_keys(%{foo: %{bar: 1}})
+      %{"foo" => %{"bar" => 1}}
+
+      iex> LemonCore.MapHelpers.stringify_keys(%{"already" => "string"})
+      %{"already" => "string"}
+
+      iex> LemonCore.MapHelpers.stringify_keys([%{a: 1}, %{b: 2}])
+      [%{"a" => 1}, %{"b" => 2}]
+  """
+  @spec stringify_keys(map()) :: map()
+  @spec stringify_keys(list()) :: list()
+  @spec stringify_keys(term()) :: term()
+  def stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+  end
+
+  def stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  def stringify_keys(value), do: value
+
+  @doc """
+  Merges an optional overrides value into a base config map.
+
+  Handles `nil` (no-op), maps (direct merge), keyword lists (converted to map
+  then merged), and ignores anything else.
+
+  ## Examples
+
+      iex> LemonCore.MapHelpers.merge_config(%{a: 1}, %{b: 2})
+      %{a: 1, b: 2}
+
+      iex> LemonCore.MapHelpers.merge_config(%{a: 1}, nil)
+      %{a: 1}
+
+      iex> LemonCore.MapHelpers.merge_config(%{a: 1}, [b: 2])
+      %{a: 1, b: 2}
+  """
+  @spec merge_config(map(), term()) :: map()
+  def merge_config(base, nil), do: base
+  def merge_config(base, opts) when is_map(opts), do: Map.merge(base, opts)
+
+  def merge_config(base, opts) when is_list(opts) do
+    if Keyword.keyword?(opts), do: Map.merge(base, Enum.into(opts, %{})), else: base
+  end
+
+  def merge_config(base, _opts), do: base
 end

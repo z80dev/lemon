@@ -126,6 +126,89 @@ defmodule LemonCore.MapHelpersTest do
     end
   end
 
+  describe "stringify_keys/1" do
+    test "converts atom keys to strings" do
+      assert MapHelpers.stringify_keys(%{foo: 1, bar: 2}) == %{"foo" => 1, "bar" => 2}
+    end
+
+    test "leaves string keys unchanged" do
+      assert MapHelpers.stringify_keys(%{"foo" => 1}) == %{"foo" => 1}
+    end
+
+    test "recursively converts nested maps" do
+      input = %{outer: %{inner: "value"}}
+      assert MapHelpers.stringify_keys(input) == %{"outer" => %{"inner" => "value"}}
+    end
+
+    test "handles lists of maps" do
+      input = [%{a: 1}, %{b: 2}]
+      assert MapHelpers.stringify_keys(input) == [%{"a" => 1}, %{"b" => 2}]
+    end
+
+    test "handles nested lists in maps" do
+      input = %{items: [%{id: 1}, %{id: 2}]}
+      assert MapHelpers.stringify_keys(input) == %{"items" => [%{"id" => 1}, %{"id" => 2}]}
+    end
+
+    test "passes through non-map/non-list values" do
+      assert MapHelpers.stringify_keys("string") == "string"
+      assert MapHelpers.stringify_keys(42) == 42
+      assert MapHelpers.stringify_keys(nil) == nil
+      assert MapHelpers.stringify_keys(true) == true
+    end
+
+    test "handles empty map" do
+      assert MapHelpers.stringify_keys(%{}) == %{}
+    end
+
+    test "handles empty list" do
+      assert MapHelpers.stringify_keys([]) == []
+    end
+
+    test "handles mixed atom and string keys" do
+      input = Map.put(%{atom_key: 1}, "string_key", 2)
+      result = MapHelpers.stringify_keys(input)
+      assert result["atom_key"] == 1
+      assert result["string_key"] == 2
+    end
+  end
+
+  describe "merge_config/2" do
+    test "returns base when opts is nil" do
+      assert MapHelpers.merge_config(%{a: 1}, nil) == %{a: 1}
+    end
+
+    test "merges map opts into base" do
+      assert MapHelpers.merge_config(%{a: 1}, %{b: 2}) == %{a: 1, b: 2}
+    end
+
+    test "map opts override base keys" do
+      assert MapHelpers.merge_config(%{a: 1}, %{a: 2}) == %{a: 2}
+    end
+
+    test "merges keyword list opts" do
+      assert MapHelpers.merge_config(%{a: 1}, b: 2) == %{a: 1, b: 2}
+    end
+
+    test "returns base for non-keyword list" do
+      assert MapHelpers.merge_config(%{a: 1}, [1, 2, 3]) == %{a: 1}
+    end
+
+    test "returns base for unsupported opts type" do
+      assert MapHelpers.merge_config(%{a: 1}, "invalid") == %{a: 1}
+      assert MapHelpers.merge_config(%{a: 1}, 42) == %{a: 1}
+    end
+
+    test "handles empty base with map opts" do
+      assert MapHelpers.merge_config(%{}, %{a: 1}) == %{a: 1}
+    end
+
+    test "handles empty opts" do
+      assert MapHelpers.merge_config(%{a: 1}, %{}) == %{a: 1}
+      assert MapHelpers.merge_config(%{a: 1}, []) == %{a: 1}
+    end
+  end
+
   describe "get_key/2 edge cases" do
     test "handles empty string values" do
       assert MapHelpers.get_key(%{name: ""}, :name) == ""

@@ -646,6 +646,264 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags direct Application.get_env for channels transport config in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/adapters/telegram/bad_config.ex",
+        """
+        defmodule LemonChannels.Adapters.Telegram.BadConfig do
+          def bad do
+            Application.get_env(:lemon_channels, :telegram)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_channels_transport_app_env and
+                 issue.path ==
+                   "apps/lemon_channels/lib/lemon_channels/adapters/telegram/bad_config.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for discord transport config in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/adapters/discord/bad_config.ex",
+        """
+        defmodule LemonChannels.Adapters.Discord.BadConfig do
+          def bad do
+            Application.get_env(:lemon_channels, :discord)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_channels_transport_app_env
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for xmtp transport config in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/adapters/xmtp/bad_config.ex",
+        """
+        defmodule LemonChannels.Adapters.Xmtp.BadConfig do
+          def bad do
+            Application.get_env(:lemon_channels, :xmtp)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_channels_transport_app_env
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for gateway transport overlay in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_gateway_overlay.ex",
+        """
+        defmodule LemonChannels.BadGatewayOverlay do
+          def bad do
+            Application.get_env(:lemon_channels, :gateway)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_channels_transport_app_env
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows LemonCore.GatewayConfig to read config_test_mode app env" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/gateway_config.ex",
+        """
+        defmodule LemonCore.GatewayConfig do
+          defp test_env? do
+            Application.get_env(:lemon_core, :config_test_mode, false)
+          end
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for router default_model in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_model_config.ex",
+        """
+        defmodule LemonRouter.BadModelConfig do
+          def bad do
+            Application.get_env(:lemon_router, :default_model)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_router_policy_app_env and
+                 issue.path == "apps/lemon_router/lib/lemon_router/bad_model_config.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for router agent_policies in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_policy_config.ex",
+        """
+        defmodule LemonRouter.BadPolicyConfig do
+          def bad do
+            Application.get_env(:lemon_router, :agent_policies)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_router_policy_app_env
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct Application.get_env for router runtime_policy in runtime modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_runtime_policy.ex",
+        """
+        defmodule LemonRouter.BadRuntimePolicy do
+          def bad do
+            Application.get_env(:lemon_router, :runtime_policy)
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_router_policy_app_env
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags direct provider env reads for config-backed provider values" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/ai/lib/ai/providers/google_vertex.ex",
+        """
+        defmodule Ai.Providers.GoogleVertex do
+          def bad do
+            System.get_env("GOOGLE_CLOUD_PROJECT")
+          end
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :forbidden_provider_direct_env and
+                 issue.path == "apps/ai/lib/ai/providers/google_vertex.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows platform-auth env fallback for GOOGLE_APPLICATION_CREDENTIALS" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/ai/lib/ai/providers/google_vertex.ex",
+        """
+        defmodule Ai.Providers.GoogleVertex do
+          def ok do
+            System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
+          end
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   defp tmp_repo! do
     dir =
       Path.join(

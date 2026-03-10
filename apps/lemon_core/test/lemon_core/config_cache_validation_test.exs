@@ -62,8 +62,8 @@ defmodule LemonCore.ConfigCacheValidationTest do
     test "reload without validation does not log warnings", %{global_config: global_config} do
       # Create a config with validation issues
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Invalidate cache to force reload
@@ -83,8 +83,8 @@ defmodule LemonCore.ConfigCacheValidationTest do
     } do
       # Create a config with validation issues
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Invalidate cache to force reload
@@ -105,10 +105,10 @@ defmodule LemonCore.ConfigCacheValidationTest do
     } do
       # Create a valid config
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = "claude-sonnet-4"
-      default_provider = "anthropic"
-      default_thinking_level = "medium"
+      [defaults]
+      model = "claude-sonnet-4"
+      provider = "anthropic"
+      thinking_level = "medium"
       """)
 
       # Invalidate cache to force reload
@@ -128,8 +128,8 @@ defmodule LemonCore.ConfigCacheValidationTest do
     test "get does not validate by default", %{global_config: global_config} do
       # Create a config with validation issues
       File.write!(Path.join(global_config, "config.toml"), """
-      [agent]
-      default_model = ""
+      [defaults]
+      model = ""
       """)
 
       # Invalidate cache
