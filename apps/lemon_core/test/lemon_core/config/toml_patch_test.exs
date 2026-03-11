@@ -58,4 +58,19 @@ defmodule LemonCore.Config.TomlPatchTest do
     assert patched =~ ~s(api_key_secret = "llm_openai_api_key")
     assert patched =~ ~s([providers.github_copilot])
   end
+
+  test "deletes an existing key from a table" do
+    content = """
+    [providers.openai-codex]
+    auth_source = "oauth"
+    oauth_secret = "llm_openai_codex_api_key"
+    api_key_secret = "legacy_secret"
+    """
+
+    patched = TomlPatch.delete_key(content, "providers.openai-codex", "api_key_secret")
+
+    assert patched =~ ~s(auth_source = "oauth")
+    assert patched =~ ~s(oauth_secret = "llm_openai_codex_api_key")
+    refute patched =~ ~s(api_key_secret = "legacy_secret")
+  end
 end

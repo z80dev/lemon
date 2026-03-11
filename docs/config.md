@@ -196,17 +196,20 @@ By default, existing environment variables are preserved. `.env` values only fil
 
 Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
 
-Primary setup path:
+Primary setup paths:
 
 ```bash
+mix lemon.onboard
 mix lemon.onboard.codex
 ```
 
 What it does:
 - Resolves Codex OAuth credentials via `Ai.Auth.OpenAICodexOAuth`
 - Stores credentials in encrypted secrets
-- Writes `providers.openai-codex.api_key_secret` in your config
+- Writes `providers.openai-codex.auth_source = "oauth"` plus `providers.openai-codex.oauth_secret`
 - Optionally updates `[defaults]` provider/model
+- Uses an interactive arrow-key TUI for selection steps when running in a real terminal
+- Listens on the localhost OAuth callback automatically and falls back to manual paste only if the callback cannot be captured
 
 The onboarding flow opens the OpenAI auth URL directly and stores the returned OAuth credentials in Lemon secrets.
 
@@ -216,24 +219,27 @@ To force a token explicitly, set:
 
 ## Provider Onboarding (CLI)
 
-Lemon includes guided onboarding flows for provider credentials where OAuth is supported:
+Lemon includes a top-level onboarding picker for provider credentials:
 
 ```bash
-# Google Antigravity OAuth onboarding
+mix lemon.onboard
+mix lemon.onboard anthropic
+mix lemon.onboard codex
+
+# Provider-specific aliases still work
 mix lemon.onboard.antigravity
-
-# OpenAI Codex OAuth onboarding
 mix lemon.onboard.codex
-
-# GitHub Copilot OAuth onboarding
 mix lemon.onboard.copilot
 ```
 
-All onboarding tasks:
+All onboarding flows:
 - Verify encrypted secrets are configured
-- Run provider OAuth flow by default (or accept `--token`)
+- Let you choose a provider when none is passed
+- Use an interactive arrow-key TUI for provider/auth/model selection when a TTY is available
+- Run provider OAuth flow by default when supported, or prompt for an API key/token otherwise
+- Capture localhost OAuth callbacks automatically when the provider redirect URI is local
 - Store credentials in encrypted secrets with provider metadata
-- Write `providers.<provider>.api_key_secret` in config
+- Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
@@ -260,10 +266,10 @@ mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
 ```
 
-Anthropic provider auth is API key based. Store your raw key in secrets:
+Anthropic provider auth is API key based. Store your key in secrets:
 
 ```bash
-mix lemon.secrets.set llm_anthropic_api_key_raw <token>
+mix lemon.secrets.set llm_anthropic_api_key <token>
 ```
 
 ## Web Tools (`websearch` / `webfetch`)

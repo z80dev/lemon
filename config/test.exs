@@ -53,7 +53,8 @@ config :lemon_gateway, :engines, [
   LemonGateway.Engines.Codex,
   LemonGateway.Engines.Claude,
   LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi
+  LemonGateway.Engines.Pi,
+  LemonGateway.Engines.Kimi
 ]
 
 config :lemon_gateway, :telegram, nil

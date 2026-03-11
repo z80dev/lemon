@@ -335,13 +335,13 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 2. To add a new master key source, extend `LemonCore.Secrets.MasterKey.resolve/1`
 3. To add a new keychain backend, implement the same interface as `LemonCore.Secrets.Keychain`
 
-### Adding a New Onboarding Task
+### Adding a New Onboarding Provider
 
-1. Create `lib/mix/tasks/lemon.onboard.<provider>.ex`
-2. The task should handle OAuth flow or token input
-3. Store credentials via `LemonCore.Secrets.set/3`
-4. Update config via `LemonCore.Config.TomlPatch.upsert_string/4`
-5. Add tests in `test/mix/tasks/lemon.onboard.<provider>_test.exs`
+1. Add a provider spec to `lib/lemon_core/onboarding/providers.ex`
+2. Reuse `LemonCore.Onboarding.Runner` for auth flow, secrets persistence, and config updates
+3. If you want a dedicated alias task, create `lib/mix/tasks/lemon.onboard.<provider>.ex` that delegates to the shared runner
+4. Update config via `LemonCore.Config.TomlPatch`
+5. Add focused tests in `test/mix/tasks/` and `test/lemon_core/onboarding/`
 
 ### Adding a New Quality Check
 
@@ -434,10 +434,18 @@ mix lemon.secrets.delete API_KEY
 
 ```bash
 # Guided provider setup:
-# - runs provider OAuth flow by default (or accepts --token)
-# - stores OAuth credentials in encrypted secrets
-# - writes providers.<provider>.api_key_secret
+# - pick a provider from a menu, or pass one directly
+# - runs provider OAuth flow when supported, or prompts for an API key/token otherwise
+# - uses a TermUI-based arrow-key selector in real terminals for provider/auth/model/default prompts
+# - the onboarding selector uses `LemonCore.Onboarding.TerminalUI`'s custom renderer rather than `TermUI.Widget.PickList`
+#   because the stock pick-list widget can emit range warnings that corrupt the TUI display
+# - captures localhost OAuth callbacks automatically when supported, with manual paste fallback
+# - stores credentials in encrypted secrets
+# - writes the relevant providers.<provider> config keys
 # - optionally updates defaults.provider/defaults.model
+mix lemon.onboard
+mix lemon.onboard anthropic
+mix lemon.onboard codex
 mix lemon.onboard.antigravity
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
@@ -455,7 +463,7 @@ mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
 ```
 
-Anthropic provider auth is API-key based; use `mix lemon.secrets.set llm_anthropic_api_key_raw <token>` and set `providers.anthropic.api_key_secret` accordingly.
+Anthropic provider auth is API-key based; use `mix lemon.onboard anthropic` or `mix lemon.secrets.set llm_anthropic_api_key <token>` and set `providers.anthropic.api_key_secret` accordingly.
 
 ### Quality Tasks
 

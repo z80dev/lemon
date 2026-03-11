@@ -39,6 +39,25 @@ defmodule LemonCore.Config.TomlPatch do
     end
   end
 
+  @spec delete_key(String.t(), String.t(), String.t()) :: String.t()
+  def delete_key(content, table, key)
+      when is_binary(content) and is_binary(table) and is_binary(key) do
+    content = normalize_newlines(content)
+
+    case find_table_range(content, table) do
+      {:ok, section_start, section_end} ->
+        section = String.slice(content, section_start, section_end - section_start)
+        updated_section = delete_line_from_section(section, key)
+
+        String.slice(content, 0, section_start) <>
+          updated_section <>
+          String.slice(content, section_end, String.length(content) - section_end)
+
+      :error ->
+        content
+    end
+  end
+
   defp upsert_line_in_section(section, key, line) do
     key_regex = ~r/^\s*#{Regex.escape(key)}\s*=.*$/m
 
@@ -48,6 +67,11 @@ defmodule LemonCore.Config.TomlPatch do
       section = ensure_trailing_newline(section)
       section <> line <> "\n"
     end
+  end
+
+  defp delete_line_from_section(section, key) do
+    key_regex = ~r/^\s*#{Regex.escape(key)}\s*=.*(?:\n|$)/m
+    String.replace(section, key_regex, "")
   end
 
   defp find_table_range(content, table) do

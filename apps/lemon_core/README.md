@@ -169,9 +169,10 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | `mix lemon.secrets.delete` | Delete a secret |
 | `mix lemon.secrets.check` | Check secrets health |
 | `mix lemon.secrets.import_env` | Import env vars as secrets |
+| `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
 | `mix lemon.onboard.anthropic` | Anthropic provider setup |
 | `mix lemon.onboard.antigravity` | Antigravity (Google) provider setup with OAuth |
-| `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth |
+| `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth and localhost callback capture |
 | `mix lemon.onboard.copilot` | GitHub Copilot provider setup with OAuth |
 | `mix lemon.quality` | Run all quality checks |
 | `mix lemon.cleanup` | Clean up old data |

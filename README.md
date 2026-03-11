@@ -134,7 +134,7 @@ Create `~/.lemon/config.toml`:
 ```toml
 # Provider keys (pick one)
 [providers.anthropic]
-api_key_secret = "llm_anthropic_api_key_raw"
+api_key_secret = "llm_anthropic_api_key"
 
 # Defaults used by runtime + default profile
 [defaults]
@@ -2161,18 +2161,33 @@ mix lemon.secrets.set github_api_token "ghp_..." --provider github --expires-at 
 
 #### 3) Provider onboarding
 
-Use onboarding tasks for providers that support OAuth, store credentials in encrypted secrets, and write `api_key_secret` in config:
+Use the top-level onboarding picker for providers that support OAuth or API-key onboarding:
 
 ```bash
+mix lemon.onboard
+mix lemon.onboard anthropic
+mix lemon.onboard codex
+
+# Provider-specific aliases still work
 mix lemon.onboard.antigravity
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
 ```
 
-Anthropic provider auth is API-key based. Store your raw key in secrets (for example):
+The onboarding flows:
+- Verify encrypted secrets are configured
+- Let you choose a provider when none is passed
+- Use a Lemon-themed interactive TUI selector in a real terminal for provider, auth-mode, model, and confirmation choices
+- Run OAuth/device login when supported, or prompt for an API key/token otherwise
+- Capture localhost OAuth callbacks automatically for providers like Codex and Antigravity, with manual paste as fallback
+- Store credentials in encrypted secrets with provider metadata
+- Update the relevant provider config in `config.toml`
+- Support `--set-default`, `--model`, and `--config-path`
+
+Anthropic provider auth is API-key based. You can also store it manually:
 
 ```bash
-mix lemon.secrets.set llm_anthropic_api_key_raw <token>
+mix lemon.secrets.set llm_anthropic_api_key <token>
 ```
 
 For Antigravity OAuth, store client credentials in Lemon secrets:
@@ -2183,7 +2198,7 @@ Environment fallback is also supported:
 - `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID`
 - `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET`
 
-For OpenAI Codex specifically, `mix lemon.onboard.codex` is the primary path. It resolves/stores Codex OAuth credentials in Lemon's secret store and wires `providers.openai-codex.api_key_secret` automatically.
+For OpenAI Codex specifically, `mix lemon.onboard codex` or `mix lemon.onboard.codex` is the primary path. OAuth mode stores the secret in Lemon's secret store, wires `providers.openai-codex.auth_source = "oauth"` plus `providers.openai-codex.oauth_secret` automatically, and listens on the localhost callback URL so the browser redirect completes without manual copy/paste in the normal case.
 
 #### 4) Use secrets for LLM providers
 
@@ -2209,11 +2224,11 @@ Runtime key resolution order is:
 - `ANTHROPIC_API_KEY`
 - `api_key`
 - `api_key_secret`
-- default secret fallback `llm_anthropic_api_key_raw`
+- default secret fallback `llm_anthropic_api_key`
 
 Example fallback names:
 - OpenAI: `llm_openai_api_key`
-- Anthropic: `llm_anthropic_api_key_raw`
+- Anthropic: `llm_anthropic_api_key`
 - OpenAI Codex: `llm_openai_codex_api_key`
 
 #### 5) Use secrets for WASM HTTP credentials

@@ -16,7 +16,8 @@ Application.put_env(:lemon_gateway, :engines, [
   LemonGateway.Engines.Codex,
   LemonGateway.Engines.Claude,
   LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi
+  LemonGateway.Engines.Pi,
+  LemonGateway.Engines.Kimi
 ])
 
 Application.delete_env(:lemon_gateway, :telegram)

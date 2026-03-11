@@ -35,7 +35,8 @@ Application.put_env(:lemon_channels, :engines, [
   "codex",
   "claude",
   "opencode",
-  "pi"
+  "pi",
+  "kimi"
 ])
 
 # Keep X adapter tests deterministic by default; specific tests can opt in.
