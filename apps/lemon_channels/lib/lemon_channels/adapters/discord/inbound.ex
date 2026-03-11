@@ -38,6 +38,10 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
       |> message_content()
       |> enrich_with_attachments(message)
 
+    ref_msg = fetch_map(message, :referenced_message)
+    reply_to_text = fetch_binary(ref_msg, :content)
+    reply_to_author_id = ref_msg |> fetch_map(:author) |> fetch_id(:id)
+
     inbound = %InboundMessage{
       channel_id: "discord",
       account_id: account_id,
@@ -60,7 +64,9 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
         thread_id: thread_id,
         user_msg_id: message_id,
         user_id: sender && sender.id,
-        reply_to_id: reply_to_id
+        reply_to_id: reply_to_id,
+        reply_to_text: reply_to_text,
+        reply_to_author_id: reply_to_author_id
       }
     }
 

@@ -30,9 +30,15 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   def deliver(
         %OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload
       ) do
+    components = extract_components(payload)
+
+    edit_params =
+      %{content: to_string(text)}
+      |> maybe_put_components(components)
+
     with {:ok, channel_id} <- peer_channel_id(payload),
          {:ok, msg_id} <- normalize_id(message_id),
-         {:ok, result} <- Message.edit(channel_id, msg_id, %{content: to_string(text)}) do
+         {:ok, result} <- Message.edit(channel_id, msg_id, edit_params) do
       {:ok, %{message_id: extract_message_id(result) || msg_id}}
     else
       {:error, reason} -> {:error, reason}
@@ -59,6 +65,21 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       {:error, {:discord_delete_crashed, error}}
   end
 
+  def deliver(%OutboundPayload{kind: :reaction} = payload) do
+    with {:ok, channel_id} <- peer_channel_id(payload),
+         {:ok, msg_id} <- normalize_id(payload.content[:message_id]),
+         emoji when is_binary(emoji) <- payload.content[:emoji] do
+      create_reaction(channel_id, msg_id, emoji)
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:discord_reaction_failed, other}}
+    end
+  rescue
+    error ->
+      Logger.warning("discord outbound reaction delivery crashed: #{inspect(error)}")
+      {:error, {:discord_reaction_crashed, error}}
+  end
+
   def deliver(%OutboundPayload{kind: :file, content: content} = payload) do
     with {:ok, channel_id} <- peer_channel_id(payload),
          text <- file_notice_text(content),
@@ -78,15 +99,122 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
     {:error, {:unsupported_kind, kind}}
   end
 
+  # ============================================================================
+  # Reactions
+  # ============================================================================
+
+  @doc "Add a reaction emoji to a message."
+  @spec create_reaction(integer(), integer(), binary()) :: {:ok, term()} | {:error, term()}
+  def create_reaction(channel_id, message_id, emoji)
+      when is_integer(channel_id) and is_integer(message_id) and is_binary(emoji) do
+    # URL-encode the emoji for the Discord API
+    encoded = URI.encode(emoji)
+
+    case Nostrum.Api.Message.react(channel_id, message_id, encoded) do
+      {:ok} -> {:ok, %{message_id: message_id}}
+      {:ok, _} -> {:ok, %{message_id: message_id}}
+      :ok -> {:ok, %{message_id: message_id}}
+      {:error, reason} -> {:error, {:discord_reaction_failed, reason}}
+    end
+  rescue
+    error ->
+      Logger.warning("discord create_reaction crashed: #{inspect(error)}")
+      {:error, {:discord_reaction_crashed, error}}
+  end
+
+  @doc "Remove bot's own reaction from a message."
+  @spec delete_own_reaction(integer(), integer(), binary()) :: :ok | {:error, term()}
+  def delete_own_reaction(channel_id, message_id, emoji)
+      when is_integer(channel_id) and is_integer(message_id) and is_binary(emoji) do
+    encoded = URI.encode(emoji)
+
+    case Nostrum.Api.Message.unreact(channel_id, message_id, encoded) do
+      {:ok} -> :ok
+      {:ok, _} -> :ok
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    _ -> :ok
+  end
+
+  @doc "Send a message with components (buttons, select menus)."
+  @spec send_with_components(integer(), binary(), list(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def send_with_components(channel_id, content, components, opts \\ [])
+      when is_integer(channel_id) and is_binary(content) do
+    params =
+      %{content: content, components: components}
+      |> maybe_put_reply(opts)
+
+    case Message.create(channel_id, params) do
+      {:ok, result} -> {:ok, %{message_id: extract_message_id(result)}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error ->
+      Logger.warning("discord send_with_components crashed: #{inspect(error)}")
+      {:error, {:discord_send_crashed, error}}
+  end
+
+  @doc "Edit a message updating content and/or components."
+  @spec edit_with_components(integer(), integer(), binary(), list()) ::
+          {:ok, map()} | {:error, term()}
+  def edit_with_components(channel_id, message_id, content, components)
+      when is_integer(channel_id) and is_integer(message_id) do
+    params =
+      %{content: content, components: components}
+
+    case Message.edit(channel_id, message_id, params) do
+      {:ok, result} -> {:ok, %{message_id: extract_message_id(result) || message_id}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error ->
+      Logger.warning("discord edit_with_components crashed: #{inspect(error)}")
+      {:error, {:discord_edit_crashed, error}}
+  end
+
+  # ============================================================================
+  # Private
+  # ============================================================================
+
   defp text_params(content, payload) do
     params = %{content: content}
 
-    case normalize_id(payload.reply_to) do
-      {:ok, reply_id} ->
-        Map.put(params, :message_reference, %{message_id: reply_id})
+    params =
+      case normalize_id(payload.reply_to) do
+        {:ok, reply_id} ->
+          Map.put(params, :message_reference, %{message_id: reply_id})
 
-      _ ->
-        params
+        _ ->
+          params
+      end
+
+    components = extract_components(payload)
+    maybe_put_components(params, components)
+  end
+
+  defp extract_components(%OutboundPayload{meta: %{components: components}})
+       when is_list(components),
+       do: components
+
+  defp extract_components(%OutboundPayload{meta: %{"components" => components}})
+       when is_list(components),
+       do: components
+
+  defp extract_components(_), do: nil
+
+  defp maybe_put_components(params, components) when is_list(components),
+    do: Map.put(params, :components, components)
+
+  defp maybe_put_components(params, _), do: params
+
+  defp maybe_put_reply(params, opts) do
+    case Keyword.get(opts, :reply_to) do
+      nil -> params
+      reply_id when is_integer(reply_id) -> Map.put(params, :message_reference, %{message_id: reply_id})
+      _ -> params
     end
   end
 

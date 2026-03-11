@@ -20,7 +20,7 @@ defmodule LemonChannels.Adapters.Discord do
         voice_support: false,
         image_support: true,
         file_support: true,
-        reaction_support: false,
+        reaction_support: true,
         thread_support: true
       },
       docs: "https://discord.com/developers/docs/intro"
