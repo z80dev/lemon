@@ -79,6 +79,9 @@ defmodule Ai.Application do
     # AWS
     Ai.ProviderRegistry.register(:bedrock_converse_stream, Ai.Providers.Bedrock)
 
+    # Mistral
+    Ai.ProviderRegistry.register(:mistral_conversations, Ai.Providers.MistralConversations)
+
     :ok
   end
 end

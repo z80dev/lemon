@@ -249,6 +249,32 @@ defmodule Ai.Models.GitHubCopilot do
       context_window: 272_000,
       max_tokens: 128_000
     },
+    "gpt-5.3-codex" => %Model{
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3-Codex",
+      api: :openai_responses,
+      provider: :github_copilot,
+      base_url: "https://api.individual.githubcopilot.com",
+      headers: %{"User-Agent" => "GitHubCopilotChat/0.35.0", "Editor-Version" => "vscode/1.107.0", "Editor-Plugin-Version" => "copilot-chat/0.35.0", "Copilot-Integration-Id" => "vscode-chat"},
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4" => %Model{
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: :openai_responses,
+      provider: :github_copilot,
+      base_url: "https://api.individual.githubcopilot.com",
+      headers: %{"User-Agent" => "GitHubCopilotChat/0.35.0", "Editor-Version" => "vscode/1.107.0", "Editor-Plugin-Version" => "copilot-chat/0.35.0", "Copilot-Integration-Id" => "vscode-chat"},
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
+    },
     "grok-code-fast-1" => %Model{
       id: "grok-code-fast-1",
       name: "Grok Code Fast 1",

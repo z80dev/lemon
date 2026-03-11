@@ -698,6 +698,18 @@ defmodule Ai.Models.OpenRouter do
       context_window: 1_048_576,
       max_tokens: 65_536
     },
+    "google/gemini-3.1-flash-lite-preview" => %Model{
+      id: "google/gemini-3.1-flash-lite-preview",
+      name: "Google: Gemini 3.1 Flash Lite Preview",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.25, output: 1.5, cache_read: 0.025, cache_write: 0.083},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
     "google/gemini-3.1-pro-preview" => %Model{
       id: "google/gemini-3.1-pro-preview",
       name: "Google: Gemini 3.1 Pro Preview",
@@ -762,6 +774,18 @@ defmodule Ai.Models.OpenRouter do
       cost: %ModelCost{input: 0.25, output: 1.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 16_384
+    },
+    "inception/mercury-2" => %Model{
+      id: "inception/mercury-2",
+      name: "Inception: Mercury 2",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.25, output: 0.75, cache_read: 0.025, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 50_000
     },
     "kwaipilot/kat-coder-pro" => %Model{
       id: "kwaipilot/kat-coder-pro",
@@ -1899,6 +1923,42 @@ defmodule Ai.Models.OpenRouter do
       input: [:text, :image],
       cost: %ModelCost{input: 21.0, output: 168.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 400_000,
+      max_tokens: 128_000
+    },
+    "openai/gpt-5.3-chat" => %Model{
+      id: "openai/gpt-5.3-chat",
+      name: "OpenAI: GPT-5.3 Chat",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: @base_url,
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 16_384
+    },
+    "openai/gpt-5.4" => %Model{
+      id: "openai/gpt-5.4",
+      name: "OpenAI: GPT-5.4",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
+    "openai/gpt-5.4-pro" => %Model{
+      id: "openai/gpt-5.4-pro",
+      name: "OpenAI: GPT-5.4 Pro",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 30.0, output: 180.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_050_000,
       max_tokens: 128_000
     },
     "openai/gpt-oss-120b" => %Model{

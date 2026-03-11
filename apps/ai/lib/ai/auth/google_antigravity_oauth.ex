@@ -10,6 +10,7 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
 
   alias Ai.Auth.OAuthPKCE
   alias LemonCore.Secrets
+  alias LemonCore.Onboarding.LocalCallbackListener
 
   @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
   @token_url "https://oauth2.googleapis.com/token"
@@ -32,6 +33,7 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
   ]
   @secret_type "google_antigravity_oauth"
   @near_expiry_ms 5 * 60 * 1000
+  @default_callback_timeout_ms 120_000
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
@@ -42,6 +44,8 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
           | {:state, String.t()}
           | {:project_id, String.t()}
           | {:email, String.t()}
+          | {:callback_timeout_ms, pos_integer()}
+          | {:listen_for_callback, boolean()}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -72,27 +76,38 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
   def authorize_url(opts \\ []), do: build_authorize_url(opts)
 
   @doc """
-  Run Google Antigravity OAuth flow (open URL + paste code/callback URL).
+  Run Google Antigravity OAuth flow.
+
+  When the redirect URI is local (`http://localhost:51121/oauth-callback` by default),
+  Lemon listens for the browser callback automatically and falls back to manual
+  paste only if that listener cannot complete the flow.
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
-    with {:ok, auth} <- build_authorize_url(opts),
-         :ok <-
-           notify_auth(
-             opts,
-             auth.authorize_url,
-             "Paste the callback URL (or authorization code) after browser sign-in."
-           ),
-         {:ok, %{code: code, state: state}} <- prompt_code(opts),
-         :ok <- ensure_state_matches(auth.state, state),
-         :ok <- notify_progress(opts, "Exchanging authorization code for tokens..."),
-         {:ok, secret} <-
-           exchange_code_for_secret(code, auth.code_verifier,
-             redirect_uri: auth.redirect_uri,
-             project_id: Keyword.get(opts, :project_id, @default_project_id),
-             email: Keyword.get(opts, :email)
-           ) do
-      {:ok, secret}
+    with {:ok, auth} <- build_authorize_url(opts) do
+      listener = maybe_start_local_callback_listener(auth.redirect_uri, opts)
+
+      try do
+        with :ok <-
+               notify_auth(
+                 opts,
+                 auth.authorize_url,
+                 auth_instructions(auth.redirect_uri, listener)
+               ),
+             {:ok, %{code: code, state: state}} <- prompt_code(opts, auth.redirect_uri, listener),
+             :ok <- ensure_state_matches(auth.state, state),
+             :ok <- notify_progress(opts, "Exchanging authorization code for tokens..."),
+             {:ok, secret} <-
+               exchange_code_for_secret(code, auth.code_verifier,
+                 redirect_uri: auth.redirect_uri,
+                 project_id: Keyword.get(opts, :project_id, @default_project_id),
+                 email: Keyword.get(opts, :email)
+               ) do
+          {:ok, secret}
+        end
+      after
+        stop_local_callback_listener(listener)
+      end
     end
   end
 
@@ -468,7 +483,17 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
     end
   end
 
-  defp prompt_code(opts) do
+  defp prompt_code(opts, redirect_uri, listener) do
+    case wait_for_local_callback(opts, redirect_uri, listener) do
+      {:ok, value} ->
+        parse_authorization_input(value)
+
+      :manual ->
+        prompt_code_manually(opts)
+    end
+  end
+
+  defp prompt_code_manually(opts) do
     prompt_callback = Keyword.get(opts, :on_prompt)
 
     value =
@@ -494,6 +519,78 @@ defmodule Ai.Auth.GoogleAntigravityOAuth do
       |> parse_authorization_input()
     end
   end
+
+  defp maybe_start_local_callback_listener(redirect_uri, opts) do
+    if Keyword.get(opts, :listen_for_callback, true) and
+         LocalCallbackListener.local_redirect_uri?(redirect_uri) do
+      case LocalCallbackListener.start(redirect_uri) do
+        {:ok, listener} ->
+          listener
+
+        {:error, reason} ->
+          _ =
+            notify_progress(
+              opts,
+              "Could not start localhost OAuth callback listener: #{format_local_callback_error(reason)}. Falling back to manual paste."
+            )
+
+          nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp wait_for_local_callback(_opts, _redirect_uri, nil), do: :manual
+
+  defp wait_for_local_callback(opts, redirect_uri, listener) do
+    timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
+
+    _ =
+      notify_progress(
+        opts,
+        "Waiting for browser callback on #{redirect_uri} ..."
+      )
+
+    case LocalCallbackListener.wait(listener, timeout_ms) do
+      {:ok, callback_url} ->
+        _ = notify_progress(opts, "Received browser callback. Finishing sign-in...")
+        {:ok, callback_url}
+
+      {:error, :timeout} ->
+        _ =
+          notify_progress(
+            opts,
+            "Did not receive the browser callback automatically. Paste the callback URL or code to continue."
+          )
+
+        :manual
+
+      {:error, reason} ->
+        _ =
+          notify_progress(
+            opts,
+            "Automatic callback capture failed: #{format_local_callback_error(reason)}. Paste the callback URL or code to continue."
+          )
+
+        :manual
+    end
+  end
+
+  defp stop_local_callback_listener(nil), do: :ok
+  defp stop_local_callback_listener(listener), do: LocalCallbackListener.stop(listener)
+
+  defp auth_instructions(_redirect_uri, nil) do
+    "Paste the callback URL (or authorization code) after browser sign-in."
+  end
+
+  defp auth_instructions(redirect_uri, _listener) do
+    "After browser sign-in, Lemon will capture the redirect to #{redirect_uri} automatically."
+  end
+
+  defp format_local_callback_error(:eaddrinuse), do: "port already in use"
+  defp format_local_callback_error(:unsupported_redirect_uri), do: "redirect URI is not local"
+  defp format_local_callback_error(reason), do: inspect(reason)
 
   defp notify_auth(opts, url, instructions) do
     auth_callback = Keyword.get(opts, :on_auth)

@@ -568,6 +568,18 @@ defmodule Ai.Models.VercelAIGateway do
       context_window: 1_000_000,
       max_tokens: 64_000
     },
+    "google/gemini-3.1-flash-lite-preview" => %Model{
+      id: "google/gemini-3.1-flash-lite-preview",
+      name: "Gemini 3.1 Flash Lite Preview",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.25, output: 1.5, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_000_000,
+      max_tokens: 65_000
+    },
     "google/gemini-3.1-pro-preview" => %Model{
       id: "google/gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
@@ -596,6 +608,18 @@ defmodule Ai.Models.VercelAIGateway do
       cost: %ModelCost{input: 0.25, output: 1.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 32_000,
       max_tokens: 16_384
+    },
+    "inception/mercury-2" => %Model{
+      id: "inception/mercury-2",
+      name: "Mercury 2",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.25, output: 0.75, cache_read: 0.025, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 128_000
     },
     "meituan/longcat-flash-chat" => %Model{
       id: "meituan/longcat-flash-chat",
@@ -762,6 +786,18 @@ defmodule Ai.Models.VercelAIGateway do
       cost: %ModelCost{input: 0.3, output: 1.2, cache_read: 0.03, cache_write: 0.375},
       context_window: 204_800,
       max_tokens: 131_000
+    },
+    "minimax/minimax-m2.5-highspeed" => %Model{
+      id: "minimax/minimax-m2.5-highspeed",
+      name: "MiniMax M2.5 High Speed",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 2.4, cache_read: 0.03, cache_write: 0.375},
+      context_window: 4_096,
+      max_tokens: 4_096
     },
     "mistral/codestral" => %Model{
       id: "mistral/codestral",
@@ -1284,6 +1320,42 @@ defmodule Ai.Models.VercelAIGateway do
       input: [:text, :image],
       cost: %ModelCost{input: 21.0, output: 168.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 400_000,
+      max_tokens: 128_000
+    },
+    "openai/gpt-5.3-chat" => %Model{
+      id: "openai/gpt-5.3-chat",
+      name: "GPT-5.3 Chat",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 16_384
+    },
+    "openai/gpt-5.4" => %Model{
+      id: "openai/gpt-5.4",
+      name: "GPT 5.4",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 0.0},
+      context_window: 200_000,
+      max_tokens: 128_000
+    },
+    "openai/gpt-5.4-pro" => %Model{
+      id: "openai/gpt-5.4-pro",
+      name: "GPT 5.4 Pro",
+      api: :anthropic_messages,
+      provider: :vercel_ai_gateway,
+      base_url: @base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 30.0, output: 180.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 200_000,
       max_tokens: 128_000
     },
     "openai/gpt-oss-120b" => %Model{

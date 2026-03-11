@@ -213,6 +213,18 @@ defmodule Ai.Models.Google do
       context_window: 1_000_000,
       max_tokens: 64_000
     },
+    "gemini-3.1-flash-lite-preview" => %Model{
+      id: "gemini-3.1-flash-lite-preview",
+      name: "Gemini 3.1 Flash Lite Preview",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.5, output: 3.0, cache_read: 0.05, cache_write: 0.0},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
     "gemini-3.1-pro" => %Model{
       id: "gemini-3.1-pro",
       name: "Gemini 3.1 Pro",
@@ -434,6 +446,23 @@ defmodule Ai.Models.Google do
                           "claude-sonnet-4-5-thinking" => %Model{
                             id: "claude-sonnet-4-5-thinking",
                             name: "Claude Sonnet 4.5 Thinking (Antigravity)",
+                            api: :google_gemini_cli,
+                            provider: :google_antigravity,
+                            base_url: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+                            reasoning: true,
+                            input: [:text, :image],
+                            cost: %ModelCost{
+                              input: 3.0,
+                              output: 15.0,
+                              cache_read: 0.3,
+                              cache_write: 3.75
+                            },
+                            context_window: 200_000,
+                            max_tokens: 64_000
+                          },
+                          "claude-sonnet-4-6" => %Model{
+                            id: "claude-sonnet-4-6",
+                            name: "Claude Sonnet 4.6 (Antigravity)",
                             api: :google_gemini_cli,
                             provider: :google_antigravity,
                             base_url: "https://daily-cloudcode-pa.sandbox.googleapis.com",

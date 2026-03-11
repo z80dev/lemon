@@ -345,6 +345,30 @@ defmodule Ai.Models.AzureOpenAI do
       context_window: 128_000,
       max_tokens: 32_000
     },
+    "gpt-5.4" => %Model{
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: :azure_openai_responses,
+      provider: :azure_openai_responses,
+      base_url: "null",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 0.0},
+      context_window: 272_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4-pro" => %Model{
+      id: "gpt-5.4-pro",
+      name: "GPT-5.4 Pro",
+      api: :azure_openai_responses,
+      provider: :azure_openai_responses,
+      base_url: "null",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 30.0, output: 180.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
     "o1" => %Model{
       id: "o1",
       name: "o1",

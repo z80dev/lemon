@@ -114,7 +114,7 @@ defmodule Ai.Models.OpenCode do
       reasoning: true,
       input: [:text, :image],
       cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75},
-      context_window: 1_000_000,
+      context_window: 200_000,
       max_tokens: 64_000
     },
     "gemini-3-flash" => %Model{
@@ -309,17 +309,41 @@ defmodule Ai.Models.OpenCode do
       context_window: 400_000,
       max_tokens: 128_000
     },
-    "trinity-large-preview-free" => %Model{
-      id: "trinity-large-preview-free",
-      name: "Trinity Large Preview",
-      api: :openai_completions,
+    "gpt-5.3-codex" => %Model{
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      api: :openai_responses,
       provider: :opencode,
       base_url: "https://opencode.ai/zen/v1",
-      reasoning: false,
-      input: [:text],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 131_072,
-      max_tokens: 131_072
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4" => %Model{
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: :openai_responses,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 0.0},
+      context_window: 272_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4-pro" => %Model{
+      id: "gpt-5.4-pro",
+      name: "GPT-5.4 Pro",
+      api: :openai_responses,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 30.0, output: 180.0, cache_read: 30.0, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
     },
     "kimi-k2" => %Model{
       id: "kimi-k2",

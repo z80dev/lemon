@@ -588,7 +588,7 @@ defmodule Ai.ModelsLegacyTest do
       assert Models.get_model(:opencode, "gemini-3-pro") != nil
       assert Models.get_model(:opencode, "gpt-5.2-codex") != nil
       assert Models.get_model(:opencode, "minimax-m2.5") != nil
-      assert Models.get_model(:opencode, "trinity-large-preview-free") != nil
+      assert Models.get_model(:opencode, "gpt-5.4") != nil
       assert Models.get_model(:opencode, "kimi-k2") != nil
       assert Models.get_model(:opencode, "kimi-k2-thinking") != nil
       assert Models.get_model(:opencode, "kimi-k2.5") != nil

@@ -7,6 +7,8 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
   setup do
     {:ok, _} = Application.ensure_all_started(:ai)
     {:ok, _} = Application.ensure_all_started(:lemon_core)
+    :inets.start()
+    :ssl.start()
 
     previous_defaults = Req.default_options()
     Req.default_options(plug: {Req.Test, __MODULE__})
@@ -152,6 +154,44 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
     assert is_integer(secret["expires_at_ms"])
   end
 
+  test "login_device_flow captures localhost callback automatically" do
+    redirect_uri = "http://localhost:#{reserve_local_port()}/oauth-callback"
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.request_path == "/token"
+
+      Plug.Conn.send_resp(
+        conn,
+        200,
+        Jason.encode!(%{
+          "access_token" => "fresh-auto-token",
+          "refresh_token" => "auto-refresh-token",
+          "expires_in" => 3600
+        })
+      )
+    end)
+
+    assert {:ok, secret} =
+             GoogleAntigravityOAuth.login_device_flow(
+               redirect_uri: redirect_uri,
+               callback_timeout_ms: 2_000,
+               on_auth: fn url, _instructions ->
+                 state = extract_query_param(url, "state")
+
+                 deliver_local_callback(
+                   "#{redirect_uri}?code=authorization-code-123&state=#{state}"
+                 )
+               end,
+               on_prompt: fn _prompt ->
+                 flunk("expected localhost callback capture without prompting")
+               end
+             )
+
+    assert secret["type"] == "google_antigravity_oauth"
+    assert secret["access_token"] == "fresh-auto-token"
+    assert secret["refresh_token"] == "auto-refresh-token"
+  end
+
   defp clear_secrets_table do
     Store.list(Secrets.table())
     |> Enum.each(fn {key, _value} ->
@@ -166,5 +206,18 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
     else
       _ -> nil
     end
+  end
+
+  defp reserve_local_port do
+    {:ok, socket} =
+      :gen_tcp.listen(0, [:binary, {:packet, :raw}, {:active, false}, {:ip, {127, 0, 0, 1}}])
+
+    {:ok, {_ip, port}} = :inet.sockname(socket)
+    :gen_tcp.close(socket)
+    port
+  end
+
+  defp deliver_local_callback(url) do
+    assert {:ok, _response} = :httpc.request(:get, {String.to_charlist(url), []}, [], [])
   end
 end

@@ -10,9 +10,9 @@ defmodule Ai.ModelsNewProvidersTest do
     test "codestral-latest is available" do
       model = Models.get_model(:mistral, "codestral-latest")
       assert model != nil
-      assert model.name == "Codestral"
+      assert model.name == "Codestral (latest)"
       assert model.provider == :mistral
-      assert model.api == :openai_completions
+      assert model.api == :mistral_conversations
       assert :text in model.input
     end
 
@@ -26,20 +26,20 @@ defmodule Ai.ModelsNewProvidersTest do
     test "mistral-large-latest is available" do
       model = Models.get_model(:mistral, "mistral-large-latest")
       assert model != nil
-      assert model.name == "Mistral Large"
+      assert model.name == "Mistral Large (latest)"
       assert :image in model.input
     end
 
     test "mistral-small-latest is available" do
       model = Models.get_model(:mistral, "mistral-small-latest")
       assert model != nil
-      assert model.name == "Mistral Small"
+      assert model.name == "Mistral Small (latest)"
     end
 
     test "pixtral-large-latest is available" do
       model = Models.get_model(:mistral, "pixtral-large-latest")
       assert model != nil
-      assert model.name == "Pixtral Large"
+      assert model.name == "Pixtral Large (latest)"
       assert :image in model.input
     end
 
