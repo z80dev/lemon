@@ -57,6 +57,7 @@ defmodule LemonGateway.Engines.CliAdapter do
     case engine_id do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
+      "kimi" -> "kimi --session #{value}"
       "opencode" -> "opencode --session #{value}"
       "pi" -> "pi --session #{quote_token(value)}"
       _ -> "#{engine_id} resume #{value}"

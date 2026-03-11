@@ -53,7 +53,8 @@ defmodule LemonGateway.EngineRegistry do
         LemonGateway.Engines.Codex,
         LemonGateway.Engines.Claude,
         LemonGateway.Engines.Opencode,
-        LemonGateway.Engines.Pi
+        LemonGateway.Engines.Pi,
+        LemonGateway.Engines.Kimi
       ])
 
     map =
