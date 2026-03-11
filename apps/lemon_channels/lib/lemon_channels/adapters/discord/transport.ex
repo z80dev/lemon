@@ -65,7 +65,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
-    token = cfg_get(config, :bot_token) || resolve_token()
+    token = cfg_get(config, :bot_token) || resolve_bot_token_secret(config) || resolve_token()
 
     if is_binary(token) and String.trim(token) != "" do
       case ensure_nostrum_started(token) do
@@ -117,7 +117,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp maybe_handle_message(message, state) do
-    with true <- user_message?(message),
+    with true <- not_self_message?(message, state),
          {:ok, inbound} <- normalize_message_inbound(message, state),
          true <- allowed_inbound?(inbound, state),
          true <- binding_allowed?(inbound, state),
@@ -366,12 +366,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> parse_id()
   end
 
-  defp user_message?(message) do
+  defp not_self_message?(message, state) do
     author = map_get(message, :author)
-    bot? = map_get(author, :bot) == true
+    author_id = map_get(author, :id) |> parse_id()
     webhook? = not is_nil(map_get(message, :webhook_id))
 
-    not bot? and not webhook?
+    author_id != state.bot_user_id and not webhook?
   end
 
   defp register_slash_commands do
@@ -452,6 +452,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp ensure_nostrum_started(token) do
     Application.put_env(:nostrum, :token, token)
 
+    # Enable privileged MESSAGE_CONTENT intent so we can read message text
+    Application.put_env(:nostrum, :gateway_intents, [
+      :guilds,
+      :guild_messages,
+      :guild_message_reactions,
+      :direct_messages,
+      :direct_message_reactions,
+      :message_content
+    ])
+
     case Application.ensure_all_started(:nostrum) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -502,6 +512,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp map_get(_, _), do: nil
+
+  defp resolve_bot_token_secret(config) do
+    secret_name = cfg_get(config, :bot_token_secret)
+
+    if is_binary(secret_name) and secret_name != "" do
+      Secrets.fetch_value(secret_name)
+    else
+      nil
+    end
+  end
 
   defp resolve_token do
     # Try secrets store first, then fall back to environment variable
