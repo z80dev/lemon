@@ -10,7 +10,8 @@ defmodule LemonSim.Examples.Skirmish.Updater do
     Events,
     Outcome,
     PhaseEngine,
-    Rng
+    Rng,
+    UnitClasses
   }
 
   @impl true
@@ -22,6 +23,8 @@ defmodule LemonSim.Examples.Skirmish.Updater do
       "attack_requested" -> apply_attack_requested(state, event)
       "cover_requested" -> apply_cover_requested(state, event)
       "end_turn_requested" -> apply_end_turn_requested(state, event)
+      "heal_requested" -> apply_heal_requested(state, event)
+      "sprint_requested" -> apply_sprint_requested(state, event)
       _ -> {:error, {:invalid_event_kind, event.kind}}
     end
   end
@@ -31,14 +34,54 @@ defmodule LemonSim.Examples.Skirmish.Updater do
     x = fetch(event.payload, :x, "x")
     y = fetch(event.payload, :y, "y")
 
+    move_cost = move_ap_cost(state.world, x, y)
+
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_main_phase(state.world),
          :ok <- ensure_active_actor(state.world, unit_id),
          {:ok, unit} <- fetch_living_unit(state.world, unit_id),
+         :ok <- ensure_ap(unit, move_cost),
+         :ok <- ensure_coords(x, y),
+         :ok <- ensure_in_bounds(state.world, x, y),
+         :ok <- ensure_not_wall(state.world, x, y),
+         :ok <- ensure_adjacent(unit, x, y),
+         :ok <- ensure_unoccupied(state.world, unit_id, x, y) do
+      next_world =
+        state.world
+        |> put_unit(
+          unit_id,
+          unit |> Map.put(:ap, get(unit, :ap, 0) - move_cost) |> Map.put(:cover?, false) |> put_pos(x, y)
+        )
+
+      action_events = [
+        Events.ap_spent(unit_id, move_cost, unit_ap(next_world, unit_id)),
+        Events.unit_moved(unit_id, x, y)
+      ]
+
+      state
+      |> append_action(event, next_world, action_events)
+      |> continue_or_advance(unit_id)
+    else
+      {:error, reason} ->
+        reject_action(state, event, unit_id, reason)
+    end
+  end
+
+  defp apply_sprint_requested(%State{} = state, event) do
+    unit_id = fetch(event.payload, :unit_id, "unit_id")
+    x = fetch(event.payload, :x, "x")
+    y = fetch(event.payload, :y, "y")
+
+    with :ok <- ensure_in_progress(state.world),
+         :ok <- ensure_main_phase(state.world),
+         :ok <- ensure_active_actor(state.world, unit_id),
+         {:ok, unit} <- fetch_living_unit(state.world, unit_id),
+         :ok <- ensure_ability(unit, :sprint),
          :ok <- ensure_ap(unit, 1),
          :ok <- ensure_coords(x, y),
          :ok <- ensure_in_bounds(state.world, x, y),
-         :ok <- ensure_adjacent(unit, x, y),
+         :ok <- ensure_not_wall(state.world, x, y),
+         :ok <- ensure_sprint_range(unit, x, y),
          :ok <- ensure_unoccupied(state.world, unit_id, x, y) do
       next_world =
         state.world
@@ -49,7 +92,7 @@ defmodule LemonSim.Examples.Skirmish.Updater do
 
       action_events = [
         Events.ap_spent(unit_id, 1, unit_ap(next_world, unit_id)),
-        Events.unit_moved(unit_id, x, y)
+        Events.unit_sprinted(unit_id, x, y)
       ]
 
       state
@@ -58,6 +101,47 @@ defmodule LemonSim.Examples.Skirmish.Updater do
     else
       {:error, reason} ->
         reject_action(state, event, unit_id, reason)
+    end
+  end
+
+  defp apply_heal_requested(%State{} = state, event) do
+    healer_id = fetch(event.payload, :healer_id, "healer_id")
+    target_id = fetch(event.payload, :target_id, "target_id")
+
+    with :ok <- ensure_in_progress(state.world),
+         :ok <- ensure_main_phase(state.world),
+         :ok <- ensure_active_actor(state.world, healer_id),
+         {:ok, healer} <- fetch_living_unit(state.world, healer_id),
+         {:ok, target} <- fetch_living_unit(state.world, target_id),
+         :ok <- ensure_ability(healer, :heal),
+         :ok <- ensure_ally(healer, target),
+         :ok <- ensure_ap(healer, 1),
+         :ok <- ensure_in_range(healer, target),
+         :ok <- ensure_wounded(target) do
+      heal_amount = get(healer, :heal_amount, 3)
+      max_hp = get(target, :max_hp, get(target, :hp, 0))
+      new_hp = min(get(target, :hp, 0) + heal_amount, max_hp)
+      actual_heal = new_hp - get(target, :hp, 0)
+
+      updated_healer = Map.put(healer, :ap, get(healer, :ap, 0) - 1)
+      updated_target = Map.put(target, :hp, new_hp)
+
+      next_world =
+        state.world
+        |> put_unit(healer_id, updated_healer)
+        |> put_unit(target_id, updated_target)
+
+      action_events = [
+        Events.ap_spent(healer_id, 1, unit_ap(next_world, healer_id)),
+        Events.heal_applied(healer_id, target_id, actual_heal, new_hp)
+      ]
+
+      state
+      |> append_action(event, next_world, action_events)
+      |> continue_or_advance(healer_id)
+    else
+      {:error, reason} ->
+        reject_action(state, event, healer_id, reason)
     end
   end
 
@@ -74,7 +158,7 @@ defmodule LemonSim.Examples.Skirmish.Updater do
          :ok <- ensure_ap(attacker, 1),
          :ok <- ensure_in_range(attacker, target) do
       {roll, next_seed} = Rng.roll(get(state.world, :rng_seed, 0))
-      chance = hit_chance(attacker, target)
+      chance = hit_chance_with_terrain(attacker, target, state.world)
 
       outcome =
         Outcome.attack(
@@ -337,10 +421,11 @@ defmodule LemonSim.Examples.Skirmish.Updater do
       else: {:error, :target_out_of_range}
   end
 
-  defp hit_chance(attacker, target) do
+  defp hit_chance_with_terrain(attacker, target, world) do
     base = get(attacker, :attack_chance, 80)
     cover_modifier = if get(target, :cover?, false), do: 20, else: 0
-    max(base - cover_modifier, 5)
+    high_ground_bonus = if world && on_high_ground?(world, attacker), do: 15, else: 0
+    max(base - cover_modifier + high_ground_bonus, 5)
   end
 
   defp maybe_damage_event(_target_id, %Outcome{damage: 0}), do: []
@@ -379,6 +464,67 @@ defmodule LemonSim.Examples.Skirmish.Updater do
 
   defp put_pos(unit, x, y), do: Map.put(unit, :pos, %{x: x, y: y})
 
+  defp ensure_not_wall(world, x, y) do
+    walls = get(get(world, :map, %{}), :walls, [])
+
+    is_wall =
+      Enum.any?(walls, fn w ->
+        get_coord(w, :x) == x and get_coord(w, :y) == y
+      end)
+
+    if is_wall, do: {:error, :tile_is_wall}, else: :ok
+  end
+
+  defp ensure_sprint_range(unit, x, y) do
+    pos = get(unit, :pos, %{})
+    distance = abs(get(pos, :x, 0) - x) + abs(get(pos, :y, 0) - y)
+    if distance >= 1 and distance <= 2, do: :ok, else: {:error, :sprint_out_of_range}
+  end
+
+  defp ensure_ability(unit, ability) do
+    if UnitClasses.has_ability?(unit, ability), do: :ok, else: {:error, :no_ability}
+  end
+
+  defp ensure_ally(unit_a, unit_b) do
+    if MapHelpers.get_key(unit_a, :team) == MapHelpers.get_key(unit_b, :team),
+      do: :ok,
+      else: {:error, :not_ally}
+  end
+
+  defp ensure_wounded(target) do
+    hp = get(target, :hp, 0)
+    max_hp = get(target, :max_hp, hp)
+    if hp < max_hp, do: :ok, else: {:error, :target_full_hp}
+  end
+
+  defp move_ap_cost(world, x, y) do
+    water = get(get(world, :map, %{}), :water, [])
+
+    is_water =
+      Enum.any?(water, fn w ->
+        get_coord(w, :x) == x and get_coord(w, :y) == y
+      end)
+
+    if is_water, do: 2, else: 1
+  end
+
+  defp on_high_ground?(world, unit) do
+    pos = get(unit, :pos, %{})
+    ux = get(pos, :x, -1)
+    uy = get(pos, :y, -1)
+    high_ground = get(get(world, :map, %{}), :high_ground, [])
+
+    Enum.any?(high_ground, fn hg ->
+      get_coord(hg, :x) == ux and get_coord(hg, :y) == uy
+    end)
+  end
+
+  defp get_coord(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key), 0))
+  end
+
+  defp get_coord(_, _), do: 0
+
   defp rejection_reason(:game_over), do: "game already over"
   defp rejection_reason(:wrong_phase), do: "wrong phase"
   defp rejection_reason(:not_active_actor), do: "not the active actor"
@@ -392,6 +538,11 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp rejection_reason(:move_not_adjacent), do: "move must be adjacent"
   defp rejection_reason(:tile_occupied), do: "destination occupied"
   defp rejection_reason(:target_out_of_range), do: "target out of range"
+  defp rejection_reason(:tile_is_wall), do: "cannot move onto wall"
+  defp rejection_reason(:sprint_out_of_range), do: "sprint must be 1-2 tiles"
+  defp rejection_reason(:no_ability), do: "unit does not have that ability"
+  defp rejection_reason(:not_ally), do: "target is not an ally"
+  defp rejection_reason(:target_full_hp), do: "target is at full health"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
   defp fetch(map, atom_key, string_key, default \\ nil) do

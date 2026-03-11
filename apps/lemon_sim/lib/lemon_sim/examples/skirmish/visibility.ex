@@ -12,7 +12,8 @@ defmodule LemonSim.Examples.Skirmish.Visibility do
       "winner" => MapHelpers.get_key(world, :winner),
       "active_actor_id" => MapHelpers.get_key(world, :active_actor_id),
       "map" => MapHelpers.get_key(world, :map),
-      "units" => visible_units(world, actor_id)
+      "units" => visible_units(world, actor_id),
+      "terrain_summary" => terrain_summary(world)
     }
   end
 
@@ -44,6 +45,37 @@ defmodule LemonSim.Examples.Skirmish.Visibility do
       MapHelpers.get_key(unit, :status) != "dead" and
         MapHelpers.get_key(unit, :team) != actor_team
     end)
+  end
+
+  @spec friendly_units(map(), String.t() | nil) :: [map()]
+  def friendly_units(world, actor_id) do
+    actor_team =
+      world
+      |> get_unit(actor_id)
+      |> case do
+        nil -> nil
+        unit -> MapHelpers.get_key(unit, :team)
+      end
+
+    world
+    |> visible_units(actor_id)
+    |> Enum.filter(fn {uid, unit} ->
+      uid != actor_id and
+        MapHelpers.get_key(unit, :status) != "dead" and
+        MapHelpers.get_key(unit, :team) == actor_team
+    end)
+    |> Enum.map(fn {_uid, unit} -> unit end)
+  end
+
+  defp terrain_summary(world) do
+    map_data = get(world, :map, %{})
+
+    %{
+      "walls" => length(get(map_data, :walls, [])),
+      "water" => length(get(map_data, :water, [])),
+      "cover" => length(get(map_data, :cover, [])),
+      "high_ground" => length(get(map_data, :high_ground, []))
+    }
   end
 
   defp get_unit(_world, nil), do: nil

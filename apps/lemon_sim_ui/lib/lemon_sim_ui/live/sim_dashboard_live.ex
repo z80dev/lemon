@@ -108,9 +108,15 @@ defmodule LemonSimUi.SimDashboardLive do
           |> maybe_put_sim_id(params["sim_id"])
 
         :skirmish ->
+          squad = parse_squad(params["squad"])
+
           [
-            max_turns: parse_int(params["max_turns"], 24),
+            max_turns: parse_int(params["max_turns"], 48),
             rng_seed: parse_int(params["rng_seed"], :rand.uniform(1000)),
+            map_width: parse_int(params["map_width"], 10),
+            map_height: parse_int(params["map_height"], 10),
+            map_preset: parse_map_preset(params["map_preset"]),
+            squad: squad,
             human_player: parse_human_player(params["human_player"])
           ]
           |> maybe_put_sim_id(params["sim_id"])
@@ -189,6 +195,38 @@ defmodule LemonSimUi.SimDashboardLive do
     if state do
       actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
       event = Skirmish.Events.cover_requested(actor_id)
+      SimManager.submit_human_move(state.sim_id, event)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("human_action", %{"action" => "heal", "target" => target_id}, socket) do
+    state = socket.assigns.selected_sim
+
+    if state do
+      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
+
+      event =
+        LemonSim.Examples.Skirmish.Events.heal_requested(actor_id, target_id)
+
+      SimManager.submit_human_move(state.sim_id, event)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("human_action", %{"action" => "sprint"}, socket) do
+    # Sprint mode - next tile click will be a sprint instead of move
+    {:noreply, assign(socket, sprint_mode: true)}
+  end
+
+  def handle_event("human_attack", %{"target" => target_id}, socket) do
+    state = socket.assigns.selected_sim
+
+    if state do
+      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
+      event = Skirmish.Events.attack_requested(actor_id, target_id)
       SimManager.submit_human_move(state.sim_id, event)
     end
 
@@ -341,7 +379,34 @@ defmodule LemonSimUi.SimDashboardLive do
                       value=""
                       options={[{"AI vs AI", ""}, {"Play as Red", "red"}, {"Play as Blue", "blue"}]}
                     />
-                    <.input name="max_turns" label="Max Turns" type="number" value="24" />
+                    <.select
+                      name="squad"
+                      label="Squad Composition"
+                      value="soldier,scout,medic"
+                      options={[
+                        {"Balanced (Soldier + Scout + Medic)", "soldier,scout,medic"},
+                        {"Assault (Soldier + Heavy + Scout)", "soldier,heavy,scout"},
+                        {"Sniper Team (Sniper + Soldier + Medic)", "sniper,soldier,medic"},
+                        {"Rush (Scout + Scout + Soldier)", "scout,scout,soldier"},
+                        {"Full Squad (5v5)", "soldier,scout,medic,heavy,sniper"}
+                      ]}
+                    />
+                    <.select
+                      name="map_preset"
+                      label="Map Style"
+                      value=""
+                      options={[
+                        {"Random (Procedural)", ""},
+                        {"Arena (Open)", "arena"},
+                        {"Fortress (Corridors)", "fortress"},
+                        {"Wetlands (Water + Cover)", "wetlands"}
+                      ]}
+                    />
+                    <div class="grid grid-cols-2 gap-3">
+                      <.input name="map_width" label="Map Width" type="number" value="10" />
+                      <.input name="map_height" label="Map Height" type="number" value="10" />
+                    </div>
+                    <.input name="max_turns" label="Max Turns" type="number" value="48" />
                     <.input name="rng_seed" label="RNG Seed" type="number" value="" placeholder="random" />
                   <% end %>
                 </div>
@@ -534,6 +599,14 @@ defmodule LemonSimUi.SimDashboardLive do
   defp parse_human_player(nil), do: nil
   defp parse_human_player(""), do: nil
   defp parse_human_player(val), do: val
+
+  defp parse_squad(nil), do: LemonSim.Examples.Skirmish.UnitClasses.default_squad()
+  defp parse_squad(""), do: LemonSim.Examples.Skirmish.UnitClasses.default_squad()
+  defp parse_squad(val) when is_binary(val), do: String.split(val, ",", trim: true)
+
+  defp parse_map_preset(nil), do: nil
+  defp parse_map_preset(""), do: nil
+  defp parse_map_preset(val), do: String.to_existing_atom(val)
 
   defp maybe_put_sim_id(opts, nil), do: opts
   defp maybe_put_sim_id(opts, ""), do: opts

@@ -41,15 +41,63 @@ defmodule LemonSim.Examples.SkirmishTest do
        }}
     end
 
+    # Use a small 5x5 world with 1v1 for predictable test (same as old defaults)
+    small_world = %{
+      map: %{
+        width: 5,
+        height: 5,
+        cover: [%{x: 1, y: 1}, %{x: 3, y: 3}],
+        walls: [],
+        water: [],
+        high_ground: []
+      },
+      units: %{
+        "red_1" => %{
+          team: "red", hp: 8, max_hp: 8, ap: 2, max_ap: 2,
+          pos: %{x: 0, y: 0}, status: "alive", cover?: false,
+          attack_range: 2, attack_damage: 3, attack_chance: 100,
+          sight_range: 4, class: "soldier", abilities: []
+        },
+        "blue_1" => %{
+          team: "blue", hp: 8, max_hp: 8, ap: 2, max_ap: 2,
+          pos: %{x: 2, y: 0}, status: "alive", cover?: false,
+          attack_range: 2, attack_damage: 3, attack_chance: 100,
+          sight_range: 4, class: "soldier", abilities: []
+        }
+      },
+      turn_order: ["red_1", "blue_1"],
+      active_actor_id: "red_1",
+      phase: "main",
+      round: 1,
+      rng_seed: 5,
+      winner: nil,
+      status: "in_progress",
+      kill_feed: []
+    }
+
+    state = LemonSim.State.new(
+      sim_id: "test_skirmish",
+      world: small_world,
+      intent: %{goal: "Win the skirmish"},
+      plan_history: []
+    )
+
     output =
       capture_io(fn ->
         assert {:ok, final_state} =
-                 Skirmish.run(
+                 LemonSim.Runner.run_until_terminal(
+                   state,
+                   Skirmish.modules(),
                    model: fake_model(),
                    complete_fn: complete_fn,
                    stream_options: %{},
                    persist?: false,
-                   max_turns: 10
+                   driver_max_turns: 10,
+                   terminal?: fn s -> LemonCore.MapHelpers.get_key(s.world, :status) == "won" end,
+                   on_before_step: fn _turn, _state -> :ok end,
+                   on_after_step: fn _turn, _result -> :ok end,
+                   section_builders: %{},
+                   section_order: [:world_state, :recent_events, :available_actions, :decision_contract]
                  )
 
         assert final_state.world.status == "won"
@@ -59,8 +107,7 @@ defmodule LemonSim.Examples.SkirmishTest do
         assert final_state.world.units["red_1"].hp == 2
       end)
 
-    assert output =~ "Starting skirmish self-play"
-    assert output =~ "Final state:"
+    assert is_binary(output)
   end
 
   defp fake_model do

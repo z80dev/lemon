@@ -1,6 +1,10 @@
 defmodule LemonSim.Examples.Skirmish do
   @moduledoc """
-  Small tactical skirmish example built on LemonSim.
+  Tactical skirmish example built on LemonSim.
+
+  Supports configurable squad sizes (up to 5v5), unit classes (scout, soldier,
+  heavy, sniper, medic), and procedurally generated maps with terrain
+  (cover, walls, water, high ground).
   """
 
   alias LemonCore.Config.{Modular, Providers}
@@ -9,6 +13,9 @@ defmodule LemonSim.Examples.Skirmish do
 
   alias LemonSim.Examples.Skirmish.{
     ActionSpace,
+    GameLog,
+    MapGenerator,
+    UnitClasses,
     Updater,
     Visibility
   }
@@ -16,60 +23,59 @@ defmodule LemonSim.Examples.Skirmish do
   alias LemonSim.Projectors.SectionedProjector
   alias LemonSim.{Runner, State, Store}
 
-  @default_max_turns 24
+  @default_max_turns 48
+  @default_map_width 10
+  @default_map_height 10
 
-  @spec initial_world() :: map()
-  def initial_world do
+  @spec initial_world(keyword()) :: map()
+  def initial_world(opts \\ []) do
+    width = Keyword.get(opts, :map_width, @default_map_width)
+    height = Keyword.get(opts, :map_height, @default_map_height)
+    map_seed = Keyword.get(opts, :map_seed, :erlang.phash2(:erlang.monotonic_time()))
+    rng_seed = Keyword.get(opts, :rng_seed, 5)
+    squad = Keyword.get(opts, :squad, UnitClasses.default_squad())
+    map_preset = Keyword.get(opts, :map_preset, nil)
+
+    # Generate or use preset map
+    map_data =
+      if map_preset do
+        Map.get(MapGenerator.preset_maps(), map_preset, MapGenerator.generate(width: width, height: height, seed: map_seed))
+      else
+        MapGenerator.generate(width: width, height: height, seed: map_seed)
+      end
+
+    # Build squads
+    red_positions = MapGenerator.spawn_positions(map_data, :red, length(squad))
+    blue_positions = MapGenerator.spawn_positions(map_data, :blue, length(squad))
+
+    red_units = build_squad(squad, "red", red_positions)
+    blue_units = build_squad(squad, "blue", blue_positions)
+
+    all_units = Map.merge(red_units, blue_units)
+    turn_order = build_turn_order(squad)
+
     %{
-      map: %{
-        width: 5,
-        height: 5,
-        cover: [%{x: 1, y: 1}, %{x: 3, y: 3}]
-      },
-      units: %{
-        "red_1" => %{
-          team: "red",
-          hp: 8,
-          max_hp: 8,
-          ap: 2,
-          max_ap: 2,
-          pos: %{x: 0, y: 0},
-          status: "alive",
-          cover?: false,
-          attack_range: 2,
-          attack_damage: 3,
-          attack_chance: 100
-        },
-        "blue_1" => %{
-          team: "blue",
-          hp: 8,
-          max_hp: 8,
-          ap: 2,
-          max_ap: 2,
-          pos: %{x: 2, y: 0},
-          status: "alive",
-          cover?: false,
-          attack_range: 2,
-          attack_damage: 3,
-          attack_chance: 100
-        }
-      },
-      turn_order: ["red_1", "blue_1"],
-      active_actor_id: "red_1",
+      map: map_data,
+      units: all_units,
+      turn_order: turn_order,
+      active_actor_id: List.first(turn_order),
       phase: "main",
       round: 1,
-      rng_seed: 5,
+      rng_seed: rng_seed,
       winner: nil,
-      status: "in_progress"
+      status: "in_progress",
+      kill_feed: []
     }
   end
 
-  @spec initial_state() :: State.t()
-  def initial_state do
+  @spec initial_state(keyword()) :: State.t()
+  def initial_state(opts \\ []) do
+    sim_id = Keyword.get(opts, :sim_id, "skirmish_#{:erlang.phash2(:erlang.monotonic_time())}")
+
     State.new(
-      sim_id: "skirmish_1",
-      world: initial_world(),
-      intent: %{goal: "Win the skirmish while preserving your unit"},
+      sim_id: sim_id,
+      world: initial_world(opts),
+      intent: %{goal: "Win the skirmish by eliminating all enemy units. Use terrain for advantage."},
       plan_history: []
     )
   end
@@ -116,6 +122,16 @@ defmodule LemonSim.Examples.Skirmish do
             content: Visibility.enemy_units(frame.world, actor_id)
           }
         end,
+        friendly_summary: fn frame, _tools, _opts ->
+          actor_id = MapHelpers.get_key(frame.world, :active_actor_id)
+
+          %{
+            id: :friendly_summary,
+            title: "Friendly Units",
+            format: :json,
+            content: Visibility.friendly_units(frame.world, actor_id)
+          }
+        end,
         recent_events: fn frame, _tools, _opts ->
           %{
             id: :recent_events,
@@ -128,7 +144,12 @@ defmodule LemonSim.Examples.Skirmish do
       section_overrides: %{
         decision_contract: """
         - Use exactly one terminal action tool each turn.
+        - Consider unit class abilities: scouts can sprint (2-tile move), medics can heal wounded allies.
+        - Walls block movement. Water tiles cost 2 AP to cross. High ground gives +15% accuracy.
+        - Cover reduces enemy hit chance by 20%.
         - Attack when you have a clean kill or strong trade.
+        - Protect your medic and use them to sustain your squad.
+        - Use scouts to flank and snipers for long-range picks.
         - Move only to improve position or preserve health.
         - End the turn if no better action remains.
         """
@@ -136,6 +157,7 @@ defmodule LemonSim.Examples.Skirmish do
       section_order: [
         :world_state,
         :active_unit,
+        :friendly_summary,
         :enemy_summary,
         :recent_events,
         :current_intent,
@@ -170,33 +192,106 @@ defmodule LemonSim.Examples.Skirmish do
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
-    run_opts = Keyword.merge(default_opts(opts), opts)
+    state = initial_state(opts)
+    log_path = Keyword.get(opts, :log_path)
+
+    # Start game log if requested
+    game_log =
+      if log_path do
+        log = GameLog.start(log_path)
+        GameLog.log_init(log, state.world)
+        log
+      end
+
+    run_opts =
+      default_opts(opts)
+      |> Keyword.merge(opts)
+      |> Keyword.put(:on_after_step, build_after_step_callback(game_log))
 
     IO.puts("Starting skirmish self-play")
+    if log_path, do: IO.puts("Logging to: #{log_path}")
 
-    case Runner.run_until_terminal(initial_state(), modules(), run_opts) do
-      {:ok, final_state} ->
-        IO.puts("Final state:")
-        IO.inspect(final_state.world)
+    result =
+      case Runner.run_until_terminal(state, modules(), run_opts) do
+        {:ok, final_state} ->
+          IO.puts("Final state:")
+          IO.inspect(final_state.world)
 
-        if Keyword.get(run_opts, :persist?, true) do
-          _ = Store.put_state(final_state)
-        end
+          if game_log do
+            step = final_state.version
+            GameLog.log_game_over(game_log, step, final_state.world)
+          end
 
-        {:ok, final_state}
+          if Keyword.get(run_opts, :persist?, true) do
+            _ = Store.put_state(final_state)
+          end
 
-      {:error, reason} = error ->
-        IO.puts("Driver failed:")
-        IO.inspect(reason)
-        error
+          {:ok, final_state}
+
+        {:error, reason} = error ->
+          IO.puts("Driver failed:")
+          IO.inspect(reason)
+          error
+      end
+
+    GameLog.stop(game_log)
+    result
+  end
+
+  defp build_after_step_callback(nil) do
+    &print_step/2
+  end
+
+  defp build_after_step_callback(game_log) do
+    step_counter = :counters.new(1, [:atomics])
+
+    fn _turn, result ->
+      :counters.add(step_counter, 1, 1)
+      step = :counters.get(step_counter, 1)
+
+      case result do
+        %{state: next_state} ->
+          GameLog.log_step(game_log, step, next_state.world)
+          print_units(next_state)
+
+        _ ->
+          :ok
+      end
     end
   end
+
+  # -- Squad building --
+
+  defp build_squad(class_list, team, positions) do
+    class_list
+    |> Enum.with_index(1)
+    |> Enum.zip(positions)
+    |> Enum.into(%{}, fn {{class_name, idx}, pos} ->
+      unit_id = "#{team}_#{idx}"
+      {unit_id, UnitClasses.build_unit(unit_id, team, class_name, pos)}
+    end)
+  end
+
+  defp build_turn_order(squad) do
+    count = length(squad)
+
+    # Interleave red and blue turns for fairness
+    Enum.flat_map(1..count, fn idx ->
+      ["red_#{idx}", "blue_#{idx}"]
+    end)
+  end
+
+  # -- Callbacks --
 
   defp terminal?(state), do: MapHelpers.get_key(state.world, :status) == "won"
 
   defp announce_turn(turn, state) do
+    actor_id = MapHelpers.get_key(state.world, :active_actor_id)
+    actor = get_unit(state.world, actor_id)
+    class = if actor, do: " (#{get(actor, :class, "?")})", else: ""
+
     IO.puts(
-      "Step #{turn} | round=#{MapHelpers.get_key(state.world, :round)} actor=#{MapHelpers.get_key(state.world, :active_actor_id)}"
+      "Step #{turn} | round=#{MapHelpers.get_key(state.world, :round)} actor=#{actor_id}#{class}"
     )
   end
 
@@ -216,7 +311,7 @@ defmodule LemonSim.Examples.Skirmish do
       pos = get(unit, :pos, %{})
 
       IO.puts(
-        "#{unit_id} team=#{MapHelpers.get_key(unit, :team)} hp=#{MapHelpers.get_key(unit, :hp)} ap=#{MapHelpers.get_key(unit, :ap)} pos=(#{MapHelpers.get_key(pos, :x)},#{MapHelpers.get_key(pos, :y)}) cover=#{get(unit, :cover?, false)} status=#{MapHelpers.get_key(unit, :status)}"
+        "#{unit_id} [#{get(unit, :class, "?")}] team=#{MapHelpers.get_key(unit, :team)} hp=#{MapHelpers.get_key(unit, :hp)} ap=#{MapHelpers.get_key(unit, :ap)} pos=(#{MapHelpers.get_key(pos, :x)},#{MapHelpers.get_key(pos, :y)}) cover=#{get(unit, :cover?, false)} status=#{MapHelpers.get_key(unit, :status)}"
       )
     end)
 
@@ -224,6 +319,16 @@ defmodule LemonSim.Examples.Skirmish do
       "status=#{MapHelpers.get_key(state.world, :status)} winner=#{inspect(MapHelpers.get_key(state.world, :winner))}"
     )
   end
+
+  defp get_unit(world, unit_id) when is_binary(unit_id) do
+    world
+    |> get(:units, %{})
+    |> Map.get(unit_id)
+  end
+
+  defp get_unit(_world, _unit_id), do: nil
+
+  # -- Config resolution --
 
   defp resolve_configured_model!(config) do
     provider = config.agent.default_provider

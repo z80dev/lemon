@@ -98,6 +98,31 @@ defmodule LemonSim.Examples.Skirmish.Events do
     })
   end
 
+  @spec heal_requested(String.t(), String.t()) :: Event.t()
+  def heal_requested(healer_id, target_id) do
+    Event.new("heal_requested", %{"healer_id" => healer_id, "target_id" => target_id})
+  end
+
+  @spec heal_applied(String.t(), String.t(), non_neg_integer(), non_neg_integer()) :: Event.t()
+  def heal_applied(healer_id, target_id, amount, new_hp) do
+    Event.new("heal_applied", %{
+      "healer_id" => healer_id,
+      "target_id" => target_id,
+      "amount" => amount,
+      "new_hp" => new_hp
+    })
+  end
+
+  @spec sprint_requested(String.t(), integer(), integer()) :: Event.t()
+  def sprint_requested(unit_id, x, y) do
+    Event.new("sprint_requested", %{"unit_id" => unit_id, "x" => x, "y" => y})
+  end
+
+  @spec unit_sprinted(String.t(), integer(), integer()) :: Event.t()
+  def unit_sprinted(unit_id, x, y) do
+    Event.new("unit_sprinted", %{"unit_id" => unit_id, "x" => x, "y" => y})
+  end
+
   @spec action_rejected(String.t(), String.t(), String.t()) :: Event.t()
   def action_rejected(kind, unit_id, reason) do
     Event.new("action_rejected", %{

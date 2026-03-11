@@ -9,7 +9,7 @@ defmodule LemonSimUi.SimManager do
   use GenServer
 
   alias LemonCore.MapHelpers
-  alias LemonSim.{Runner, State, Store}
+  alias LemonSim.{Runner, Store}
   alias LemonSim.Examples.{TicTacToe, Skirmish}
 
   @lobby_topic "sim:lobby"
@@ -170,11 +170,10 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp build_initial_state(:skirmish, sim_id, opts) do
-    max_turns = Keyword.get(opts, :max_turns, 24)
-    rng_seed = Keyword.get(opts, :rng_seed, :rand.uniform(1000))
+    max_turns = Keyword.get(opts, :max_turns, 48)
 
-    initial_state = %{Skirmish.initial_state() | sim_id: sim_id}
-    initial_state = State.put_world(initial_state, %{rng_seed: rng_seed})
+    # Pass through all skirmish-specific opts (squad, map_width, map_height, map_preset, rng_seed)
+    initial_state = %{Skirmish.initial_state(opts) | sim_id: sim_id}
 
     modules = Skirmish.modules()
 

@@ -16,6 +16,7 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
     max_turns: :integer,
     max_driver_turns: :integer,
     model: :string,
+    log: :string,
     help: :boolean
   ]
 
@@ -33,11 +34,14 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
       true ->
         ensure_runtime_started!()
 
+        log_path = resolve_log_path(opts[:log])
+
         run_opts =
           []
           |> maybe_put(:persist?, opts[:persist])
           |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
           |> maybe_put(:model, resolve_model(opts[:model]))
+          |> maybe_put(:log_path, log_path)
 
         case LemonSim.Examples.Skirmish.run(run_opts) do
           {:ok, _final_state} -> :ok
@@ -72,6 +76,11 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
         Ai.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
     end
   end
+
+  defp resolve_log_path(nil), do: nil
+  defp resolve_log_path(""), do: nil
+  defp resolve_log_path("auto"), do: LemonSim.Examples.Skirmish.GameLog.default_log_path("skirmish_#{System.system_time(:second)}")
+  defp resolve_log_path(path), do: path
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)

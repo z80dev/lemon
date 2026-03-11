@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
-  alias LemonSim.Examples.Skirmish.Events
+  alias LemonSim.Examples.Skirmish.{Events, UnitClasses}
 
   @impl true
   def tools(state, _opts) do
@@ -27,11 +27,15 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
       true ->
         ap = get(actor, :ap, 0)
+        has_sprint = UnitClasses.has_ability?(actor, :sprint)
+        has_heal = UnitClasses.has_ability?(actor, :heal)
 
         action_tools =
           []
           |> maybe_add(ap > 0, move_tool(actor_id))
+          |> maybe_add(ap > 0 and has_sprint, sprint_tool(actor_id))
           |> maybe_add(ap > 0, attack_tool(actor_id))
+          |> maybe_add(ap > 0 and has_heal, heal_tool(actor_id))
           |> maybe_add(ap > 0, cover_tool(actor_id))
           |> maybe_add(true, end_turn_tool(actor_id))
 
@@ -42,7 +46,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
   defp move_tool(actor_id) do
     %AgentTool{
       name: "move_unit",
-      description: "Move #{actor_id} to an adjacent tile.",
+      description: "Move #{actor_id} to an adjacent tile. Costs 1 AP (2 AP on water tiles). Cannot move onto walls.",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -63,6 +67,37 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [AgentCore.text_content("proposed move for #{unit_id} to (#{x}, #{y})")],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp sprint_tool(actor_id) do
+    %AgentTool{
+      name: "sprint",
+      description: "Sprint #{actor_id} up to 2 tiles away for 1 AP. Scout ability. Clears cover.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "unit_id" => %{"type" => "string", "description" => "The acting unit id"},
+          "x" => %{"type" => "integer", "description" => "Destination x coordinate"},
+          "y" => %{"type" => "integer", "description" => "Destination y coordinate"}
+        },
+        "required" => ["unit_id", "x", "y"],
+        "additionalProperties" => false
+      },
+      label: "Sprint",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        unit_id = Map.get(params, "unit_id", actor_id)
+        x = Map.get(params, "x", Map.get(params, :x))
+        y = Map.get(params, "y", Map.get(params, :y))
+        event = Events.sprint_requested(unit_id, x, y)
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("sprinting #{unit_id} to (#{x}, #{y})")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -101,10 +136,39 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
     }
   end
 
+  defp heal_tool(actor_id) do
+    %AgentTool{
+      name: "heal_unit",
+      description: "Heal a wounded ally in range with #{actor_id}. Medic ability. Costs 1 AP.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "healer_id" => %{"type" => "string", "description" => "The acting medic unit id"},
+          "target_id" => %{"type" => "string", "description" => "The ally unit id to heal"}
+        },
+        "required" => ["healer_id", "target_id"],
+        "additionalProperties" => false
+      },
+      label: "Heal Unit",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        healer_id = Map.get(params, "healer_id", actor_id)
+        target_id = Map.get(params, "target_id", Map.get(params, :target_id))
+        event = Events.heal_requested(healer_id, target_id)
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("healing #{target_id} with #{healer_id}")],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
   defp cover_tool(actor_id) do
     %AgentTool{
       name: "take_cover",
-      description: "Spend an action point to take cover with #{actor_id}.",
+      description: "Spend an action point to take cover with #{actor_id}. Reduces enemy hit chance by 20%.",
       parameters: %{
         "type" => "object",
         "properties" => %{

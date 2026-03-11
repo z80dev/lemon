@@ -12,6 +12,9 @@
           extend: {
             colors: {
               fog: 'rgba(0,0,0,0.35)',
+              kill: '#ef4444',
+              heal: '#22c55e',
+              water: '#3b82f6',
             }
           }
         }
@@ -40,6 +43,85 @@
       @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 4px rgba(59,130,246,0.5); } 50% { box-shadow: 0 0 12px rgba(59,130,246,0.8); } }
       .active-unit { animation: pulse-glow 2s ease-in-out infinite; }
       .fog-overlay { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.06) 4px, rgba(0,0,0,0.06) 8px); }
+
+      /* Kill feed slide-in */
+      @keyframes slide-in-right {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      .kill-feed-enter { animation: slide-in-right 0.3s ease-out; }
+
+      /* Damage flash on tiles */
+      @keyframes damage-flash {
+        0% { background-color: rgba(239, 68, 68, 0.4); }
+        100% { background-color: transparent; }
+      }
+      .damage-flash { animation: damage-flash 0.5s ease-out; }
+
+      /* Victory overlay */
+      @keyframes victory-appear {
+        from { opacity: 0; transform: scale(0.8); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      .victory-overlay { animation: victory-appear 0.5s ease-out; }
+
+      /* Floating damage numbers */
+      @keyframes float-up {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(-20px); }
+      }
+      .float-damage { animation: float-up 1s ease-out forwards; }
+
+      /* Wall diagonal stripe pattern */
+      .wall-pattern {
+        background: repeating-linear-gradient(
+          45deg,
+          transparent,
+          transparent 3px,
+          rgba(255,255,255,0.05) 3px,
+          rgba(255,255,255,0.05) 6px
+        );
+      }
+
+      /* Water wave pattern */
+      .water-pattern {
+        background: linear-gradient(
+          135deg,
+          rgba(59, 130, 246, 0.1) 25%,
+          transparent 25%,
+          transparent 50%,
+          rgba(59, 130, 246, 0.1) 50%,
+          rgba(59, 130, 246, 0.1) 75%,
+          transparent 75%
+        );
+        background-size: 8px 8px;
+      }
+
+      /* Unit death fade */
+      @keyframes unit-death {
+        from { opacity: 1; transform: scale(1); }
+        to { opacity: 0.3; transform: scale(0.8); }
+      }
+      .unit-dead { animation: unit-death 0.5s ease-out forwards; }
+
+      /* Heal glow */
+      @keyframes heal-glow {
+        0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); }
+        50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.6); }
+      }
+      .heal-glow { animation: heal-glow 1.5s ease-in-out infinite; }
+
+      /* Valid move tile highlight */
+      .valid-move {
+        box-shadow: inset 0 0 0 2px rgba(34, 197, 94, 0.4);
+        background-color: rgba(34, 197, 94, 0.1) !important;
+      }
+
+      /* Attack range highlight */
+      .in-range {
+        box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.3);
+        background-color: rgba(239, 68, 68, 0.05) !important;
+      }
     </style>
   </head>
   <body class="min-h-screen bg-gray-950 text-gray-100 antialiased">
