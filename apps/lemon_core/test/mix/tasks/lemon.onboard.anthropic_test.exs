@@ -58,6 +58,8 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
+    assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
+
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
              "llm_anthropic_api_key"
 
@@ -80,6 +82,8 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     end)
 
     {:ok, config_map} = Toml.decode_file(config_path)
+
+    assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
              "llm_anthropic_api_key"

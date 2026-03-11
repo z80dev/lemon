@@ -1,14 +1,15 @@
 defmodule Mix.Tasks.Lemon.Onboard.Anthropic do
   use Mix.Task
 
-  alias LemonCore.Onboarding.OAuthHelper
+  alias LemonCore.Onboarding.Providers
+  alias LemonCore.Onboarding.Runner
 
   @shortdoc "Interactive onboarding for Anthropic provider"
   @moduledoc """
   Interactive onboarding flow for Anthropic.
 
   What it does:
-  - Runs Anthropic OAuth flow by default
+  - Prompts for an Anthropic API key
   - Stores credentials in the encrypted Lemon secrets store
   - Writes `[providers.anthropic].api_key_secret` to config.toml
   - Optionally sets `[defaults].provider` and `[defaults].model`
@@ -24,20 +25,6 @@ defmodule Mix.Tasks.Lemon.Onboard.Anthropic do
 
   @impl true
   def run(args) do
-    OAuthHelper.run(args, %{
-      display_name: "Anthropic",
-      provider_key: "anthropic",
-      provider_table: "providers.anthropic",
-      default_secret_name: "llm_anthropic_api_key",
-      default_secret_provider: "onboarding_anthropic",
-      oauth_secret_provider: "onboarding_anthropic_oauth",
-      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :AnthropicOAuth]),
-      preferred_models: [
-        "claude-sonnet-4-20250514",
-        "claude-sonnet-4-5-20250929",
-        "claude-opus-4-6"
-      ],
-      oauth_failure_label: "Anthropic OAuth login failed"
-    })
+    Runner.run(args, Providers.fetch!("anthropic"))
   end
 end

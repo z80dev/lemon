@@ -55,8 +55,12 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
+    assert get_in(config_map, ["providers", "openai-codex", "auth_source"]) == "api_key"
+
     assert get_in(config_map, ["providers", "openai-codex", "api_key_secret"]) ==
              "llm_openai_codex_api_key"
+
+    refute get_in(config_map, ["providers", "openai-codex", "oauth_secret"])
 
     refute Map.has_key?(config_map, "defaults")
   end
@@ -77,6 +81,8 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
     end)
 
     {:ok, config_map} = Toml.decode_file(config_path)
+
+    assert get_in(config_map, ["providers", "openai-codex", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "openai-codex", "api_key_secret"]) ==
              "llm_openai_codex_api_key"

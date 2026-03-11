@@ -27,6 +27,7 @@ defmodule LemonCore.MixProject do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
+      {:term_ui, "~> 0.2.0"},
       {:uuid, "~> 1.1"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"},

@@ -1,14 +1,15 @@
 defmodule Mix.Tasks.Lemon.Onboard.Antigravity do
   use Mix.Task
 
-  alias LemonCore.Onboarding.OAuthHelper
+  alias LemonCore.Onboarding.Providers
+  alias LemonCore.Onboarding.Runner
 
   @shortdoc "Interactive onboarding for Google Antigravity provider"
   @moduledoc """
   Interactive onboarding flow for Google Antigravity.
 
   What it does:
-  - Runs Google Antigravity OAuth flow by default
+  - Runs Google Antigravity OAuth flow by default, or accepts a credential payload via `--token`
   - Stores credentials in the encrypted Lemon secrets store
   - Writes `[providers.google_antigravity].api_key_secret` to config.toml
   - Optionally sets `[defaults].provider` and `[defaults].model`
@@ -24,20 +25,6 @@ defmodule Mix.Tasks.Lemon.Onboard.Antigravity do
 
   @impl true
   def run(args) do
-    OAuthHelper.run(args, %{
-      display_name: "Google Antigravity",
-      provider_key: "google_antigravity",
-      provider_table: "providers.google_antigravity",
-      default_secret_name: "llm_google_antigravity_api_key",
-      default_secret_provider: "onboarding_google_antigravity",
-      oauth_secret_provider: "onboarding_google_antigravity_oauth",
-      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :GoogleAntigravityOAuth]),
-      preferred_models: [
-        "gemini-3-pro-high",
-        "gemini-3-pro-low",
-        "gemini-3-flash"
-      ],
-      oauth_failure_label: "Google Antigravity OAuth login failed"
-    })
+    Runner.run(args, Providers.fetch!("google_antigravity"))
   end
 end
