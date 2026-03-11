@@ -8,7 +8,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   require Logger
 
-  alias LemonChannels.Adapters.Discord.{Inbound, ModelPolicyAdapter, Outbound, StatusRenderer, TriggerMode}
+  alias LemonChannels.Adapters.Discord.{FileOperations, Inbound, ModelPolicyAdapter, Outbound, StatusRenderer, TriggerMode}
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
@@ -131,6 +131,42 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     type: 1
   }
 
+  @topic_command %{
+    name: "topic",
+    description: "Create a new thread or forum post",
+    type: 1,
+    options: [
+      %{type: 3, name: "name", description: "Thread/post name", required: true},
+      %{type: 3, name: "message", description: "Initial message content", required: false}
+    ]
+  }
+
+  @file_command %{
+    name: "file",
+    description: "File operations",
+    type: 1,
+    options: [
+      %{
+        type: 1,
+        name: "put",
+        description: "Upload an attached file to the project",
+        options: [
+          %{type: 11, name: "attachment", description: "File to upload", required: true},
+          %{type: 3, name: "path", description: "Destination path (relative)", required: false},
+          %{type: 5, name: "force", description: "Overwrite existing file", required: false}
+        ]
+      },
+      %{
+        type: 1,
+        name: "get",
+        description: "Download a file from the project",
+        options: [
+          %{type: 3, name: "path", description: "File path (relative)", required: true}
+        ]
+      }
+    ]
+  }
+
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -178,7 +214,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
              # Pending /new: run_id => info
              pending_new: %{},
              debounce_ms: cfg_get(config, :debounce_ms, @debounce_ms),
-             dedupe_ttl_ms: cfg_get(config, :dedupe_ttl_ms, @default_dedupe_ttl)
+             dedupe_ttl_ms: cfg_get(config, :dedupe_ttl_ms, @default_dedupe_ttl),
+             # File operations config from [gateway.discord.files]
+             files: cfg_get(config, :files, %{})
            }}
 
         {:error, reason} ->
@@ -321,6 +359,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
+  def handle_info({:discord_event, {:THREAD_CREATE, thread, _ws_state}}, state) do
+    state = maybe_handle_thread_create(thread, state)
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ============================================================================
@@ -355,6 +398,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp handle_inbound_message(state, inbound) do
     text = inbound.message.text || ""
+
+    # Auto-put attachments if enabled (before any other processing)
+    _ =
+      if FileOperations.should_auto_put?(state, inbound) do
+        spawn(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
+      end
 
     # Check if this is model picker input
     {state, handled_picker?} = maybe_handle_model_picker_input(state, inbound, text)
@@ -562,6 +611,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "trigger" -> handle_trigger_interaction(interaction, state)
       "cwd" -> handle_cwd_interaction(interaction, state)
       "reload" -> handle_reload_interaction(interaction, state)
+      "topic" -> handle_topic_interaction(interaction, state)
+      "file" -> handle_file_interaction(interaction, state)
       _ ->
         respond_ephemeral(interaction, "Unknown command")
         state
@@ -1085,6 +1136,66 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   # ============================================================================
+  # /file Command
+  # ============================================================================
+
+  defp handle_file_interaction(interaction, state) do
+    sub = file_subcommand(interaction)
+
+    case sub do
+      "put" -> handle_file_put_interaction(interaction, state)
+      "get" -> handle_file_get_interaction(interaction, state)
+      _ ->
+        respond_ephemeral(interaction, "Usage: /file put <attachment> [path] or /file get <path>")
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_file_put_interaction(interaction, state) do
+    attachment = FileOperations.extract_resolved_attachment(interaction, "put", "attachment")
+    dest_path = nested_option_value(interaction, "put", "path")
+    force = nested_option_value(interaction, "put", "force") == true
+
+    if is_nil(attachment) do
+      respond_ephemeral(interaction, "Please attach a file to upload.")
+    else
+      case FileOperations.handle_file_put(state, interaction, attachment, dest_path, force) do
+        {:ok, msg} -> respond_ephemeral(interaction, msg)
+        {:error, msg} -> respond_ephemeral(interaction, msg)
+      end
+    end
+  rescue
+    _ -> respond_ephemeral(interaction, "File upload failed.")
+  end
+
+  defp handle_file_get_interaction(interaction, state) do
+    file_path = nested_option_value(interaction, "get", "path")
+
+    if is_nil(file_path) or file_path == "" do
+      respond_ephemeral(interaction, "Please specify a file path.")
+    else
+      case FileOperations.handle_file_get(state, interaction, file_path) do
+        {:ok, msg} -> respond_ephemeral(interaction, msg)
+        {:error, msg} -> respond_ephemeral(interaction, msg)
+      end
+    end
+  rescue
+    _ -> respond_ephemeral(interaction, "File download failed.")
+  end
+
+  defp file_subcommand(interaction) do
+    interaction
+    |> map_get(:data)
+    |> map_get(:options)
+    |> List.wrap()
+    |> List.first()
+    |> map_get(:name)
+  end
+
+  # ============================================================================
   # /reload Command
   # ============================================================================
 
@@ -1100,6 +1211,88 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       {:error, _} ->
         send_followup(interaction, "Recompile failed — check the build output.")
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  # ============================================================================
+  # /topic Command — Thread & Forum Post Creation
+  # ============================================================================
+
+  defp handle_topic_interaction(interaction, state) do
+    topic_name = option_value(interaction, "name")
+    initial_msg = option_value(interaction, "message") || "Thread started."
+    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+
+    if not is_binary(topic_name) or String.trim(topic_name) == "" do
+      respond_ephemeral(interaction, "Thread name cannot be empty.")
+      state
+    else
+      respond_ephemeral(interaction, "Creating thread...")
+
+      # Try forum post first, fall back to regular thread
+      case create_thread_or_forum_post(channel_id, topic_name, initial_msg) do
+        {:ok, thread} ->
+          thread_id = map_get(thread, :id)
+          send_followup(interaction, "Created: <##{thread_id}>")
+          state
+
+        {:error, reason} ->
+          send_followup(interaction, "Failed to create thread: #{inspect(reason)}")
+          state
+      end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp create_thread_or_forum_post(channel_id, name, initial_message)
+       when is_integer(channel_id) do
+    # First try as a forum channel (create_in_forum)
+    case Nostrum.Api.Thread.create_in_forum(channel_id, %{
+           name: name,
+           message: %{content: initial_message},
+           auto_archive_duration: 10_080
+         }) do
+      {:ok, channel} ->
+        {:ok, channel}
+
+      {:error, _} ->
+        # Fall back to regular thread creation
+        Nostrum.Api.Thread.create(channel_id, %{
+          name: name,
+          type: 11,
+          auto_archive_duration: 10_080
+        })
+    end
+  rescue
+    _ -> {:error, :thread_creation_failed}
+  end
+
+  # ============================================================================
+  # Thread Create Event — Auto-join Forum Threads
+  # ============================================================================
+
+  defp maybe_handle_thread_create(thread, state) do
+    # Auto-join forum threads in allowed guilds so we can receive messages
+    thread_id = map_get(thread, :id) |> parse_id()
+    guild_id = map_get(thread, :guild_id) |> parse_id()
+
+    # Check if this is in an allowed guild
+    guild_allowed? =
+      case state.allowed_guild_ids do
+        nil -> true
+        set -> is_integer(guild_id) and MapSet.member?(set, guild_id)
+      end
+
+    if guild_allowed? and is_integer(thread_id) do
+      # Auto-join the thread so we receive MESSAGE_CREATE events in it
+      spawn(fn ->
+        _ = Nostrum.Api.Thread.join(thread_id)
+      end)
     end
 
     state
@@ -1982,12 +2175,19 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp interaction_thread_id(interaction) do
-    interaction
-    |> map_get(:channel)
-    |> map_get(:thread_metadata)
-    |> case do
-      %{} -> interaction |> map_get(:channel_id) |> parse_id()
-      _ -> nil
+    channel = map_get(interaction, :channel)
+
+    cond do
+      # Has thread metadata — this is a thread/forum post
+      match?(%{}, map_get(channel, :thread_metadata)) ->
+        interaction |> map_get(:channel_id) |> parse_id()
+
+      # Check if parent_id is set (forum threads have parent_id)
+      is_integer(map_get(channel, :parent_id) |> parse_id()) ->
+        interaction |> map_get(:channel_id) |> parse_id()
+
+      true ->
+        nil
     end
   end
 
@@ -2098,7 +2298,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       @cancel_command,
       @trigger_command,
       @cwd_command,
-      @reload_command
+      @reload_command,
+      @topic_command,
+      @file_command
     ]
 
     for cmd <- commands do

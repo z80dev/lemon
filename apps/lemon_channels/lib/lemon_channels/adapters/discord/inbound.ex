@@ -42,6 +42,9 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     reply_to_text = fetch_binary(ref_msg, :content)
     reply_to_author_id = ref_msg |> fetch_map(:author) |> fetch_id(:id)
 
+    attachments = fetch_list(message, :attachments)
+    attachment_maps = Enum.map(attachments, &normalize_attachment/1)
+
     inbound = %InboundMessage{
       channel_id: "discord",
       account_id: account_id,
@@ -66,7 +69,8 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
         user_id: sender && sender.id,
         reply_to_id: reply_to_id,
         reply_to_text: reply_to_text,
-        reply_to_author_id: reply_to_author_id
+        reply_to_author_id: reply_to_author_id,
+        attachments: attachment_maps
       }
     }
 
@@ -99,8 +103,19 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
 
   defp fetch_thread_id(message) do
     case fetch_id(message, :thread_id) do
-      id when is_integer(id) -> id
-      _ -> nil
+      id when is_integer(id) ->
+        id
+
+      _ ->
+        # For forum threads: the message's channel IS the thread.
+        # Detect by checking if the message has a thread object or if
+        # the channel type indicates a thread (11 = public, 12 = private, 15 = forum).
+        thread = fetch_map(message, :thread)
+
+        case fetch_id(thread, :id) do
+          id when is_integer(id) -> id
+          _ -> nil
+        end
     end
   end
 
@@ -116,6 +131,21 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
       _ -> nil
     end
   end
+
+  defp normalize_attachment(att) when is_map(att) do
+    %{
+      id: fetch_id(att, :id),
+      filename: fetch_binary(att, :filename),
+      size: Map.get(att, :size) || Map.get(att, "size"),
+      url: fetch_binary(att, :url),
+      proxy_url: fetch_binary(att, :proxy_url),
+      content_type: fetch_binary(att, :content_type),
+      height: Map.get(att, :height) || Map.get(att, "height"),
+      width: Map.get(att, :width) || Map.get(att, "width")
+    }
+  end
+
+  defp normalize_attachment(_), do: %{}
 
   defp enrich_with_attachments(content, message) do
     attachments = fetch_list(message, :attachments)
