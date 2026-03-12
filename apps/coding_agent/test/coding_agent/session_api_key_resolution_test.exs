@@ -16,6 +16,11 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     System.delete_env("ANTHROPIC_API_KEY")
     System.delete_env("OPENCODE_API_KEY")
     System.delete_env("GITHUB_COPILOT_API_KEY")
+    System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
+    System.delete_env("LEMON_GEMINI_PROJECT_ID")
+    System.delete_env("GOOGLE_CLOUD_PROJECT")
+    System.delete_env("GOOGLE_CLOUD_PROJECT_ID")
+    System.delete_env("GCLOUD_PROJECT")
     System.delete_env("ANTHROPIC_API_KEY")
     System.delete_env("OPENAI_CODEX_API_KEY")
     System.delete_env("CHATGPT_TOKEN")
@@ -29,6 +34,11 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       System.delete_env("ANTHROPIC_API_KEY")
       System.delete_env("OPENCODE_API_KEY")
       System.delete_env("GITHUB_COPILOT_API_KEY")
+      System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
+      System.delete_env("LEMON_GEMINI_PROJECT_ID")
+      System.delete_env("GOOGLE_CLOUD_PROJECT")
+      System.delete_env("GOOGLE_CLOUD_PROJECT_ID")
+      System.delete_env("GCLOUD_PROJECT")
       System.delete_env("ANTHROPIC_API_KEY")
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
@@ -371,6 +381,107 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
+  test "google gemini cli oauth secret resolves to json token+projectId" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "google_gemini_cli_oauth",
+        "refresh_token" => "gemini-refresh-token",
+        "access_token" => "gemini-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "managed_project_id" => "managed-proj-123",
+        "project_id" => "managed-proj-123",
+        "projectId" => "managed-proj-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_google_gemini_cli_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "google_gemini_cli" => %{api_key_secret: "llm_google_gemini_cli_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:google_gemini_cli))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, resolved_key}, 1_000
+    assert_receive {:stream_project, nil}, 1_000
+    assert {:ok, decoded} = Jason.decode(resolved_key)
+    assert decoded["token"] == "gemini-access-token"
+    assert decoded["projectId"] == "managed-proj-123"
+
+    GenServer.stop(session)
+  end
+
+  test "google gemini cli resolves runtime project override from env" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "google_gemini_cli_oauth",
+        "refresh_token" => "gemini-refresh-token",
+        "access_token" => "gemini-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "managed_project_id" => "managed-proj-123",
+        "project_id" => "managed-proj-123",
+        "projectId" => "managed-proj-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_google_gemini_cli_api_key", oauth_secret)
+    System.put_env("LEMON_GEMINI_PROJECT_ID", "env-proj-456")
+
+    settings =
+      settings(%{
+        "google_gemini_cli" => %{api_key_secret: "llm_google_gemini_cli_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:google_gemini_cli))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, resolved_key}, 1_000
+    assert_receive {:stream_project, "env-proj-456"}, 1_000
+    assert {:ok, decoded} = Jason.decode(resolved_key)
+    assert decoded["projectId"] == "managed-proj-123"
+
+    GenServer.stop(session)
+  end
+
+  test "google gemini cli resolves runtime project override from provider config" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "google_gemini_cli_oauth",
+        "refresh_token" => "gemini-refresh-token",
+        "access_token" => "gemini-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "managed_project_id" => "managed-proj-123",
+        "project_id" => "managed-proj-123",
+        "projectId" => "managed-proj-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_google_gemini_cli_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "google_gemini_cli" => %{
+          api_key_secret: "llm_google_gemini_cli_api_key",
+          project_id: "config-proj-789"
+        }
+      })
+
+    session = start_session(self(), settings, mock_model(:google_gemini_cli))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, resolved_key}, 1_000
+    assert_receive {:stream_project, "config-proj-789"}, 1_000
+    assert {:ok, decoded} = Jason.decode(resolved_key)
+    assert decoded["projectId"] == "managed-proj-123"
+
+    GenServer.stop(session)
+  end
+
   test "openai codex oauth secret resolves to access token" do
     oauth_secret =
       Jason.encode!(%{
@@ -447,6 +558,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   defp stream_fn(test_pid) do
     fn _model, _context, options ->
       send(test_pid, {:stream_api_key, options.api_key})
+      send(test_pid, {:stream_project, options.project})
       {:ok, response_stream()}
     end
   end

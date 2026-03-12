@@ -8,7 +8,9 @@ defmodule LemonCore.ProviderConfigResolverTest do
   setup do
     # Save and clear relevant env vars before each test
     saved_env = %{
+      "LEMON_GEMINI_PROJECT_ID" => System.get_env("LEMON_GEMINI_PROJECT_ID"),
       "GOOGLE_CLOUD_PROJECT" => System.get_env("GOOGLE_CLOUD_PROJECT"),
+      "GOOGLE_CLOUD_PROJECT_ID" => System.get_env("GOOGLE_CLOUD_PROJECT_ID"),
       "GCLOUD_PROJECT" => System.get_env("GCLOUD_PROJECT"),
       "GOOGLE_CLOUD_LOCATION" => System.get_env("GOOGLE_CLOUD_LOCATION"),
       "AZURE_OPENAI_API_VERSION" => System.get_env("AZURE_OPENAI_API_VERSION"),
@@ -21,7 +23,7 @@ defmodule LemonCore.ProviderConfigResolverTest do
 
     # Clear env vars for a clean slate
     Enum.each(
-      ~w(GOOGLE_CLOUD_PROJECT GCLOUD_PROJECT GOOGLE_CLOUD_LOCATION
+      ~w(LEMON_GEMINI_PROJECT_ID GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_PROJECT_ID GCLOUD_PROJECT GOOGLE_CLOUD_LOCATION
          AZURE_OPENAI_API_VERSION AZURE_OPENAI_BASE_URL AZURE_OPENAI_RESOURCE_NAME
          AWS_REGION AWS_DEFAULT_REGION),
       &System.delete_env/1
@@ -115,6 +117,37 @@ defmodule LemonCore.ProviderConfigResolverTest do
         })
 
       assert result.service_account_json == "{\"key\": \"value\"}"
+    end
+  end
+
+  describe "google_gemini_cli" do
+    test "returns empty map when no env or opts" do
+      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      refute Map.has_key?(result, :project)
+    end
+
+    test "reads LEMON_GEMINI_PROJECT_ID from env first" do
+      System.put_env("LEMON_GEMINI_PROJECT_ID", "gemini-project")
+      System.put_env("GOOGLE_CLOUD_PROJECT", "cloud-project")
+
+      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      assert result.project == "gemini-project"
+    end
+
+    test "reads GOOGLE_CLOUD_PROJECT_ID as fallback" do
+      System.put_env("GOOGLE_CLOUD_PROJECT_ID", "cloud-project-id")
+
+      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      assert result.project == "cloud-project-id"
+    end
+
+    test "opts take priority over config and env" do
+      System.put_env("LEMON_GEMINI_PROJECT_ID", "env-project")
+
+      result =
+        ProviderConfigResolver.resolve_for_provider(:google_gemini_cli, %{project: "opts-project"})
+
+      assert result.project == "opts-project"
     end
   end
 
@@ -303,6 +336,29 @@ defmodule LemonCore.ProviderConfigResolverTest do
       assert result.resource_name == "project-resource"
       assert result.api_version == "2025-02-01-preview"
       assert result.deployment_name_map["gpt-4o"] == "project-deployment"
+    end
+
+    test "project-local gemini config overrides global config", %{home: home} do
+      global_dir = Path.join(home, ".lemon")
+      project_dir = Path.join(home, "project-gemini")
+      project_config_dir = Path.join(project_dir, ".lemon")
+      File.mkdir_p!(global_dir)
+      File.mkdir_p!(project_config_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.google_gemini_cli]
+      project_id = "global-project"
+      """)
+
+      File.write!(Path.join(project_config_dir, "config.toml"), """
+      [providers.google_gemini_cli]
+      project_id = "project-project"
+      """)
+
+      result =
+        ProviderConfigResolver.resolve_for_provider(:google_gemini_cli, %{cwd: project_dir})
+
+      assert result.project == "project-project"
     end
 
     test "project-local bedrock config overrides global config", %{home: home} do

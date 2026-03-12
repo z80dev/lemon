@@ -70,6 +70,7 @@ Ai (main API)
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
 - `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
+- `Ai.Auth.GoogleGeminiCliOAuth` - Gemini CLI PKCE OAuth helpers, Code Assist project onboarding, token refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
 - `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
 - `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution
 - `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific OAuth secret payloads
@@ -589,8 +590,10 @@ not by adding new direct env reads inside provider modules.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Bedrock provider | AWS credentials |
 | `AWS_REGION` | Bedrock provider | AWS region (default: `us-east-1`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
+| `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI provider | JSON credential payload (`{"token","projectId"}`) |
 | `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
+| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` / `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client credentials |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials (secret store is primary) |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP request/response logging |

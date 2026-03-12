@@ -22,4 +22,29 @@ defmodule Ai.Auth.OAuthSecretResolverTest do
     assert {:ok, "header.payload.signature"} =
              OAuthSecretResolver.resolve_api_key_from_secret("llm_openai_codex_api_key", payload)
   end
+
+  test "dispatches to Gemini CLI resolver for google_gemini_cli_oauth payloads" do
+    payload =
+      Jason.encode!(%{
+        "type" => "google_gemini_cli_oauth",
+        "refresh_token" => "refresh-token",
+        "access_token" => "gemini-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "managed_project_id" => "managed-project-123",
+        "project_id" => "managed-project-123",
+        "projectId" => "managed-project-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, api_key_json} =
+             OAuthSecretResolver.resolve_api_key_from_secret(
+               "llm_google_gemini_cli_api_key",
+               payload
+             )
+
+    assert {:ok, decoded} = Jason.decode(api_key_json)
+    assert decoded["token"] == "gemini-access-token"
+    assert decoded["projectId"] == "managed-project-123"
+  end
 end

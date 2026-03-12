@@ -44,6 +44,30 @@ defmodule LemonCore.ProviderConfigResolver do
     |> reject_nil_values()
   end
 
+  def resolve_for_provider(:google_gemini_cli, opts) do
+    config = get_provider_config("google_gemini_cli", opts)
+
+    project =
+      first_non_empty_binary([
+        Map.get(opts, :project),
+        Map.get(opts, :project_id),
+        Map.get(opts, "project_id"),
+        Map.get(opts, :projectId),
+        Map.get(opts, "projectId"),
+        resolve_secret(Map.get(opts, :project_secret) || Map.get(opts, "project_secret")),
+        config[:project],
+        config[:project_id],
+        resolve_secret(config[:project_secret]),
+        System.get_env("LEMON_GEMINI_PROJECT_ID"),
+        System.get_env("GOOGLE_CLOUD_PROJECT"),
+        System.get_env("GOOGLE_CLOUD_PROJECT_ID"),
+        System.get_env("GCLOUD_PROJECT")
+      ])
+
+    %{project: project}
+    |> reject_nil_values()
+  end
+
   def resolve_for_provider(:azure_openai_responses, opts) do
     config = get_provider_config("azure_openai_responses", opts)
     azure_opts = Map.get(opts, :thinking_budgets, %{})

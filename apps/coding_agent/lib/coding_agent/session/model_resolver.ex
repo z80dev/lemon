@@ -237,6 +237,26 @@ defmodule CodingAgent.Session.ModelResolver do
     %{base_opts | headers: headers}
   end
 
+  def build_stream_options(
+        %{provider: :google_gemini_cli},
+        %CodingAgent.SettingsManager{providers: providers},
+        existing_opts,
+        cwd
+      ) do
+    base_opts = normalize_stream_options(existing_opts, cwd)
+    provider_cfg = provider_config(providers, "google_gemini_cli") || %{}
+
+    resolved =
+      LemonCore.ProviderConfigResolver.resolve_for_provider(
+        :google_gemini_cli,
+        stream_options_to_map(base_opts)
+        |> Map.merge(provider_cfg)
+      )
+
+    base_opts
+    |> maybe_put_struct(:project, resolved[:project])
+  end
+
   def build_stream_options(_model, _settings_manager, existing_opts, cwd) do
     normalize_stream_options(existing_opts, cwd)
   end
@@ -325,6 +345,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY"]
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
   defp provider_env_vars("github_copilot"), do: ["GITHUB_COPILOT_API_KEY"]
+  defp provider_env_vars("google_gemini_cli"), do: ["GOOGLE_GEMINI_CLI_API_KEY"]
 
   defp provider_env_vars("google"),
     do: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
@@ -560,6 +581,7 @@ defmodule CodingAgent.Session.ModelResolver do
   @oauth_secret_fallback_resolvers [
     Ai.Auth.GitHubCopilotOAuth,
     Ai.Auth.GoogleAntigravityOAuth,
+    Ai.Auth.GoogleGeminiCliOAuth,
     Ai.Auth.OpenAICodexOAuth
   ]
 
@@ -695,7 +717,12 @@ defmodule CodingAgent.Session.ModelResolver do
   defp normalize_stream_options(nil, cwd), do: %Ai.Types.StreamOptions{cwd: cwd}
 
   defp normalize_stream_options(%Ai.Types.StreamOptions{} = opts, cwd) do
-    %{opts | cwd: opts.cwd || cwd, headers: opts.headers || %{}, thinking_budgets: opts.thinking_budgets || %{}}
+    %{
+      opts
+      | cwd: opts.cwd || cwd,
+        headers: opts.headers || %{},
+        thinking_budgets: opts.thinking_budgets || %{}
+    }
   end
 
   defp normalize_stream_options(opts, cwd) when is_map(opts) do

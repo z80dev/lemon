@@ -171,7 +171,8 @@ defmodule Mix.Tasks.Lemon.Onboard do
               "--secret-name",
               "--model",
               "--auth",
-              "--enterprise-domain"
+              "--enterprise-domain",
+              "--project-id"
             ] do
     do_extract_provider_arg(rest, nil, [value, flag | acc])
   end

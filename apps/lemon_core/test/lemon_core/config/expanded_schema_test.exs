@@ -107,6 +107,25 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
   end
 
+  describe "Providers - Google Gemini CLI fields" do
+    test "parses project_id and project_secret" do
+      settings = %{
+        "providers" => %{
+          "google_gemini_cli" => %{
+            "project_id" => "gemini-project",
+            "project_secret" => "gemini_project_secret"
+          }
+        }
+      }
+
+      config = Providers.resolve(settings)
+      gemini = config.providers["google_gemini_cli"]
+
+      assert gemini[:project_id] == "gemini-project"
+      assert gemini[:project_secret] == "gemini_project_secret"
+    end
+  end
+
   describe "Providers - Azure OpenAI Responses fields" do
     test "parses resource_name, api_version, deployment_name_map" do
       settings = %{

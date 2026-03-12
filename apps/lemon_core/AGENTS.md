@@ -146,6 +146,8 @@ Config provides defaults; runtime state provides the current effective value. Cu
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
 | `OPENAI_CODEX_API_KEY` | `providers.openai-codex.api_key` (used when `providers.openai-codex.auth_source = "api_key"`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
+| `GOOGLE_GEMINI_CLI_API_KEY` | `providers.google_gemini_cli.api_key` (JSON credential payload: `{"token","projectId"}`) |
+| `LEMON_GEMINI_PROJECT_ID` | Runtime override for `providers.google_gemini_cli.project_id` |
 
 ## Secrets Management Flow
 
@@ -446,12 +448,16 @@ mix lemon.secrets.delete API_KEY
 mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
+mix lemon.onboard gemini
 mix lemon.onboard.antigravity
+mix lemon.onboard.gemini
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
 
 # Non-interactive examples
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
+mix lemon.onboard.gemini --project-id your-gcp-project
+mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
 mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
 

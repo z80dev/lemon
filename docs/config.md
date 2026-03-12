@@ -225,9 +225,11 @@ Lemon includes a top-level onboarding picker for provider credentials:
 mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
+mix lemon.onboard gemini
 
 # Provider-specific aliases still work
 mix lemon.onboard.antigravity
+mix lemon.onboard.gemini
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
 ```
@@ -242,6 +244,10 @@ All onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
+Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `Ai.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
+
+The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
+
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`
 - `google_antigravity_oauth_client_secret`
@@ -255,6 +261,10 @@ Common non-interactive usage:
 ```bash
 # Google Antigravity
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
+
+# Google Gemini CLI / Code Assist
+mix lemon.onboard.gemini --project-id your-gcp-project
+mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
 
 # OpenAI Codex
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2

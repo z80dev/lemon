@@ -117,7 +117,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
     output = init_output(model)
 
     try do
-      {access_token, project_id} = parse_credentials(opts.api_key)
+      {access_token, project_id} = parse_credentials(opts.api_key, opts.project)
 
       is_antigravity = model.provider == :google_antigravity
       base_url = get_base_url(model, is_antigravity)
@@ -152,19 +152,40 @@ defmodule Ai.Providers.GoogleGeminiCli do
     }
   end
 
-  defp parse_credentials(nil) do
+  defp parse_credentials(nil, _project_override) do
     raise "Google Cloud Code Assist requires OAuth authentication. Use /login to authenticate."
   end
 
-  defp parse_credentials(api_key) when is_binary(api_key) do
+  defp parse_credentials(api_key, project_override) when is_binary(api_key) do
     case Jason.decode(api_key) do
-      {:ok, %{"token" => token, "projectId" => project_id}}
-      when is_binary(token) and is_binary(project_id) ->
-        {token, project_id}
+      {:ok, %{"token" => token} = credentials} when is_binary(token) ->
+        project_id =
+          first_non_empty_binary([
+            project_override,
+            Map.get(credentials, "projectId"),
+            Map.get(credentials, "project_id")
+          ])
+
+        if is_binary(project_id) and project_id != "" do
+          {token, project_id}
+        else
+          raise "Invalid Google Cloud Code Assist credentials. Use /login to re-authenticate."
+        end
 
       _ ->
         raise "Invalid Google Cloud Code Assist credentials. Use /login to re-authenticate."
     end
+  end
+
+  defp parse_credentials(_, _project_override) do
+    raise "Invalid Google Cloud Code Assist credentials. Use /login to re-authenticate."
+  end
+
+  defp first_non_empty_binary(values) when is_list(values) do
+    Enum.find(values, fn
+      value when is_binary(value) -> String.trim(value) != ""
+      _ -> false
+    end)
   end
 
   defp get_base_url(%Model{base_url: base_url}, _is_antigravity)

@@ -9,6 +9,7 @@ defmodule Ai.Auth.OAuthSecretResolver do
   @resolvers [
     Ai.Auth.GitHubCopilotOAuth,
     Ai.Auth.GoogleAntigravityOAuth,
+    Ai.Auth.GoogleGeminiCliOAuth,
     Ai.Auth.OpenAICodexOAuth
   ]
 

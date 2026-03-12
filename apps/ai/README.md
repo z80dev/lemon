@@ -99,6 +99,7 @@ Ai.Supervisor (one_for_one)
 | `Ai.Auth.OAuthSecretResolver` | Central dispatcher -- routes encrypted secret payloads to provider-specific OAuth resolvers |
 | `Ai.Auth.GitHubCopilotOAuth` | GitHub Copilot device-code login, Copilot token refresh, secret encoding/decoding |
 | `Ai.Auth.GoogleAntigravityOAuth` | Google Antigravity PKCE OAuth: authorize URL, token exchange/refresh, secret resolver |
+| `Ai.Auth.GoogleGeminiCliOAuth` | Google Gemini CLI PKCE OAuth: authorize URL, token exchange/refresh, Code Assist project onboarding, secret resolver |
 | `Ai.Auth.OpenAICodexOAuth` | OpenAI Codex PKCE OAuth: authorize URL, code exchange, token refresh, JWT extraction |
 | `Ai.Auth.OAuthPKCE` | PKCE verifier/challenge generation utility |
 
@@ -381,8 +382,11 @@ config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Bedrock | AWS credentials |
 | `AWS_REGION` | Bedrock | AWS region (default: `us-east-1`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
+| `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI | JSON credential payload (`{"token","projectId"}`) |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | Google Vertex | GCP project ID |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex | GCP region |
+| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client ID |
+| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client secret |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for OAuth client ID |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for OAuth client secret |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP trace logging |

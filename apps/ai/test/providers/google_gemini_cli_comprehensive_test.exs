@@ -151,6 +151,44 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       assert {:error, _} = EventStream.result(stream, 500)
     end
 
+    test "stream option project overrides projectId embedded in credentials" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "test")
+      end)
+
+      api_key = Jason.encode!(%{"token" => "my-token", "projectId" => "stored-project"})
+      opts = %StreamOptions{api_key: api_key, project: "override-project"}
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), opts)
+
+      assert_receive {:request_body, body}, 1000
+      assert body["project"] == "override-project"
+      assert {:error, _} = EventStream.result(stream, 500)
+    end
+
+    test "credentials without projectId work when stream options provide project" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "test")
+      end)
+
+      api_key = Jason.encode!(%{"token" => "my-token"})
+      opts = %StreamOptions{api_key: api_key, project: "opts-project"}
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), opts)
+
+      assert_receive {:request_body, body}, 1000
+      assert body["project"] == "opts-project"
+      assert {:error, _} = EventStream.result(stream, 500)
+    end
+
     test "nil credentials result in error" do
       body = sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
 

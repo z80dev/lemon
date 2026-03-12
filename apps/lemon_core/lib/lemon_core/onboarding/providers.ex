@@ -96,6 +96,34 @@ defmodule LemonCore.Onboarding.Providers do
       api_key_choice_label: "Paste existing credential",
       oauth_choice_label: "Browser sign-in (OAuth)",
       oauth_failure_label: "Google Antigravity OAuth login failed"
+    },
+    %Provider{
+      id: "google_gemini_cli",
+      display_name: "Google Gemini CLI",
+      description: "Google OAuth for Gemini CLI / Code Assist",
+      provider_table: "providers.google_gemini_cli",
+      default_secret_name: "llm_google_gemini_cli_api_key",
+      api_key_secret_provider: "onboarding_google_gemini_cli",
+      oauth_secret_provider: "onboarding_google_gemini_cli_oauth",
+      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :GoogleGeminiCliOAuth]),
+      auth_modes: [:oauth, :api_key],
+      default_auth_mode: :oauth,
+      preferred_models: [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview"
+      ],
+      aliases: ["gemini", "gemini-cli", "google-gemini-cli"],
+      switches: [project_id: :string],
+      oauth_opts_builder: &__MODULE__.gemini_cli_oauth_opts/1,
+      api_key_prompt:
+        "Paste a Gemini CLI credential payload (for example JSON with token/projectId): ",
+      api_key_choice_label: "Paste existing credential",
+      oauth_choice_label: "Browser sign-in (Gemini OAuth)",
+      oauth_failure_label: "Google Gemini CLI OAuth login failed",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
     }
   ]
 
@@ -210,6 +238,18 @@ defmodule LemonCore.Onboarding.Providers do
     Keyword.merge(opts,
       enterprise_domain: Keyword.get(opts, :enterprise_domain),
       enable_models: !Keyword.get(opts, :skip_enable_models, false)
+    )
+  end
+
+  @doc false
+  def gemini_cli_oauth_opts(opts) do
+    Keyword.merge(opts,
+      project_id:
+        Keyword.get(opts, :project_id) ||
+          System.get_env("LEMON_GEMINI_PROJECT_ID") ||
+          System.get_env("GOOGLE_CLOUD_PROJECT") ||
+          System.get_env("GOOGLE_CLOUD_PROJECT_ID") ||
+          System.get_env("GCLOUD_PROJECT")
     )
   end
 

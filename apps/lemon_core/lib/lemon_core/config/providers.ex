@@ -31,8 +31,10 @@ defmodule LemonCore.Config.Providers do
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
 
-  For providers that support OAuth payloads (`openai-codex`), set
-  `auth_source = "oauth"` to resolve access tokens from `oauth_secret`.
+  For providers that support OAuth payloads (`openai-codex`, `google_gemini_cli`),
+  set `auth_source = "oauth"` to resolve credential payloads from encrypted
+  secrets. `google_gemini_cli` stores its OAuth payload in `api_key_secret`
+  because the runtime provider expects a JSON `{"token","projectId"}` value.
   """
 
   alias LemonCore.Config.Helpers
@@ -46,7 +48,10 @@ defmodule LemonCore.Config.Providers do
           base_url: String.t() | nil,
           api_key_secret: String.t() | nil,
           auth_source: String.t() | nil,
-          oauth_secret: String.t() | nil
+          oauth_secret: String.t() | nil,
+          project: String.t() | nil,
+          project_id: String.t() | nil,
+          project_secret: String.t() | nil
         }
 
   @type t :: %__MODULE__{
@@ -58,6 +63,7 @@ defmodule LemonCore.Config.Providers do
     "anthropic" => %{api_key: "ANTHROPIC_API_KEY", base_url: "ANTHROPIC_BASE_URL"},
     "openai" => %{api_key: "OPENAI_API_KEY", base_url: "OPENAI_BASE_URL"},
     "openai-codex" => %{api_key: "OPENAI_CODEX_API_KEY", base_url: "OPENAI_BASE_URL"},
+    "google_gemini_cli" => %{api_key: "GOOGLE_GEMINI_CLI_API_KEY"},
     "opencode" => %{api_key: "OPENCODE_API_KEY", base_url: "OPENCODE_BASE_URL"}
   }
 
@@ -93,6 +99,8 @@ defmodule LemonCore.Config.Providers do
       api_key_secret: normalize_optional_string(config["api_key_secret"]),
       auth_source: normalize_optional_string(config["auth_source"]),
       oauth_secret: normalize_optional_string(config["oauth_secret"]),
+      project: normalize_optional_string(config["project"]),
+      project_id: normalize_optional_string(config["project_id"] || config["projectId"]),
       # Google Vertex fields
       project_secret: normalize_optional_string(config["project_secret"]),
       location_secret: normalize_optional_string(config["location_secret"]),
@@ -133,8 +141,8 @@ defmodule LemonCore.Config.Providers do
   defp apply_provider_env_override(providers, name, env_vars) do
     existing = Map.get(providers, name, %{})
 
-    api_key = Helpers.get_env(env_vars[:api_key])
-    base_url = Helpers.get_env(env_vars[:base_url])
+    api_key = env_var_value(env_vars[:api_key])
+    base_url = env_var_value(env_vars[:base_url])
 
     merged =
       existing
@@ -150,6 +158,9 @@ defmodule LemonCore.Config.Providers do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp env_var_value(name) when is_binary(name), do: Helpers.get_env(name)
+  defp env_var_value(_), do: nil
 
   @doc """
   Gets a specific provider's configuration.

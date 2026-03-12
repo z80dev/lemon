@@ -172,6 +172,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
 | `mix lemon.onboard.anthropic` | Anthropic provider setup |
 | `mix lemon.onboard.antigravity` | Antigravity (Google) provider setup with OAuth |
+| `mix lemon.onboard.gemini` | Google Gemini CLI / Code Assist setup with OAuth |
 | `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth and localhost callback capture |
 | `mix lemon.onboard.copilot` | GitHub Copilot provider setup with OAuth |
 | `mix lemon.quality` | Run all quality checks |
@@ -255,6 +256,8 @@ LemonCore.ConfigReloader.reload/1
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
 | `OPENAI_CODEX_API_KEY` | `providers.openai-codex.api_key` |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
+| `GOOGLE_GEMINI_CLI_API_KEY` | `providers.google_gemini_cli.api_key` (JSON credential payload) |
+| `LEMON_GEMINI_PROJECT_ID` | Runtime override for `providers.google_gemini_cli.project_id` |
 
 ## Secrets Management
 
