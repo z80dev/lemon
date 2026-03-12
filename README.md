@@ -188,8 +188,6 @@ chat_id = 123456789
 agent_id = "default"
 ```
 
-Legacy aliases are still accepted: `[agent]` for runtime/default settings and `[agents.<id>]` for profiles.
-
 Notes:
 - Restrict who can use the bot. Set `allowed_chat_ids` and consider enabling `deny_unbound_chats` (see `docs/config.md`).
 - If you want Lemon to operate inside a specific repo, add a project and bind it (see `docs/config.md`).
@@ -296,7 +294,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 ### Key Features
 
 **Agent Capabilities:**
-- **Multi-turn conversations** with 30 built-in tools (`read`, `write`, `edit`, `patch`, `multiedit`, `hashline`, `bash`, `grep`, `find`, `ls`, `glob`, `browser`, `webfetch`, `websearch`, `webdownload`, `todo`, `todoread`, `todowrite`, `task`, `agent`, `await`, `extensions_status`, `tool_auth`, `memory_topic`, `post_to_x`, `get_x_mentions`, `exec`, `process`, `restart`, `truncate`) plus extension tools
+- **Multi-turn conversations** with 20 built-in tools (`read`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `browser`, `webfetch`, `websearch`, `todo`, `task`, `agent`, `extensions_status`, `tool_auth`, `memory_topic`, `post_to_x`, `get_x_mentions`, `hashline_edit`) plus optional tool modules and extension tools
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -317,7 +315,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 - **Stream coalescing** with smart buffering for efficient delivery
 
 **Infrastructure:**
-- **Pluggable channel adapters** (Telegram, X/Twitter, with Discord/Email/Farcaster/SMS extensibility)
+- **Pluggable channel adapters** (Telegram, Discord, X/Twitter, with Email/Farcaster/SMS extensibility)
 - **Cron scheduling** with timezone support, heartbeats, and on-demand wake
 - **Event-driven architecture** with pub/sub messaging across all components
 - **Comprehensive telemetry** for observability and monitoring
@@ -377,7 +375,7 @@ OTP supervision trees ensure that:
 
 ![Supervision Tree](docs/diagrams/supervision-tree.svg)
 
-The supervision tree shows all 13 OTP applications and their supervised processes. Key points:
+The supervision tree shows all 18 OTP applications and their supervised processes. Key points:
 
 - Each application has its own supervision subtree for fault isolation
 - DynamicSupervisors manage runtime-spawned processes (sessions, runs, workers)
@@ -536,7 +534,7 @@ lemon/
 │   ├── hooks/                  # Git hook scripts
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (17 apps)
+├── apps/                        # Umbrella applications (18 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
@@ -705,6 +703,9 @@ lemon/
 │   │       ├── action_space.ex  # Dynamic legal tool generation behaviour
 │   │       └── runner.ex        # Ingest-until-decision + decide-once helpers
 │   │
+│   ├── lemon_sim_ui/            # Phoenix LiveView UI for simulation replays
+│   │   └── lib/lemon_sim_ui/
+│   │
 │   ├── lemon_skills/            # Skill registry and management
 │   │   └── lib/lemon_skills/
 │   │       ├── registry.ex      # In-memory skill cache
@@ -764,14 +765,23 @@ lemon/
 ├── docs/                        # Documentation
 │   ├── README.md                # Docs index
 │   ├── architecture_boundaries.md  # Dependency policy
+│   ├── assistant_bootstrap_contract.md  # Bootstrap contract
 │   ├── beam_agents.md           # BEAM architecture
+│   ├── benchmarks.md            # Performance benchmarks
+│   ├── catalog.exs              # Module catalog
 │   ├── config.md                # Configuration reference
 │   ├── context.md               # Context management
 │   ├── extensions.md            # Extension system
+│   ├── games-platform.md        # Games platform design
+│   ├── long-running-agent-harnesses.md  # Long-running agent patterns
+│   ├── model-selection-decoupling.md    # Model selection architecture
 │   ├── quality_harness.md       # Quality checks and CI gates
+│   ├── runtime-hot-reload.md    # Runtime hot reload
 │   ├── skills.md                # Skills system
 │   ├── telemetry.md             # Observability
+│   ├── agent-loop/              # Agent loop documentation
 │   ├── diagrams/                # Architecture diagrams (Excalidraw + SVG)
+│   ├── for-dummies/             # Beginner-friendly guides
 │   ├── security/                # Secrets and security docs
 │   ├── testing/                 # Testing guides
 │   └── tools/                   # Tool-specific docs (web, firecrawl, wasm)
@@ -813,7 +823,7 @@ end
 
 | Provider | Models | API Type | Notes |
 |----------|--------|----------|-------|
-| Anthropic | 26+ | Native | Claude 3/4 series with reasoning |
+| Anthropic | 24+ | Native | Claude 3/4 series with reasoning |
 | OpenAI | 35+ | Native | GPT-4/5, o1, o3, o4, Codex |
 | Google | 20+ | Native | Gemini 1.5/2.0/2.5/3 series |
 | Amazon Bedrock | 50+ | Native | Nova, Titan, Claude, Llama, DeepSeek, Mistral |
@@ -1056,7 +1066,7 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- 30 built-in tools (file, search, shell, web, browser, task, todo, X/Twitter)
+- 20 built-in tools (file, search, shell, web, browser, task, todo, X/Twitter) plus optional tool modules
 - Optional runtime tool modules for custom integrations
 - Context compaction and branch summarization
 - Extension system for custom tools
@@ -1067,19 +1077,22 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 - Tool policy profiles with per-engine restrictions
 - **Hashline Edit Mode**: Line-addressable edits using xxHash32 content hashes (ported from Oh-My-Pi)
 
-**Built-in Tools (30 total):**
+**Built-in Tools (20 registered by default):**
 
 | Category | Tools |
 |----------|-------|
-| File Operations | `read`, `write`, `edit`, `patch`, `multiedit`, `hashline`, `glob`, `ls` |
+| File Operations | `read`, `write`, `edit`, `patch`, `ls` |
 | Search | `grep`, `find` |
-| Shell/Execution | `bash`, `exec`, `process`, `restart` |
-| Web | `websearch`, `webfetch`, `webdownload`, `browser` |
-| Task Management | `todo`, `todoread`, `todowrite`, `task` |
-| Agent Control | `agent`, `await` |
+| Shell | `bash` |
+| Web | `websearch`, `webfetch`, `browser` |
+| Task Management | `todo`, `task` |
+| Agent Control | `agent` |
 | Extensions | `extensions_status`, `tool_auth` |
 | X/Twitter | `post_to_x`, `get_x_mentions` |
-| Memory | `memory_topic`, `truncate` |
+| Memory | `memory_topic` |
+| Editing | `hashline_edit` |
+
+**Optional tool modules** (exist in codebase but not registered by default): `glob`, `multiedit`, `webdownload`, `todoread`, `todowrite`, `await`, `exec`, `process`, `restart`, `truncate`
 
 ### CodingAgent UI
 
@@ -1460,7 +1473,7 @@ Instructions for the agent...
 **Key Features:**
 
 - **Dual Scope**: Global (`~/.lemon/agent/skill/`) and project (`.lemon/skill/`)
-- **Bundled Skills**: Seeds built-ins on first run (`github`, `peekaboo`, `pinata`, `runtime-remsh`, `session-logs`, `skill-creator`, `summarize`, `tmux`)
+- **Bundled Skills**: Seeds built-ins on first run (`agent-games`, `github`, `peekaboo`, `pinata`, `runtime-remsh`, `session-logs`, `skill-creator`, `summarize`, `tmux`)
 - **Manifest Parsing**: YAML or TOML frontmatter with metadata
 - **Dependency Verification**: Checks for required binaries and env vars
 - **Approval Gating**: Requires approval for install/update/uninstall
@@ -1650,7 +1663,7 @@ All commands are prefixed with `/`. Type `/help` within the TUI to see this list
 - **Overlay Dialogs**: Interactive select, confirm, input, and editor overlays
 - **Session Persistence**: Save and resume sessions with full conversation tree structure
 - **Search**: Search across entire conversation history
-- **Settings Management**: Configurable themes (6 themes: lemon, lime, midnight, rose, ocean, charcoal), debug mode, persisted to config file
+- **Settings Management**: Configurable themes (5 themes: lemon, lime, midnight, rose, ocean), debug mode, persisted to config file
 - **Git Integration**: Displays git branch and status in the status bar
 - **Token Tracking**: Real-time display of input/output tokens and running cost estimate
 - **Auto-Completion**: Smart completion for commands and paths
@@ -2167,9 +2180,11 @@ Use the top-level onboarding picker for providers that support OAuth or API-key 
 mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
+mix lemon.onboard gemini
 
 # Provider-specific aliases still work
 mix lemon.onboard.antigravity
+mix lemon.onboard.gemini
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
 ```
@@ -2179,7 +2194,7 @@ The onboarding flows:
 - Let you choose a provider when none is passed
 - Use a Lemon-themed interactive TUI selector in a real terminal for provider, auth-mode, model, and confirmation choices
 - Run OAuth/device login when supported, or prompt for an API key/token otherwise
-- Capture localhost OAuth callbacks automatically for providers like Codex and Antigravity, with manual paste as fallback
+- Capture localhost OAuth callbacks automatically for providers like Codex, Gemini CLI, and Antigravity, with manual paste as fallback
 - Store credentials in encrypted secrets with provider metadata
 - Update the relevant provider config in `config.toml`
 - Support `--set-default`, `--model`, and `--config-path`
@@ -2200,6 +2215,8 @@ Environment fallback is also supported:
 
 For OpenAI Codex specifically, `mix lemon.onboard codex` or `mix lemon.onboard.codex` is the primary path. OAuth mode stores the secret in Lemon's secret store, wires `providers.openai-codex.auth_source = "oauth"` plus `providers.openai-codex.oauth_secret` automatically, and listens on the localhost callback URL so the browser redirect completes without manual copy/paste in the normal case.
 
+For Google Gemini CLI specifically, `mix lemon.onboard gemini` or `mix lemon.onboard.gemini` is the primary path. OAuth mode stores the secret in Lemon's secret store, wires `providers.google_gemini_cli.auth_source = "oauth"` plus `providers.google_gemini_cli.api_key_secret` automatically, resolves a usable Code Assist project during sign-in, and accepts `--project-id <gcp-project-id>` when you want to force a specific Google Cloud project. After onboarding, Lemon will also re-resolve the active Gemini project at runtime from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`.
+
 #### 4) Use secrets for LLM providers
 
 Use `api_key_secret` in `~/.lemon/config.toml`:
@@ -2219,6 +2236,11 @@ Runtime key resolution order is:
 - Set `[providers.openai-codex].auth_source = "oauth"` to use OAuth secret payloads from encrypted store (default secret `llm_openai_codex_api_key`).
 - Set `[providers.openai-codex].auth_source = "api_key"` to use static key/token resolution (`OPENAI_CODEX_API_KEY`/`CHATGPT_TOKEN`, `api_key`, `api_key_secret`).
 - `auth_source` is required for `openai-codex`.
+
+`google_gemini_cli` uses Code Assist OAuth payloads:
+- Set `[providers.google_gemini_cli].auth_source = "oauth"` when using `mix lemon.onboard gemini`; Lemon stores the encrypted OAuth payload in `api_key_secret` (default secret `llm_google_gemini_cli_api_key`) and resolves it into the provider's expected `{"token","projectId"}` JSON at runtime.
+- `GOOGLE_GEMINI_CLI_API_KEY` can also supply that JSON credential payload directly via environment variable.
+- To override the active Code Assist project after onboarding, set `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`. Runtime project overrides take precedence over the `projectId` embedded in the stored OAuth payload.
 
 `anthropic` uses static API key resolution:
 - `ANTHROPIC_API_KEY`
@@ -2297,7 +2319,6 @@ This is automatic and idempotent (already wrapped content is not double-wrapped)
 ### CLI Runner Configuration (Codex/Claude/Kimi/OpenCode/Pi)
 
 CLI runner behavior is configured in the preferred TOML config under `[runtime.cli.*]`
-(legacy `[agent.cli.*]` also works)
 (see `docs/config.md`):
 
 ```toml
