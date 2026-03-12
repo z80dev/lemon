@@ -44,13 +44,15 @@ defmodule LemonSim.Examples.Skirmish.Updater do
          :ok <- ensure_coords(x, y),
          :ok <- ensure_in_bounds(state.world, x, y),
          :ok <- ensure_not_wall(state.world, x, y),
-         :ok <- ensure_adjacent(unit, x, y),
+         :ok <- ensure_move_range(unit, x, y),
          :ok <- ensure_unoccupied(state.world, unit_id, x, y) do
+      on_cover = on_cover_tile?(state.world, x, y)
+
       next_world =
         state.world
         |> put_unit(
           unit_id,
-          unit |> Map.put(:ap, get(unit, :ap, 0) - move_cost) |> Map.put(:cover?, false) |> put_pos(x, y)
+          unit |> Map.put(:ap, get(unit, :ap, 0) - move_cost) |> Map.put(:cover?, on_cover) |> put_pos(x, y)
         )
 
       action_events = [
@@ -83,11 +85,13 @@ defmodule LemonSim.Examples.Skirmish.Updater do
          :ok <- ensure_not_wall(state.world, x, y),
          :ok <- ensure_sprint_range(unit, x, y),
          :ok <- ensure_unoccupied(state.world, unit_id, x, y) do
+      on_cover = on_cover_tile?(state.world, x, y)
+
       next_world =
         state.world
         |> put_unit(
           unit_id,
-          unit |> Map.put(:ap, get(unit, :ap, 0) - 1) |> Map.put(:cover?, false) |> put_pos(x, y)
+          unit |> Map.put(:ap, get(unit, :ap, 0) - 1) |> Map.put(:cover?, on_cover) |> put_pos(x, y)
         )
 
       action_events = [
@@ -389,10 +393,10 @@ defmodule LemonSim.Examples.Skirmish.Updater do
     if x >= 0 and x < width and y >= 0 and y < height, do: :ok, else: {:error, :out_of_bounds}
   end
 
-  defp ensure_adjacent(unit, x, y) do
+  defp ensure_move_range(unit, x, y) do
     pos = get(unit, :pos, %{})
     distance = abs(get(pos, :x, 0) - x) + abs(get(pos, :y, 0) - y)
-    if distance == 1, do: :ok, else: {:error, :move_not_adjacent}
+    if distance >= 1 and distance <= 2, do: :ok, else: {:error, :move_out_of_range}
   end
 
   defp ensure_unoccupied(world, moving_unit_id, x, y) do
@@ -478,7 +482,7 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp ensure_sprint_range(unit, x, y) do
     pos = get(unit, :pos, %{})
     distance = abs(get(pos, :x, 0) - x) + abs(get(pos, :y, 0) - y)
-    if distance >= 1 and distance <= 2, do: :ok, else: {:error, :sprint_out_of_range}
+    if distance >= 1 and distance <= 3, do: :ok, else: {:error, :sprint_out_of_range}
   end
 
   defp ensure_ability(unit, ability) do
@@ -508,6 +512,14 @@ defmodule LemonSim.Examples.Skirmish.Updater do
     if is_water, do: 2, else: 1
   end
 
+  defp on_cover_tile?(world, x, y) do
+    cover = get(get(world, :map, %{}), :cover, [])
+
+    Enum.any?(cover, fn c ->
+      get_coord(c, :x) == x and get_coord(c, :y) == y
+    end)
+  end
+
   defp on_high_ground?(world, unit) do
     pos = get(unit, :pos, %{})
     ux = get(pos, :x, -1)
@@ -535,11 +547,11 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp rejection_reason(:insufficient_ap), do: "insufficient ap"
   defp rejection_reason(:invalid_coords), do: "invalid coordinates"
   defp rejection_reason(:out_of_bounds), do: "out of bounds"
-  defp rejection_reason(:move_not_adjacent), do: "move must be adjacent"
+  defp rejection_reason(:move_out_of_range), do: "move must be within 2 tiles"
   defp rejection_reason(:tile_occupied), do: "destination occupied"
   defp rejection_reason(:target_out_of_range), do: "target out of range"
   defp rejection_reason(:tile_is_wall), do: "cannot move onto wall"
-  defp rejection_reason(:sprint_out_of_range), do: "sprint must be 1-2 tiles"
+  defp rejection_reason(:sprint_out_of_range), do: "sprint must be 1-3 tiles"
   defp rejection_reason(:no_ability), do: "unit does not have that ability"
   defp rejection_reason(:not_ally), do: "target is not an ally"
   defp rejection_reason(:target_full_hp), do: "target is at full health"

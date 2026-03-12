@@ -14,6 +14,7 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
 
   @default_max_turns 8
   @default_max_tool_calls_per_turn 16
+  @default_empty_response_retries 3
 
   @type decision :: map()
   @type complete_fn ::
@@ -38,10 +39,17 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   end
 
   defp run_loop(state, model, opts, turn) do
+    run_loop(state, model, opts, turn, 0)
+  end
+
+  defp run_loop(state, model, opts, turn, empty_retries) do
     max_turns = Keyword.get(opts, :decision_max_turns, Keyword.get(opts, :max_turns, @default_max_turns))
 
     max_tool_calls_per_turn =
       Keyword.get(opts, :max_tool_calls_per_turn, @default_max_tool_calls_per_turn)
+
+    max_empty_retries =
+      Keyword.get(opts, :empty_response_retries, @default_empty_response_retries)
 
     if turn >= max_turns do
       {:error,
@@ -56,7 +64,16 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
         with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
           case tool_calls do
             [] ->
-              {:error, tool_call_required_error(assistant, state.executed_calls)}
+              if empty_response?(assistant) and empty_retries < max_empty_retries do
+                IO.puts(
+                  "[ToolLoopDecider] Empty API response (retry #{empty_retries + 1}/#{max_empty_retries})"
+                )
+
+                Process.sleep(500 * (empty_retries + 1))
+                run_loop(state, model, opts, turn, empty_retries + 1)
+              else
+                {:error, tool_call_required_error(assistant, state.executed_calls)}
+              end
 
             calls ->
               with {:ok, resolved_calls} <- resolve_tool_calls(calls, state.tools),
@@ -80,7 +97,7 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
                       decisions: state.decisions ++ List.wrap(step.decision)
                   }
 
-                  run_loop(next_state, model, opts, turn + 1)
+                  run_loop(next_state, model, opts, turn + 1, 0)
                 end
               end
           end
@@ -262,6 +279,13 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   end
 
   defp decision_from_tool_call(_policy, _call, _tool, _result, _is_error, _opts), do: nil
+
+  defp empty_response?(%AssistantMessage{content: []}), do: true
+
+  defp empty_response?(%AssistantMessage{} = msg) do
+    text = Ai.get_text(msg)
+    text == "" or is_nil(text)
+  end
 
   defp tool_call_required_error(%AssistantMessage{} = assistant, executed_calls) do
     {:tool_call_required,

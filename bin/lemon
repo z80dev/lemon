@@ -225,7 +225,7 @@ case System.get_env("LEMON_SIM_UI_PORT") do
         Application.put_env(:lemon_sim_ui, LemonSimUi.Endpoint,
           Keyword.merge(
             Application.get_env(:lemon_sim_ui, LemonSimUi.Endpoint, []),
-            http: [ip: {127, 0, 0, 1}, port: port]
+            server: true, http: [ip: {127, 0, 0, 1}, port: port]
           )
         )
       _ -> :ok

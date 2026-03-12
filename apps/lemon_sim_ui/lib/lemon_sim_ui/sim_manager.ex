@@ -11,6 +11,7 @@ defmodule LemonSimUi.SimManager do
   alias LemonCore.MapHelpers
   alias LemonSim.{Runner, Store}
   alias LemonSim.Examples.{TicTacToe, Skirmish}
+  alias LemonSim.GameHelpers.Config, as: SimConfig
 
   @lobby_topic "sim:lobby"
 
@@ -67,7 +68,7 @@ defmodule LemonSimUi.SimManager do
 
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
-        :ok = Store.put_state(initial_state)
+        put_state_with_retry(initial_state, 3)
         broadcast_lobby()
 
         task_ref = start_runner(initial_state, modules, run_opts, human_player)
@@ -157,8 +158,10 @@ defmodule LemonSimUi.SimManager do
     initial_state = %{TicTacToe.initial_state() | sim_id: sim_id}
     modules = TicTacToe.modules()
 
+    {model, stream_options} = resolve_default_model_for_ui()
+
     run_opts =
-      TicTacToe.default_opts(opts)
+      TicTacToe.default_opts(model: model, stream_options: stream_options)
       |> Keyword.put(:driver_max_turns, max_turns)
       |> Keyword.put(:persist?, true)
       |> Keyword.put(:on_before_step, nil)
@@ -177,12 +180,70 @@ defmodule LemonSimUi.SimManager do
 
     modules = Skirmish.modules()
 
+    {model, stream_options} = resolve_default_model_for_ui()
+
     run_opts =
-      Skirmish.default_opts(opts)
+      Skirmish.default_opts(Keyword.merge(opts, model: model, stream_options: stream_options))
       |> Keyword.put(:driver_max_turns, max_turns)
       |> Keyword.put(:persist?, true)
       |> Keyword.put(:on_before_step, nil)
       |> Keyword.put(:on_after_step, &on_after_step/2)
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:werewolf, sim_id, opts) do
+    model_specs = Keyword.get(opts, :model_specs, [])
+    player_count = Keyword.get(opts, :player_count, 6)
+    player_ids = Enum.map(1..player_count, &"player_#{&1}")
+
+    initial_state = %{LemonSim.Examples.Werewolf.initial_state(opts) | sim_id: sim_id}
+    modules = LemonSim.Examples.Werewolf.modules()
+
+    config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+
+    # Resolve model assignments if specs provided
+    {initial_state, run_opts} =
+      if model_specs != [] do
+        model_assignments =
+          player_ids
+          |> Enum.zip(model_specs)
+          |> Enum.into(%{}, fn {player_id, spec} ->
+            {provider, model_id} = parse_model_spec(spec)
+            model = resolve_model!(provider, model_id, config)
+            api_key = SimConfig.resolve_provider_api_key!(provider, config, "werewolf")
+            {player_id, {model, api_key}}
+          end)
+
+        state_with_models = attach_model_assignments(initial_state, model_assignments)
+
+        # Use first model assignment as the default model for opts initialization
+        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+
+        run_opts =
+          LemonSim.Examples.Werewolf.default_opts(
+            model: default_model,
+            stream_options: %{api_key: default_key}
+          )
+          |> Keyword.put(:persist?, true)
+          |> Keyword.put(:on_before_step, nil)
+          |> Keyword.put(:on_after_step, &on_after_step/2)
+          |> Keyword.put(:model_assignments, model_assignments)
+
+        {state_with_models, run_opts}
+      else
+        {model, stream_options} = resolve_default_model_for_ui()
+
+        run_opts =
+          LemonSim.Examples.Werewolf.default_opts(model: model, stream_options: stream_options)
+          |> Keyword.put(:persist?, true)
+          |> Keyword.put(:on_before_step, nil)
+          |> Keyword.put(:on_after_step, &on_after_step/2)
+
+        {initial_state, run_opts}
+      end
 
     {:ok, initial_state, modules, run_opts}
   rescue
@@ -214,6 +275,36 @@ defmodule LemonSimUi.SimManager do
   defp run_ai_only(state, modules, opts) do
     terminal? = Keyword.get(opts, :terminal?, fn _s -> false end)
     max_turns = Keyword.get(opts, :driver_max_turns, 50)
+    model_assignments = Keyword.get(opts, :model_assignments)
+
+    # If multi-model, set up the model-switching complete_fn
+    opts =
+      if model_assignments do
+        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+        {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
+
+        complete_fn = fn _model, context, stream_options ->
+          {actual_model, api_key} = Agent.get(model_agent, & &1)
+          actual_stream_options = stream_options |> Map.new() |> Map.put(:api_key, api_key)
+          Ai.complete(actual_model, context, actual_stream_options)
+        end
+
+        on_before_step = fn _turn, step_state ->
+          actor_id = LemonCore.MapHelpers.get_key(step_state.world, :active_actor_id)
+
+          case Map.get(model_assignments, actor_id) do
+            {model, key} -> Agent.update(model_agent, fn _ -> {model, key} end)
+            nil -> :ok
+          end
+        end
+
+        opts
+        |> Keyword.put(:complete_fn, complete_fn)
+        |> Keyword.put(:on_before_step, on_before_step)
+      else
+        opts
+      end
+
     do_ai_loop(state, modules, opts, terminal?, max_turns, 0)
   end
 
@@ -224,20 +315,50 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn) do
+    do_ai_loop(state, modules, opts, terminal?, max_turns, turn, 0)
+  end
+
+  @max_step_retries 3
+
+  defp do_ai_loop(state, _modules, _opts, _terminal?, _max_turns, _turn, retries)
+       when retries >= @max_step_retries do
+    require Logger
+    Logger.warning("[SimManager] Giving up after #{@max_step_retries} retries for #{state.sim_id}")
+    Store.put_state(state)
+    broadcast_update(state.sim_id)
+  end
+
+  defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries) do
     if terminal?.(state) do
       Store.put_state(state)
       broadcast_update(state.sim_id)
     else
-      case Runner.step(state, modules, opts) do
-        {:ok, result} ->
-          Store.put_state(result.state)
-          broadcast_update(result.state.sim_id)
-          Process.sleep(500)
-          do_ai_loop(result.state, modules, opts, terminal?, max_turns, turn + 1)
+      # Call on_before_step if provided (used by multi-model to switch the active model)
+      case Keyword.get(opts, :on_before_step) do
+        f when is_function(f, 2) -> f.(turn, state)
+        _ -> :ok
+      end
 
-        {:error, _reason} ->
-          Store.put_state(state)
-          broadcast_update(state.sim_id)
+      try do
+        case Runner.step(state, modules, opts) do
+          {:ok, result} ->
+            Store.put_state(result.state)
+            broadcast_update(result.state.sim_id)
+            Process.sleep(500)
+            do_ai_loop(result.state, modules, opts, terminal?, max_turns, turn + 1, 0)
+
+          {:error, reason} ->
+            require Logger
+            Logger.warning("[SimManager] Step error for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{inspect(reason)}")
+            Process.sleep(2000 * (retries + 1))
+            do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
+        end
+      catch
+        kind, reason ->
+          require Logger
+          Logger.error("[SimManager] Step crashed for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{kind} #{inspect(reason)}")
+          Process.sleep(2000 * (retries + 1))
+          do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
       end
     end
   end
@@ -301,6 +422,12 @@ defmodule LemonSimUi.SimManager do
             broadcast_update(state.sim_id)
         end
       else
+        # Call on_before_step for multi-model switching
+        case Keyword.get(opts, :on_before_step) do
+          f when is_function(f, 2) -> f.(turn, state)
+          _ -> :ok
+        end
+
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
             Store.put_state(result.state)
@@ -364,9 +491,79 @@ defmodule LemonSimUi.SimManager do
 
   defp generate_id(:tic_tac_toe), do: "ttt_#{random_hex(4)}"
   defp generate_id(:skirmish), do: "skm_#{random_hex(4)}"
+  defp generate_id(:werewolf), do: "ww_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp random_hex(bytes) do
     :crypto.strong_rand_bytes(bytes) |> Base.encode16(case: :lower)
+  end
+
+  defp put_state_with_retry(state, retries) when retries > 0 do
+    case Store.put_state(state) do
+      :ok -> :ok
+      {:error, :sqlite_busy} ->
+        Process.sleep(100)
+        put_state_with_retry(state, retries - 1)
+      {:error, reason} -> raise "Store.put_state failed: #{inspect(reason)}"
+    end
+  end
+
+  defp put_state_with_retry(_state, 0), do: :ok
+
+  # -- Model resolution helpers --
+
+  # Resolves a default model + API key for non-multi-model sims started from the UI.
+  # Tries Lemon config first, falls back to first available Gemini model.
+  defp resolve_default_model_for_ui do
+    config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+
+    model =
+      try do
+        SimConfig.resolve_configured_model!(config, "sim")
+      rescue
+        _ -> Ai.Models.get_model(:google_gemini_cli, "gemini-2.5-flash")
+      end
+
+    api_key =
+      try do
+        SimConfig.resolve_provider_api_key!(model.provider, config, "sim")
+      rescue
+        _ -> nil
+      end
+
+    {model, %{api_key: api_key}}
+  end
+
+  defp parse_model_spec(spec) when is_binary(spec) do
+    case String.split(spec, ":", parts: 2) do
+      [provider, model_id] -> {String.to_existing_atom(provider), model_id}
+      [model_id] -> {:anthropic, model_id}
+    end
+  end
+
+  defp resolve_model!(provider, model_id, config) do
+    case Ai.Models.get_model(provider, model_id) do
+      %Ai.Types.Model{} = model ->
+        SimConfig.apply_provider_base_url(model, config)
+
+      nil ->
+        raise "Could not resolve model #{provider}/#{model_id}"
+    end
+  end
+
+  defp attach_model_assignments(state, model_assignments) do
+    players =
+      (state.world[:players] || state.world["players"] || %{})
+      |> Enum.into(%{}, fn {player_id, info} ->
+        case Map.get(model_assignments, player_id) do
+          {model, _key} ->
+            {player_id, Map.put(info, :model, "#{model.provider}/#{model.id}")}
+
+          nil ->
+            {player_id, info}
+        end
+      end)
+
+    %{state | world: Map.put(state.world, :players, players)}
   end
 end

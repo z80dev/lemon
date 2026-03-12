@@ -97,27 +97,27 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
       |> assign(:recent_feed, recent_feed)
 
     ~H"""
-    <div class="relative">
+    <div class="relative font-sans">
       <%!-- Inline styles for animations and patterns --%>
       <style>
         @keyframes pulse-glow-red {
-          0%, 100% { box-shadow: 0 0 4px 1px rgba(239, 68, 68, 0.4); }
-          50% { box-shadow: 0 0 12px 4px rgba(239, 68, 68, 0.7); }
+          0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), inset 0 0 5px rgba(239, 68, 68, 0.2); }
+          50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.8), inset 0 0 10px rgba(239, 68, 68, 0.4); }
         }
         @keyframes pulse-glow-blue {
-          0%, 100% { box-shadow: 0 0 4px 1px rgba(59, 130, 246, 0.4); }
-          50% { box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.7); }
+          0%, 100% { box-shadow: 0 0 10px rgba(6, 182, 212, 0.4), inset 0 0 5px rgba(6, 182, 212, 0.2); }
+          50% { box-shadow: 0 0 20px rgba(6, 182, 212, 0.8), inset 0 0 10px rgba(6, 182, 212, 0.4); }
         }
-        .active-unit-red { animation: pulse-glow-red 2s ease-in-out infinite; }
-        .active-unit-blue { animation: pulse-glow-blue 2s ease-in-out infinite; }
+        .active-unit-red { animation: pulse-glow-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; border-color: rgba(239, 68, 68, 0.8) !important; }
+        .active-unit-blue { animation: pulse-glow-blue 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; border-color: rgba(6, 182, 212, 0.8) !important; }
         @keyframes slide-in-right {
           from { transform: translateX(40px); opacity: 0; }
           to { transform: translateX(0); opacity: 1; }
         }
         .kill-feed-enter { animation: slide-in-right 0.3s ease-out; }
         @keyframes victory-pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.02); }
+          0%, 100% { transform: scale(1); text-shadow: 0 0 20px rgba(255,255,255,0.5); }
+          50% { transform: scale(1.02); text-shadow: 0 0 40px rgba(255,255,255,0.8); }
         }
         .victory-banner { animation: victory-pulse 2s ease-in-out infinite; }
         .wall-pattern {
@@ -125,8 +125,8 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
             45deg,
             transparent,
             transparent 3px,
-            rgba(107, 114, 128, 0.3) 3px,
-            rgba(107, 114, 128, 0.3) 6px
+            rgba(255, 255, 255, 0.05) 3px,
+            rgba(255, 255, 255, 0.05) 6px
           );
         }
         .water-pattern {
@@ -134,31 +134,33 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
             180deg,
             transparent,
             transparent 4px,
-            rgba(96, 165, 250, 0.08) 4px,
-            rgba(96, 165, 250, 0.08) 6px
+            rgba(6, 182, 212, 0.1) 4px,
+            rgba(6, 182, 212, 0.1) 6px
           );
+          animation: water-flow 4s linear infinite;
         }
         @keyframes valid-move-pulse {
-          0%, 100% { background-color: rgba(34, 197, 94, 0.12); }
-          50% { background-color: rgba(34, 197, 94, 0.25); }
+          0%, 100% { background-color: rgba(16, 185, 129, 0.1); box-shadow: inset 0 0 5px rgba(16, 185, 129, 0.2); }
+          50% { background-color: rgba(16, 185, 129, 0.25); box-shadow: inset 0 0 15px rgba(16, 185, 129, 0.4); }
         }
         .valid-move-tile { animation: valid-move-pulse 1.5s ease-in-out infinite; }
       </style>
 
       <%!-- Status Bar --%>
-      <div class="mb-3 px-3 py-2 rounded-lg bg-gray-800/80 border border-gray-700/50">
-        <div :if={@game_status == "in_progress"} class="flex items-center justify-between text-sm">
-          <div class="flex items-center gap-3">
-            <span class="text-gray-500 font-mono text-xs tracking-wider uppercase">Round</span>
-            <span class="text-white font-bold tabular-nums">{@round}</span>
-            <span class="w-px h-4 bg-gray-700"></span>
-            <span class="text-gray-500 font-mono text-xs tracking-wider uppercase">Phase</span>
-            <span class="text-gray-300">{@phase}</span>
+      <div class="mb-4 px-4 py-3 rounded-xl glass-panel relative overflow-hidden flex items-center justify-between shadow-neon-blue">
+        <div class="absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-transparent to-red-500/10 opacity-30 pointer-events-none"></div>
+        <div :if={@game_status == "in_progress"} class="flex items-center justify-between text-sm w-full relative z-10">
+          <div class="flex items-center gap-4">
+            <span class="text-cyan-500 font-mono text-xs tracking-widest uppercase font-bold">Round</span>
+            <span class="text-white font-black text-lg tabular-nums text-glow-cyan">{@round}</span>
+            <span class="w-px h-5 bg-glass-border"></span>
+            <span class="text-slate-500 font-mono text-xs tracking-widest uppercase font-bold">Phase</span>
+            <span class="text-slate-200 font-semibold tracking-wider">{@phase}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-gray-500 text-xs">Active:</span>
+          <div class="flex items-center gap-3">
+            <span class="text-slate-500 text-xs font-mono uppercase tracking-widest font-bold">Active:</span>
             <span class={[
-              "px-2 py-0.5 rounded text-xs font-bold",
+              "px-3 py-1 rounded-md text-xs font-black tracking-wider shadow-sm",
               active_actor_badge(@active_actor, @units)
             ]}>
               {format_unit_label(@active_actor, @units)}
@@ -171,19 +173,21 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
       <div class="flex gap-4 items-start">
 
         <%!-- Left Panel: Red Team Roster --%>
-        <div class="w-48 flex-shrink-0 space-y-1.5">
-          <div class="flex items-center gap-2 px-2 py-1.5 rounded-t-lg bg-red-950/40 border border-red-900/30">
-            <div class="w-2 h-2 rounded-full bg-red-500"></div>
-            <span class="text-red-400 text-xs font-bold tracking-wider uppercase">Red Team</span>
+        <div class="w-48 flex-shrink-0 space-y-2">
+          <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.1)]">
+            <div class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)]"></div>
+            <span class="text-red-400 text-xs font-black tracking-widest uppercase text-glow-red">Red Team</span>
           </div>
-          <%= for {unit_id, unit} <- @red_units do %>
-            <.roster_card
-              unit_id={unit_id}
-              unit={unit}
-              active={unit_id == @active_actor}
-              team="red"
-            />
-          <% end %>
+          <div class="space-y-1.5 p-1">
+            <%= for {unit_id, unit} <- @red_units do %>
+              <.roster_card
+                unit_id={unit_id}
+                unit={unit}
+                active={unit_id == @active_actor}
+                team="red"
+              />
+            <% end %>
+          </div>
         </div>
 
         <%!-- Center: The Grid Board --%>
@@ -216,7 +220,7 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
 
               <%!-- Grid --%>
               <div
-                class="grid gap-px bg-gray-800 rounded-lg overflow-hidden border border-gray-700/50 shadow-xl shadow-black/40"
+                class="grid gap-px bg-slate-800/80 rounded-xl overflow-hidden border border-glass-border shadow-glass relative z-10 backdrop-blur-sm p-1"
                 style={"grid-template-columns: repeat(#{@width}, #{@tile_size}px); grid-auto-rows: #{@tile_size}px"}
               >
                 <%= for y <- 0..(@height - 1) do %>
@@ -228,12 +232,12 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                     <% clickable = @interactive && is_valid_move && is_nil(unit_here) && @game_status == "in_progress" %>
                     <div
                       class={[
-                        "relative flex items-center justify-center transition-colors duration-150",
+                        "relative flex items-center justify-center transition-all duration-300 rounded-md",
                         terrain_bg(terrain),
                         if(terrain == :wall, do: "wall-pattern", else: ""),
                         if(terrain == :water, do: "water-pattern", else: ""),
-                        if(is_valid_move && is_nil(unit_here), do: "valid-move-tile ring-1 ring-inset ring-green-500/40", else: ""),
-                        if(clickable, do: "cursor-pointer hover:ring-2 hover:ring-green-400/60", else: "")
+                        if(is_valid_move && is_nil(unit_here), do: "valid-move-tile ring-1 ring-inset ring-emerald-400/50 shadow-[0_0_10px_rgba(16,185,129,0.2)_inset]", else: ""),
+                        if(clickable, do: "cursor-pointer hover:ring-2 hover:ring-emerald-400/80 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)_inset] hover:scale-[0.98]", else: "")
                       ]}
                       phx-click={if clickable, do: "human_move_to"}
                       phx-value-x={x}
@@ -265,7 +269,7 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                         :if={is_wall}
                         class="absolute inset-0 flex items-center justify-center pointer-events-none"
                       >
-                        <span class="text-gray-600 font-bold" style={"font-size: #{max(10, @tile_size - 26)}px"}>&#x2588;</span>
+                        <div class="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-900/50 to-transparent"></div>
                       </div>
 
                       <%!-- Unit rendering --%>
@@ -282,24 +286,24 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                           <%!-- Unit circle --%>
                           <div
                             class={[
-                              "rounded-full flex items-center justify-center font-bold border-2 relative",
+                              "rounded-full flex items-center justify-center font-bold border-2 relative transition-all duration-300",
                               unit_circle_classes(team, is_dead),
                               if(is_active && !is_dead, do: "active-unit-#{team}", else: ""),
-                              if(is_active && !is_dead, do: "ring-2 ring-offset-1 ring-offset-gray-900 ring-yellow-400/80", else: "")
+                              if(is_active && !is_dead, do: "ring-2 ring-offset-2 ring-offset-slate-900 ring-white/80 scale-110 z-20", else: "z-10 shadow-lg")
                             ]}
                             style={"width: #{circle_size(@tile_size)}px; height: #{circle_size(@tile_size)}px; font-size: #{max(8, circle_size(@tile_size) - 10)}px; line-height: 1"}
                           >
-                            <span :if={!is_dead} class={unit_icon_class(get_val(u, :class, "soldier"))}>
+                            <span :if={!is_dead} class={[unit_icon_class(get_val(u, :class, "soldier")), "drop-shadow-md"]}>
                               {unit_icon_char(get_val(u, :class, "soldier"))}
                             </span>
-                            <span :if={is_dead} class="text-gray-400">X</span>
+                            <span :if={is_dead} class="text-slate-500">X</span>
 
                             <%!-- Cover shield indicator --%>
                             <div
                               :if={has_cover && !is_dead}
-                              class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-gray-800 border border-green-500/60 flex items-center justify-center"
+                              class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-slate-900 border-2 border-cyan-400 flex items-center justify-center shadow-neon-cyan"
                             >
-                              <span class="text-green-400 text-[6px] font-bold leading-none">S</span>
+                              <span class="text-cyan-400 text-[8px] font-black leading-none pb-0.5">S</span>
                             </div>
                           </div>
 
@@ -368,15 +372,19 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
           </div>
 
           <%!-- Interactive Controls --%>
-          <div :if={@interactive && @game_status == "in_progress" && @active_unit_data} class="mt-3 w-full">
-            <div class="bg-gray-800/60 rounded-lg border border-gray-700/40 p-3">
-              <div class="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-2">Actions</div>
-              <div class="flex flex-wrap gap-2">
+          <div :if={@interactive && @game_status == "in_progress" && @active_unit_data} class="mt-4 w-full">
+            <div class="glass-panel rounded-xl border border-cyan-500/30 p-4 shadow-neon-cyan relative overflow-hidden">
+              <div class="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+              <div class="text-[10px] text-cyan-400 uppercase tracking-widest font-black mb-3 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,1)]"></span>
+                TACTICAL COMMANDS
+              </div>
+              <div class="flex flex-wrap gap-2.5 relative z-10">
                 <%!-- End Turn --%>
                 <button
                   phx-click="human_action"
                   phx-value-action="end_turn"
-                  class="px-3 py-1.5 text-xs rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-all border border-gray-600/50 shadow-sm"
+                  class="glass-button px-4 py-2 text-xs font-bold rounded-lg uppercase tracking-wider"
                 >
                   End Turn
                 </button>
@@ -385,7 +393,7 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                 <button
                   phx-click="human_action"
                   phx-value-action="take_cover"
-                  class="px-3 py-1.5 text-xs rounded-md bg-emerald-900/40 text-emerald-400 hover:bg-emerald-800/50 hover:text-emerald-300 transition-all border border-emerald-700/30 shadow-sm"
+                  class="px-4 py-2 text-xs font-bold rounded-lg uppercase tracking-wider bg-gradient-to-r from-cyan-900/60 to-blue-900/60 text-cyan-300 border border-cyan-500/50 hover:from-cyan-800/80 hover:to-blue-800/80 hover:text-white transition-all shadow-[0_0_10px_rgba(6,182,212,0.2)] hover:shadow-[0_0_15px_rgba(6,182,212,0.4)]"
                 >
                   Take Cover
                 </button>
@@ -395,7 +403,7 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                   :if={get_val(@active_unit_data, :class, "") == "medic"}
                   phx-click="human_action"
                   phx-value-action="heal"
-                  class="px-3 py-1.5 text-xs rounded-md bg-green-900/40 text-green-400 hover:bg-green-800/50 hover:text-green-300 transition-all border border-green-700/30 shadow-sm"
+                  class="px-4 py-2 text-xs font-bold rounded-lg uppercase tracking-wider bg-gradient-to-r from-emerald-900/60 to-green-900/60 text-emerald-300 border border-emerald-500/50 hover:from-emerald-800/80 hover:to-green-800/80 hover:text-white transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)] hover:shadow-[0_0_15px_rgba(16,185,129,0.4)]"
                 >
                   Heal Ally
                 </button>
@@ -405,9 +413,9 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                   :if={get_val(@active_unit_data, :class, "") == "scout"}
                   phx-click="human_action"
                   phx-value-action="sprint"
-                  class="px-3 py-1.5 text-xs rounded-md bg-cyan-900/40 text-cyan-400 hover:bg-cyan-800/50 hover:text-cyan-300 transition-all border border-cyan-700/30 shadow-sm"
+                  class="px-4 py-2 text-xs font-bold rounded-lg uppercase tracking-wider bg-gradient-to-r from-purple-900/60 to-fuchsia-900/60 text-purple-300 border border-purple-500/50 hover:from-purple-800/80 hover:to-fuchsia-800/80 hover:text-white transition-all shadow-[0_0_10px_rgba(168,85,247,0.2)] hover:shadow-[0_0_15px_rgba(168,85,247,0.4)]"
                 >
-                  Sprint
+                  Dash
                 </button>
 
                 <%!-- Attack buttons for each target in range --%>
@@ -416,11 +424,17 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
                   <button
                     phx-click="human_attack"
                     phx-value-target={target_id}
-                    class="px-3 py-1.5 text-xs rounded-md bg-red-900/40 text-red-400 hover:bg-red-800/50 hover:text-red-300 transition-all border border-red-700/30 shadow-sm"
+                    class="px-4 py-2 text-xs font-bold rounded-lg uppercase tracking-wider bg-gradient-to-r from-red-900/60 to-rose-900/60 text-red-300 border border-red-500/50 hover:from-red-800/80 hover:to-rose-800/80 hover:text-white transition-all shadow-[0_0_10px_rgba(239,68,68,0.2)] hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] relative overflow-hidden group"
                   >
-                    Attack {target_id}
-                    <span :if={target_unit} class="text-gray-500 ml-1">
-                      ({class_label(get_val(target_unit, :class, ""))})
+                    <div class="absolute inset-0 bg-gradient-to-r from-red-500/20 to-transparent -translate-x-full group-hover:animate-[slide-in-right_0.5s_forwards]"></div>
+                    <span class="relative z-10 flex items-center gap-1.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+                      </svg>
+                      STRIKE {target_id}
+                      <span :if={target_unit} class="text-red-400/70 ml-1 text-[10px]">
+                        [{class_label(get_val(target_unit, :class, ""))}]
+                      </span>
                     </span>
                   </button>
                 <% end %>
@@ -430,32 +444,34 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
         </div>
 
         <%!-- Right Panel: Blue Team Roster + Kill Feed --%>
-        <div class="w-48 flex-shrink-0 flex flex-col gap-4">
+        <div class="w-48 flex-shrink-0 flex flex-col gap-5">
           <%!-- Blue Team Roster --%>
-          <div class="space-y-1.5">
-            <div class="flex items-center gap-2 px-2 py-1.5 rounded-t-lg bg-blue-950/40 border border-blue-900/30">
-              <div class="w-2 h-2 rounded-full bg-blue-500"></div>
-              <span class="text-blue-400 text-xs font-bold tracking-wider uppercase">Blue Team</span>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-950/40 border border-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.1)]">
+              <div class="w-2.5 h-2.5 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,1)]"></div>
+              <span class="text-cyan-400 text-xs font-black tracking-widest uppercase text-glow-cyan">Blue Team</span>
             </div>
-            <%= for {unit_id, unit} <- @blue_units do %>
-              <.roster_card
-                unit_id={unit_id}
-                unit={unit}
-                active={unit_id == @active_actor}
-                team="blue"
-              />
-            <% end %>
+            <div class="space-y-1.5 p-1">
+              <%= for {unit_id, unit} <- @blue_units do %>
+                <.roster_card
+                  unit_id={unit_id}
+                  unit={unit}
+                  active={unit_id == @active_actor}
+                  team="blue"
+                />
+              <% end %>
+            </div>
           </div>
 
           <%!-- Kill Feed --%>
-          <div :if={@recent_feed != []} class="space-y-1">
-            <div class="flex items-center gap-2 px-2 py-1.5 rounded-t-lg bg-gray-800/60 border border-gray-700/30">
-              <span class="text-gray-500 text-[10px] font-bold tracking-wider uppercase">Combat Log</span>
+          <div :if={@recent_feed != []} class="space-y-1.5 glass-card rounded-xl p-2">
+            <div class="flex items-center gap-2 px-2 py-1.5 border-b border-glass-border">
+              <span class="text-slate-400 text-[10px] font-black tracking-widest uppercase">Combat Log</span>
             </div>
-            <div class="space-y-0.5 max-h-64 overflow-y-auto">
+            <div class="space-y-1 max-h-64 overflow-y-auto custom-scrollbar pr-1 pt-1">
               <%= for entry <- @recent_feed do %>
                 <div class={[
-                  "px-2 py-1 rounded text-[10px] leading-snug kill-feed-enter border-l-2",
+                  "px-2 py-1.5 rounded text-[10px] leading-snug kill-feed-enter border font-mono shadow-sm",
                   feed_entry_classes(entry)
                 ]}>
                   {get_val(entry, :message, "")}
@@ -469,32 +485,33 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
       <%!-- Victory Overlay --%>
       <div
         :if={@game_status == "won" && @winner}
-        class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 rounded-lg backdrop-blur-sm"
+        class="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 rounded-2xl backdrop-blur-xl border border-glass-border victory-overlay overflow-hidden"
       >
-        <div class="text-center p-8 space-y-4 victory-banner">
+        <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(59,130,246,0.1)_0%,transparent_70%)] pointer-events-none"></div>
+        <div class="text-center p-12 space-y-8 victory-banner relative z-10">
           <div class={[
-            "text-4xl font-black tracking-tight",
-            if(@winner == "red", do: "text-red-400", else: "text-blue-400")
+            "text-6xl font-black tracking-tighter uppercase drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]",
+            if(@winner == "red", do: "text-red-400 text-glow-red", else: "text-cyan-400 text-glow-cyan")
           ]}>
-            {String.upcase(@winner || "")} TEAM WINS!
+            {String.upcase(@winner || "")} TEAM WINS
           </div>
-          <div class="flex justify-center gap-8 text-sm text-gray-400">
-            <div class="text-center">
-              <div class="text-2xl font-bold text-white">{count_alive_units(@units, @winner)}</div>
-              <div class="text-[10px] uppercase tracking-wider text-gray-500">Units Remaining</div>
+          <div class="flex justify-center gap-12 text-sm text-slate-300">
+            <div class="text-center glass-panel px-6 py-4 rounded-xl border border-glass-border shadow-lg">
+              <div class="text-4xl font-black text-white drop-shadow-md">{count_alive_units(@units, @winner)}</div>
+              <div class="text-[10px] uppercase tracking-widest text-slate-400 mt-1 font-bold">Units Out</div>
             </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-white">{@round}</div>
-              <div class="text-[10px] uppercase tracking-wider text-gray-500">Rounds Lasted</div>
+            <div class="text-center glass-panel px-6 py-4 rounded-xl border border-glass-border shadow-lg">
+              <div class="text-4xl font-black text-white drop-shadow-md">{@round}</div>
+              <div class="text-[10px] uppercase tracking-widest text-slate-400 mt-1 font-bold">Rounds</div>
             </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-white">{count_kills(@units, @winner)}</div>
-              <div class="text-[10px] uppercase tracking-wider text-gray-500">Enemy Eliminated</div>
+            <div class="text-center glass-panel px-6 py-4 rounded-xl border border-glass-border shadow-lg">
+              <div class="text-4xl font-black text-white drop-shadow-md">{count_kills(@units, @winner)}</div>
+              <div class="text-[10px] uppercase tracking-widest text-slate-400 mt-1 font-bold">KIA</div>
             </div>
           </div>
           <div class={[
-            "w-full h-1 rounded-full mt-4",
-            if(@winner == "red", do: "bg-gradient-to-r from-transparent via-red-500 to-transparent", else: "bg-gradient-to-r from-transparent via-blue-500 to-transparent")
+            "w-full h-px rounded-full mt-8 shadow-[0_0_10px_currentColor]",
+            if(@winner == "red", do: "bg-gradient-to-r from-transparent via-red-500 to-transparent", else: "bg-gradient-to-r from-transparent via-cyan-500 to-transparent")
           ]}></div>
         </div>
       </div>
@@ -531,59 +548,60 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
 
     ~H"""
     <div class={[
-      "px-2 py-1.5 rounded-md border transition-all text-xs",
-      if(@is_dead, do: "opacity-40 border-gray-800 bg-gray-900/40", else: ""),
+      "px-3 py-2 rounded-lg border transition-all duration-300 text-xs shadow-sm relative overflow-hidden group/card",
+      if(@is_dead, do: "opacity-40 border-slate-800 bg-slate-900/40 grayscale", else: "glass-card"),
       if(@active && !@is_dead, do: roster_active_border(@team), else: ""),
-      if(!@active && !@is_dead, do: "border-gray-800/50 bg-gray-900/30", else: "")
+      if(!@active && !@is_dead, do: "border-glass-border bg-slate-800/30 hover:bg-slate-700/40 hover:border-slate-600/50", else: "")
     ]}>
-      <div class="flex items-center gap-1.5">
+      <div class="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover/card:opacity-100 transition-opacity pointer-events-none"></div>
+      <div class="flex items-center gap-2.5 relative z-10">
         <%!-- Class icon --%>
         <div class={[
-          "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold border",
+          "w-7 h-7 rounded-md flex items-center justify-center text-sm font-black border shadow-inner",
           roster_icon_classes(@team, @is_dead)
         ]}>
-          <span :if={!@is_dead} class={unit_icon_class(@unit_class)}>
+          <span :if={!@is_dead} class={[unit_icon_class(@unit_class), "drop-shadow-md"]}>
             {unit_icon_char(@unit_class)}
           </span>
-          <span :if={@is_dead} class="text-gray-500">X</span>
+          <span :if={@is_dead} class="text-slate-600 font-normal">X</span>
         </div>
         <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between mb-0.5">
             <span class={[
-              "font-mono text-[10px] truncate",
-              if(@is_dead, do: "text-gray-600 line-through", else: "text-gray-300")
+              "font-mono text-[11px] font-bold truncate tracking-wide",
+              if(@is_dead, do: "text-slate-600 line-through decoration-slate-700 decoration-2", else: "text-slate-200")
             ]}>
               {@unit_id}
             </span>
             <span class={[
-              "text-[9px] ml-1",
-              if(@is_dead, do: "text-gray-600", else: "text-gray-500")
+              "text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-widest",
+              if(@is_dead, do: "text-slate-600 bg-slate-900", else: "text-slate-400 bg-slate-900/60 border border-slate-700/50")
             ]}>
               {class_label(@unit_class)}
             </span>
           </div>
           <%!-- HP bar --%>
-          <div :if={!@is_dead} class="w-full h-1.5 bg-gray-700/60 rounded-full overflow-hidden mt-0.5">
+          <div :if={!@is_dead} class="w-full h-1.5 bg-slate-900/80 rounded-full overflow-hidden mt-1 shadow-inner border border-slate-800/50">
             <div
               class={[
-                "h-full rounded-full transition-all",
+                "h-full rounded-full transition-all duration-500",
                 cond do
-                  @hp_pct > 60 -> "bg-emerald-500"
-                  @hp_pct > 30 -> "bg-amber-500"
-                  true -> "bg-red-500"
+                  @hp_pct > 60 -> "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+                  @hp_pct > 30 -> "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]"
+                  true -> "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"
                 end
               ]}
               style={"width: #{@hp_pct}%"}
             ></div>
           </div>
           <%!-- Stats row --%>
-          <div :if={!@is_dead} class="flex items-center justify-between mt-0.5">
-            <span class="text-[9px] text-gray-500">{@hp}/{@max_hp} HP</span>
-            <div class="flex gap-px">
+          <div :if={!@is_dead} class="flex items-center justify-between mt-1">
+            <span class="text-[10px] font-mono text-slate-400 font-semibold"><span class="text-slate-200">{@hp}</span>/{@max_hp} HP</span>
+            <div class="flex gap-1">
               <%= for i <- 1..@max_ap do %>
                 <div class={[
-                  "w-1.5 h-1.5 rounded-full",
-                  if(i <= @ap, do: "bg-yellow-400", else: "bg-gray-600/50")
+                  "w-2 h-2 rounded-full border border-slate-900",
+                  if(i <= @ap, do: "bg-cyan-400 shadow-[0_0_5px_rgba(34,211,238,0.8)]", else: "bg-slate-700/50")
                 ]}></div>
               <% end %>
             </div>
@@ -622,11 +640,11 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
     end
   end
 
-  defp terrain_bg(:empty), do: "bg-gray-900"
-  defp terrain_bg(:cover), do: "bg-gray-850 bg-gray-800/70 border border-gray-700/30"
-  defp terrain_bg(:wall), do: "bg-gray-700"
-  defp terrain_bg(:water), do: "bg-blue-950/60"
-  defp terrain_bg(:high_ground), do: "bg-amber-950/30 border border-amber-800/20"
+  defp terrain_bg(:empty), do: "bg-slate-900/60"
+  defp terrain_bg(:cover), do: "bg-slate-800/80 border border-slate-700/50 shadow-inner"
+  defp terrain_bg(:wall), do: "bg-slate-800/90 border border-slate-700"
+  defp terrain_bg(:water), do: "bg-blue-900/30 border border-blue-500/10 shadow-[0_0_15px_rgba(59,130,246,0.1)_inset]"
+  defp terrain_bg(:high_ground), do: "bg-slate-700/50 border border-slate-600 shadow-[0_2px_10px_rgba(0,0,0,0.5)] z-10"
 
   # ── Unit Visuals ──────────────────────────────────────────────────
 
@@ -636,17 +654,17 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
 
   defp unit_circle_classes(team, true = _is_dead) do
     case team do
-      "red" -> "bg-gray-700 border-gray-600 text-gray-400"
-      "blue" -> "bg-gray-700 border-gray-600 text-gray-400"
-      _ -> "bg-gray-700 border-gray-600 text-gray-400"
+      "red" -> "bg-slate-800 border-slate-700 text-slate-600"
+      "blue" -> "bg-slate-800 border-slate-700 text-slate-600"
+      _ -> "bg-slate-800 border-slate-700 text-slate-600"
     end
   end
 
   defp unit_circle_classes(team, false = _is_dead) do
     case team do
-      "red" -> "bg-red-500/90 border-red-400 text-white shadow-sm shadow-red-500/30"
-      "blue" -> "bg-blue-500/90 border-blue-400 text-white shadow-sm shadow-blue-500/30"
-      _ -> "bg-gray-500/90 border-gray-400 text-white"
+      "red" -> "bg-red-500 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.5)] font-sans"
+      "blue" -> "bg-cyan-500 border-cyan-400 text-white shadow-[0_0_10px_rgba(6,182,212,0.5)] font-sans"
+      _ -> "bg-slate-500 border-slate-400 text-white font-sans"
     end
   end
 
@@ -752,12 +770,12 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
 
     if unit do
       case get_val(unit, :team, "") do
-        "red" -> "bg-red-500/20 text-red-400 border border-red-500/30"
-        "blue" -> "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-        _ -> "bg-gray-700 text-gray-400 border border-gray-600"
+        "red" -> "bg-red-500/20 text-red-400 border border-red-500/40 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
+        "blue" -> "bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 shadow-[0_0_8px_rgba(6,182,212,0.3)]"
+        _ -> "bg-slate-700/50 text-slate-400 border border-slate-600"
       end
     else
-      "bg-gray-700 text-gray-400 border border-gray-600"
+      "bg-slate-700/50 text-slate-400 border border-slate-600"
     end
   end
 
@@ -789,11 +807,11 @@ defmodule LemonSimUi.Live.Components.SkirmishBoard do
 
   defp feed_entry_classes(entry) do
     case get_val(entry, :type, "hit") do
-      "kill" -> "bg-red-950/30 text-red-400 border-red-500/50"
-      "hit" -> "bg-amber-950/20 text-amber-400/80 border-amber-500/40"
-      "miss" -> "bg-gray-800/30 text-gray-500 border-gray-600/30"
-      "heal" -> "bg-green-950/20 text-green-400/80 border-green-500/40"
-      _ -> "bg-gray-800/30 text-gray-400 border-gray-600/30"
+      "kill" -> "bg-red-950/40 text-red-400 border-red-500 border-l-4"
+      "hit" -> "bg-amber-950/30 text-amber-400 border-amber-500/50 border-l-2"
+      "miss" -> "bg-slate-800/30 text-slate-400 border-slate-600/30 border-l"
+      "heal" -> "bg-emerald-950/30 text-emerald-400 border-emerald-500 border-l-2"
+      _ -> "bg-slate-800/30 text-slate-400 border-slate-600/30 border-l"
     end
   end
 

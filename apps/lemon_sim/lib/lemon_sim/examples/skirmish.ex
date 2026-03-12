@@ -23,9 +23,10 @@ defmodule LemonSim.Examples.Skirmish do
   alias LemonSim.Projectors.SectionedProjector
   alias LemonSim.{Runner, State, Store}
 
-  @default_max_turns 48
-  @default_map_width 10
-  @default_map_height 10
+  @default_max_turns 60
+  @default_map_width 8
+  @default_map_height 6
+  @default_max_rounds 8
 
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
@@ -39,7 +40,11 @@ defmodule LemonSim.Examples.Skirmish do
     # Generate or use preset map
     map_data =
       if map_preset do
-        Map.get(MapGenerator.preset_maps(), map_preset, MapGenerator.generate(width: width, height: height, seed: map_seed))
+        Map.get(
+          MapGenerator.preset_maps(),
+          map_preset,
+          MapGenerator.generate(width: width, height: height, seed: map_seed)
+        )
       else
         MapGenerator.generate(width: width, height: height, seed: map_seed)
       end
@@ -61,6 +66,7 @@ defmodule LemonSim.Examples.Skirmish do
       active_actor_id: List.first(turn_order),
       phase: "main",
       round: 1,
+      max_rounds: @default_max_rounds,
       rng_seed: rng_seed,
       winner: nil,
       status: "in_progress",
@@ -75,7 +81,9 @@ defmodule LemonSim.Examples.Skirmish do
     State.new(
       sim_id: sim_id,
       world: initial_world(opts),
-      intent: %{goal: "Win the skirmish by eliminating all enemy units. Use terrain for advantage."},
+      intent: %{
+        goal: "Win the skirmish by eliminating all enemy units. Use terrain for advantage."
+      },
       plan_history: []
     )
   end
@@ -101,7 +109,9 @@ defmodule LemonSim.Examples.Skirmish do
             id: :world_state,
             title: "Battlefield",
             format: :json,
-            content: Visibility.view_world(frame.world, actor_id)
+            content:
+              Visibility.view_world(frame.world, actor_id)
+              |> Map.put("max_rounds", MapHelpers.get_key(frame.world, :max_rounds))
           }
         end,
         active_unit: fn frame, _tools, _opts ->
@@ -143,15 +153,16 @@ defmodule LemonSim.Examples.Skirmish do
       },
       section_overrides: %{
         decision_contract: """
-        - Use exactly one terminal action tool each turn.
-        - Consider unit class abilities: scouts can sprint (2-tile move), medics can heal wounded allies.
-        - Walls block movement. Water tiles cost 2 AP to cross. High ground gives +15% accuracy.
-        - Cover reduces enemy hit chance by 20%.
-        - Attack when you have a clean kill or strong trade.
-        - Protect your medic and use them to sustain your squad.
-        - Use scouts to flank and snipers for long-range picks.
-        - Move only to improve position or preserve health.
-        - End the turn if no better action remains.
+        COMBAT DOCTRINE:
+        - ATTACK is your highest priority. If an enemy is in range, ATTACK.
+        - Move TOWARD the nearest enemy every turn. Never stay idle.
+        - Focus fire: attack the most wounded enemy to secure kills fast.
+        - Scouts: sprint aggressively to flank and reach firing positions.
+        - Medics: advance WITH the squad, heal wounded allies, then attack.
+        - Snipers: find high ground, then attack every turn from range.
+        - DO NOT end your turn with unused AP if enemies are reachable.
+        - Bold aggression wins. Passive play loses.
+        - After round 8, all units take 1 damage per round from the closing storm. End the fight quickly.
         """
       },
       section_order: [
@@ -377,9 +388,10 @@ defmodule LemonSim.Examples.Skirmish do
   defp lookup_model("", model_id), do: Ai.Models.find_by_id(model_id)
 
   defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
-    provider
-    |> normalize_provider()
-    |> then(&Ai.Models.get_model(&1, model_id))
+    normalized = normalize_provider(provider)
+
+    Ai.Models.get_model(normalized, model_id) ||
+      Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
   end
 
   defp apply_provider_base_url(%Ai.Types.Model{} = model, config) do
@@ -414,7 +426,7 @@ defmodule LemonSim.Examples.Skirmish do
       is_binary(provider_cfg[:api_key_secret]) ->
         case LemonCore.Secrets.resolve(provider_cfg[:api_key_secret], env_fallback: true) do
           {:ok, value, _source} when is_binary(value) and value != "" ->
-            value
+            resolve_secret_api_key(provider_cfg[:api_key_secret], value)
 
           {:error, reason} ->
             raise "skirmish sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
@@ -425,8 +437,17 @@ defmodule LemonSim.Examples.Skirmish do
     end
   end
 
-  defp provider_name(provider) when is_atom(provider), do: Atom.to_string(provider)
-  defp provider_name(provider) when is_binary(provider), do: provider
+  @provider_aliases %{
+    "gemini" => "google_gemini_cli",
+    "gemini_cli" => "google_gemini_cli",
+    "gemini-cli" => "google_gemini_cli",
+    "openai_codex" => "openai-codex"
+  }
+
+  defp provider_name(provider) when is_atom(provider),
+    do: provider |> Atom.to_string() |> canonical_provider_name()
+
+  defp provider_name(provider) when is_binary(provider), do: canonical_provider_name(provider)
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
@@ -436,7 +457,31 @@ defmodule LemonSim.Examples.Skirmish do
     |> String.trim()
     |> String.downcase()
     |> String.replace("-", "_")
+    |> canonical_provider_name()
     |> String.to_atom()
+  end
+
+  defp canonical_provider_name(provider_name) do
+    normalized =
+      provider_name
+      |> String.trim()
+      |> String.downcase()
+
+    Map.get(@provider_aliases, normalized, normalized)
+  end
+
+  defp resolve_secret_api_key(secret_name, secret_value)
+       when is_binary(secret_name) and is_binary(secret_value) do
+    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(secret_name, secret_value) do
+      {:ok, resolved_api_key} when is_binary(resolved_api_key) and resolved_api_key != "" ->
+        resolved_api_key
+
+      :ignore ->
+        secret_value
+
+      {:error, _reason} ->
+        secret_value
+    end
   end
 
   defp get(map, key, default) when is_map(map) and is_atom(key) do

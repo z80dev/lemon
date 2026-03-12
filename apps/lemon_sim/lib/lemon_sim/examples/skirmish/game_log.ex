@@ -8,6 +8,7 @@ defmodule LemonSim.Examples.Skirmish.GameLog do
   """
   @spec start(String.t()) :: File.io_device()
   def start(path) when is_binary(path) do
+    path |> Path.dirname() |> File.mkdir_p!()
     File.open!(path, [:write, :utf8])
   end
 

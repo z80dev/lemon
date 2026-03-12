@@ -4,24 +4,68 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <title><%= assigns[:page_title] || "LemonSim" %></title>
+    <title><%= assigns[:page_title] || "LemonSim Command Center" %></title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
             colors: {
+              glass: {
+                mura: 'rgba(15, 23, 42, 0.6)',
+                border: 'rgba(255, 255, 255, 0.08)',
+                highlight: 'rgba(255, 255, 255, 0.15)'
+              },
+              neon: {
+                blue: '#3b82f6',
+                cyan: '#06b6d4',
+                emerald: '#10b981',
+                red: '#ef4444',
+                purple: '#8b5cf6',
+                amber: '#f59e0b',
+                pink: '#ec4899'
+              },
               fog: 'rgba(0,0,0,0.35)',
               kill: '#ef4444',
               heal: '#22c55e',
               water: '#3b82f6',
+            },
+            boxShadow: {
+              'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+              'neon-blue': '0 0 10px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.3)',
+              'neon-cyan': '0 0 10px rgba(6, 182, 212, 0.5), 0 0 20px rgba(6, 182, 212, 0.3)',
+              'neon-emerald': '0 0 10px rgba(16, 185, 129, 0.5), 0 0 20px rgba(16, 185, 129, 0.3)',
+              'neon-red': '0 0 10px rgba(239, 68, 68, 0.5), 0 0 20px rgba(239, 68, 68, 0.3)',
+            },
+            backgroundImage: {
+              'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+              'cyber-grid': 'linear-gradient(rgba(15, 23, 42, 0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.8) 1px, transparent 1px)',
             }
           }
         }
       }
     </script>
-    <script defer phx-track-static type="module" src={~p"/assets/app.js"}></script>
+    <script defer type="module" src={"/assets/app.js?v=3"}></script>
     <style>
+      /* Global Base */
+      body {
+        background-color: #020617; /* Very dark slate, almost black */
+        background-image: 
+          radial-gradient(circle at 50% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 70%),
+          radial-gradient(circle at 100% 100%, rgba(88, 28, 135, 0.15) 0%, transparent 50%);
+        background-attachment: fixed;
+      }
+
       /* Custom scrollbar for webkit */
       .custom-scrollbar::-webkit-scrollbar {
         width: 6px;
@@ -36,41 +80,99 @@
         border-radius: 4px;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.3);
       }
       
       .scroll-bottom { overflow-y: auto; scroll-behavior: smooth; }
-      @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 4px rgba(59,130,246,0.5); } 50% { box-shadow: 0 0 12px rgba(59,130,246,0.8); } }
-      .active-unit { animation: pulse-glow 2s ease-in-out infinite; }
-      .fog-overlay { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.06) 4px, rgba(0,0,0,0.06) 8px); }
+      
+      /* Glassmorphism Utilities */
+      .glass-panel {
+        background: rgba(15, 23, 42, 0.4);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+      }
+
+      .glass-card {
+        background: rgba(30, 41, 59, 0.3);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.03);
+        box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.2);
+        transition: all 0.3s ease;
+      }
+      
+      .glass-card:hover {
+        background: rgba(30, 41, 59, 0.5);
+        border-color: rgba(255, 255, 255, 0.1);
+        transform: translateY(-2px);
+      }
+
+      .glass-button {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.1));
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(96, 165, 250, 0.3);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        color: #93c5fd;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      }
+      
+      .glass-button:hover {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(37, 99, 235, 0.2));
+        border-color: rgba(96, 165, 250, 0.6);
+        color: #fff;
+        box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        transform: translateY(-1px);
+      }
+
+      /* Glow & Animations */
+      @keyframes pulse-glow { 
+        0%, 100% { box-shadow: 0 0 10px rgba(6, 182, 212, 0.4), inset 0 0 8px rgba(6, 182, 212, 0.2); } 
+        50% { box-shadow: 0 0 25px rgba(6, 182, 212, 0.7), inset 0 0 15px rgba(6, 182, 212, 0.4); } 
+      }
+      .active-unit { animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; border-color: rgba(6, 182, 212, 0.8) !important; }
+      
+      .fog-overlay { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.1) 4px, rgba(0,0,0,0.1) 8px); }
 
       /* Kill feed slide-in */
       @keyframes slide-in-right {
-        from { transform: translateX(100%); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
+        from { transform: translateX(100%) scale(0.9); opacity: 0; filter: blur(4px); }
+        to { transform: translateX(0) scale(1); opacity: 1; filter: blur(0); }
       }
-      .kill-feed-enter { animation: slide-in-right 0.3s ease-out; }
+      .kill-feed-enter { animation: slide-in-right 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+      
+      /* Subtle entry animation for list items */
+      @keyframes fade-in-up {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .stagger-enter {
+        animation: fade-in-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        opacity: 0;
+      }
 
       /* Damage flash on tiles */
       @keyframes damage-flash {
-        0% { background-color: rgba(239, 68, 68, 0.4); }
-        100% { background-color: transparent; }
+        0% { background-color: rgba(239, 68, 68, 0.6); box-shadow: 0 0 20px rgba(239, 68, 68, 0.8) inset; }
+        100% { background-color: transparent; box-shadow: none; }
       }
-      .damage-flash { animation: damage-flash 0.5s ease-out; }
+      .damage-flash { animation: damage-flash 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
 
       /* Victory overlay */
       @keyframes victory-appear {
-        from { opacity: 0; transform: scale(0.8); }
-        to { opacity: 1; transform: scale(1); }
+        from { opacity: 0; transform: scale(0.8) translateY(20px); filter: blur(10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
       }
-      .victory-overlay { animation: victory-appear 0.5s ease-out; }
+      .victory-overlay { animation: victory-appear 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
 
       /* Floating damage numbers */
       @keyframes float-up {
-        from { opacity: 1; transform: translateY(0); }
-        to { opacity: 0; transform: translateY(-20px); }
+        0% { opacity: 1; transform: translateY(0) scale(1); }
+        50% { opacity: 1; transform: translateY(-15px) scale(1.2); }
+        100% { opacity: 0; transform: translateY(-30px) scale(0.8); }
       }
-      .float-damage { animation: float-up 1s ease-out forwards; }
+      .float-damage { animation: float-up 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
 
       /* Wall diagonal stripe pattern */
       .wall-pattern {
@@ -78,8 +180,8 @@
           45deg,
           transparent,
           transparent 3px,
-          rgba(255,255,255,0.05) 3px,
-          rgba(255,255,255,0.05) 6px
+          rgba(255,255,255,0.08) 3px,
+          rgba(255,255,255,0.08) 6px
         );
       }
 
@@ -87,44 +189,48 @@
       .water-pattern {
         background: linear-gradient(
           135deg,
-          rgba(59, 130, 246, 0.1) 25%,
+          rgba(59, 130, 246, 0.15) 25%,
           transparent 25%,
           transparent 50%,
-          rgba(59, 130, 246, 0.1) 50%,
-          rgba(59, 130, 246, 0.1) 75%,
+          rgba(59, 130, 246, 0.15) 50%,
+          rgba(59, 130, 246, 0.15) 75%,
           transparent 75%
         );
         background-size: 8px 8px;
+        animation: water-flow 4s linear infinite;
+      }
+      @keyframes water-flow {
+        from { background-position: 0 0; }
+        to { background-position: 16px 16px; }
       }
 
       /* Unit death fade */
       @keyframes unit-death {
-        from { opacity: 1; transform: scale(1); }
-        to { opacity: 0.3; transform: scale(0.8); }
+        0% { opacity: 1; transform: scale(1) rotate(0deg); filter: grayscale(0%); }
+        100% { opacity: 0.2; transform: scale(0.7) rotate(15deg); filter: grayscale(100%); }
       }
-      .unit-dead { animation: unit-death 0.5s ease-out forwards; }
+      .unit-dead { animation: unit-death 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
 
       /* Heal glow */
       @keyframes heal-glow {
-        0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); }
-        50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.6); }
+        0%, 100% { box-shadow: 0 0 10px rgba(34, 197, 94, 0.4), inset 0 0 8px rgba(34, 197, 94, 0.2); background-color: rgba(34, 197, 94, 0.1); }
+        50% { box-shadow: 0 0 20px rgba(34, 197, 94, 0.7), inset 0 0 15px rgba(34, 197, 94, 0.4); background-color: rgba(34, 197, 94, 0.3); }
       }
       .heal-glow { animation: heal-glow 1.5s ease-in-out infinite; }
-
-      /* Valid move tile highlight */
-      .valid-move {
-        box-shadow: inset 0 0 0 2px rgba(34, 197, 94, 0.4);
-        background-color: rgba(34, 197, 94, 0.1) !important;
-      }
-
-      /* Attack range highlight */
-      .in-range {
-        box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.3);
-        background-color: rgba(239, 68, 68, 0.05) !important;
-      }
+      
+      /* Neon Text Trims */
+      .text-glow-blue { text-shadow: 0 0 10px rgba(59, 130, 246, 0.6); }
+      .text-glow-cyan { text-shadow: 0 0 10px rgba(6, 182, 212, 0.6); }
+      .text-glow-red { text-shadow: 0 0 10px rgba(239, 68, 68, 0.6); }
+      .text-glow-green { text-shadow: 0 0 10px rgba(16, 185, 129, 0.6); }
+      .text-glow-emerald { text-shadow: 0 0 10px rgba(16, 185, 129, 0.6); }
+      .text-glow-purple { text-shadow: 0 0 10px rgba(139, 92, 246, 0.6); }
+      .text-glow-amber { text-shadow: 0 0 10px rgba(245, 158, 11, 0.6); }
     </style>
   </head>
-  <body class="min-h-screen bg-gray-950 text-gray-100 antialiased">
+  <body class="min-h-screen text-slate-200 antialiased font-sans flex flex-col selection:bg-cyan-500/30">
+    <div class="fixed inset-0 z-[-1] bg-[length:30px_30px] bg-cyber-grid opacity-10 pointer-events-none"></div>
+    <div class="fixed top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 via-cyan-400 to-emerald-400 z-50"></div>
     <%= @inner_content %>
   </body>
 </html>

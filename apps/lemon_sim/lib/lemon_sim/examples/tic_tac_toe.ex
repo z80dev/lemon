@@ -251,7 +251,7 @@ defmodule LemonSim.Examples.TicTacToe do
       is_binary(provider_cfg[:api_key_secret]) ->
         case LemonCore.Secrets.resolve(provider_cfg[:api_key_secret], env_fallback: true) do
           {:ok, value, _source} when is_binary(value) and value != "" ->
-            value
+            resolve_secret_api_key(provider_cfg[:api_key_secret], value)
 
           {:error, reason} ->
             raise "tic tac toe sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
@@ -262,8 +262,17 @@ defmodule LemonSim.Examples.TicTacToe do
     end
   end
 
-  defp provider_name(provider) when is_atom(provider), do: Atom.to_string(provider)
-  defp provider_name(provider) when is_binary(provider), do: provider
+  @provider_aliases %{
+    "gemini" => "google_gemini_cli",
+    "gemini_cli" => "google_gemini_cli",
+    "gemini-cli" => "google_gemini_cli",
+    "openai_codex" => "openai-codex"
+  }
+
+  defp provider_name(provider) when is_atom(provider),
+    do: provider |> Atom.to_string() |> canonical_provider_name()
+
+  defp provider_name(provider) when is_binary(provider), do: canonical_provider_name(provider)
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
@@ -273,6 +282,30 @@ defmodule LemonSim.Examples.TicTacToe do
     |> String.trim()
     |> String.downcase()
     |> String.replace("-", "_")
+    |> canonical_provider_name()
     |> String.to_atom()
+  end
+
+  defp canonical_provider_name(provider_name) do
+    normalized =
+      provider_name
+      |> String.trim()
+      |> String.downcase()
+
+    Map.get(@provider_aliases, normalized, normalized)
+  end
+
+  defp resolve_secret_api_key(secret_name, secret_value)
+       when is_binary(secret_name) and is_binary(secret_value) do
+    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(secret_name, secret_value) do
+      {:ok, resolved_api_key} when is_binary(resolved_api_key) and resolved_api_key != "" ->
+        resolved_api_key
+
+      :ignore ->
+        secret_value
+
+      {:error, _reason} ->
+        secret_value
+    end
   end
 end

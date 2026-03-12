@@ -6,11 +6,12 @@ defmodule LemonSimUi.SimHelpers do
   alias LemonCore.MapHelpers
   alias LemonSim.State
 
-  @spec infer_domain_type(State.t()) :: :tic_tac_toe | :skirmish | :unknown
+  @spec infer_domain_type(State.t()) :: :tic_tac_toe | :skirmish | :werewolf | :unknown
   def infer_domain_type(%State{world: world}) do
     cond do
       Map.has_key?(world, :board) or Map.has_key?(world, "board") -> :tic_tac_toe
       Map.has_key?(world, :units) or Map.has_key?(world, "units") -> :skirmish
+      Map.has_key?(world, :players) or Map.has_key?(world, "players") -> :werewolf
       true -> :unknown
     end
   end
@@ -60,6 +61,17 @@ defmodule LemonSimUi.SimHelpers do
           "Round #{round} - #{actor}"
         end
 
+      :werewolf ->
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        day = MapHelpers.get_key(state.world, :day_number) || 1
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Winner: #{winner}"
+        else
+          "Day #{day} - Phase: #{phase}"
+        end
+
       :unknown ->
         "v#{state.version}"
     end
@@ -86,13 +98,15 @@ defmodule LemonSimUi.SimHelpers do
   def status_color("finished"), do: "text-gray-400"
   def status_color(_), do: "text-gray-500"
 
-  @spec domain_label(:tic_tac_toe | :skirmish | :unknown) :: String.t()
+  @spec domain_label(:tic_tac_toe | :skirmish | :werewolf | :unknown) :: String.t()
   def domain_label(:tic_tac_toe), do: "Tic Tac Toe"
   def domain_label(:skirmish), do: "Skirmish"
+  def domain_label(:werewolf), do: "Werewolf"
   def domain_label(_), do: "Unknown"
 
-  @spec domain_badge_color(:tic_tac_toe | :skirmish | :unknown) :: String.t()
-  def domain_badge_color(:tic_tac_toe), do: "bg-violet-900 text-violet-300"
-  def domain_badge_color(:skirmish), do: "bg-orange-900 text-orange-300"
-  def domain_badge_color(_), do: "bg-gray-800 text-gray-400"
+  @spec domain_badge_color(:tic_tac_toe | :skirmish | :werewolf | :unknown) :: String.t()
+  def domain_badge_color(:tic_tac_toe), do: "bg-violet-900/60 text-violet-300 border-violet-500/30"
+  def domain_badge_color(:skirmish), do: "bg-orange-900/60 text-orange-300 border-orange-500/30"
+  def domain_badge_color(:werewolf), do: "bg-fuchsia-900/60 text-fuchsia-300 border-fuchsia-500/30"
+  def domain_badge_color(_), do: "bg-gray-800/60 text-gray-400 border-gray-600/30"
 end

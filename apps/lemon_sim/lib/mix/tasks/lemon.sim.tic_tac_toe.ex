@@ -77,11 +77,12 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp normalize_provider(provider) do
-    provider
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    case provider |> String.trim() |> String.downcase() |> String.replace("-", "_") do
+      "gemini" -> :google_gemini_cli
+      "gemini_cli" -> :google_gemini_cli
+      "openai_codex" -> :"openai-codex"
+      normalized -> String.to_atom(normalized)
+    end
   end
 
   defp print_help do

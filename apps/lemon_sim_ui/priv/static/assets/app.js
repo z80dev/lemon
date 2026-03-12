@@ -1,5 +1,5 @@
-import {Socket} from "https://cdn.jsdelivr.net/npm/phoenix@1.8.1/priv/static/phoenix.esm.js"
-import {LiveSocket} from "https://cdn.jsdelivr.net/npm/phoenix_live_view@1.0.18/priv/static/phoenix_live_view.esm.js"
+import {Socket} from "https://esm.sh/phoenix@1.7.14"
+import {LiveSocket} from "https://esm.sh/phoenix_live_view@1.1.24"
 
 const Hooks = {}
 

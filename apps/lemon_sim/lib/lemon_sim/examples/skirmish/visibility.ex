@@ -25,7 +25,65 @@ defmodule LemonSim.Examples.Skirmish.Visibility do
   @spec active_unit(map()) :: map() | nil
   def active_unit(world) do
     actor_id = MapHelpers.get_key(world, :active_actor_id)
-    get_unit(world, actor_id)
+    unit = get_unit(world, actor_id)
+
+    case unit do
+      nil ->
+        nil
+
+      unit ->
+        unit_pos = get(unit, :pos, %{})
+        unit_team = MapHelpers.get_key(unit, :team)
+        attack_range = get(unit, :attack_range, 0)
+
+        enemies =
+          world
+          |> get(:units, %{})
+          |> Enum.filter(fn {_id, u} ->
+            MapHelpers.get_key(u, :status) != "dead" and
+              MapHelpers.get_key(u, :team) != unit_team
+          end)
+
+        nearest_enemy_distance =
+          case enemies do
+            [] ->
+              nil
+
+            enemies ->
+              enemies
+              |> Enum.map(fn {_id, u} ->
+                epos = get(u, :pos, %{})
+                abs(get(unit_pos, :x, 0) - get(epos, :x, 0)) +
+                  abs(get(unit_pos, :y, 0) - get(epos, :y, 0))
+              end)
+              |> Enum.min()
+          end
+
+        enemies_in_range =
+          enemies
+          |> Enum.filter(fn {_id, u} ->
+            epos = get(u, :pos, %{})
+            dist = abs(get(unit_pos, :x, 0) - get(epos, :x, 0)) +
+                     abs(get(unit_pos, :y, 0) - get(epos, :y, 0))
+            dist <= attack_range
+          end)
+          |> Enum.map(fn {id, _u} -> id end)
+
+        map_data = get(world, :map, %{})
+        cover_tiles = get(map_data, :cover, [])
+        ux = get(unit_pos, :x, -1)
+        uy = get(unit_pos, :y, -1)
+
+        on_cover_tile =
+          Enum.any?(cover_tiles, fn c ->
+            get(c, :x, nil) == ux and get(c, :y, nil) == uy
+          end)
+
+        unit
+        |> Map.put(:nearest_enemy_distance, nearest_enemy_distance)
+        |> Map.put(:enemies_in_range, enemies_in_range)
+        |> Map.put(:on_cover_tile, on_cover_tile)
+    end
   end
 
   @spec enemy_units(map(), String.t() | nil) :: [map()]

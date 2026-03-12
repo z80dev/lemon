@@ -54,12 +54,14 @@ defmodule LemonSim.Examples.Skirmish.MapGenerator do
     |> Enum.take(count)
   end
 
-  @spec preset_maps() :: %{arena: map(), fortress: map(), wetlands: map()}
+  @spec preset_maps() :: %{arena: map(), fortress: map(), wetlands: map(), alley: map(), crossroads: map()}
   def preset_maps do
     %{
       arena: preset_arena(),
       fortress: preset_fortress(),
-      wetlands: preset_wetlands()
+      wetlands: preset_wetlands(),
+      alley: preset_alley(),
+      crossroads: preset_crossroads()
     }
   end
 
@@ -384,14 +386,51 @@ defmodule LemonSim.Examples.Skirmish.MapGenerator do
     }
   end
 
+  defp preset_alley do
+    %{
+      width: 8,
+      height: 4,
+      cover: [
+        %{x: 3, y: 1},
+        %{x: 3, y: 2},
+        %{x: 4, y: 1},
+        %{x: 4, y: 2}
+      ],
+      walls:
+        Enum.map(1..6, fn x -> %{x: x, y: 0} end) ++
+          Enum.map(1..6, fn x -> %{x: x, y: 3} end),
+      water: [],
+      high_ground: []
+    }
+  end
+
+  defp preset_crossroads do
+    %{
+      width: 6,
+      height: 6,
+      cover: [
+        %{x: 1, y: 1},
+        %{x: 1, y: 4},
+        %{x: 4, y: 1},
+        %{x: 4, y: 4}
+      ],
+      walls: [],
+      water: [],
+      high_ground: [
+        %{x: 2, y: 2},
+        %{x: 3, y: 3}
+      ]
+    }
+  end
+
   # -- Helpers --
 
   defp in_spawn_zone?(x, width) do
-    x <= 1 or x >= width - 2
+    x == 0 or x == width - 1
   end
 
-  defp spawn_columns(_width, :red), do: [0, 1]
-  defp spawn_columns(width, :blue), do: [width - 2, width - 1]
+  defp spawn_columns(_width, :red), do: [0]
+  defp spawn_columns(width, :blue), do: [width - 1]
 
   defp adjacent_tiles(x, y, width, height) do
     [{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}]

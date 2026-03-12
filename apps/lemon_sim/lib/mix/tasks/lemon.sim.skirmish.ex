@@ -65,12 +65,13 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
 
     case String.split(trimmed, ":", parts: 2) do
       [provider, model_id] ->
-        provider
-        |> normalize_provider()
-        |> then(fn provider_atom ->
+        provider_atom = normalize_provider(provider)
+
+        model =
           Ai.Models.get_model(provider_atom, model_id) ||
-            Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
-        end)
+            Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
+
+        model || Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
 
       [_model_id] ->
         Ai.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
@@ -79,18 +80,25 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
 
   defp resolve_log_path(nil), do: nil
   defp resolve_log_path(""), do: nil
-  defp resolve_log_path("auto"), do: LemonSim.Examples.Skirmish.GameLog.default_log_path("skirmish_#{System.system_time(:second)}")
+
+  defp resolve_log_path("auto"),
+    do:
+      LemonSim.Examples.Skirmish.GameLog.default_log_path(
+        "skirmish_#{System.system_time(:second)}"
+      )
+
   defp resolve_log_path(path), do: path
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp normalize_provider(provider) do
-    provider
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    case provider |> String.trim() |> String.downcase() |> String.replace("-", "_") do
+      "gemini" -> :google_gemini_cli
+      "gemini_cli" -> :google_gemini_cli
+      "openai_codex" -> :"openai-codex"
+      normalized -> String.to_atom(normalized)
+    end
   end
 
   defp print_help do
