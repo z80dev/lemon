@@ -10,7 +10,7 @@ defmodule LemonSimUi.SimManager do
 
   alias LemonCore.MapHelpers
   alias LemonSim.{Runner, Store}
-  alias LemonSim.Examples.{TicTacToe, Skirmish}
+  alias LemonSim.Examples.{TicTacToe, Skirmish, StockMarket, Survivor, SpaceStation, Auction, Diplomacy, DungeonCrawl}
   alias LemonSim.GameHelpers.Config, as: SimConfig
 
   @lobby_topic "sim:lobby"
@@ -244,6 +244,93 @@ defmodule LemonSimUi.SimManager do
 
         {initial_state, run_opts}
       end
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:stock_market, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 4)
+    model_specs = Keyword.get(opts, :model_specs, [])
+
+    initial_state = %{StockMarket.initial_state(player_count: player_count) | sim_id: sim_id}
+    modules = StockMarket.modules()
+
+    {initial_state, run_opts} =
+      build_multi_model_opts(initial_state, modules, model_specs, player_count,
+        default_opts_fn: &StockMarket.default_opts/1
+      )
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:survivor, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 8)
+    model_specs = Keyword.get(opts, :model_specs, [])
+
+    initial_state = %{Survivor.initial_state(player_count: player_count) | sim_id: sim_id}
+    modules = Survivor.modules()
+
+    {initial_state, run_opts} =
+      build_multi_model_opts(initial_state, modules, model_specs, player_count,
+        default_opts_fn: &Survivor.default_opts/1
+      )
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:space_station, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 6)
+    model_specs = Keyword.get(opts, :model_specs, [])
+
+    initial_state = %{SpaceStation.initial_state(player_count: player_count) | sim_id: sim_id}
+    modules = SpaceStation.modules()
+
+    {initial_state, run_opts} =
+      build_multi_model_opts(initial_state, modules, model_specs, player_count,
+        default_opts_fn: &SpaceStation.default_opts/1
+      )
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:auction, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 4)
+
+    initial_state = %{Auction.initial_state(player_count: player_count) | sim_id: sim_id}
+    modules = Auction.modules()
+    run_opts = Auction.default_opts(opts)
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:diplomacy, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 4)
+
+    initial_state = %{Diplomacy.initial_state(player_count: player_count) | sim_id: sim_id}
+    modules = Diplomacy.modules()
+    run_opts = Diplomacy.default_opts(opts)
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:dungeon_crawl, sim_id, opts) do
+    party_size = Keyword.get(opts, :party_size, 4)
+
+    initial_state = %{DungeonCrawl.initial_state(party_size: party_size) | sim_id: sim_id}
+    modules = DungeonCrawl.modules()
+    run_opts = DungeonCrawl.default_opts(opts)
 
     {:ok, initial_state, modules, run_opts}
   rescue
@@ -492,6 +579,9 @@ defmodule LemonSimUi.SimManager do
   defp generate_id(:tic_tac_toe), do: "ttt_#{random_hex(4)}"
   defp generate_id(:skirmish), do: "skm_#{random_hex(4)}"
   defp generate_id(:werewolf), do: "ww_#{random_hex(4)}"
+  defp generate_id(:stock_market), do: "stk_#{random_hex(4)}"
+  defp generate_id(:survivor), do: "srv_#{random_hex(4)}"
+  defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp random_hex(bytes) do
@@ -548,6 +638,48 @@ defmodule LemonSimUi.SimManager do
 
       nil ->
         raise "Could not resolve model #{provider}/#{model_id}"
+    end
+  end
+
+  # Shared helper for games that support multi-model assignments (stock_market, survivor, space_station).
+  defp build_multi_model_opts(initial_state, _modules, model_specs, player_count, opts) do
+    default_opts_fn = Keyword.fetch!(opts, :default_opts_fn)
+    player_ids = Enum.map(1..player_count, &"player_#{&1}")
+
+    if model_specs != [] do
+      config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+
+      model_assignments =
+        player_ids
+        |> Enum.zip(model_specs)
+        |> Enum.into(%{}, fn {player_id, spec} ->
+          {provider, model_id} = parse_model_spec(spec)
+          model = resolve_model!(provider, model_id, config)
+          api_key = SimConfig.resolve_provider_api_key!(provider, config, "sim")
+          {player_id, {model, api_key}}
+        end)
+
+      state_with_models = attach_model_assignments(initial_state, model_assignments)
+      {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+
+      run_opts =
+        default_opts_fn.(model: default_model, stream_options: %{api_key: default_key})
+        |> Keyword.put(:persist?, true)
+        |> Keyword.put(:on_before_step, nil)
+        |> Keyword.put(:on_after_step, &on_after_step/2)
+        |> Keyword.put(:model_assignments, model_assignments)
+
+      {state_with_models, run_opts}
+    else
+      {model, stream_options} = resolve_default_model_for_ui()
+
+      run_opts =
+        default_opts_fn.(model: model, stream_options: stream_options)
+        |> Keyword.put(:persist?, true)
+        |> Keyword.put(:on_before_step, nil)
+        |> Keyword.put(:on_after_step, &on_after_step/2)
+
+      {initial_state, run_opts}
     end
   end
 

@@ -9,6 +9,12 @@ defmodule LemonSimUi.SimDashboardLive do
     TicTacToeBoard,
     SkirmishBoard,
     WerewolfBoard,
+    StockMarketBoard,
+    SurvivorBoard,
+    SpaceStationBoard,
+    AuctionBoard,
+    DiplomacyBoard,
+    DungeonCrawlBoard,
     EventLog,
     PlanHistory,
     MemoryViewer
@@ -97,8 +103,19 @@ defmodule LemonSimUi.SimDashboardLive do
 
   def handle_event("change_domain", params, socket) do
     domain = params["domain"] || socket.assigns.new_sim_domain
-    player_count = parse_int(params["player_count"], socket.assigns.new_player_count)
-    player_count = max(5, min(player_count, 8))
+    min_p = min_players(domain)
+    max_p = max_players(domain)
+
+    player_count =
+      if params["domain"] && params["domain"] != socket.assigns.new_sim_domain do
+        # Domain changed — reset to default for new domain
+        default_player_count(String.to_existing_atom(domain))
+      else
+        parse_int(params["player_count"], socket.assigns.new_player_count)
+        |> max(min_p)
+        |> min(max_p)
+      end
+
     {:noreply, assign(socket, new_sim_domain: domain, new_player_count: player_count)}
   end
 
@@ -141,6 +158,39 @@ defmodule LemonSimUi.SimDashboardLive do
             model_specs: model_specs
           ]
           |> maybe_put_sim_id(params["sim_id"])
+
+        domain when domain in [:stock_market, :survivor, :space_station] ->
+          player_count = parse_int(params["player_count"], default_player_count(domain))
+
+          model_specs =
+            for seat <- 1..player_count do
+              params["model_#{seat}"] || default_model_for_seat(seat)
+            end
+
+          [
+            player_count: player_count,
+            model_specs: model_specs
+          ]
+          |> maybe_put_sim_id(params["sim_id"])
+
+        domain when domain in [:auction, :diplomacy] ->
+          player_count = parse_int(params["player_count"], default_player_count(domain))
+
+          [
+            player_count: player_count
+          ]
+          |> maybe_put_sim_id(params["sim_id"])
+
+        :dungeon_crawl ->
+          party_size = parse_int(params["party_size"], 4)
+
+          [
+            party_size: party_size
+          ]
+          |> maybe_put_sim_id(params["sim_id"])
+
+        _ ->
+          maybe_put_sim_id([], params["sim_id"])
       end
 
     try do
@@ -287,53 +337,53 @@ defmodule LemonSimUi.SimDashboardLive do
     ~H"""
     <div class="flex h-screen overflow-hidden text-slate-200">
       <!-- Sidebar -->
-      <aside class="w-80 glass-panel flex flex-col flex-shrink-0 z-10 border-r border-glass-border">
-        <div class="p-6 border-b border-glass-border flex items-center gap-3 bg-slate-900/30">
-          <div class="w-8 h-8 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-lg text-white">
+      <aside class="w-56 glass-panel flex flex-col flex-shrink-0 z-10 border-r border-glass-border">
+        <div class="px-4 py-3 border-b border-glass-border flex items-center gap-2.5 bg-slate-900/30">
+          <div class="w-7 h-7 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-sm text-white">
             L
           </div>
           <div>
-            <button phx-click="go_home" class="text-xl font-bold text-white hover:text-cyan-400 transition tracking-tight text-glow-cyan">
+            <button phx-click="go_home" class="text-base font-bold text-white hover:text-cyan-400 transition tracking-tight text-glow-cyan">
               LemonSim
             </button>
-            <p class="text-xs text-slate-400 mt-0.5 font-mono">{length(@sims)} simulations active</p>
+            <p class="text-[10px] text-slate-400 font-mono">{length(@sims)} active</p>
           </div>
         </div>
 
-        <div class="p-4 border-b border-glass-border bg-slate-900/20">
-          <button phx-click="toggle_new_sim_form" class="w-full glass-button font-medium py-2.5 px-4 rounded-lg transition-all flex items-center justify-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <div class="px-3 py-2.5 border-b border-glass-border bg-slate-900/20">
+          <button phx-click="toggle_new_sim_form" class="w-full glass-button font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
             </svg>
-            New Simulation
+            New Sim
           </button>
         </div>
 
-        <nav class="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+        <nav class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
           <%= for sim <- @sims do %>
             <button
               phx-click="select_sim"
               phx-value-sim_id={sim.sim_id}
               class={[
-                "w-full text-left p-3 rounded-xl transition-all border group relative overflow-hidden stagger-enter backdrop-blur-md",
+                "w-full text-left px-2.5 py-2 rounded-lg transition-all border group relative overflow-hidden stagger-enter backdrop-blur-md",
                 if(@selected_sim && @selected_sim.sim_id == sim.sim_id,
                   do: "bg-blue-900/40 border-cyan-500/50 shadow-neon-blue bg-gradient-to-r from-blue-900/50 to-transparent",
                   else: "bg-slate-800/20 border-glass-border hover:bg-slate-700/40 hover:border-slate-600/50"
                 )
               ]}
             >
-              <div class="flex items-center justify-between mb-2">
-                <span class="font-mono text-xs font-semibold text-slate-100 truncate pr-2 group-hover:text-cyan-300 transition-colors">{sim.sim_id}</span>
+              <div class="flex items-center justify-between mb-1">
+                <span class="font-mono text-[11px] font-semibold text-slate-100 truncate pr-1 group-hover:text-cyan-300 transition-colors">{sim.sim_id}</span>
                 <span class={[
-                  "text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap border",
+                  "text-[9px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap border",
                   SimHelpers.domain_badge_color(sim.domain_type)
                 ]}>
                   {SimHelpers.domain_label(sim.domain_type)}
                 </span>
               </div>
-              <div class="flex items-center justify-between mt-1.5">
+              <div class="flex items-center justify-between">
                 <span class={[
-                  "text-xs font-medium flex items-center gap-1.5", 
+                  "text-[10px] font-medium flex items-center gap-1",
                   SimHelpers.status_color(sim.status)
                 ]}>
                   <%= if sim.sim_id in @running do %>
@@ -344,15 +394,11 @@ defmodule LemonSimUi.SimDashboardLive do
                     {sim.status}
                   <% end %>
                 </span>
-                <span class="text-[10px] font-mono text-slate-400 bg-slate-900/50 border border-slate-700/50 px-1.5 py-0.5 rounded">v{sim.version}</span>
+                <span class="text-[9px] font-mono text-slate-500">v{sim.version}</span>
               </div>
-              
-              <div class="mt-2 text-xs text-slate-400 truncate opacity-80 group-hover:opacity-100 transition-opacity">
-                {sim.world_summary}
-              </div>
-              
+
               <%= if @selected_sim && @selected_sim.sim_id == sim.sim_id do %>
-                <div class="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_12px_rgba(6,182,212,1)] rounded-l-xl"></div>
+                <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-cyan-400 shadow-[0_0_12px_rgba(6,182,212,1)] rounded-l-xl"></div>
               <% end %>
             </button>
           <% end %>
@@ -387,7 +433,7 @@ defmodule LemonSimUi.SimDashboardLive do
                   name="domain"
                   label="Domain Protocol"
                   value={@new_sim_domain}
-                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Skirmish", "skirmish"}, {"Werewolf", "werewolf"}]}
+                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Skirmish", "skirmish"}, {"Werewolf", "werewolf"}, {"Stock Market", "stock_market"}, {"Survivor", "survivor"}, {"Space Station", "space_station"}, {"Auction", "auction"}, {"Diplomacy", "diplomacy"}, {"Dungeon Crawl", "dungeon_crawl"}]}
                   class="bg-slate-900/80 border-glass-border focus:border-cyan-500!"
                 />
 
@@ -441,11 +487,19 @@ defmodule LemonSimUi.SimDashboardLive do
                       <.input name="max_turns" label="Max Turns" type="number" value="48" />
                       <.input name="rng_seed" label="RNG Seed" type="number" value="" placeholder="random" />
                     <% else %>
-                      <%= if @new_sim_domain == "werewolf" do %>
-                        <.input name="player_count" label="Number of Players (5-8)" type="number" value={@new_player_count} min="5" max="8" />
+                      <%= if @new_sim_domain == "dungeon_crawl" do %>
+                        <.select
+                          name="party_size"
+                          label="Party Size"
+                          value="4"
+                          options={[{"Full Party (4)", "4"}, {"Trio (3)", "3"}, {"Duo (2)", "2"}]}
+                        />
+                      <% else %>
+                      <%= if @new_sim_domain in ~w(werewolf stock_market survivor space_station auction diplomacy) do %>
+                        <.input name="player_count" label={player_count_label(@new_sim_domain)} type="number" value={@new_player_count} min={min_players(@new_sim_domain)} max={max_players(@new_sim_domain)} />
                         <div class="mt-3 pt-3 border-t border-glass-border/50">
                           <div class="text-[10px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2">Model Assignment</div>
-                          <p class="text-[10px] text-slate-500 mb-3">Assign AI models to player seats. Models are shuffled across roles each game.</p>
+                          <p class="text-[10px] text-slate-500 mb-3">Assign AI models to player seats.</p>
                           <%= for seat <- 1..@new_player_count do %>
                             <div class="flex items-center gap-2 mb-1.5">
                               <span class="text-[10px] text-slate-500 font-mono w-6 shrink-0">P{seat}</span>
@@ -459,6 +513,7 @@ defmodule LemonSimUi.SimDashboardLive do
                             </div>
                           <% end %>
                         </div>
+                      <% end %>
                       <% end %>
                     <% end %>
                   <% end %>
@@ -534,16 +589,14 @@ defmodule LemonSimUi.SimDashboardLive do
           </div>
 
           <!-- Board + details layout -->
-          <div class={[
-            "grid grid-cols-1 xl:grid-cols-12 gap-6 items-start",
-            if(@domain_type == :werewolf, do: "", else: "")
-          ]}>
+          <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
             <!-- Left: Visual board -->
+            <% full_width_board = @domain_type in [:werewolf, :stock_market, :survivor, :space_station, :auction, :diplomacy, :dungeon_crawl] %>
             <div class={[
               "glass-card rounded-xl flex flex-col overflow-hidden",
-              if(@domain_type == :werewolf, do: "xl:col-span-8 h-[calc(100vh-14rem)]", else: "xl:col-span-7 p-6 min-h-[500px]")
+              if(full_width_board, do: "xl:col-span-9 h-[calc(100vh-14rem)]", else: "xl:col-span-7 p-6 min-h-[500px]")
             ]}>
-              <h3 :if={@domain_type != :werewolf} class="text-xs font-bold text-cyan-400 mb-5 uppercase tracking-widest flex items-center gap-2 font-mono drop-shadow-md">
+              <h3 :if={!full_width_board} class="text-xs font-bold text-cyan-400 mb-5 uppercase tracking-widest flex items-center gap-2 font-mono drop-shadow-md">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
                 </svg>
@@ -551,9 +604,9 @@ defmodule LemonSimUi.SimDashboardLive do
               </h3>
               <div class={[
                 "flex-1 flex relative overflow-hidden",
-                if(@domain_type == :werewolf, do: "", else: "items-center justify-center bg-slate-950/60 rounded-lg border border-slate-800 shadow-inner p-4")
+                if(full_width_board, do: "", else: "items-center justify-center bg-slate-950/60 rounded-lg border border-slate-800 shadow-inner p-4")
               ]}>
-                <div :if={@domain_type != :werewolf} class="absolute inset-0 bg-[linear-gradient(rgba(59,130,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.03)_1px,transparent_1px)] bg-[length:40px_40px] pointer-events-none"></div>
+                <div :if={!full_width_board} class="absolute inset-0 bg-[linear-gradient(rgba(59,130,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.03)_1px,transparent_1px)] bg-[length:40px_40px] pointer-events-none"></div>
                 <%= case @domain_type do %>
                   <% :tic_tac_toe -> %>
                     <TicTacToeBoard.render
@@ -570,6 +623,36 @@ defmodule LemonSimUi.SimDashboardLive do
                       world={@selected_sim.world}
                       interactive={@human_player != nil && @selected_sim.sim_id in @running}
                     />
+                  <% :stock_market -> %>
+                    <StockMarketBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :survivor -> %>
+                    <SurvivorBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :space_station -> %>
+                    <SpaceStationBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :auction -> %>
+                    <AuctionBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :diplomacy -> %>
+                    <DiplomacyBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :dungeon_crawl -> %>
+                    <DungeonCrawlBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
                   <% _ -> %>
                     <div class="text-center text-slate-500">
                       <p>UNRECOGNIZED DOMAIN</p>
@@ -582,7 +665,7 @@ defmodule LemonSimUi.SimDashboardLive do
             <!-- Right: Event log + Plan history + Memory -->
             <div class={[
               "space-y-6",
-              if(@domain_type == :werewolf, do: "xl:col-span-4", else: "xl:col-span-5")
+              if(full_width_board, do: "xl:col-span-3", else: "xl:col-span-5")
             ]}>
               <div class="glass-card rounded-xl overflow-hidden flex flex-col h-96">
                 <div class="p-4 border-b border-glass-border bg-slate-900/60">
@@ -697,7 +780,38 @@ defmodule LemonSimUi.SimDashboardLive do
   defp maybe_put_sim_id(opts, ""), do: opts
   defp maybe_put_sim_id(opts, sim_id), do: Keyword.put(opts, :sim_id, sim_id)
 
-  # -- Werewolf model helpers --
+  # -- Game-specific form helpers --
+
+  defp player_count_label("werewolf"), do: "Number of Players (5-8)"
+  defp player_count_label("stock_market"), do: "Number of Traders (3-6)"
+  defp player_count_label("survivor"), do: "Number of Contestants (6-8)"
+  defp player_count_label("space_station"), do: "Number of Crew (5-7)"
+  defp player_count_label("auction"), do: "Number of Bidders (4-6)"
+  defp player_count_label("diplomacy"), do: "Number of Factions (4-6)"
+  defp player_count_label(_), do: "Number of Players"
+
+  defp min_players("stock_market"), do: 3
+  defp min_players("survivor"), do: 6
+  defp min_players("space_station"), do: 5
+  defp min_players("auction"), do: 4
+  defp min_players("diplomacy"), do: 4
+  defp min_players(_), do: 5
+
+  defp max_players("stock_market"), do: 6
+  defp max_players("survivor"), do: 8
+  defp max_players("space_station"), do: 7
+  defp max_players("auction"), do: 6
+  defp max_players("diplomacy"), do: 6
+  defp max_players(_), do: 8
+
+  defp default_player_count(:stock_market), do: 4
+  defp default_player_count(:survivor), do: 8
+  defp default_player_count(:space_station), do: 6
+  defp default_player_count(:auction), do: 4
+  defp default_player_count(:diplomacy), do: 4
+  defp default_player_count(_), do: 6
+
+  # -- Model helpers --
 
   defp available_model_options do
     [

@@ -19,6 +19,23 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     elimination_log = MapHelpers.get_key(world, :elimination_log) || []
     night_history = MapHelpers.get_key(world, :night_history) || []
     night_actions = MapHelpers.get_key(world, :night_actions) || %{}
+    past_transcripts = MapHelpers.get_key(world, :past_transcripts) || %{}
+    past_votes = MapHelpers.get_key(world, :past_votes) || %{}
+    last_words = MapHelpers.get_key(world, :last_words) || []
+    pending_elimination = MapHelpers.get_key(world, :pending_elimination)
+    wolf_chat_transcript = MapHelpers.get_key(world, :wolf_chat_transcript) || []
+    runoff_candidates = MapHelpers.get_key(world, :runoff_candidates)
+    journals = MapHelpers.get_key(world, :journals) || %{}
+    evidence_tokens = MapHelpers.get_key(world, :evidence_tokens) || []
+    wanderer_results = MapHelpers.get_key(world, :wanderer_results) || []
+    meeting_pairs = MapHelpers.get_key(world, :meeting_pairs) || []
+    meeting_transcripts = MapHelpers.get_key(world, :meeting_transcripts) || []
+    current_meeting_index = MapHelpers.get_key(world, :current_meeting_index) || 0
+    current_meeting_messages = MapHelpers.get_key(world, :current_meeting_messages) || []
+    current_village_event = MapHelpers.get_key(world, :current_village_event)
+    village_event_history = MapHelpers.get_key(world, :village_event_history) || []
+    player_items = MapHelpers.get_key(world, :player_items) || %{}
+    backstory_connections = MapHelpers.get_key(world, :backstory_connections) || []
 
     sorted_players = Enum.sort_by(players, fn {id, _p} -> id end)
 
@@ -67,6 +84,23 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       |> assign(:latest_night, latest_night)
       |> assign(:night_actions, night_actions)
       |> assign(:prev_night_summary, prev_night_summary)
+      |> assign(:past_transcripts, past_transcripts)
+      |> assign(:past_votes, past_votes)
+      |> assign(:last_words, last_words)
+      |> assign(:pending_elimination, pending_elimination)
+      |> assign(:wolf_chat_transcript, wolf_chat_transcript)
+      |> assign(:runoff_candidates, runoff_candidates)
+      |> assign(:journals, journals)
+      |> assign(:evidence_tokens, evidence_tokens)
+      |> assign(:wanderer_results, wanderer_results)
+      |> assign(:meeting_pairs, meeting_pairs)
+      |> assign(:meeting_transcripts, meeting_transcripts)
+      |> assign(:current_meeting_index, current_meeting_index)
+      |> assign(:current_meeting_messages, current_meeting_messages)
+      |> assign(:current_village_event, current_village_event)
+      |> assign(:village_event_history, village_event_history)
+      |> assign(:player_items, player_items)
+      |> assign(:backstory_connections, backstory_connections)
 
     ~H"""
     <div class="relative font-sans w-full h-full flex flex-col overflow-hidden rounded-xl">
@@ -204,6 +238,31 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         }
         .ww-dawn-reveal { animation: ww-dawn-reveal 0.7s cubic-bezier(0.22,1,0.36,1) forwards; opacity: 0; }
 
+        /* Dawn suspense blur-in */
+        @keyframes ww-dawn-suspense {
+          0% { opacity: 0; filter: blur(8px); transform: translateY(12px); }
+          60% { opacity: 0.7; filter: blur(2px); }
+          100% { opacity: 1; filter: blur(0); transform: translateY(0); }
+        }
+        .ww-dawn-suspense { animation: ww-dawn-suspense 0.9s cubic-bezier(0.22,1,0.36,1) forwards; opacity: 0; }
+
+        /* Accusation border pulse */
+        @keyframes ww-accusation-pulse {
+          0%, 100% { border-color: rgba(239,68,68,0.3); }
+          50% { border-color: rgba(239,68,68,0.7); }
+        }
+        .ww-accusation { animation: ww-accusation-pulse 2s ease-in-out infinite; }
+
+        /* Last words dramatic glow */
+        @keyframes ww-last-words-glow {
+          0%, 100% { box-shadow: 0 0 15px rgba(168,85,247,0.2), 0 0 30px rgba(168,85,247,0.05); }
+          50% { box-shadow: 0 0 25px rgba(168,85,247,0.5), 0 0 50px rgba(168,85,247,0.15); }
+        }
+        .ww-last-words { animation: ww-last-words-glow 3s ease-in-out infinite; }
+
+        /* Runoff highlight */
+        .ww-runoff-candidate { box-shadow: 0 0 8px rgba(251,191,36,0.4); border-color: rgba(251,191,36,0.5) !important; }
+
         /* Blood drip effect on kill row */
         @keyframes ww-blood-pulse {
           0%, 100% { border-color: rgba(239,68,68,0.2); background-color: rgba(239,68,68,0.04); }
@@ -252,7 +311,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         <div class={[
           "absolute inset-0",
           if(is_night?(@phase), do: "ww-phase-night", else: "ww-phase-day"),
-          if(@phase == "day_voting", do: "ww-phase-voting")
+          if(@phase in ["day_voting", "runoff_voting"], do: "ww-phase-voting")
         ]}></div>
       </div>
 
@@ -260,52 +319,46 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       <div class="relative z-10 flex flex-col h-full">
 
         <%!-- Phase Banner --%>
-        <div class="flex items-center justify-between px-4 py-3 border-b border-white/5">
-          <div class="flex items-center gap-3">
-            <%!-- Moon/Sun icon --%>
+        <div class="flex items-center justify-between px-3 py-2 border-b border-white/5">
+          <div class="flex items-center gap-2">
             <div class="ww-moon-float">
               <img
                 :if={is_night?(@phase)}
                 src="/assets/werewolf/moon.png"
-                class="w-8 h-8 rounded-full drop-shadow-[0_0_8px_rgba(147,197,253,0.6)]"
+                class="w-6 h-6 rounded-full drop-shadow-[0_0_8px_rgba(147,197,253,0.6)]"
               />
-              <div :if={!is_night?(@phase)} class="w-8 h-8 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 shadow-[0_0_12px_rgba(251,191,36,0.6)]"></div>
+              <div :if={!is_night?(@phase)} class="w-6 h-6 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 shadow-[0_0_12px_rgba(251,191,36,0.6)]"></div>
             </div>
             <div>
-              <div class="text-[10px] font-mono uppercase tracking-[0.2em] text-slate-500 font-bold">
+              <div class="text-[9px] font-mono uppercase tracking-[0.15em] text-slate-500 font-bold leading-tight">
                 {phase_label(@phase)}
               </div>
-              <div class="text-lg font-black text-white tracking-tight leading-tight">
+              <div class="text-sm font-black text-white tracking-tight leading-tight">
                 Day {@day_number}
               </div>
             </div>
           </div>
 
-          <div class="flex items-center gap-3">
-            <%!-- Spectator badge --%>
-            <div class="px-2 py-1 rounded text-[9px] font-black uppercase tracking-[0.15em] border border-violet-500/30 bg-violet-950/60 text-violet-400 shadow-[0_0_8px_rgba(139,92,246,0.15)]">
-              👁 Spectator
+          <div class="flex items-center gap-2">
+            <div class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-[0.1em] border border-violet-500/30 bg-violet-950/60 text-violet-400">
+              Spectator
             </div>
-
-            <%!-- Phase badge --%>
             <div class={[
-              "px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider border",
+              "px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border",
               phase_badge(@phase)
             ]}>
               {phase_action_label(@phase)}
             </div>
           </div>
 
-          <%!-- Active player indicator --%>
-          <div :if={@game_status == "in_progress" && @active_actor} class="flex items-center gap-2">
+          <div :if={@game_status == "in_progress" && @active_actor} class="flex items-center gap-1.5">
             <img
               src={avatar_for_role(get_player_role(@players, @active_actor))}
-              class={["w-7 h-7 rounded-full border object-cover", role_border(get_player_role(@players, @active_actor))]}
+              class={["w-6 h-6 rounded-full border object-cover", role_border(get_player_role(@players, @active_actor))]}
             />
             <div class="text-right">
-              <div class="text-[10px] text-slate-500 font-mono uppercase tracking-widest">Acting</div>
-              <div class="text-sm font-bold text-white">{player_name(@players, @active_actor)}</div>
-              <div class={["text-[9px] font-bold uppercase", role_text_color(get_player_role(@players, @active_actor))]}>
+              <div class="text-sm font-bold text-white leading-tight">{player_name(@players, @active_actor)}</div>
+              <div class={["text-[8px] font-bold uppercase", role_text_color(get_player_role(@players, @active_actor))]}>
                 {get_player_role(@players, @active_actor)}
               </div>
             </div>
@@ -316,10 +369,10 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         <div class="flex-1 flex min-h-0 overflow-hidden">
 
           <%!-- Left: Player roster --%>
-          <div class="w-48 flex-shrink-0 border-r border-white/5 overflow-y-auto custom-scrollbar p-3 space-y-2">
+          <div class="w-36 flex-shrink-0 border-r border-white/5 overflow-y-auto custom-scrollbar p-2 space-y-1">
             <%!-- Alive --%>
-            <div class="text-[9px] font-mono uppercase tracking-[0.2em] text-emerald-500/80 font-bold mb-2 flex items-center gap-1.5">
-              <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]"></div>
+            <div class="text-[8px] font-mono uppercase tracking-[0.2em] text-emerald-500/80 font-bold mb-1 flex items-center gap-1">
+              <div class="w-1 h-1 rounded-full bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]"></div>
               Alive ({length(@alive_players)})
             </div>
             <%= for {player_id, player} <- @alive_players do %>
@@ -332,13 +385,15 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                 game_status={@game_status}
                 phase={@phase}
                 players={@players}
+                runoff_candidates={@runoff_candidates}
+                player_items={@player_items}
               />
             <% end %>
 
             <%!-- Dead --%>
-            <div :if={length(@dead_players) > 0} class="pt-3 mt-3 border-t border-white/5">
-              <div class="text-[9px] font-mono uppercase tracking-[0.2em] text-red-500/60 font-bold mb-2 flex items-center gap-1.5">
-                <div class="w-1.5 h-1.5 bg-red-500/60 rotate-45"></div>
+            <div :if={length(@dead_players) > 0} class="pt-2 mt-2 border-t border-white/5">
+              <div class="text-[8px] font-mono uppercase tracking-[0.2em] text-red-500/60 font-bold mb-1 flex items-center gap-1">
+                <div class="w-1 h-1 bg-red-500/60 rotate-45"></div>
                 Dead ({length(@dead_players)})
               </div>
               <%= for {player_id, player} <- @dead_players do %>
@@ -351,6 +406,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                   game_status={@game_status}
                   phase={@phase}
                   players={@players}
+                  player_items={@player_items}
                 />
               <% end %>
             </div>
@@ -360,15 +416,103 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
 
             <%!-- Narrative Content --%>
-            <div id="ww-narrative" phx-hook="ScrollBottom" class="scroll-bottom flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 ww-narrative">
+            <div id="ww-narrative" phx-hook="ScrollBottom" class="scroll-bottom flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-2 ww-narrative">
 
-              <%!-- Elimination log entries as story beats --%>
-              <%= for entry <- @elimination_log do %>
+              <%!-- Past day history accordions --%>
+              <%= for day <- Enum.sort(Map.keys(@past_transcripts)) do %>
+                <details class="group rounded-lg border border-white/5 bg-white/[0.02] overflow-hidden">
+                  <summary class="cursor-pointer px-3 py-2 flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors">
+                    <span class="text-amber-500/60 transition-transform group-open:rotate-90">&#x25B6;</span>
+                    <span>Day {day}</span>
+                    <span class="text-[9px] font-mono text-slate-600 ml-auto">
+                      {length(Map.get(@past_transcripts, day, []))} messages
+                    </span>
+                  </summary>
+                  <div class="px-3 pb-3 space-y-2 border-t border-white/5 pt-2">
+                    <%!-- Night summary for this day --%>
+                    <% prev_night = Enum.filter(MapHelpers.get_key(@world, :night_history) || [], fn e -> get_val(e, :day, 0) == day - 1 end) %>
+                    <%= for entry <- prev_night do %>
+                      <div class="text-[10px] text-slate-500 px-2">
+                        <span class="font-bold">{get_val(entry, :player, "?")}</span>
+                        (<span class={role_text_color(get_val(entry, :player_role, "unknown"))}>{get_val(entry, :player_role, "?")}</span>)
+                        — {get_val(entry, :action, "?")}
+                        <%= if get_val(entry, :target, nil) do %>
+                          &#x2192; {get_val(entry, :target, "")}
+                        <% end %>
+                      </div>
+                    <% end %>
+
+                    <%!-- Past transcript --%>
+                    <%= for {entry, idx} <- Enum.with_index(Map.get(@past_transcripts, day, [])) do %>
+                      <.chat_message entry={entry} players={@players} game_status={@game_status} index={idx} />
+                    <% end %>
+
+                    <%!-- Past vote results --%>
+                    <% day_votes = Map.get(@past_votes, day, %{}) %>
+                    <%= if map_size(day_votes) > 0 do %>
+                      <div class="text-[9px] font-mono uppercase tracking-widest text-slate-600 font-bold mt-2">Votes</div>
+                      <%= for {voter, target} <- Enum.sort_by(day_votes, fn {k, _v} -> k end) do %>
+                        <div class="text-[10px] text-slate-500 px-2">
+                          <span class="font-semibold text-slate-400">{voter}</span>
+                          &#x2192;
+                          <span class={if target == "skip", do: "italic text-slate-600", else: "font-bold text-rose-400"}>{target}</span>
+                        </div>
+                      <% end %>
+                    <% end %>
+
+                    <%!-- Eliminations this day --%>
+                    <%= for entry <- Enum.filter(@elimination_log, fn e -> get_val(e, :day, 0) == day end) do %>
+                      <.story_beat entry={entry} players={@players} />
+                    <% end %>
+                  </div>
+                </details>
+              <% end %>
+
+              <%!-- Elimination log entries as story beats (current day only) --%>
+              <%= for entry <- Enum.filter(@elimination_log, fn e -> get_val(e, :day, 0) == @day_number || map_size(@past_transcripts) == 0 end) do %>
                 <.story_beat entry={entry} players={@players} />
               <% end %>
 
-              <%!-- Night action feed (live night phase) --%>
-              <div :if={is_night?(@phase) && @game_status == "in_progress"} class="ww-fade-in">
+              <%!-- Wolf Pack Chat (spectator only) --%>
+              <div :if={@phase == "wolf_discussion" || length(@wolf_chat_transcript) > 0}>
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-red-500/20 to-transparent"></div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-red-400 text-sm">&#x1F43A;</span>
+                    <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-red-400/70 font-bold">Wolf Pack Chat</span>
+                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-red-950/60 text-red-400/60 border border-red-500/20">Spectator Only</span>
+                  </div>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-red-500/20 to-transparent"></div>
+                </div>
+
+                <div class="rounded-lg border border-red-900/30 bg-gradient-to-b from-red-950/20 to-black/30 p-3 space-y-2">
+                  <%= for {entry, idx} <- Enum.with_index(@wolf_chat_transcript) do %>
+                    <div class="flex gap-2 items-start ww-fade-in" style={"animation-delay: #{idx * 50}ms"}>
+                      <img src="/assets/werewolf/werewolf.png" class="w-6 h-6 rounded-md object-cover border border-red-500/30 flex-shrink-0 mt-0.5" />
+                      <div class="flex-1 min-w-0">
+                        <span class="text-xs font-bold text-red-400">{get_val(entry, :player, "?")}</span>
+                        <div class="ww-speech mt-1 !bg-red-950/30 !border-red-900/30">
+                          <p class="text-sm text-red-200/80 leading-relaxed">{get_val(entry, :message, "")}</p>
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <div :if={@phase == "wolf_discussion" && @active_actor} class="flex items-center gap-2 mt-2 px-2 py-2">
+                    <div class="flex items-center gap-2 text-xs text-red-400/60 italic">
+                      <div class="flex gap-0.5">
+                        <div class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 0ms"></div>
+                        <div class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 150ms"></div>
+                        <div class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 300ms"></div>
+                      </div>
+                      <span>{player_name(@players, @active_actor)} is plotting...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Night action feed (live night phase — not wolf_discussion, that has its own panel) --%>
+              <div :if={@phase == "night" && @game_status == "in_progress"} class="ww-fade-in">
                 <.night_scene
                   day_number={@day_number}
                   active_actor={@active_actor}
@@ -386,13 +530,190 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                 />
               </div>
 
+              <%!-- Evidence tokens from the night --%>
+              <div :if={!is_night?(@phase) && length(@evidence_tokens) > 0} class="ww-dawn-suspense" style="animation-delay: 4500ms">
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-yellow-500/20 to-transparent"></div>
+                  <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-yellow-400/60 font-bold">Evidence Found</span>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-yellow-500/20 to-transparent"></div>
+                </div>
+                <div class="rounded-lg border border-yellow-900/30 bg-gradient-to-b from-yellow-950/10 to-black/20 p-3 space-y-1.5">
+                  <%= for token <- @evidence_tokens do %>
+                    <div class="flex items-center gap-2 text-xs">
+                      <span class="text-yellow-400">{evidence_emoji(get_val(token, :type, "unknown"))}</span>
+                      <span class="text-yellow-300/80">{get_val(token, :description, "Strange evidence...")}</span>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Wanderer results --%>
+              <div :if={!is_night?(@phase) && length(@wanderer_results) > 0} class="ww-dawn-suspense" style="animation-delay: 5000ms">
+                <%= for result <- Enum.filter(@wanderer_results, fn r -> get_val(r, :day, 0) == @day_number - 1 end) do %>
+                  <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-900/20 bg-indigo-950/10 text-xs">
+                    <span class="text-indigo-400">&#x1F6B6;</span>
+                    <span class="font-bold text-indigo-300">{get_val(result, :player, "?")}</span>
+                    <span class="text-slate-400">{get_val(result, :description, "wandered the village")}</span>
+                  </div>
+                <% end %>
+              </div>
+
+              <%!-- Village event banner --%>
+              <div :if={@current_village_event && !is_night?(@phase)} class="ww-fade-in">
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-orange-500/20 to-transparent"></div>
+                  <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-orange-400/60 font-bold">Village Event</span>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-orange-500/20 to-transparent"></div>
+                </div>
+                <div class="rounded-lg border border-orange-900/30 bg-gradient-to-b from-orange-950/20 to-black/20 px-4 py-3">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-lg">{village_event_emoji(get_val(@current_village_event, :type, "unknown"))}</span>
+                    <span class="text-sm font-bold text-orange-300">{village_event_title(get_val(@current_village_event, :type, "unknown"))}</span>
+                  </div>
+                  <p class="text-xs text-orange-200/70 leading-relaxed">{get_val(@current_village_event, :description, "")}</p>
+                </div>
+              </div>
+
+              <%!-- Meeting selection phase --%>
+              <div :if={@phase == "meeting_selection"} class="ww-fade-in">
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent"></div>
+                  <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-cyan-400/60 font-bold">Arranging Meetings</span>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent"></div>
+                </div>
+                <div class="text-center py-3 text-cyan-300/50 text-xs italic">
+                  Players are choosing who to meet with privately before discussion...
+                </div>
+                <div :if={@active_actor} class="flex items-center gap-2 justify-center py-2">
+                  <div class="flex gap-0.5">
+                    <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 0ms"></div>
+                    <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 150ms"></div>
+                    <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 300ms"></div>
+                  </div>
+                  <span class="text-xs text-cyan-400/60 italic">{player_name(@players, @active_actor)} is choosing...</span>
+                </div>
+              </div>
+
+              <%!-- Private meetings in progress --%>
+              <div :if={@phase == "private_meeting" || length(@meeting_transcripts) > 0}>
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent"></div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-cyan-400 text-sm">&#x1F91D;</span>
+                    <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-cyan-400/70 font-bold">Private Meetings</span>
+                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-cyan-950/60 text-cyan-400/60 border border-cyan-500/20">Spectator Only</span>
+                  </div>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent"></div>
+                </div>
+
+                <%!-- Show completed meeting transcripts --%>
+                <%= for {meeting, midx} <- Enum.with_index(@meeting_transcripts) do %>
+                  <div class="rounded-lg border border-cyan-900/20 bg-cyan-950/10 p-3 mb-2">
+                    <div class="text-[9px] font-mono uppercase tracking-wider text-cyan-500/60 mb-2">
+                      {get_val(meeting, :player_a, "?")} &amp; {get_val(meeting, :player_b, "?")}
+                    </div>
+                    <%= for {msg, idx} <- Enum.with_index(get_val(meeting, :messages, [])) do %>
+                      <div class="flex gap-2 items-start mb-1.5 ww-fade-in" style={"animation-delay: #{(midx * 4 + idx) * 50}ms"}>
+                        <span class={["text-xs font-bold", role_text_color(get_player_role(@players, get_val(msg, :player, "?")))]}>{get_val(msg, :player, "?")}</span>
+                        <span class="text-xs text-cyan-200/70">{get_val(msg, :message, "")}</span>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+
+                <%!-- Current meeting in progress --%>
+                <div :if={@phase == "private_meeting" && length(@current_meeting_messages) > 0} class="rounded-lg border border-cyan-700/30 bg-cyan-950/20 p-3 mb-2">
+                  <% current_pair = Enum.at(@meeting_pairs, @current_meeting_index) %>
+                  <div :if={current_pair} class="text-[9px] font-mono uppercase tracking-wider text-cyan-400/60 mb-2">
+                    {get_val(current_pair, :player_a, "?")} &amp; {get_val(current_pair, :player_b, "?")} (in progress)
+                  </div>
+                  <%= for msg <- @current_meeting_messages do %>
+                    <div class="flex gap-2 items-start mb-1.5">
+                      <span class={["text-xs font-bold", role_text_color(get_player_role(@players, get_val(msg, :player, "?")))]}>{get_val(msg, :player, "?")}</span>
+                      <span class="text-xs text-cyan-200/70">{get_val(msg, :message, "")}</span>
+                    </div>
+                  <% end %>
+                  <div :if={@active_actor} class="flex items-center gap-2 mt-1">
+                    <div class="flex gap-0.5">
+                      <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 0ms"></div>
+                      <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 150ms"></div>
+                      <div class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style="animation-delay: 300ms"></div>
+                    </div>
+                    <span class="text-xs text-cyan-400/60 italic">{player_name(@players, @active_actor)} is speaking...</span>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Last Words --%>
+              <div :if={@phase in ["last_words_vote", "last_words_night"] && @pending_elimination}>
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-purple-500/20 to-transparent"></div>
+                  <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-purple-400/60 font-bold">
+                    &#x2620; Last Words
+                  </span>
+                  <div class="flex-1 h-px bg-gradient-to-r from-transparent via-purple-500/20 to-transparent"></div>
+                </div>
+
+                <div class="ww-last-words rounded-xl p-4 border border-purple-900/40 bg-gradient-to-b from-purple-950/30 to-black/40">
+                  <div class="flex items-center gap-3 mb-3">
+                    <img
+                      src={avatar_for_role(get_val(@pending_elimination, :role, "villager"))}
+                      class="w-10 h-10 rounded-lg object-cover border border-purple-500/40 grayscale-[50%]"
+                    />
+                    <div>
+                      <div class="text-sm font-bold text-purple-300">
+                        {get_val(@pending_elimination, :player_id, "?")}
+                      </div>
+                      <div class="text-[10px] text-purple-400/60 uppercase font-bold tracking-wider">
+                        {if @phase == "last_words_vote", do: "Voted out", else: "Killed by werewolves"}
+                        — speaks their final words
+                      </div>
+                    </div>
+                  </div>
+
+                  <%= for entry <- @last_words do %>
+                    <div class="ww-speech !bg-purple-950/30 !border-purple-900/30 mt-2">
+                      <p class="text-sm text-purple-200/90 leading-relaxed italic">
+                        &ldquo;{get_val(entry, :statement, "")}&rdquo;
+                      </p>
+                      <div class="text-[9px] text-purple-500/50 mt-1 text-right">— {get_val(entry, :player, "?")}</div>
+                    </div>
+                  <% end %>
+
+                  <div :if={length(@last_words) == 0 && @active_actor} class="flex items-center gap-2 mt-2">
+                    <div class="flex items-center gap-2 text-xs text-purple-400/60 italic">
+                      <div class="flex gap-0.5">
+                        <div class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style="animation-delay: 0ms"></div>
+                        <div class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style="animation-delay: 150ms"></div>
+                        <div class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style="animation-delay: 300ms"></div>
+                      </div>
+                      <span>Gathering their final thoughts...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Display past last words --%>
+              <div :if={length(@last_words) > 0 && @phase not in ["last_words_vote", "last_words_night"]}>
+                <%= for entry <- @last_words do %>
+                  <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-950/10 border border-purple-900/20 text-xs">
+                    <span class="text-purple-400/60">&#x2620;</span>
+                    <span class="font-bold text-purple-400/80">{get_val(entry, :player, "?")}</span>
+                    <span class="text-purple-300/60 italic">&ldquo;{get_val(entry, :statement, "")}&rdquo;</span>
+                  </div>
+                <% end %>
+              </div>
+
               <%!-- Discussion transcript as chat --%>
-              <div :if={@phase == "day_discussion" || (@phase == "day_voting" && length(@transcript) > 0)}>
-                <div class="flex items-center gap-3 py-3">
+              <div :if={@phase in ["day_discussion", "runoff_discussion"] || (@phase in ["day_voting", "runoff_voting"] && length(@transcript) > 0)}>
+                <div class="flex items-center gap-2 py-2">
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/30 to-transparent"></div>
                   <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-amber-400/60 font-bold">
-                    Day {@day_number} Discussion
+                    {if @phase in ["runoff_discussion", "runoff_voting"], do: "Runoff Discussion", else: "Day #{@day_number} Discussion"}
                   </span>
+                  <%= if @runoff_candidates do %>
+                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-amber-950/60 text-amber-400 border border-amber-500/30">Runoff</span>
+                  <% end %>
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/30 to-transparent"></div>
                 </div>
 
@@ -405,7 +726,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                   />
                 <% end %>
 
-                <div :if={@phase == "day_discussion" && @active_actor} class="flex items-center gap-2 mt-2 px-2 py-2">
+                <div :if={@phase in ["day_discussion", "runoff_discussion"] && @active_actor} class="flex items-center gap-2 mt-2 px-2 py-2">
                   <div class="flex items-center gap-2 text-xs text-slate-500 italic">
                     <div class="flex gap-0.5">
                       <div class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style="animation-delay: 0ms"></div>
@@ -418,12 +739,15 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Voting display --%>
-              <div :if={@phase == "day_voting"}>
-                <div class="flex items-center gap-3 py-3">
+              <div :if={@phase in ["day_voting", "runoff_voting"]}>
+                <div class="flex items-center gap-2 py-2">
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
                   <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-rose-400/60 font-bold">
-                    The Vote
+                    {if @phase == "runoff_voting", do: "Runoff Vote", else: "The Vote"}
                   </span>
+                  <%= if @phase == "runoff_voting" do %>
+                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-amber-950/60 text-amber-400 border border-amber-500/30">Runoff</span>
+                  <% end %>
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-rose-500/30 to-transparent"></div>
                 </div>
 
@@ -467,10 +791,56 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Empty state --%>
-              <div :if={@phase == "day_discussion" && length(@transcript) == 0 && @game_status == "in_progress"} class="text-center py-8">
-                <p class="text-amber-300/50 text-sm italic">The villagers gather in the square...</p>
+              <div :if={@phase in ["day_discussion", "runoff_discussion"] && length(@transcript) == 0 && @game_status == "in_progress"} class="text-center py-8">
+                <p class="text-amber-300/50 text-sm italic">
+                  {if @phase == "runoff_discussion", do: "The final candidates prepare to defend themselves...", else: "The villagers gather in the square..."}
+                </p>
               </div>
 
+            </div>
+          </div>
+
+          <%!-- Right: Agent Journals (spectator only) --%>
+          <div :if={map_size(@journals) > 0} class="w-44 flex-shrink-0 border-l border-white/5 overflow-y-auto custom-scrollbar">
+            <div class="px-2 py-2">
+              <div class="flex items-center gap-1.5 mb-2">
+                <span class="text-[10px]">&#x1F4D6;</span>
+                <span class="text-[9px] font-mono uppercase tracking-[0.2em] text-violet-400/70 font-bold">Agent Journals</span>
+                <span class="px-1 py-0 rounded text-[7px] font-bold uppercase bg-violet-950/60 text-violet-400/50 border border-violet-500/15">Spectator</span>
+              </div>
+
+              <%= for {player_id, entries} <- Enum.sort_by(@journals, fn {k, _v} -> k end) do %>
+                <% recent = Enum.take(entries, -3) %>
+                <details :if={length(entries) > 0} class="group mb-1.5">
+                  <summary class="cursor-pointer flex items-center gap-1.5 px-1.5 py-1 rounded text-[10px] hover:bg-white/5 transition-colors">
+                    <span class="text-violet-500/60 transition-transform group-open:rotate-90 text-[8px]">&#x25B6;</span>
+                    <span class={["font-bold", role_text_color(get_player_role(@players, player_id))]}>{player_id}</span>
+                    <span class="text-slate-600 ml-auto">{length(entries)}</span>
+                  </summary>
+                  <div class="pl-3 mt-1 space-y-1 border-l border-violet-900/20 ml-2">
+                    <%= for entry <- recent do %>
+                      <div class="text-[9px] text-slate-500 leading-snug">
+                        <span class="text-violet-500/50 font-mono">D{get_val(entry, :day, "?")}</span>
+                        <span class="text-slate-400/80 italic">{get_val(entry, :thought, "")}</span>
+                      </div>
+                    <% end %>
+                    <div :if={length(entries) > 3} class="text-[8px] text-slate-600 italic">
+                      +{length(entries) - 3} earlier thoughts
+                    </div>
+                  </div>
+                </details>
+              <% end %>
+            </div>
+
+            <%!-- Backstory connections --%>
+            <div :if={length(@backstory_connections) > 0} class="px-2 py-2 border-t border-white/5">
+              <div class="text-[9px] font-mono uppercase tracking-[0.2em] text-pink-400/60 font-bold mb-1.5">&#x1F517; Connections</div>
+              <%= for conn <- @backstory_connections do %>
+                <div class="text-[9px] text-slate-500 leading-snug mb-1 px-1">
+                  <span class="text-pink-400/60">{connection_emoji(get_val(conn, :type, ""))}</span>
+                  <span class="text-slate-400">{get_val(conn, :description, "")}</span>
+                </div>
+              <% end %>
             </div>
           </div>
         </div>
@@ -490,39 +860,41 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           )
         ]}></div>
 
-        <div class="relative z-10 text-center p-8 space-y-6 max-w-md">
-          <%!-- Winner icon --%>
-          <img
-            src={if @winner == "villagers", do: "/assets/werewolf/villager.png", else: "/assets/werewolf/werewolf.png"}
-            class={[
-              "w-28 h-28 mx-auto rounded-2xl border-2 shadow-lg object-cover",
-              if(@winner == "villagers", do: "border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.4)]", else: "border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.4)]")
-            ]}
-          />
-
-          <div class={[
-            "text-4xl font-black tracking-tight uppercase ww-victory-text",
-            if(@winner == "villagers", do: "text-emerald-400", else: "text-red-500")
-          ]}>
-            {String.upcase(to_string(@winner))} WIN
+        <div class="relative z-10 text-center p-6 space-y-4 max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar">
+          <%!-- Winner icon + title row --%>
+          <div class="flex items-center justify-center gap-4">
+            <img
+              src={if @winner == "villagers", do: "/assets/werewolf/villager.png", else: "/assets/werewolf/werewolf.png"}
+              class={[
+                "w-20 h-20 rounded-2xl border-2 shadow-lg object-cover",
+                if(@winner == "villagers", do: "border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.4)]", else: "border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.4)]")
+              ]}
+            />
+            <div class="text-left">
+              <div class={[
+                "text-3xl font-black tracking-tight uppercase ww-victory-text",
+                if(@winner == "villagers", do: "text-emerald-400", else: "text-red-500")
+              ]}>
+                {String.upcase(to_string(@winner))} WIN
+              </div>
+              <p class="text-slate-400 text-xs mt-1">
+                {if @winner == "villagers", do: "The village is safe. All werewolves have been unmasked.", else: "Darkness falls. The werewolves have consumed the village."}
+              </p>
+            </div>
           </div>
 
-          <p class="text-slate-400 text-sm">
-            {if @winner == "villagers", do: "The village is safe. All werewolves have been unmasked.", else: "Darkness falls. The werewolves have consumed the village."}
-          </p>
-
-          <div class="flex justify-center gap-6 text-sm">
-            <div class="text-center px-5 py-3 rounded-xl bg-white/5 border border-white/10">
-              <div class="text-2xl font-black text-white">{@day_number}</div>
-              <div class="text-[9px] uppercase tracking-widest text-slate-500 mt-0.5">Days</div>
+          <div class="flex justify-center gap-4 text-sm">
+            <div class="text-center px-4 py-2 rounded-lg bg-white/5 border border-white/10">
+              <div class="text-xl font-black text-white">{@day_number}</div>
+              <div class="text-[8px] uppercase tracking-widest text-slate-500">Days</div>
             </div>
-            <div class="text-center px-5 py-3 rounded-xl bg-white/5 border border-white/10">
-              <div class="text-2xl font-black text-white">{length(@dead_players)}</div>
-              <div class="text-[9px] uppercase tracking-widest text-slate-500 mt-0.5">Casualties</div>
+            <div class="text-center px-4 py-2 rounded-lg bg-white/5 border border-white/10">
+              <div class="text-xl font-black text-white">{length(@dead_players)}</div>
+              <div class="text-[8px] uppercase tracking-widest text-slate-500">Dead</div>
             </div>
-            <div class="text-center px-5 py-3 rounded-xl bg-white/5 border border-white/10">
-              <div class="text-2xl font-black text-white">{length(@alive_players)}</div>
-              <div class="text-[9px] uppercase tracking-widest text-slate-500 mt-0.5">Survivors</div>
+            <div class="text-center px-4 py-2 rounded-lg bg-white/5 border border-white/10">
+              <div class="text-xl font-black text-white">{length(@alive_players)}</div>
+              <div class="text-[8px] uppercase tracking-widest text-slate-500">Alive</div>
             </div>
           </div>
 
@@ -550,6 +922,38 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                   ]}>{get_val(player, :role, "?")}</span>
                   <span :if={get_val(player, :status, "alive") == "dead"} class="text-red-500/60">&#x2620;</span>
                   <span :if={get_val(player, :model, nil)} class="text-[8px] text-slate-600 font-mono">{short_model_name(get_val(player, :model, ""))}</span>
+                </div>
+              <% end %>
+            </div>
+          </div>
+
+          <%!-- Game Recap: "The Story" timeline --%>
+          <% timeline = build_game_timeline(@world) %>
+          <div :if={length(timeline) > 0} class="mt-4 pt-4 border-t border-white/10">
+            <div class="text-[9px] font-mono uppercase tracking-[0.2em] text-slate-500 mb-3">The Story</div>
+            <div class="max-h-60 overflow-y-auto custom-scrollbar space-y-3 text-xs">
+              <%= for day_entry <- timeline do %>
+                <div class="rounded-lg border border-white/5 bg-white/[0.03] p-3">
+                  <div class="font-bold text-slate-300 mb-1.5">Day {Map.get(day_entry, :day)}</div>
+
+                  <div :if={Map.get(day_entry, :night_text)} class="text-slate-500 mb-1">
+                    <span class="text-blue-400/60">&#x1F319;</span> {Map.get(day_entry, :night_text)}
+                  </div>
+
+                  <div :if={Map.get(day_entry, :discussion_summary)} class="text-slate-500 mb-1">
+                    <span class="text-amber-400/60">&#x1F4AC;</span> {Map.get(day_entry, :discussion_summary)}
+                  </div>
+
+                  <div :if={Map.get(day_entry, :vote_text)} class="text-slate-500 mb-1">
+                    <span class="text-rose-400/60">&#x2694;</span> {Map.get(day_entry, :vote_text)}
+                  </div>
+
+                  <div :if={Map.get(day_entry, :elimination_text)} class={[
+                    "font-semibold",
+                    if(String.contains?(Map.get(day_entry, :elimination_text, ""), "killed"), do: "text-red-400/80", else: "text-rose-400/80")
+                  ]}>
+                    &#x2620; {Map.get(day_entry, :elimination_text)}
+                  </div>
                 </div>
               <% end %>
             </div>
@@ -582,7 +986,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     ~H"""
     <div class="relative">
       <%!-- Section divider --%>
-      <div class="flex items-center gap-3 py-3">
+      <div class="flex items-center gap-2 py-2">
         <div class="flex-1 h-px bg-gradient-to-r from-transparent via-blue-500/20 to-transparent"></div>
         <div class="flex items-center gap-2">
           <img src="/assets/werewolf/moon.png" class="w-5 h-5 rounded-full opacity-70 ww-moon-float drop-shadow-[0_0_8px_rgba(147,197,253,0.5)]" />
@@ -608,8 +1012,8 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         </div>
 
         <%!-- Moon header --%>
-        <div class="flex items-center justify-center gap-4 pt-5 pb-3">
-          <img src="/assets/werewolf/moon.png" class="w-14 h-14 rounded-full ww-moon-float drop-shadow-[0_0_24px_rgba(147,197,253,0.5)] opacity-90" />
+        <div class="flex items-center justify-center gap-3 pt-3 pb-2">
+          <img src="/assets/werewolf/moon.png" class="w-10 h-10 rounded-full ww-moon-float drop-shadow-[0_0_24px_rgba(147,197,253,0.5)] opacity-90" />
           <div class="text-center">
             <div :if={@active_actor} class="text-blue-300/80 text-xs font-light italic">
               The night watch continues...
@@ -705,7 +1109,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     ~H"""
     <div class="mb-4">
       <%!-- Dawn divider --%>
-      <div class="flex items-center gap-3 py-3">
+      <div class="flex items-center gap-2 py-2">
         <div class="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/20 to-transparent"></div>
         <div class="flex items-center gap-2">
           <span class="text-amber-300" style="font-size:12px">☀️</span>
@@ -725,8 +1129,13 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         </div>
 
         <div class="p-3 space-y-2">
+          <%!-- Suspense preamble --%>
+          <div class="ww-dawn-suspense text-center py-2 text-blue-300/60 text-xs italic" style="animation-delay: 0ms">
+            The village awakens...
+          </div>
+
           <%!-- Kill: someone died --%>
-          <div :if={@kill_action} class="ww-blood-pulse flex items-center gap-3 px-3 py-3 rounded-lg border ww-slide-up" style="animation-delay: 100ms">
+          <div :if={@kill_action} class="ww-blood-pulse flex items-center gap-3 px-3 py-3 rounded-lg border ww-dawn-suspense" style="animation-delay: 800ms">
             <div class="w-10 h-10 rounded-lg bg-red-950/60 border border-red-500/30 flex items-center justify-center text-xl flex-shrink-0">
               🐺
             </div>
@@ -746,7 +1155,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
           <%!-- No kill (peaceful night) --%>
           <div :if={!@kill_action && !@saved_action && length(@wolf_actions) > 0}
-            class="flex items-center gap-3 px-3 py-3 rounded-lg border border-slate-700/30 bg-slate-800/20 ww-slide-up" style="animation-delay: 100ms">
+            class="flex items-center gap-3 px-3 py-3 rounded-lg border border-slate-700/30 bg-slate-800/20 ww-dawn-suspense" style="animation-delay: 800ms">
             <div class="w-10 h-10 rounded-lg bg-slate-800/60 border border-slate-700/30 flex items-center justify-center text-xl flex-shrink-0">🌙</div>
             <div class="flex-1">
               <div class="text-sm font-bold text-slate-300">A quiet night</div>
@@ -756,7 +1165,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           </div>
 
           <%!-- Doctor save --%>
-          <div :if={@saved_action} class="ww-shield-save flex items-center gap-3 px-3 py-3 rounded-lg border ww-slide-up" style="animation-delay: 200ms">
+          <div :if={@saved_action} class="ww-shield-save flex items-center gap-3 px-3 py-3 rounded-lg border ww-dawn-suspense" style="animation-delay: 1800ms">
             <div class="w-10 h-10 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-xl flex-shrink-0">
               🛡️
             </div>
@@ -772,7 +1181,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           </div>
 
           <%!-- Seer investigation (spectator reveal) --%>
-          <div :if={@seer_action} class="ww-eye-glow flex items-center gap-3 px-3 py-3 rounded-lg border ww-slide-up" style="animation-delay: 300ms">
+          <div :if={@seer_action} class="ww-eye-glow flex items-center gap-3 px-3 py-3 rounded-lg border ww-dawn-suspense" style="animation-delay: 2800ms">
             <img src="/assets/werewolf/seer.png" class="w-10 h-10 rounded-lg object-cover border border-purple-500/40 flex-shrink-0" />
             <div class="flex-1">
               <div class="text-sm font-bold text-purple-400">
@@ -792,7 +1201,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           </div>
 
           <%!-- Werewolf coordination (spectator mode reveals all) --%>
-          <div :if={length(@wolf_actions) > 0} class="ww-slide-up" style="animation-delay: 400ms">
+          <div :if={length(@wolf_actions) > 0} class="ww-dawn-suspense" style="animation-delay: 3500ms">
             <div class="text-[9px] font-mono uppercase tracking-widest text-slate-600 font-bold pl-1 mb-1.5">🐺 Wolf pack moves</div>
             <%= for wolf <- @wolf_actions do %>
               <div class="flex items-center gap-2 px-3 py-2 rounded-md bg-red-950/10 border border-red-900/10 mb-1">
@@ -807,7 +1216,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           </div>
 
           <%!-- Doctor action (spectator mode) --%>
-          <div :if={@doctor_action} class="ww-slide-up" style="animation-delay: 450ms">
+          <div :if={@doctor_action} class="ww-dawn-suspense" style="animation-delay: 4000ms">
             <div class="flex items-center gap-2 px-3 py-2 rounded-md bg-emerald-950/10 border border-emerald-900/10">
               <img src="/assets/werewolf/doctor.png" class="w-5 h-5 rounded-md object-cover opacity-70" />
               <span class="text-xs text-emerald-400/80 font-semibold">{get_val(@doctor_action, :player, "doctor")}</span>
@@ -832,6 +1241,8 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   attr :game_status, :string, required: true
   attr :phase, :string, required: true
   attr :players, :map, required: true
+  attr :runoff_candidates, :any, default: nil
+  attr :player_items, :map, default: %{}
 
   defp roster_card(assigns) do
     player = assigns.player
@@ -846,6 +1257,9 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     vote_count =
       Enum.count(assigns.votes, fn {_voter, target} -> target == assigns.player_id end)
 
+    traits = get_val(player, :traits, [])
+    items = Map.get(assigns.player_items, assigns.player_id, [])
+
     assigns =
       assigns
       |> assign(:is_dead, is_dead)
@@ -854,31 +1268,36 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       |> assign(:show_role, show_role)
       |> assign(:display_role, display_role)
       |> assign(:vote_count, vote_count)
+      |> assign(:traits, traits)
+      |> assign(:items, items)
+
+    is_runoff = assigns[:runoff_candidates] && assigns.player_id in (assigns[:runoff_candidates] || [])
+    assigns = assign(assigns, :is_runoff, is_runoff)
 
     ~H"""
     <div class={[
-      "flex items-center gap-2.5 p-2 rounded-lg border transition-all duration-300 relative group/card",
+      "flex items-center gap-1.5 px-1.5 py-1 rounded-md border transition-all duration-300 relative group/card",
       if(@is_dead,
         do: "bg-black/20 border-white/3 opacity-50 ww-dead-card",
         else: "bg-white/3 border-white/5 hover:bg-white/5 hover:border-white/10"
       ),
       if(@active && !@is_dead, do: "ww-active border-purple-500/40 bg-purple-900/10"),
-      if(@active && @phase == "day_discussion" && !@is_dead, do: "ww-speaking border-amber-500/40 bg-amber-900/10")
+      if(@active && @phase in ["day_discussion", "runoff_discussion"] && !@is_dead, do: "ww-speaking border-amber-500/40 bg-amber-900/10"),
+      if(@is_runoff && !@is_dead, do: "ww-runoff-candidate")
     ]}>
-      <%!-- Avatar (always role-based in observer mode) --%>
+      <%!-- Avatar --%>
       <div class="relative flex-shrink-0">
         <img
           src={avatar_for_role(@role)}
           class={[
-            "w-9 h-9 rounded-lg object-cover border",
+            "w-7 h-7 rounded-md object-cover border",
             if(@is_dead, do: "grayscale border-slate-700/50", else: role_border(@role))
           ]}
         />
         <div :if={@is_dead} class="absolute inset-0 flex items-center justify-center">
-          <span class="text-base drop-shadow-lg">&#x2620;</span>
+          <span class="text-sm drop-shadow-lg">&#x2620;</span>
         </div>
-        <%!-- Vote count badge --%>
-        <div :if={@vote_count > 0 && !@is_dead} class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center text-[9px] font-black text-white shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse">
+        <div :if={@vote_count > 0 && !@is_dead} class="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-red-500 flex items-center justify-center text-[8px] font-black text-white shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse">
           {@vote_count}
         </div>
       </div>
@@ -886,24 +1305,37 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       <%!-- Info --%>
       <div class="min-w-0 flex-1">
         <div class={[
-          "text-xs font-bold truncate",
+          "text-[11px] font-bold truncate leading-tight",
           if(@is_dead, do: "text-slate-500 line-through", else: "text-slate-200")
         ]}>
           {@name}
         </div>
         <div class={[
-          "text-[9px] font-bold uppercase tracking-wider",
+          "text-[8px] font-bold uppercase tracking-wider leading-tight",
           role_text_color(@role)
         ]}>
           {@display_role}
         </div>
-        <div :if={get_val(@player, :model, nil)} class="text-[8px] text-slate-600 truncate mt-0.5 font-mono" title={get_val(@player, :model, "")}>
+        <div :if={get_val(@player, :model, nil)} class="text-[7px] text-slate-600 truncate font-mono leading-tight" title={get_val(@player, :model, "")}>
           {short_model_name(get_val(@player, :model, ""))}
+        </div>
+        <div :if={is_list(@traits) && length(@traits) > 0} class="flex gap-0.5 flex-wrap mt-0.5">
+          <%= for trait <- @traits do %>
+            <span class="text-[7px] px-1 py-0 rounded bg-indigo-950/40 text-indigo-400/70 border border-indigo-500/10 leading-tight" title={trait}>
+              {trait_emoji(trait)}
+            </span>
+          <% end %>
+        </div>
+        <div :if={length(@items) > 0} class="flex gap-0.5 flex-wrap mt-0.5">
+          <%= for item <- @items do %>
+            <span class="text-[7px] px-1 py-0 rounded bg-amber-950/40 text-amber-400/70 border border-amber-500/10 leading-tight" title={item}>
+              {item_emoji(item)}
+            </span>
+          <% end %>
         </div>
       </div>
 
-      <%!-- Active indicator --%>
-      <div :if={@active && !@is_dead} class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse shadow-[0_0_6px_rgba(168,85,247,0.8)] flex-shrink-0"></div>
+      <div :if={@active && !@is_dead} class="w-1 h-1 rounded-full bg-purple-400 animate-pulse shadow-[0_0_6px_rgba(168,85,247,0.8)] flex-shrink-0"></div>
     </div>
     """
   end
@@ -919,15 +1351,19 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     player_id = get_val(assigns.entry, :player, "unknown")
     statement = get_val(assigns.entry, :statement, "")
     role = get_player_role(assigns.players, player_id)
+    msg_type = get_val(assigns.entry, :type, nil)
+    accusation_target = get_val(assigns.entry, :target, nil)
 
     assigns =
       assigns
       |> assign(:player_id, player_id)
       |> assign(:statement, statement)
       |> assign(:role, role)
+      |> assign(:msg_type, msg_type)
+      |> assign(:accusation_target, accusation_target)
 
     ~H"""
-    <div class="flex gap-3 items-start ww-fade-in" style={"animation-delay: #{@index * 50}ms"}>
+    <div class={["flex gap-3 items-start ww-fade-in", if(@msg_type == "accusation", do: "ww-accusation")]} style={"animation-delay: #{@index * 50}ms"}>
       <%!-- Always show role avatar (observer mode) --%>
       <img
         src={avatar_for_role(@role)}
@@ -939,9 +1375,17 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           <span class={["text-[9px] font-bold uppercase opacity-70", role_text_color(@role)]}>
             {String.upcase(@role)}
           </span>
+          <%= if @msg_type == "accusation" do %>
+            <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-red-950/60 text-red-400 border border-red-500/30">
+              Accuses {player_name(@players, @accusation_target)}
+            </span>
+          <% end %>
         </div>
-        <div class="ww-speech">
-          <p class="text-sm text-slate-300 leading-relaxed">{@statement}</p>
+        <div class={[
+          "ww-speech",
+          if(@msg_type == "accusation", do: "!border-red-500/30 !bg-red-950/20")
+        ]}>
+          <p class={["text-sm leading-relaxed", if(@msg_type == "accusation", do: "text-red-200", else: "text-slate-300")]}>{@statement}</p>
         </div>
       </div>
     </div>
@@ -1009,12 +1453,16 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   defp night_action_icon("investigate"), do: "🔮"
   defp night_action_icon("protect"), do: "💉"
   defp night_action_icon("sleep"), do: "😴"
+  defp night_action_icon("wander"), do: "🚶"
+  defp night_action_icon("use_item"), do: "🎒"
   defp night_action_icon(_), do: "🌙"
 
   defp night_action_status_icon("choose_victim"), do: "🎯"
   defp night_action_status_icon("investigate"), do: "👁️"
   defp night_action_status_icon("protect"), do: "🛡️"
   defp night_action_status_icon("sleep"), do: "💤"
+  defp night_action_status_icon("wander"), do: "👀"
+  defp night_action_status_icon("use_item"), do: "✨"
   defp night_action_status_icon(_), do: "✓"
 
   defp night_action_row_class("werewolf"),
@@ -1064,7 +1512,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   defp night_thinking_label("werewolf"), do: "Choosing prey..."
   defp night_thinking_label("seer"), do: "Reaching into the shadows..."
   defp night_thinking_label("doctor"), do: "Deciding who to protect..."
-  defp night_thinking_label("villager"), do: "Sleeping peacefully..."
+  defp night_thinking_label("villager"), do: "Deciding whether to sleep or wander..."
   defp night_thinking_label(_), do: "Waiting in the dark..."
 
   defp night_action_description(action, players) do
@@ -1089,9 +1537,89 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       "sleep" ->
         "Sleeping soundly 💤"
 
+      "wander" ->
+        "Wandering the village at night 🚶"
+
+      "use_item" ->
+        item = get_val(action, :item_type, "item")
+        "Used #{item} ✨"
+
       _ ->
         "Taking action..."
     end
+  end
+
+  # ── Game Timeline Builder ─────────────────────────────
+
+  defp build_game_timeline(world) do
+    night_history = get_val(world, :night_history, [])
+    vote_history = get_val(world, :vote_history, [])
+    elimination_log = get_val(world, :elimination_log, [])
+    past_transcripts = get_val(world, :past_transcripts, %{})
+    day_number = get_val(world, :day_number, 1)
+
+    # Gather all days
+    all_days =
+      (Map.keys(past_transcripts) ++ [day_number])
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    Enum.map(all_days, fn day ->
+      # Night events for this day (night happens at start of day)
+      night_entries = Enum.filter(night_history, fn e -> get_val(e, :day, 0) == day - 1 end)
+
+      night_text =
+        case night_entries do
+          [] ->
+            nil
+
+          entries ->
+            kill = Enum.find(entries, fn e -> get_val(e, :action, "") == "choose_victim" && get_val(e, :successful, false) end)
+            save = Enum.find(entries, fn e -> get_val(e, :saved, false) end)
+
+            cond do
+              save -> "#{get_val(save, :target, "someone")} was attacked but saved by the doctor."
+              kill -> "#{get_val(kill, :target, "someone")} was killed by werewolves."
+              true -> "A quiet night — no one died."
+            end
+        end
+
+      # Discussion summary
+      transcript = Map.get(past_transcripts, day, [])
+
+      discussion_summary =
+        case length(transcript) do
+          0 -> nil
+          n -> "#{n} statements exchanged during discussion."
+        end
+
+      # Vote summary
+      day_votes = Enum.filter(vote_history, fn e -> get_val(e, :day, 0) == day end)
+
+      vote_text =
+        case day_votes do
+          [] -> nil
+          votes -> "#{length(votes)} votes cast."
+        end
+
+      # Elimination
+      day_eliminations = Enum.filter(elimination_log, fn e -> get_val(e, :day, 0) == day end)
+
+      elimination_text =
+        day_eliminations
+        |> Enum.map(fn e ->
+          "#{get_val(e, :player, "?")} (#{get_val(e, :role, "?")}) was #{format_reason(get_val(e, :reason, "eliminated"))}"
+        end)
+        |> Enum.join(". ")
+
+      %{
+        day: day,
+        night_text: night_text,
+        discussion_summary: discussion_summary,
+        vote_text: vote_text,
+        elimination_text: if(elimination_text == "", do: nil, else: elimination_text)
+      }
+    end)
   end
 
   # ── Helpers ───────────────────────────────────────────
@@ -1103,22 +1631,43 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   defp get_val(_, _, default), do: default
 
   defp is_night?("night"), do: true
+  defp is_night?("wolf_discussion"), do: true
+  defp is_night?("last_words_night"), do: true
+  defp is_night?("meeting_selection"), do: false
+  defp is_night?("private_meeting"), do: false
   defp is_night?(_), do: false
 
   defp phase_label("night"), do: "Nightfall"
+  defp phase_label("wolf_discussion"), do: "Wolf Den"
+  defp phase_label("meeting_selection"), do: "Meetings"
+  defp phase_label("private_meeting"), do: "Private Meeting"
   defp phase_label("day_discussion"), do: "Town Square"
   defp phase_label("day_voting"), do: "Judgment"
+  defp phase_label("runoff_discussion"), do: "Runoff"
+  defp phase_label("runoff_voting"), do: "Runoff Vote"
+  defp phase_label("last_words_vote"), do: "Last Words"
+  defp phase_label("last_words_night"), do: "Last Words"
   defp phase_label("game_over"), do: "Game Over"
   defp phase_label(_), do: "Unknown"
 
   defp phase_action_label("night"), do: "The wolves hunt"
+  defp phase_action_label("wolf_discussion"), do: "The pack plots"
+  defp phase_action_label("meeting_selection"), do: "Choosing meeting partners"
+  defp phase_action_label("private_meeting"), do: "Private conversation"
   defp phase_action_label("day_discussion"), do: "Discussion"
   defp phase_action_label("day_voting"), do: "Vote to eliminate"
+  defp phase_action_label("runoff_discussion"), do: "Final arguments"
+  defp phase_action_label("runoff_voting"), do: "Runoff vote"
+  defp phase_action_label("last_words_vote"), do: "Final words"
+  defp phase_action_label("last_words_night"), do: "Final words"
   defp phase_action_label("game_over"), do: "Finished"
   defp phase_action_label(_), do: ""
 
   defp phase_badge("night"),
     do: "bg-blue-950/80 text-blue-300 border-blue-500/30 shadow-[0_0_8px_rgba(59,130,246,0.15)]"
+
+  defp phase_badge("wolf_discussion"),
+    do: "bg-red-950/80 text-red-300 border-red-500/30 shadow-[0_0_8px_rgba(239,68,68,0.15)]"
 
   defp phase_badge("day_discussion"),
     do:
@@ -1126,6 +1675,24 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
   defp phase_badge("day_voting"),
     do: "bg-rose-950/80 text-rose-300 border-rose-500/30 shadow-[0_0_8px_rgba(225,29,72,0.15)]"
+
+  defp phase_badge("runoff_discussion"),
+    do: "bg-amber-950/80 text-amber-300 border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.2)]"
+
+  defp phase_badge("runoff_voting"),
+    do: "bg-rose-950/80 text-rose-300 border-rose-500/40 shadow-[0_0_8px_rgba(225,29,72,0.2)]"
+
+  defp phase_badge("last_words_vote"),
+    do: "bg-purple-950/80 text-purple-300 border-purple-500/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+
+  defp phase_badge("last_words_night"),
+    do: "bg-purple-950/80 text-purple-300 border-purple-500/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+
+  defp phase_badge("meeting_selection"),
+    do: "bg-cyan-950/80 text-cyan-300 border-cyan-500/30 shadow-[0_0_8px_rgba(6,182,212,0.15)]"
+
+  defp phase_badge("private_meeting"),
+    do: "bg-cyan-950/80 text-cyan-300 border-cyan-500/30 shadow-[0_0_8px_rgba(6,182,212,0.15)]"
 
   defp phase_badge(_), do: "bg-slate-800 text-slate-400 border-slate-600"
 
@@ -1176,4 +1743,53 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   end
 
   defp short_model_name(_), do: ""
+
+  # ── Trait/Item/Event Emoji Helpers ──────────────────────
+
+  defp trait_emoji("bold"), do: "⚡"
+  defp trait_emoji("paranoid"), do: "👁"
+  defp trait_emoji("loyal"), do: "🤝"
+  defp trait_emoji("cunning"), do: "🦊"
+  defp trait_emoji("superstitious"), do: "🔮"
+  defp trait_emoji("merciful"), do: "🕊"
+  defp trait_emoji("observant"), do: "🔍"
+  defp trait_emoji("dramatic"), do: "🎭"
+  defp trait_emoji(_), do: "✦"
+
+  defp item_emoji("lantern"), do: "🔦"
+  defp item_emoji("lock"), do: "🔒"
+  defp item_emoji("anonymous_letter"), do: "✉"
+  defp item_emoji("wolfsbane"), do: "🌿"
+  defp item_emoji(_), do: "📦"
+
+  defp evidence_emoji("muddy_footprints"), do: "👣"
+  defp evidence_emoji("broken_vial"), do: "🧪"
+  defp evidence_emoji("strange_symbols"), do: "🔣"
+  defp evidence_emoji("torn_cloth"), do: "🧵"
+  defp evidence_emoji("cold_trail"), do: "❄️"
+  defp evidence_emoji(_), do: "🔎"
+
+  defp village_event_emoji("stranger_arrives"), do: "🧳"
+  defp village_event_emoji("supply_raid"), do: "💰"
+  defp village_event_emoji("blizzard"), do: "🌨"
+  defp village_event_emoji("festival"), do: "🎉"
+  defp village_event_emoji("omen"), do: "☠️"
+  defp village_event_emoji("missing_livestock"), do: "🐄"
+  defp village_event_emoji(_), do: "📢"
+
+  defp village_event_title("stranger_arrives"), do: "A Stranger Arrives"
+  defp village_event_title("supply_raid"), do: "Supply Raid"
+  defp village_event_title("blizzard"), do: "Blizzard"
+  defp village_event_title("festival"), do: "Village Festival"
+  defp village_event_title("omen"), do: "Dark Omen"
+  defp village_event_title("missing_livestock"), do: "Missing Livestock"
+  defp village_event_title(_), do: "Village Event"
+
+  defp connection_emoji("siblings"), do: "👨‍👩‍👧‍👦"
+  defp connection_emoji("rivals"), do: "⚔️"
+  defp connection_emoji("old_friends"), do: "🤝"
+  defp connection_emoji("debt"), do: "💰"
+  defp connection_emoji("mentor_student"), do: "📚"
+  defp connection_emoji("secret_keepers"), do: "🤫"
+  defp connection_emoji(_), do: "🔗"
 end
