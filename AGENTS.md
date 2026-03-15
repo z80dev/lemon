@@ -415,6 +415,9 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
+- `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
+- `docs/missions.md` - Reverse-engineered Factory Missions behavior and Lemon implementation spec
+- `docs/missions_phase1_plan.md` - Concrete Phase 1 implementation plan for Lemon Missions
 - `docs/telemetry.md` - Telemetry and observability
 - `docs/extensions.md` - Extension system
 - `docs/beam_agents.md` - BEAM agent architecture
@@ -463,4 +466,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-03-08* (added lemon_mcp, fixed dependency graph, corrected RPC/engine counts)
+*Last updated: 2026-03-13* (added subagent parent-question design doc to docs index)

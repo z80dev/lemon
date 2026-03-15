@@ -29,6 +29,7 @@
 |-----|---------------|
 | [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill injection, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
+| [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [beam_agents.md](beam_agents.md) | BEAM agent architecture: process-per-agent, supervision, message passing |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
 | [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
@@ -87,4 +88,4 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
 5. **Review cycle**: docs are checked for staleness based on `max_age_days` in the catalog.
 
-*Last reviewed: 2026-03-10*
+*Last reviewed: 2026-03-13*

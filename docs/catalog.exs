@@ -96,6 +96,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/subagent-parent-questions.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-13],
+    max_age_days: 60
+  },
+  %{
     path: "docs/extensions.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
