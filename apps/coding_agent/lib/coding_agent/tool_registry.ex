@@ -49,6 +49,7 @@ defmodule CodingAgent.ToolRegistry do
     {:todo, Tools.Todo},
     {:task, Tools.Task},
     {:agent, Tools.Agent},
+    {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
     {:post_to_x, Tools.PostToX},
@@ -605,5 +606,4 @@ defmodule CodingAgent.ToolRegistry do
   defp sort_extensions(extensions) do
     Enum.sort_by(extensions, fn module -> Atom.to_string(module) end)
   end
-
 end

@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, tool_auth, extensions_status, post_to_x, get_x_mentions)
+  - `coding_tools/2` - Full access tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
   - `read_only_tools/2` - Exploration tools (read only)
   - `all_tools/2` - All available tools as a map
   """
@@ -28,11 +28,12 @@ defmodule CodingAgent.Tools do
     ToolAuth,
     ExtensionsStatus,
     PostToX,
-    GetXMentions
+    GetXMentions,
+    ParentQuestion
   }
 
   @doc """
-  Get the default coding tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, tool_auth, extensions_status, post_to_x, get_x_mentions).
+  Get the default coding tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
 
   ## Options
   - Any options are passed through to individual tools
@@ -55,6 +56,7 @@ defmodule CodingAgent.Tools do
       Todo.tool(cwd, opts),
       Task.tool(cwd, opts),
       Agent.tool(cwd, opts),
+      ParentQuestion.tool(cwd, opts),
       ToolAuth.tool(cwd, opts),
       ExtensionsStatus.tool(cwd, opts),
       PostToX.tool(cwd, opts),
@@ -97,6 +99,7 @@ defmodule CodingAgent.Tools do
       "truncate" => Truncate.tool(opts),
       "task" => Task.tool(cwd, opts),
       "agent" => Agent.tool(cwd, opts),
+      "parent_question" => ParentQuestion.tool(cwd, opts),
       "tool_auth" => ToolAuth.tool(cwd, opts),
       "extensions_status" => ExtensionsStatus.tool(cwd, opts),
       "post_to_x" => PostToX.tool(cwd, opts),

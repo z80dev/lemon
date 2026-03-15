@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
+  alias CodingAgent.Tools.AskParent
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -235,6 +236,9 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @spec build_session_opts(String.t(), keyword(), map()) :: keyword()
   def build_session_opts(cwd, opts, validated) do
+    inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
+    child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
+
     base_opts =
       opts
       |> Keyword.take([
@@ -262,6 +266,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:tool_policy, validated[:tool_policy])
       |> maybe_put_kw(:session_key, validated[:session_key])
       |> maybe_put_kw(:agent_id, validated[:agent_id])
+      |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
 
     [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
   end
@@ -282,4 +287,38 @@ defmodule CodingAgent.Tools.Task.Params do
 
   defp maybe_put_kw(list, _key, nil), do: list
   defp maybe_put_kw(list, key, value), do: Keyword.put(list, key, value)
+
+  defp maybe_build_ask_parent_tools(cwd, opts) do
+    parent_session_pid = Keyword.get(opts, :session_pid)
+    parent_run_id = Keyword.get(opts, :parent_run_id)
+    child_scope_id = Keyword.get(opts, :child_scope_id)
+
+    if is_pid(parent_session_pid) and Process.alive?(parent_session_pid) and
+         is_binary(parent_run_id) and is_binary(child_scope_id) do
+      [
+        AskParent.tool(cwd,
+          parent_session_pid: parent_session_pid,
+          parent_session_module: Keyword.get(opts, :session_module, CodingAgent.Session),
+          parent_session_key: Keyword.get(opts, :session_key),
+          parent_agent_id: Keyword.get(opts, :agent_id),
+          parent_run_id: parent_run_id,
+          child_run_id: Keyword.get(opts, :child_run_id),
+          child_scope_id: child_scope_id,
+          task_id: Keyword.get(opts, :task_id),
+          task_description: Keyword.get(opts, :task_description)
+        )
+      ]
+    else
+      []
+    end
+  end
+
+  defp normalize_extra_tools(tools) when is_list(tools) do
+    Enum.filter(tools, &match?(%AgentTool{}, &1))
+  end
+
+  defp normalize_extra_tools(_), do: []
+
+  defp child_extra_tools_if_present([]), do: nil
+  defp child_extra_tools_if_present(extra_tools), do: extra_tools
 end

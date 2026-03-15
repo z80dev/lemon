@@ -50,6 +50,8 @@ defmodule CodingAgent.Tools.Task.Execution do
         RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
       end
 
+    child_scope_id = run_id || "child_scope:" <> generate_child_scope_id()
+
     task_id =
       if async? do
         TaskStore.new_task(%{
@@ -110,6 +112,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       coordinator: coordinator,
       run_id: run_id,
       task_id: task_id,
+      child_scope_id: child_scope_id,
       lifecycle_context: lifecycle_context,
       followup_context: followup_context,
       validated: validated
@@ -158,7 +161,7 @@ defmodule CodingAgent.Tools.Task.Execution do
               Runner.start_session_with_prompt(
                 CodingAgent.Tools.Task.Params.build_session_opts(
                   execution.effective_cwd,
-                  opts,
+                  build_child_session_opts(opts, execution),
                   execution.validated
                 ),
                 resolved_prompt,
@@ -189,4 +192,16 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   defp coordinator_alive?(_), do: false
+
+  defp build_child_session_opts(opts, execution) do
+    opts
+    |> Keyword.put(:child_run_id, execution.run_id)
+    |> Keyword.put(:child_scope_id, execution.child_scope_id)
+    |> Keyword.put(:task_id, execution.task_id)
+    |> Keyword.put(:task_description, execution.description)
+  end
+
+  defp generate_child_scope_id do
+    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
 end

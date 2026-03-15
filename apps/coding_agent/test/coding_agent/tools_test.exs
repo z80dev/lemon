@@ -41,6 +41,7 @@ defmodule CodingAgent.ToolsTest do
         "todo",
         "task",
         "agent",
+        "parent_question",
         "tool_auth",
         "extensions_status",
         "post_to_x",
@@ -52,9 +53,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 19 tools" do
+    test "returns exactly 20 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 19
+      assert length(tools) == 20
     end
 
     test "passes cwd to each tool" do
@@ -73,7 +74,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 19
+      assert length(tools) == 20
     end
   end
 
@@ -155,6 +156,7 @@ defmodule CodingAgent.ToolsTest do
         "truncate",
         "task",
         "agent",
+        "parent_question",
         "tool_auth",
         "extensions_status",
         "post_to_x",
@@ -167,9 +169,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 20 tools (includes truncate plus X tools)" do
+    test "returns 21 tools (includes truncate plus parent_question and X tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 20
+      assert map_size(tools_map) == 21
     end
 
     test "tool names match map keys" do

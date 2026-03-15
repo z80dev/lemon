@@ -37,6 +37,7 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |  +-- CodingAgent.TaskSupervisor (for async operations)                      |
 |  +-- CodingAgent.ProcessStoreServer (background process tracking)           |
 |  +-- CodingAgent.TaskStoreServer (async task tracking with DETS)            |
+|  +-- CodingAgent.ParentQuestionStoreServer (parent-question tracking)       |
 |  +-- CodingAgent.LaneQueue (concurrency-capped subagent/background lanes)  |
 +-----------------------------------------------------------------------------+
 ```
@@ -60,7 +61,7 @@ When downstream store or agent processes time out, callers should log and contin
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (19 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (20 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
@@ -68,7 +69,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | **Search** | `grep`, `find` |
 | **Execution** | `bash`, `browser` |
 | **Web** | `websearch`, `webfetch` |
-| **Task/Agent** | `task`, `agent`, `todo` |
+| **Task/Agent** | `task`, `agent`, `parent_question`, `todo` |
 | **Social** | `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status`, `memory_topic` |
 
@@ -86,6 +87,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `todowrite` | `Tools.TodoWrite` | Low-level todo write (used internally by `todo`) |
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev only) |
 | `lsp_formatter` | `Tools.LspFormatter` | Format code via LSP |
+| `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
 **Internal helpers** (not exposed as tools): `Tools.Fuzzy` (fuzzy match used by `edit`), `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
@@ -104,6 +106,8 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |--------|---------|
 | `CodingAgent.BudgetTracker` | Token/cost budget tracking per run |
 | `CodingAgent.BudgetEnforcer` | Budget limit enforcement |
+| `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
+| `CodingAgent.ParentQuestionStoreServer` | Owns the ParentQuestions ETS/DETS tables and cleanup |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run relationships |
 | `CodingAgent.RunGraphServer` | DETS persistence for run graph |
 
@@ -161,6 +165,8 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 - `CodingAgent.Tools.Task.Runner` for CLI/internal execution paths
 - `CodingAgent.Tools.Task.Followup` for async followup routing
 - `CodingAgent.Tools.Task.Result` for poll/join/result shaping
+
+Child sessions launched through `CodingAgent.Tools.Task` can now receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`).
 
 ### Long-Running Harness Primitives
 

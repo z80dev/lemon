@@ -61,6 +61,7 @@ CodingAgent.Supervisor (one_for_one)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
   +-- TaskStoreServer (DETS-backed async task tracking)
+  +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
   +-- RunGraphServer (ETS+DETS persistent run graph)
   +-- ProcessStoreServer (background process state)
   +-- ProcessManager (DynamicSupervisor for exec processes)
@@ -77,6 +78,8 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent` | Top-level facade -- `start_session/1`, `start_supervised_session/1`, `lookup_session/1`, `coding_tools/2`, `read_only_tools/2`, `load_settings/1` |
 | `CodingAgent.Application` | OTP application callback; starts the full supervision tree and optionally a primary session |
+| `CodingAgent.ParentQuestions` | DETS-backed store and lifecycle helpers for child-to-parent clarification requests |
+| `CodingAgent.ParentQuestionStoreServer` | Owns the parent-question ETS/DETS tables and TTL cleanup |
 
 ### Session Management
 
@@ -98,7 +101,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (19 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (20 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
@@ -113,7 +116,7 @@ CodingAgent.Supervisor (one_for_one)
 | Search | `grep`, `find` |
 | Execution | `bash`, `browser` |
 | Web | `websearch`, `webfetch` |
-| Task / Agent | `task`, `agent`, `todo` |
+| Task / Agent | `task`, `agent`, `parent_question`, `todo` |
 | Social | `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
 
@@ -132,6 +135,7 @@ CodingAgent.Supervisor (one_for_one)
 | `memory_topic` | `Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
 | `glob` | `Tools.Glob` | File pattern matching |
 | `lsp_formatter` | `Tools.LspFormatter` | Format code via LSP |
+| `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
 **Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
@@ -141,6 +145,7 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.BudgetTracker` | Token/cost budget tracking per run with parent/child inheritance |
 | `CodingAgent.BudgetEnforcer` | Raises on exceeded budgets during agent runs |
+| `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
 | `CodingAgent.RunGraphServer` | GenServer owning the RunGraph ETS table with DETS persistence, atomic transitions, and TTL-based cleanup |
 
@@ -181,6 +186,7 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
+| `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
 ### Subagents and Commands
 

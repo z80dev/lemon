@@ -2,9 +2,9 @@ defmodule CodingAgentTest do
   use ExUnit.Case, async: true
 
   describe "coding_tools/2" do
-    test "returns list of 19 tools" do
+    test "returns list of 20 tools" do
       tools = CodingAgent.coding_tools("/tmp")
-      assert length(tools) == 19
+      assert length(tools) == 20
       assert Enum.all?(tools, &match?(%AgentCore.Types.AgentTool{}, &1))
     end
 
@@ -25,6 +25,7 @@ defmodule CodingAgentTest do
       assert "todo" in names
       assert "task" in names
       assert "agent" in names
+      assert "parent_question" in names
       assert "tool_auth" in names
       assert "extensions_status" in names
       assert "post_to_x" in names

@@ -29,6 +29,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Wasm.SidecarSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
+      {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
       {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
       {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
