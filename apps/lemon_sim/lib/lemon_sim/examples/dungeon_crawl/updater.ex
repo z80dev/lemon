@@ -3,6 +3,9 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
 
   @behaviour LemonSim.Updater
 
+  import LemonSim.GameHelpers
+  import LemonSim.GameHelpers.UpdaterHelpers, only: [maybe_store_thought: 2]
+
   alias LemonCore.MapHelpers
   alias LemonSim.State
   alias LemonSim.Examples.DungeonCrawl.Events
@@ -10,6 +13,7 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
+    state = maybe_store_thought(state, event)
 
     case event.kind do
       "attack_requested" -> apply_attack(state, event)
@@ -1054,13 +1058,4 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
   defp rejection_reason(:no_active_traps), do: "no active traps to disarm"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
-  defp fetch(map, atom_key, string_key) do
-    Map.get(map, atom_key, Map.get(map, string_key))
-  end
-
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-  end
-
-  defp get(_map, _key, default), do: default
 end

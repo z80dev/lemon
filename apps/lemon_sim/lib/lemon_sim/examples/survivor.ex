@@ -43,8 +43,19 @@ defmodule LemonSim.Examples.Survivor do
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
-    player_ids = Enum.map(1..player_count, fn i -> "player_#{i}" end)
-    {players, tribes} = Tribes.assign_tribes(player_ids)
+    player_names = Tribes.player_names(player_count)
+    {players, tribes} = Tribes.assign_tribes(player_names)
+
+    # Assign personality traits and backstory connections
+    traits = Tribes.assign_traits(player_names)
+    connections = Tribes.generate_connections(player_names)
+
+    # Add traits to player maps
+    players =
+      Enum.into(players, %{}, fn {name, info} ->
+        {name, Map.put(info, :traits, Map.get(traits, name, []))}
+      end)
+
     challenge_order = Tribes.challenge_turn_order(players)
     first_actor = List.first(challenge_order)
 
@@ -80,7 +91,12 @@ defmodule LemonSim.Examples.Survivor do
       jury_statements: [],
       ftc_sub_phase: nil,
       status: "in_progress",
-      winner: nil
+      winner: nil,
+      # Personality & backstory
+      traits: traits,
+      connections: connections,
+      # Internal journals
+      journals: %{}
     }
   end
 
@@ -133,11 +149,51 @@ defmodule LemonSim.Examples.Survivor do
           players = get(world, :players, %{})
           actor = Map.get(players, actor_id, %{})
 
+          # Build trait descriptions for this player
+          actor_traits = get(actor, :traits, [])
+
+          trait_guidance =
+            actor_traits
+            |> Enum.map(&Tribes.trait_description/1)
+            |> Enum.reject(&(&1 == ""))
+            |> Enum.join(" ")
+
+          # Build connections for this player
+          connections = get(world, :connections, [])
+          my_connections = Tribes.connections_for_player(connections, actor_id)
+
+          connection_info =
+            Enum.map(my_connections, fn conn ->
+              other =
+                conn
+                |> Map.get(:players, [])
+                |> Enum.find(&(&1 != actor_id))
+
+              %{
+                "other_player" => other,
+                "type" => Map.get(conn, :type),
+                "description" => Map.get(conn, :description)
+              }
+            end)
+
+          # Build journal entries
+          journals = get(world, :journals, %{})
+          my_journal = Map.get(journals, actor_id, [])
+
+          base_info = build_player_info(world, actor_id, actor)
+
+          enriched_info =
+            base_info
+            |> Map.put("your_traits", actor_traits)
+            |> Map.put("trait_guidance", trait_guidance)
+            |> Map.put("your_connections", connection_info)
+            |> Map.put("your_journal", Enum.take(my_journal, -10))
+
           %{
             id: :player_info,
             title: "Your Player Info (some info is private to you)",
             format: :json,
-            content: build_player_info(world, actor_id, actor)
+            content: enriched_info
           }
         end,
         social_graph: fn frame, _tools, _opts ->
@@ -192,6 +248,10 @@ defmodule LemonSim.Examples.Survivor do
         - IMPORTANT: The whisper GRAPH is public (everyone sees who talks to whom), but whisper CONTENT is private.
         - IMPORTANT: Post-merge eliminated players become jury members who vote for the winner. Don't burn bridges unnecessarily.
         - Think about both short-term survival and long-term jury management.
+        - PERSONALITY: You have a personality. Stay in character based on your traits. Let them influence how you speak, strategize, and react.
+        - CONNECTIONS: You have connections with other players that may influence your decisions. Use them to your advantage or navigate around them.
+        - JOURNAL: Use the optional "thought" field in any tool to record private observations. These persist across episodes.
+        - Use player names when referring to other players in discussion and tool calls.
         """
       },
       section_order: [
@@ -311,8 +371,9 @@ defmodule LemonSim.Examples.Survivor do
       |> Enum.map(fn {id, p} ->
         status = get(p, :status, "alive")
         tribe = get(p, :tribe, "unknown")
+        traits = get(p, :traits, [])
 
-        base = %{"id" => id, "status" => status, "tribe" => tribe}
+        base = %{"name" => id, "status" => status, "tribe" => tribe, "traits" => traits}
 
         if get(p, :jury_member, false) do
           Map.put(base, "jury_member", true)

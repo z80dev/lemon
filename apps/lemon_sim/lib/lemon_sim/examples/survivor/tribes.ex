@@ -1,7 +1,8 @@
 defmodule LemonSim.Examples.Survivor.Tribes do
   @moduledoc """
   Player and tribe management for Survivor.
-  Handles initial tribe assignment, merge logic, and turn ordering.
+  Handles initial tribe assignment, merge logic, turn ordering,
+  character names, personality traits, and backstory connections.
   """
 
   import LemonSim.GameHelpers
@@ -9,6 +10,105 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   @tribe_names ["Tala", "Manu"]
   @merge_tribe_name "Solana"
   @merge_threshold 6
+
+  @player_names [
+    "Kai", "Sierra", "Marcus", "Jade", "Rex", "Luna", "Dex", "Paloma",
+    "Blaze", "Isla", "Thorn", "Willow", "Nash", "Sable", "Zane", "Ember"
+  ]
+
+  # -- Personality Traits --
+
+  @traits ~w(strategic ruthless loyal charismatic paranoid athletic cunning underdog)
+
+  @trait_descriptions %{
+    "strategic" => "You are STRATEGIC — you think three steps ahead, plan blindsides, and always have a target list ranked by threat level.",
+    "ruthless" => "You are RUTHLESS — you will cut any ally loose when they stop being useful. Winning is everything, and sentimentality is weakness.",
+    "loyal" => "You are LOYAL — you ride or die with your alliance. Betraying an ally is the worst sin, and you remember every backstab.",
+    "charismatic" => "You are CHARISMATIC — you can talk anyone into anything. You defuse conflicts, build bridges, and make everyone feel heard.",
+    "paranoid" => "You are PARANOID — you read too much into every whisper, every glance. If someone talked to your rival, they're plotting against you.",
+    "athletic" => "You are ATHLETIC — you live for challenges and respect physical prowess. You judge people by their performance under pressure.",
+    "cunning" => "You are CUNNING — you plant seeds of doubt, spread controlled misinformation, and let others do your dirty work.",
+    "underdog" => "You are an UNDERDOG — you fly under the radar, let bigger threats absorb attention, and strike when no one expects it."
+  }
+
+  # -- Backstory Connections --
+
+  @connection_types ~w(exes college_roommates work_rivals hometown secret_alliance bitter_enemies)
+
+  @connection_templates %{
+    "exes" => " dated briefly before the show. There's unresolved tension and neither has told the others.",
+    "college_roommates" => " were college roommates and still know each other's tells and habits.",
+    "work_rivals" => " worked at the same company and competed for the same promotion. Old wounds die hard.",
+    "hometown" => " grew up in the same small town. They share memories no one else would understand.",
+    "secret_alliance" => " made a pact before the game started to watch each other's backs no matter what.",
+    "bitter_enemies" => " had a falling out years ago over a mutual friend. Neither has forgiven the other."
+  }
+
+  @doc """
+  Returns N shuffled player names from the name pool.
+  """
+  @spec player_names(pos_integer()) :: [String.t()]
+  def player_names(count) do
+    @player_names
+    |> Enum.shuffle()
+    |> Enum.take(count)
+  end
+
+  @doc """
+  Assigns personality traits (1-2) to each player.
+  Returns a map of player_name => [trait1, trait2].
+  """
+  @spec assign_traits([String.t()]) :: %{String.t() => [String.t()]}
+  def assign_traits(player_names) do
+    Enum.into(player_names, %{}, fn name ->
+      count = Enum.random(1..2)
+      player_traits = @traits |> Enum.shuffle() |> Enum.take(count)
+      {name, player_traits}
+    end)
+  end
+
+  @doc """
+  Returns the description for a given trait.
+  """
+  @spec trait_description(String.t()) :: String.t()
+  def trait_description(trait), do: Map.get(@trait_descriptions, trait, "")
+
+  @doc """
+  Generates backstory connections between random pairs of players.
+  Returns a list of connection maps with :players, :type, and :description keys.
+  """
+  @spec generate_connections([String.t()]) :: [map()]
+  def generate_connections(player_names) when length(player_names) < 4, do: []
+
+  def generate_connections(player_names) do
+    num_connections = min(3, div(length(player_names), 2))
+
+    player_names
+    |> Enum.shuffle()
+    |> Enum.chunk_every(2, 2, :discard)
+    |> Enum.take(num_connections)
+    |> Enum.map(fn [a, b] ->
+      type = Enum.random(@connection_types)
+      template = Map.get(@connection_templates, type, " have a connection.")
+
+      %{
+        players: [a, b],
+        type: type,
+        description: "#{a} and #{b}" <> template
+      }
+    end)
+  end
+
+  @doc """
+  Filters connections to only those involving the given player.
+  """
+  @spec connections_for_player([map()], String.t()) :: [map()]
+  def connections_for_player(connections, player_id) do
+    Enum.filter(connections, fn conn ->
+      players = Map.get(conn, :players, [])
+      player_id in players
+    end)
+  end
 
   @doc """
   Assigns players into two tribes and gives one player a hidden immunity idol.

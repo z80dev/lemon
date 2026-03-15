@@ -163,6 +163,51 @@ defmodule LemonSim.GameHelpers.Tools do
     }
   end
 
+  @doc """
+  Wraps an AgentTool to add an optional "thought" parameter for journal tracking.
+
+  The thought is injected into the event payload so updaters can store it.
+  """
+  def add_thought_param(tool) do
+    props = Map.get(tool.parameters, "properties", %{})
+
+    new_props =
+      Map.put(props, "thought", %{
+        "type" => "string",
+        "description" =>
+          "Optional: record a private internal thought about what's happening. " <>
+            "Note suspicions, plans, observations. Only you (and spectators) can see this."
+      })
+
+    original_execute = tool.execute
+
+    wrapped_execute = fn tool_call_id, params, signal, on_update ->
+      case original_execute.(tool_call_id, params, signal, on_update) do
+        {:ok, result} ->
+          thought = Map.get(params, "thought", Map.get(params, :thought))
+
+          if is_binary(thought) and thought != "" do
+            event = Map.get(result.details, "event")
+
+            if event do
+              updated_payload = Map.put(event.payload, "thought", thought)
+              updated_event = %{event | payload: updated_payload}
+              {:ok, %{result | details: Map.put(result.details, "event", updated_event)}}
+            else
+              {:ok, result}
+            end
+          else
+            {:ok, result}
+          end
+
+        other ->
+          other
+      end
+    end
+
+    %{tool | parameters: Map.put(tool.parameters, "properties", new_props), execute: wrapped_execute}
+  end
+
   defp build_vote_description(targets_desc, true),
     do:
       "Vote to eliminate a player or skip. Valid targets: #{targets_desc}, or \"skip\" to abstain."

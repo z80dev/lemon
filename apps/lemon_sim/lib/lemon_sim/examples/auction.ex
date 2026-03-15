@@ -35,9 +35,11 @@ defmodule LemonSim.Examples.Auction do
     player_count = max(4, min(6, player_count))
     seed = Keyword.get(opts, :seed, :erlang.phash2(:erlang.monotonic_time()))
 
-    player_ids = Enum.map(1..player_count, &"player_#{&1}")
+    player_ids = Items.collector_names(player_count)
     schedule = Items.generate_schedule(seed)
     objectives = Items.assign_objectives(player_ids, seed)
+    traits = Items.assign_traits(player_ids)
+    connections = Items.generate_connections(player_ids)
 
     players =
       Enum.into(player_ids, %{}, fn pid ->
@@ -54,6 +56,9 @@ defmodule LemonSim.Examples.Auction do
 
     %{
       players: players,
+      traits: traits,
+      connections: connections,
+      journals: %{},
       auction_schedule: schedule,
       current_round: 1,
       max_rounds: 8,
@@ -112,6 +117,16 @@ defmodule LemonSim.Examples.Auction do
             content: build_player_view(frame.world, actor_id)
           }
         end,
+        your_profile: fn frame, _tools, _opts ->
+          actor_id = MapHelpers.get_key(frame.world, :active_actor_id)
+
+          %{
+            id: :your_profile,
+            title: "Your Collector Profile",
+            format: :json,
+            content: build_profile_view(frame.world, actor_id)
+          }
+        end,
         auction_status: fn frame, _tools, _opts ->
           %{
             id: :auction_status,
@@ -125,7 +140,7 @@ defmodule LemonSim.Examples.Auction do
 
           %{
             id: :opponents,
-            title: "Other Players",
+            title: "Other Collectors",
             format: :json,
             content: build_opponents_view(frame.world, actor_id)
           }
@@ -150,10 +165,16 @@ defmodule LemonSim.Examples.Auction do
         - Sometimes it's better to let an item go than to overpay.
         - Remaining gold contributes to your score (gold/10).
         - The minimum bid increment is 2 gold above the current high bid.
+
+        PERSONALITY GUIDANCE:
+        - Stay in character according to your collector profile and personality traits.
+        - Let your traits influence HOW you bid, not just WHETHER you bid.
+        - Consider your backstory connections — rivalries may push you to outbid certain collectors, while old partnerships may make you yield.
         """
       },
       section_order: [
         :world_state,
+        :your_profile,
         :auction_status,
         :opponents,
         :recent_events,
@@ -324,12 +345,16 @@ defmodule LemonSim.Examples.Auction do
 
   defp build_opponents_view(world, actor_id) do
     players = get(world, :players, %{})
+    traits = get(world, :traits, %{})
 
     players
     |> Enum.reject(fn {pid, _} -> pid == actor_id end)
     |> Enum.map(fn {pid, player} ->
+      opponent_traits = Map.get(traits, pid, [])
+
       %{
-        "id" => pid,
+        "name" => pid,
+        "reputation" => format_trait_labels(opponent_traits),
         "wealth" => Items.wealth_indicator(get(player, :gold, 0)),
         "item_count" => length(get(player, :items, [])),
         "items" =>
@@ -342,6 +367,40 @@ defmodule LemonSim.Examples.Auction do
       }
     end)
   end
+
+  defp build_profile_view(world, actor_id) do
+    traits = get(world, :traits, %{})
+    connections = get(world, :connections, [])
+
+    player_traits = Map.get(traits, actor_id, [])
+    player_connections = Items.connections_for_player(connections, actor_id)
+
+    %{
+      "name" => actor_id,
+      "traits" => player_traits,
+      "trait_descriptions" => Enum.map(player_traits, &Items.trait_description/1),
+      "connections" =>
+        Enum.map(player_connections, fn conn ->
+          %{
+            "type" => Map.get(conn, :type, "unknown"),
+            "with" =>
+              conn
+              |> Map.get(:players, [])
+              |> Enum.reject(&(&1 == actor_id))
+              |> List.first(),
+            "description" => Map.get(conn, :description, "")
+          }
+        end)
+    }
+  end
+
+  defp format_trait_labels(traits) when is_list(traits) and length(traits) > 0 do
+    traits
+    |> Enum.map(&String.capitalize/1)
+    |> Enum.join(", ")
+  end
+
+  defp format_trait_labels(_), do: "Unknown"
 
   # -- Callbacks --
 

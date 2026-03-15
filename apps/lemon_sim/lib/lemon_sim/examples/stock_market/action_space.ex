@@ -25,7 +25,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
       if is_nil(actor) do
         {:ok, []}
       else
-        {:ok, tools_for_phase(phase, actor_id, players, world)}
+        {:ok, Enum.map(tools_for_phase(phase, actor_id, players, world), &GameTools.add_thought_param/1)}
       end
     end
   end
@@ -165,6 +165,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
     portfolio = get(actor, :portfolio, %{})
     short_book = get(actor, :short_book, %{})
     stock_names = Market.stock_names()
+    max_order = Market.max_order_shares()
 
     stock_info =
       Enum.map(stock_names, fn ticker ->
@@ -177,13 +178,13 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
 
     max_shares_info =
       Enum.map(stock_names, fn ticker ->
-        price = Market.get_stock_price(stocks, ticker)
-        max_buy = if price > 0, do: floor(cash / price), else: 0
+        max_buy = Market.max_buy_quantity(actor, stocks, ticker)
         long_shares = Map.get(portfolio, ticker, 0)
         short_shares = Map.get(short_book, ticker, 0)
         max_short = Market.max_short_capacity(actor, stocks, ticker)
+        sellable = min(long_shares, max_order)
 
-        "#{ticker}: buy #{max_buy}, sell #{long_shares}, short to #{max_short} total, cover #{short_shares}"
+        "#{ticker}: buy #{max_buy}, sell #{sellable}, short to #{max_short} total, cover #{min(short_shares, max_order)}"
       end)
       |> Enum.join("; ")
 
@@ -192,7 +193,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
       description:
         "Place a trade order. You have $#{Float.round(cash * 1.0, 2)} cash. " <>
           "Current prices & holdings: #{stock_info}. " <>
-          "Limits: #{max_shares_info}. " <>
+          "Limits (max #{max_order}/trade, slippage applies): #{max_shares_info}. " <>
           "Choose to buy, sell, short, cover, or hold.",
       parameters: %{
         "type" => "object",
@@ -210,8 +211,9 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
           "quantity" => %{
             "type" => "integer",
             "description" =>
-              "Number of shares to buy or sell. Must be > 0 for buy/sell. Ignored for hold.",
-            "minimum" => 0
+              "Number of shares (max #{max_order} per trade, slippage on larger orders). Ignored for hold.",
+            "minimum" => 0,
+            "maximum" => max_order
           }
         },
         "required" => ["action"],
@@ -223,7 +225,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
         stock = Map.get(params, "stock", Map.get(params, :stock))
         quantity = Map.get(params, "quantity", Map.get(params, :quantity, 0))
 
-        # Ensure quantity is an integer
+        # Ensure quantity is an integer, clamped to order limit
         quantity =
           cond do
             is_integer(quantity) -> quantity
@@ -231,6 +233,8 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
             is_binary(quantity) -> String.to_integer(quantity)
             true -> 0
           end
+
+        quantity = min(quantity, max_order)
 
         event = Events.place_trade(actor_id, action, stock || "", quantity)
 

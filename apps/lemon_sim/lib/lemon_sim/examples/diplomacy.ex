@@ -38,16 +38,31 @@ defmodule LemonSim.Examples.Diplomacy do
     starting = MapGraph.starting_positions(player_count)
     factions = MapGraph.factions()
     adjacency = MapGraph.adjacency()
+    leader_names = MapGraph.leader_names(player_count)
 
-    # Build players
+    # Build players with leader names and personality traits
+    player_ids = Enum.map(1..player_count, &"player_#{&1}")
+    traits = MapGraph.assign_traits(player_ids)
+    connections = MapGraph.generate_connections(player_ids)
+
     players =
       Enum.into(1..player_count, %{}, fn idx ->
         id = "player_#{idx}"
         faction = Map.get(factions, id, "Faction #{idx}")
-        {id, %{faction: faction, status: "alive"}}
+        leader_name = Enum.at(leader_names, idx - 1, "Leader #{idx}")
+        player_traits = Map.get(traits, id, %{trait: "diplomatic", description: ""})
+
+        {id,
+         %{
+           faction: faction,
+           name: leader_name,
+           trait: player_traits.trait,
+           trait_description: player_traits.description,
+           status: "alive"
+         }}
       end)
 
-    turn_order = Enum.map(1..player_count, &"player_#{&1}")
+    turn_order = player_ids
 
     # Build territories
     territories =
@@ -74,6 +89,8 @@ defmodule LemonSim.Examples.Diplomacy do
       territories: territories,
       adjacency: adjacency,
       players: players,
+      traits: traits,
+      connections: connections,
       phase: "diplomacy",
       round: 1,
       max_rounds: @default_max_rounds,
@@ -88,6 +105,7 @@ defmodule LemonSim.Examples.Diplomacy do
       diplomacy_done: MapSet.new(),
       capture_history: [],
       resolution_log: [],
+      journals: %{},
       status: "in_progress",
       winner: nil
     }
@@ -168,13 +186,39 @@ defmodule LemonSim.Examples.Diplomacy do
               }
             end)
 
+          # Personality trait for this leader
+          trait_desc = get(player_info, :trait_description, nil)
+          leader_name = get(player_info, :name, actor_id)
+
+          # Connections involving this player
+          all_connections = get(frame.world, :connections, [])
+
+          my_connections =
+            MapGraph.connections_for_player(all_connections, actor_id)
+            |> Enum.map(fn conn ->
+              {a, b} = conn.pair
+              other_id = if a == actor_id, do: b, else: a
+              other_info = Map.get(players, other_id, %{})
+
+              %{
+                "other_player" => other_id,
+                "other_leader" => get(other_info, :name, other_id),
+                "other_faction" => get(other_info, :faction, "Unknown"),
+                "connection_type" => conn.type,
+                "backstory" => conn.description
+              }
+            end)
+
           %{
             id: :your_faction,
             title: "Your Faction (#{actor_id})",
             format: :json,
             content: %{
               "player_id" => actor_id,
+              "leader_name" => leader_name,
               "faction" => get(player_info, :faction, "Unknown"),
+              "personality" => trait_desc,
+              "connections" => my_connections,
               "territories_owned" => owned,
               "territory_count" => length(owned),
               "adjacent_targets" => neighbors,
@@ -227,6 +271,16 @@ defmodule LemonSim.Examples.Diplomacy do
         - STRATEGY: Coordinate with allies to concentrate force. Betray when it gives you the win.
         - You MUST call end_diplomacy or submit_orders to finish your turn. Do not stall.
         - First to 7 territories wins. After 10 rounds, most territories wins.
+
+        PERSONALITY & ROLEPLAY:
+        - You have a PERSONALITY TRAIT shown in the "Your Faction" section. Stay in character.
+        - Let your trait influence HOW you negotiate, who you trust, and when you attack.
+        - Your CONNECTIONS with other leaders shape your starting disposition toward them.
+        - A "blood_feud" or "sworn_enemies" connection means deep distrust — you need strong reasons to ally.
+        - A "marriage_alliance" or "trade_partners" connection means natural cooperation — betrayal hurts more.
+        - An "ancient_treaty" is ambiguous — honor it or exploit it, your choice.
+        - A "border_dispute" means friction — small conflicts can escalate or be resolved diplomatically.
+        - Reference your relationships in messages. Remind allies of bonds. Warn enemies of consequences.
         """
       },
       section_order: [
@@ -319,6 +373,7 @@ defmodule LemonSim.Examples.Diplomacy do
 
         {id,
          %{
+           "leader_name" => get(info, :name, id),
            "faction" => get(info, :faction, "Unknown"),
            "territory_count" => count,
            "status" => get(info, :status, "alive")

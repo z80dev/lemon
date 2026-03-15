@@ -219,6 +219,103 @@ defmodule LemonSim.Examples.Auction.Items do
     Map.get(item, :category, Map.get(item, "category", "unknown"))
   end
 
+  # -- Collector Characters --
+
+  @collector_names [
+    "Ashworth", "Beaumont", "Crane", "Duvall", "Etchingham", "Fontaine",
+    "Grimaldi", "Huxley", "Ivory", "Jarvis", "Kingsley", "Lockhart",
+    "Montague", "Northcott", "Osgood", "Pemberton"
+  ]
+
+  @traits ~w(obsessive shrewd impulsive patient showoff calculating completionist penny_pincher)
+
+  @trait_descriptions %{
+    "obsessive" => "You are OBSESSIVE — when you want something, nothing else matters. You will overpay for the piece that completes your vision.",
+    "shrewd" => "You are SHREWD — you know the true value of everything and refuse to pay a cent more. Every bid is calculated to the gold piece.",
+    "impulsive" => "You are IMPULSIVE — you bid with your heart, not your head. A beautiful item demands a beautiful price.",
+    "patient" => "You are PATIENT — you let others waste gold on early lots. The best items come to those who wait with full coffers.",
+    "showoff" => "You are a SHOWOFF — winning the auction matters as much as the item. You want rivals to see you outbid them.",
+    "calculating" => "You are CALCULATING — you track every gold piece spent by every rival, predict their limits, and bid accordingly.",
+    "completionist" => "You are a COMPLETIONIST — set bonuses obsess you. You will sacrifice individual item value to complete a collection.",
+    "penny_pincher" => "You are a PENNY PINCHER — every gold piece saved is a gold piece earned. You pass on good deals waiting for great ones."
+  }
+
+  @connection_types ~w(estate_rivals auction_nemesis mentor_student old_partners collection_thieves gallery_neighbors)
+
+  @connection_templates %{
+    "estate_rivals" => " have been outbidding each other at estate sales for decades. It's become personal.",
+    "auction_nemesis" => ": one always seems to want exactly what the other is bidding on. Coincidence or spite?",
+    "mentor_student" => ": the first taught the second the art of collecting. Now they compete for the same treasures.",
+    "old_partners" => " once shared a gallery before a disagreement over a forged painting tore them apart.",
+    "collection_thieves" => " both claim ownership of the same legendary piece that went missing years ago.",
+    "gallery_neighbors" => " run galleries on the same street. Professional courtesy masks fierce competition."
+  }
+
+  @doc """
+  Returns a list of collector names for the given player count.
+  Names are shuffled to provide variety across runs.
+  """
+  @spec collector_names(pos_integer()) :: [String.t()]
+  def collector_names(count) do
+    @collector_names
+    |> Enum.shuffle()
+    |> Enum.take(count)
+  end
+
+  @doc """
+  Assigns 1-2 personality traits to each player.
+  """
+  @spec assign_traits([String.t()]) :: %{String.t() => [String.t()]}
+  def assign_traits(player_ids) do
+    Enum.into(player_ids, %{}, fn pid ->
+      count = Enum.random(1..2)
+      player_traits = @traits |> Enum.shuffle() |> Enum.take(count)
+      {pid, player_traits}
+    end)
+  end
+
+  @doc """
+  Returns the full description for a personality trait.
+  """
+  @spec trait_description(String.t()) :: String.t()
+  def trait_description(trait), do: Map.get(@trait_descriptions, trait, "")
+
+  @doc """
+  Generates backstory connections between pairs of players.
+  """
+  @spec generate_connections([String.t()]) :: [map()]
+  def generate_connections(player_ids) when length(player_ids) < 4, do: []
+
+  def generate_connections(player_ids) do
+    num_connections = min(3, div(length(player_ids), 2))
+
+    player_ids
+    |> Enum.shuffle()
+    |> Enum.chunk_every(2, 2, :discard)
+    |> Enum.take(num_connections)
+    |> Enum.map(fn [a, b] ->
+      type = Enum.random(@connection_types)
+      template = Map.get(@connection_templates, type, " have a connection.")
+
+      %{
+        players: [a, b],
+        type: type,
+        description: "#{a} and #{b}" <> template
+      }
+    end)
+  end
+
+  @doc """
+  Returns connections involving a specific player.
+  """
+  @spec connections_for_player([map()], String.t()) :: [map()]
+  def connections_for_player(connections, player_id) do
+    Enum.filter(connections, fn conn ->
+      players = Map.get(conn, :players, [])
+      player_id in players
+    end)
+  end
+
   @doc """
   Returns a human-readable description of a secret objective.
   """

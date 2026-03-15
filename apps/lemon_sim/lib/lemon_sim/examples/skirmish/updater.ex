@@ -3,6 +3,8 @@ defmodule LemonSim.Examples.Skirmish.Updater do
 
   @behaviour LemonSim.Updater
 
+  import LemonSim.GameHelpers
+
   alias LemonCore.MapHelpers
   alias LemonSim.State
 
@@ -557,13 +559,4 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp rejection_reason(:target_full_hp), do: "target is at full health"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
-  defp fetch(map, atom_key, string_key, default \\ nil) do
-    Map.get(map, atom_key, Map.get(map, string_key, default))
-  end
-
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-  end
-
-  defp get(_map, _key, default), do: default
 end

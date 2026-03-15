@@ -31,7 +31,9 @@ defmodule LemonSim.Examples.StockMarket do
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
-    player_ids = Enum.map(1..player_count, fn i -> "player_#{i}" end)
+    player_ids = Market.trader_names(player_count)
+    traits = Market.assign_traits(player_ids)
+    connections = Market.generate_connections(player_ids)
     players = Market.init_players(player_ids)
     stocks = Market.init_stocks()
     target_prices = Market.generate_target_prices()
@@ -56,6 +58,9 @@ defmodule LemonSim.Examples.StockMarket do
       players: players_with_tips,
       stocks: stocks,
       target_prices: target_prices,
+      traits: traits,
+      connections: connections,
+      journals: %{},
       phase: "discussion",
       round: 1,
       max_rounds: 10,
@@ -149,11 +154,42 @@ defmodule LemonSim.Examples.StockMarket do
           world = frame.world
           actor_id = get(world, :active_actor_id)
 
+          base_info = build_private_info(world, actor_id)
+
+          traits = get(world, :traits, %{})
+          connections = get(world, :connections, [])
+          journals = get(world, :journals, %{})
+
+          player_traits = Map.get(traits, actor_id, [])
+
+          trait_info =
+            Enum.map(player_traits, fn trait ->
+              %{"trait" => trait, "description" => Market.trait_description(trait) || trait}
+            end)
+
+          player_connections =
+            Market.connections_for_player(connections, actor_id)
+            |> Enum.map(fn conn ->
+              %{
+                "type" => get(conn, :type),
+                "with" => get(conn, :players, []) |> Enum.reject(&(&1 == actor_id)) |> List.first(),
+                "description" => get(conn, :description)
+              }
+            end)
+
+          player_journal = Map.get(journals, actor_id, [])
+
+          enriched_info =
+            base_info
+            |> Map.put("personality_traits", trait_info)
+            |> Map.put("connections", player_connections)
+            |> Map.put("journal", Enum.take(player_journal, -10))
+
           %{
             id: :role_info,
             title: "Your Book (SECRET - trade on it, reveal selectively)",
             format: :json,
-            content: build_private_info(world, actor_id)
+            content: enriched_info
           }
         end,
         discussion_log: fn frame, _tools, _opts ->
@@ -245,9 +281,18 @@ defmodule LemonSim.Examples.StockMarket do
         - Use trader names in public discussion, not raw ids like player_2.
         - Use ids only when a tool requires a `to_id` or `player_id`.
         - During trading, place exactly one trade: buy, sell, short, cover, or hold.
+        - Max 500 shares per trade. Slippage applies: larger orders get worse fills (square-root impact model).
+        - 2.5% commission on every trade. Short positions incur 5% borrow cost per round. Overtrading will eat you alive.
+        - Circuit breakers cap price moves to ±15% per round. No stock can explode or collapse overnight.
         - Public standings show total portfolio value and trader reputation, not exact books.
         - Shorting is allowed but capped by your equity. Bearish reasoning should be actionable, not just rhetorical.
         - Optimize for both edge and narrative pressure: who the table believes can matter almost as much as who is right.
+
+        PERSONALITY & RELATIONSHIPS:
+        - You have personality traits listed in your Book. Let them color your style — how you talk, what risks you take, and how you react to others.
+        - Your connections describe real history with other traders. Use them: trust allies, suspect rivals, exploit grudges.
+        - Your journal tracks your internal thoughts across rounds. Refer to it for consistency and evolving strategy.
+        - Stay in character. Your traits are not constraints on winning — they are your edge. A contrarian who acts like everyone else is just a bad contrarian.
         """
       },
       section_order: [
@@ -327,7 +372,7 @@ defmodule LemonSim.Examples.StockMarket do
           "ticker" => ticker,
           "type" => Map.get(config, :label, "stock"),
           "price" => price,
-          "change" => Float.round(price - prev_price, 2),
+          "change" => Float.round((price - prev_price) * 1.0, 2),
           "history_length" => length(history)
         }
       end)
@@ -681,8 +726,8 @@ defmodule LemonSim.Examples.StockMarket do
       price = get(stock, :price, 0)
       history = get(stock, :history, [])
       start_price = List.first(history) || price
-      change = Float.round(price - start_price, 2)
-      pct = if start_price > 0, do: Float.round(change / start_price * 100, 1), else: 0.0
+      change = Float.round((price - start_price) * 1.0, 2)
+      pct = if start_price > 0, do: Float.round(change / start_price * 100.0, 1), else: 0.0
 
       IO.puts(
         "  #{ticker}: $#{price} (#{if change >= 0, do: "+", else: ""}#{change}, #{if pct >= 0, do: "+", else: ""}#{pct}%)"

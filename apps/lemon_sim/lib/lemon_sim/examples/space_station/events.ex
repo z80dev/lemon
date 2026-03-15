@@ -72,6 +72,24 @@ defmodule LemonSim.Examples.SpaceStation.Events do
     })
   end
 
+  @spec ask_question(String.t(), String.t(), String.t()) :: Event.t()
+  def ask_question(player_id, target_id, question) do
+    Event.new("ask_question", %{
+      "player_id" => player_id,
+      "target_id" => target_id,
+      "question" => question
+    })
+  end
+
+  @spec accuse(String.t(), String.t(), String.t()) :: Event.t()
+  def accuse(player_id, target_id, evidence) do
+    Event.new("accuse", %{
+      "player_id" => player_id,
+      "target_id" => target_id,
+      "evidence" => evidence
+    })
+  end
+
   @spec cast_vote(String.t(), String.t()) :: Event.t()
   def cast_vote(voter_id, target_id) do
     Event.new("cast_vote", %{
@@ -81,6 +99,15 @@ defmodule LemonSim.Examples.SpaceStation.Events do
   end
 
   # -- Resolution events --
+
+  @spec environmental_event(String.t(), integer(), String.t()) :: Event.t()
+  def environmental_event(system_id, damage, description) do
+    Event.new("environmental_event", %{
+      "system_id" => system_id,
+      "damage" => damage,
+      "description" => description
+    })
+  end
 
   @spec round_resolved(map(), non_neg_integer()) :: Event.t()
   def round_resolved(system_changes, round) do
@@ -154,6 +181,22 @@ defmodule LemonSim.Examples.SpaceStation.Events do
         else
           "No majority reached. No one is ejected."
         end
+    })
+  end
+
+  @spec clue_found(String.t(), map()) :: Event.t()
+  def clue_found(player_id, clue) do
+    Event.new("clue_found", %{
+      "player_id" => player_id,
+      "clue" => clue
+    })
+  end
+
+  @spec crisis_triggered(map()) :: Event.t()
+  def crisis_triggered(crisis) do
+    Event.new("crisis_triggered", %{
+      "crisis" => crisis,
+      "message" => Map.get(crisis, :announcement, "A crisis has struck the station!")
     })
   end
 end

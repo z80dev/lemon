@@ -12,6 +12,7 @@ defmodule LemonSim.Examples.Survivor.Updater do
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
+    state = maybe_store_thought(state, event)
 
     case event.kind do
       "challenge_choice" -> apply_challenge_choice(state, event)

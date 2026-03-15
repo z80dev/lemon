@@ -14,6 +14,7 @@ defmodule LemonSim.Examples.StockMarket.Updater do
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
+    state = maybe_store_thought(state, event)
 
     case event.kind do
       "make_statement" -> apply_make_statement(state, event)
@@ -273,6 +274,9 @@ defmodule LemonSim.Examples.StockMarket.Updater do
     {post_trade_players, trade_log} = Market.execute_trades(players, trades, stocks, round)
     updated_stocks = Market.resolve_prices(stocks, trades, round, target_prices, market_calls)
 
+    # Charge borrow cost on short positions at new prices
+    post_trade_players = Market.apply_short_borrow_costs(post_trade_players, updated_stocks)
+
     price_changes =
       Enum.into(Market.stock_names(), %{}, fn ticker ->
         old_price = Market.get_stock_price(stocks, ticker)
@@ -431,56 +435,51 @@ defmodule LemonSim.Examples.StockMarket.Updater do
 
   defp validate_trade(_players, _stocks, _player_id, "hold", _stock, _quantity), do: :ok
 
-  defp validate_trade(players, stocks, player_id, "buy", stock, quantity) do
+  # Validation is lenient — quantity clamping and slippage are applied during execution
+  defp validate_trade(players, _stocks, player_id, "buy", stock, _quantity) do
     player = Map.get(players, player_id, %{})
     cash = get(player, :cash, 0)
-    price = Market.get_stock_price(stocks, stock)
 
     cond do
       stock not in Market.stock_names() -> {:error, :invalid_stock}
-      quantity <= 0 -> {:error, :invalid_quantity}
-      price * quantity > cash -> {:error, :insufficient_funds}
+      cash <= 0 -> {:error, :insufficient_funds}
       true -> :ok
     end
   end
 
-  defp validate_trade(players, _stocks, player_id, "sell", stock, quantity) do
+  defp validate_trade(players, _stocks, player_id, "sell", stock, _quantity) do
     player = Map.get(players, player_id, %{})
     portfolio = get(player, :portfolio, %{})
     shares = Map.get(portfolio, stock, 0)
 
     cond do
       stock not in Market.stock_names() -> {:error, :invalid_stock}
-      quantity <= 0 -> {:error, :invalid_quantity}
-      quantity > shares -> {:error, :insufficient_shares}
+      shares <= 0 -> {:error, :no_position}
       true -> :ok
     end
   end
 
-  defp validate_trade(players, stocks, player_id, "short", stock, quantity) do
+  defp validate_trade(players, stocks, player_id, "short", stock, _quantity) do
     player = Map.get(players, player_id, %{})
     max_short = Market.max_short_capacity(player, stocks, stock)
     current_short = get(player, :short_book, %{}) |> Map.get(stock, 0)
 
     cond do
       stock not in Market.stock_names() -> {:error, :invalid_stock}
-      quantity <= 0 -> {:error, :invalid_quantity}
-      current_short + quantity > max_short -> {:error, :short_capacity_exceeded}
+      current_short >= max_short -> {:error, :short_capacity_maxed}
       true -> :ok
     end
   end
 
-  defp validate_trade(players, stocks, player_id, "cover", stock, quantity) do
+  defp validate_trade(players, _stocks, player_id, "cover", stock, _quantity) do
     player = Map.get(players, player_id, %{})
     current_short = get(player, :short_book, %{}) |> Map.get(stock, 0)
     cash = get(player, :cash, 0)
-    cost = Market.get_stock_price(stocks, stock) * quantity
 
     cond do
       stock not in Market.stock_names() -> {:error, :invalid_stock}
-      quantity <= 0 -> {:error, :invalid_quantity}
-      quantity > current_short -> {:error, :insufficient_short_position}
-      cost > cash -> {:error, :insufficient_funds}
+      current_short <= 0 -> {:error, :no_short_position}
+      cash <= 0 -> {:error, :insufficient_funds}
       true -> :ok
     end
   end

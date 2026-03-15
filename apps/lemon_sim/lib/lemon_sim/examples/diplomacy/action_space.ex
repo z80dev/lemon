@@ -6,6 +6,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Diplomacy.Events
+  alias LemonSim.GameHelpers.Tools, as: GameTools
 
   @impl true
   def tools(state, _opts) do
@@ -19,10 +20,10 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
         {:ok, []}
 
       phase == "diplomacy" ->
-        {:ok, diplomacy_tools(world, actor_id)}
+        {:ok, Enum.map(diplomacy_tools(world, actor_id), &GameTools.add_thought_param/1)}
 
       phase == "orders" ->
-        {:ok, orders_tools(world, actor_id)}
+        {:ok, Enum.map(orders_tools(world, actor_id), &GameTools.add_thought_param/1)}
 
       true ->
         {:ok, []}

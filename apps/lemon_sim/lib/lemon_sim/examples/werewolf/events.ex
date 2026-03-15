@@ -37,6 +37,46 @@ defmodule LemonSim.Examples.Werewolf.Events do
     Event.new("sleep", %{"player_id" => player_id})
   end
 
+  @spec night_wander(String.t()) :: Event.t()
+  def night_wander(player_id) do
+    Event.new("night_wander", %{"player_id" => player_id})
+  end
+
+  @spec wanderer_result(String.t(), boolean(), String.t()) :: Event.t()
+  def wanderer_result(player_id, saw_shadows, description) do
+    Event.new("wanderer_result", %{
+      "player_id" => player_id,
+      "saw_shadows" => saw_shadows,
+      "description" => description
+    })
+  end
+
+  @spec evidence_found(list()) :: Event.t()
+  def evidence_found(tokens) do
+    Event.new("evidence_found", %{
+      "tokens" => tokens,
+      "message" => "The village finds evidence from last night..."
+    })
+  end
+
+  # -- Meeting actions --
+
+  @spec request_meeting(String.t(), String.t()) :: Event.t()
+  def request_meeting(player_id, target_id) do
+    Event.new("request_meeting", %{
+      "player_id" => player_id,
+      "target_id" => target_id
+    })
+  end
+
+  @spec meeting_message(String.t(), String.t()) :: Event.t()
+  def meeting_message(player_id, message) do
+    Event.new("meeting_message", %{
+      "player_id" => player_id,
+      "message" => message
+    })
+  end
+
   # -- Day actions --
 
   @spec make_statement(String.t(), String.t()) :: Event.t()
@@ -52,6 +92,31 @@ defmodule LemonSim.Examples.Werewolf.Events do
     Event.new("cast_vote", %{
       "player_id" => voter_id,
       "target_id" => target_id
+    })
+  end
+
+  @spec make_last_words(String.t(), String.t()) :: Event.t()
+  def make_last_words(player_id, statement) do
+    Event.new("make_last_words", %{
+      "player_id" => player_id,
+      "statement" => statement
+    })
+  end
+
+  @spec wolf_chat(String.t(), String.t()) :: Event.t()
+  def wolf_chat(player_id, message) do
+    Event.new("wolf_chat", %{
+      "player_id" => player_id,
+      "message" => message
+    })
+  end
+
+  @spec make_accusation(String.t(), String.t(), String.t()) :: Event.t()
+  def make_accusation(player_id, target_id, reason) do
+    Event.new("make_accusation", %{
+      "player_id" => player_id,
+      "target_id" => target_id,
+      "reason" => reason
     })
   end
 
@@ -112,9 +177,16 @@ defmodule LemonSim.Examples.Werewolf.Events do
       "day_number" => day_number,
       "message" =>
         case new_phase do
-          "night" -> "Night #{day_number} falls. The village sleeps..."
+          "wolf_discussion" -> "Night #{day_number} falls. The wolves gather to plan..."
+          "night" -> "Night #{day_number}. The village sleeps..."
+          "meeting_selection" -> "Time to arrange private meetings before discussion."
+          "private_meeting" -> "Private meetings are underway..."
           "day_discussion" -> "Day #{day_number} dawns. Time for discussion."
           "day_voting" -> "Discussion is over. Time to vote."
+          "runoff_discussion" -> "No majority! The top candidates must defend themselves."
+          "runoff_voting" -> "Runoff vote begins. Choose between the final candidates."
+          "last_words_vote" -> "The condemned may speak their last words..."
+          "last_words_night" -> "The fallen may speak their last words..."
           _ -> "Phase changed to #{new_phase}."
         end
     })
@@ -135,6 +207,42 @@ defmodule LemonSim.Examples.Werewolf.Events do
       "kind" => kind,
       "player_id" => player_id,
       "reason" => reason
+    })
+  end
+
+  # -- Village events --
+
+  @spec village_event(String.t(), String.t()) :: Event.t()
+  def village_event(event_type, description) do
+    Event.new("village_event", %{
+      "event_type" => event_type,
+      "description" => description
+    })
+  end
+
+  # -- Items --
+
+  @spec item_found(String.t(), String.t(), String.t()) :: Event.t()
+  def item_found(player_id, item_type, description) do
+    Event.new("item_found", %{
+      "player_id" => player_id,
+      "item_type" => item_type,
+      "description" => description
+    })
+  end
+
+  @spec item_used(String.t(), String.t()) :: Event.t()
+  def item_used(player_id, item_type) do
+    Event.new("item_used", %{
+      "player_id" => player_id,
+      "item_type" => item_type
+    })
+  end
+
+  @spec anonymous_message(String.t()) :: Event.t()
+  def anonymous_message(message) do
+    Event.new("anonymous_message", %{
+      "message" => message
     })
   end
 end

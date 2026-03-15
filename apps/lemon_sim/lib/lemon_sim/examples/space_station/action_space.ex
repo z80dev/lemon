@@ -9,7 +9,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
   alias LemonSim.Examples.SpaceStation.{Events, Roles}
   alias LemonSim.GameHelpers.Tools, as: GameTools
 
-  @system_ids ~w(o2 power hull comms)
+  @system_ids ~w(o2 power hull comms nav medbay shields)
 
   @impl true
   def tools(state, _opts) do
@@ -28,7 +28,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok, []}
       else
         role = get(actor, :role, "crew")
-        {:ok, tools_for_phase_and_role(phase, role, actor_id, world)}
+        {:ok, Enum.map(tools_for_phase_and_role(phase, role, actor_id, world), &GameTools.add_thought_param/1)}
       end
     end
   end
@@ -81,14 +81,24 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
     ]
   end
 
-  defp tools_for_phase_and_role("discussion", _role, actor_id, _world) do
+  defp tools_for_phase_and_role("discussion", _role, actor_id, world) do
+    players = get(world, :players, %{})
+
+    living_others =
+      players
+      |> Roles.living_players()
+      |> Enum.reject(fn {id, _p} -> id == actor_id end)
+      |> Enum.map(fn {id, _p} -> id end)
+
     [
       GameTools.statement_tool(actor_id,
         description:
-          "Make a public statement during the discussion. All players will see what you say. " <>
-            "You may accuse others, defend yourself, share observations, or bluff. " <>
-            "Be strategic based on your role."
-      )
+          "Make a general public statement during the discussion. All players will see what you say. " <>
+            "Use this for observations, theories, coordination, or defense. " <>
+            "For direct questions or formal accusations, use the dedicated tools instead."
+      ),
+      ask_question_tool(actor_id, living_others),
+      accuse_tool(actor_id, living_others)
     ]
   end
 
@@ -147,8 +157,8 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
     %AgentTool{
       name: "repair_system",
       description:
-        "Repair a station system to restore +20 health (capped at 100). " <>
-          "Everyone will see which system you visited, but not what you did. " <>
+        "Repair a station system to restore health (capped at 100). " <>
+          "Only players at the same system will see you there. " <>
           "Available systems: #{systems_desc}",
       parameters: %{
         "type" => "object",
@@ -183,8 +193,8 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
     %AgentTool{
       name: "sabotage_system",
       description:
-        "Sabotage a station system to deal -25 health. You are the saboteur. " <>
-          "Everyone will see you visited this system but won't know you sabotaged it. " <>
+        "Sabotage a station system to damage it. You are the saboteur. " <>
+          "Only players at the same system will see you there, but won't know you sabotaged. " <>
           "Cannot sabotage a room locked by the Captain. " <>
           "Available systems: #{systems_desc}",
       parameters: %{
@@ -218,31 +228,31 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
     systems_desc = Enum.join(system_ids, ", ")
 
     %AgentTool{
-      name: "fake_repair",
+      name: "inspect_system",
       description:
-        "Fake a repair on a station system. You appear to visit the system " <>
-          "but it has no effect. Useful for maintaining your cover as crew. " <>
-          "Available systems: #{systems_desc}",
+        "Run a diagnostic inspection on a station system. You visit the system and assess its condition " <>
+          "without performing active repairs. Other players at that system will see you working there normally. " <>
+          "To them, this looks identical to a repair. Available systems: #{systems_desc}",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "system_id" => %{
             "type" => "string",
-            "description" => "The system to fake-repair. Must be one of: #{systems_desc}",
+            "description" => "The system to inspect. Must be one of: #{systems_desc}",
             "enum" => system_ids
           }
         },
         "required" => ["system_id"],
         "additionalProperties" => false
       },
-      label: "Fake Repair",
+      label: "Inspect System",
       execute: fn _tool_call_id, params, _signal, _on_update ->
         system_id = Map.get(params, "system_id", Map.get(params, :system_id))
         event = Events.fake_repair(actor_id, system_id)
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You faked a repair on the #{system_id} system.")],
+           content: [AgentCore.text_content("You inspected the #{system_id} system. To others, this looked like a normal repair.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -258,6 +268,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
       description:
         "Scan another player to learn whether they repaired or sabotaged last turn. " <>
           "You are the Engineer. The result is private to you only. " <>
+          "WARNING: Station interference causes occasional false readings — scans are wrong about 25% of the time. " <>
           "Note: this uses your action for the turn (you won't also repair). " <>
           "Valid targets: #{targets_desc}",
       parameters: %{
@@ -370,6 +381,97 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [AgentCore.text_content("You slipped into the vents unseen.")],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp ask_question_tool(actor_id, valid_targets) do
+    targets_desc = Enum.join(valid_targets, ", ")
+
+    %AgentTool{
+      name: "ask_question",
+      description:
+        "Publicly ask a specific player a direct question. The question and your target " <>
+          "will be visible to all players. This puts pressure on the target to respond " <>
+          "and demonstrates your reasoning. Use this to probe inconsistencies, request alibis, " <>
+          "or challenge suspicious behavior. Valid targets: #{targets_desc}",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "target_id" => %{
+            "type" => "string",
+            "description" => "The player you are questioning. Must be one of: #{targets_desc}",
+            "enum" => valid_targets
+          },
+          "question" => %{
+            "type" => "string",
+            "description" =>
+              "Your question to the target player. Be specific and pointed (1-2 sentences)."
+          }
+        },
+        "required" => ["target_id", "question"],
+        "additionalProperties" => false
+      },
+      label: "Ask Question",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        target_id = Map.get(params, "target_id", Map.get(params, :target_id))
+        question = Map.get(params, "question", Map.get(params, :question, ""))
+        event = Events.ask_question(actor_id, target_id, question)
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("You asked #{target_id}: \"#{question}\"")],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp accuse_tool(actor_id, valid_targets) do
+    targets_desc = Enum.join(valid_targets, ", ")
+
+    %AgentTool{
+      name: "accuse",
+      description:
+        "Make a formal accusation against a specific player, presenting your evidence and reasoning. " <>
+          "This is a strong move — it signals to the group that you believe this player is the saboteur " <>
+          "and want them ejected. All players will see your accusation and evidence. " <>
+          "Use this when you have built a case through observations, clues, or scan results. " <>
+          "Valid targets: #{targets_desc}",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "target_id" => %{
+            "type" => "string",
+            "description" => "The player you are accusing. Must be one of: #{targets_desc}",
+            "enum" => valid_targets
+          },
+          "evidence" => %{
+            "type" => "string",
+            "description" =>
+              "Your case against this player. Present observations, clues, and reasoning (2-4 sentences)."
+          }
+        },
+        "required" => ["target_id", "evidence"],
+        "additionalProperties" => false
+      },
+      label: "Accuse",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        target_id = Map.get(params, "target_id", Map.get(params, :target_id))
+        evidence = Map.get(params, "evidence", Map.get(params, :evidence, ""))
+        event = Events.accuse(actor_id, target_id, evidence)
+
+        {:ok,
+         %AgentToolResult{
+           content: [
+             AgentCore.text_content(
+               "You formally accused #{target_id}: \"#{evidence}\""
+             )
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}

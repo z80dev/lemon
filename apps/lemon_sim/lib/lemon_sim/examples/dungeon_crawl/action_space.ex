@@ -6,6 +6,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.DungeonCrawl.Events
+  alias LemonSim.GameHelpers.Tools, as: GameTools
 
   @impl true
   def tools(state, _opts) do
@@ -45,7 +46,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
           |> maybe_add(ap > 0 and has_items, use_item_tool(actor_id, inventory, enemies))
           |> maybe_add(true, end_turn_tool(actor_id))
 
-        {:ok, action_tools}
+        {:ok, Enum.map(action_tools, &GameTools.add_thought_param/1)}
     end
   end
 

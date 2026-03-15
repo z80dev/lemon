@@ -3,6 +3,9 @@ defmodule LemonSim.Examples.Auction.Updater do
 
   @behaviour LemonSim.Updater
 
+  import LemonSim.GameHelpers
+  import LemonSim.GameHelpers.UpdaterHelpers, only: [maybe_store_thought: 2]
+
   alias LemonCore.MapHelpers
   alias LemonSim.State
   alias LemonSim.Examples.Auction.{Events, Items}
@@ -12,6 +15,7 @@ defmodule LemonSim.Examples.Auction.Updater do
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
+    state = maybe_store_thought(state, event)
 
     case event.kind do
       "place_bid" -> apply_place_bid(state, event)
@@ -448,13 +452,4 @@ defmodule LemonSim.Examples.Auction.Updater do
     State.append_events(state, Enum.reject(events, &is_nil/1))
   end
 
-  defp fetch(map, atom_key, string_key, default \\ nil) do
-    Map.get(map, atom_key, Map.get(map, string_key, default))
-  end
-
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-  end
-
-  defp get(_map, _key, default), do: default
 end

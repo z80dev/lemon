@@ -20,6 +20,10 @@ defmodule LemonSim.GameHelpers.UpdaterHelpers do
     if get(world, :phase) == expected_phase, do: :ok, else: {:error, :wrong_phase}
   end
 
+  def ensure_phase_in(world, phases) when is_list(phases) do
+    if get(world, :phase) in phases, do: :ok, else: {:error, :wrong_phase}
+  end
+
   def ensure_active_actor(world, player_id) do
     if get(world, :active_actor_id) == player_id,
       do: :ok,
@@ -149,4 +153,31 @@ defmodule LemonSim.GameHelpers.UpdaterHelpers do
   def rejection_reason(:no_idol), do: "you don't have an idol"
   def rejection_reason(:emergency_used), do: "emergency meeting already used"
   def rejection_reason(other), do: "rejected: #{inspect(other)}"
+
+  # -- Journal / thought tracking --
+
+  @doc """
+  Extracts an optional "thought" from the event payload and appends it
+  to the player's journal in the world state. Call at the top of `apply_event`.
+  """
+  def maybe_store_thought(%State{} = state, event) do
+    thought = Map.get(event.payload, "thought") || Map.get(event.payload, :thought)
+    player_id = Map.get(event.payload, "player_id") || Map.get(event.payload, :player_id)
+
+    if is_binary(thought) and thought != "" and is_binary(player_id) do
+      journals = get(state.world, :journals, %{})
+      player_journal = Map.get(journals, player_id, [])
+
+      entry = %{
+        round: get(state.world, :round, nil) || get(state.world, :episode, nil) || get(state.world, :current_round, nil) || 1,
+        phase: get(state.world, :phase),
+        thought: thought
+      }
+
+      new_journals = Map.put(journals, player_id, player_journal ++ [entry])
+      State.put_world(state, world_updates(state.world, %{journals: new_journals}))
+    else
+      state
+    end
+  end
 end

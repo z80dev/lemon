@@ -31,19 +31,19 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
           # Jury members act during final tribal council
           phase == "final_tribal_council" and actor_status == "eliminated" and get(actor, :jury_member) ->
             sub_phase = get(world, :ftc_sub_phase, "jury_statements")
-            {:ok, tools_for_ftc(sub_phase, actor_id, players)}
+            {:ok, Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
 
           # Finalists plead during final tribal council
           phase == "final_tribal_council" and actor_status == "alive" ->
             sub_phase = get(world, :ftc_sub_phase, "jury_statements")
-            {:ok, tools_for_ftc(sub_phase, actor_id, players)}
+            {:ok, Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
 
           # Normal phases require alive status
           actor_status != "alive" ->
             {:ok, []}
 
           true ->
-            {:ok, tools_for_phase(phase, actor_id, players, world)}
+            {:ok, Enum.map(tools_for_phase(phase, actor_id, players, world), &GameTools.add_thought_param/1)}
         end
       end
     end

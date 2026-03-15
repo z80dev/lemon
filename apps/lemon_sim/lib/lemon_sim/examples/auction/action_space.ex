@@ -5,6 +5,7 @@ defmodule LemonSim.Examples.Auction.ActionSpace do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
+  alias LemonSim.GameHelpers.Tools, as: GameTools
   alias LemonSim.Examples.Auction.Events
 
   @impl true
@@ -40,7 +41,7 @@ defmodule LemonSim.Examples.Auction.ActionSpace do
             |> maybe_add(gold >= min_bid, place_bid_tool(actor_id, high_bid, min_bid, item_name))
             |> maybe_add(true, pass_auction_tool(actor_id))
 
-          {:ok, tools}
+          {:ok, Enum.map(tools, &GameTools.add_thought_param/1)}
         else
           {:ok, []}
         end

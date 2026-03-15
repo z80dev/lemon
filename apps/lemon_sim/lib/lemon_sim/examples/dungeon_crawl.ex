@@ -25,6 +25,37 @@ defmodule LemonSim.Examples.DungeonCrawl do
 
   @default_max_turns 120
 
+  @character_names %{
+    "warrior" => ["Thorin", "Brynn", "Kael", "Helga"],
+    "rogue" => ["Shadow", "Wren", "Flick", "Nyx"],
+    "mage" => ["Aldric", "Zara", "Ember", "Rune"],
+    "cleric" => ["Sera", "Oswin", "Dawn", "Mercy"]
+  }
+
+  @traits ~w(reckless cautious glory_seeker protector scholar berserker compassionate tactical)
+
+  @trait_descriptions %{
+    "reckless" => "You are RECKLESS — you charge in first, ask questions never. The thrill of combat drives you forward.",
+    "cautious" => "You are CAUTIOUS — you check every corner, test every floor tile, and never rush into a room.",
+    "glory_seeker" => "You are a GLORY SEEKER — you want the killing blow, the dramatic save, the story worth telling at the tavern.",
+    "protector" => "You are a PROTECTOR — your party members' safety comes before everything. You'll take a hit for anyone.",
+    "scholar" => "You are a SCHOLAR — you study your enemies, exploit weaknesses, and believe knowledge is the sharpest weapon.",
+    "berserker" => "You are a BERSERKER — when blood is drawn, something primal takes over. You attack the strongest enemy first, always.",
+    "compassionate" => "You are COMPASSIONATE — you heal before fighting, prioritize the wounded, and believe mercy is strength.",
+    "tactical" => "You are TACTICAL — you coordinate attacks, call targets, and think of the party as a single fighting unit."
+  }
+
+  @connection_types ~w(sworn_oath tavern_debt old_quest siblings_in_arms rescued mentor_student)
+
+  @connection_templates %{
+    "sworn_oath" => " swore a blood oath to protect each other after surviving a near-death encounter.",
+    "tavern_debt" => ": the first owes the second a considerable sum from a legendary night of gambling.",
+    "old_quest" => " adventured together before and know how the other fights. They can anticipate each other's moves.",
+    "siblings_in_arms" => " trained at the same academy and consider each other closer than family.",
+    "rescued" => ": the first once saved the second's life in a collapsing dungeon. The debt weighs heavily.",
+    "mentor_student" => ": the first taught the second their craft. Pride and protectiveness mix in equal measure."
+  }
+
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
     seed = Keyword.get(opts, :seed, :erlang.phash2(:erlang.monotonic_time()))
@@ -36,6 +67,17 @@ defmodule LemonSim.Examples.DungeonCrawl do
 
     first_room = List.first(rooms) || %{}
     initial_enemies = load_room_enemies(first_room)
+
+    # Assign personality traits to each party member (1-2 traits each)
+    class_ids = Map.keys(party)
+    traits = assign_traits(class_ids)
+    connections = generate_connections(class_ids, party)
+
+    # Enrich party members with traits
+    party =
+      Enum.into(party, %{}, fn {id, member} ->
+        {id, Map.put(member, :traits, Map.get(traits, id, []))}
+      end)
 
     %{
       rooms: rooms,
@@ -50,6 +92,9 @@ defmodule LemonSim.Examples.DungeonCrawl do
       taunt_active: nil,
       attacks_this_turn: [],
       combat_log: [],
+      traits: traits,
+      connections: connections,
+      journals: %{},
       status: "in_progress",
       winner: nil
     }
@@ -114,34 +159,50 @@ defmodule LemonSim.Examples.DungeonCrawl do
           party = get(world, :party, %{})
           buffs = get(world, :buffs, %{})
           active_id = MapHelpers.get_key(world, :active_actor_id)
+          traits_map = get(world, :traits, %{})
+          connections = get(world, :connections, [])
+
+          party_members =
+            Enum.map(get(world, :turn_order, []), fn id ->
+              adventurer = Map.get(party, id, %{})
+              actor_buffs = Map.get(buffs, id, [])
+              actor_traits = Map.get(traits_map, id, [])
+
+              trait_descriptions =
+                Enum.map(actor_traits, fn t ->
+                  Map.get(@trait_descriptions, t, t)
+                end)
+
+              %{
+                "id" => id,
+                "name" => get(adventurer, :name, id),
+                "class" => get(adventurer, :class, "?"),
+                "personality" => Enum.join(actor_traits, ", "),
+                "personality_detail" => trait_descriptions,
+                "hp" => get(adventurer, :hp, 0),
+                "max_hp" => get(adventurer, :max_hp, 0),
+                "ap" => get(adventurer, :ap, 0),
+                "max_ap" => get(adventurer, :max_ap, 0),
+                "attack" => get(adventurer, :attack, 0),
+                "armor" => get(adventurer, :armor, 0),
+                "range" => get(adventurer, :range, 1),
+                "status" => if(get(adventurer, :hp, 0) > 0, do: "alive", else: "dead"),
+                "active" => id == active_id,
+                "buffs" =>
+                  Enum.map(actor_buffs, fn b ->
+                    "#{get(b, :type, "?")} (#{get(b, :remaining_turns, 0)} turns)"
+                  end)
+              }
+            end)
 
           %{
             id: :party_status,
             title: "Party Status",
             format: :json,
-            content:
-              Enum.map(get(world, :turn_order, []), fn id ->
-                adventurer = Map.get(party, id, %{})
-                actor_buffs = Map.get(buffs, id, [])
-
-                %{
-                  "id" => id,
-                  "class" => get(adventurer, :class, "?"),
-                  "hp" => get(adventurer, :hp, 0),
-                  "max_hp" => get(adventurer, :max_hp, 0),
-                  "ap" => get(adventurer, :ap, 0),
-                  "max_ap" => get(adventurer, :max_ap, 0),
-                  "attack" => get(adventurer, :attack, 0),
-                  "armor" => get(adventurer, :armor, 0),
-                  "range" => get(adventurer, :range, 1),
-                  "status" => if(get(adventurer, :hp, 0) > 0, do: "alive", else: "dead"),
-                  "active" => id == active_id,
-                  "buffs" =>
-                    Enum.map(actor_buffs, fn b ->
-                      "#{get(b, :type, "?")} (#{get(b, :remaining_turns, 0)} turns)"
-                    end)
-                }
-              end)
+            content: %{
+              "members" => party_members,
+              "connections" => connections
+            }
           }
         end,
         enemy_status: fn frame, _tools, _opts ->
@@ -173,23 +234,52 @@ defmodule LemonSim.Examples.DungeonCrawl do
             format: :json,
             content: Enum.take(frame.recent_events, -15)
           }
+        end,
+        decision_contract: fn frame, _tools, _opts ->
+          world = frame.world
+          active_id = MapHelpers.get_key(world, :active_actor_id)
+          party = get(world, :party, %{})
+          actor = Map.get(party, active_id, %{})
+          char_name = get(actor, :name, active_id)
+          class = get(actor, :class, "adventurer")
+          traits_map = get(world, :traits, %{})
+          actor_traits = Map.get(traits_map, active_id, [])
+          trait_label = Enum.join(actor_traits, " and ")
+
+          trait_reminder =
+            actor_traits
+            |> Enum.map(fn t -> Map.get(@trait_descriptions, t, "") end)
+            |> Enum.reject(&(&1 == ""))
+            |> Enum.join(" ")
+
+          identity_line =
+            "You are #{char_name}, a #{class}" <>
+              if(trait_label != "", do: " with a #{trait_label} personality", else: "") <>
+              ". Stay in character."
+
+          %{
+            id: :decision_contract,
+            title: "Decision Contract",
+            format: :markdown,
+            content: """
+            #{identity_line}
+            #{trait_reminder}
+
+            DUNGEON CRAWL TACTICS:
+            - You control the ACTIVE adventurer shown in party status.
+            - COOPERATIVE: All party members work together against enemies.
+            - Focus fire: concentrate attacks on one enemy to kill it quickly.
+            - Warrior: Use TAUNT when allies are low HP to absorb enemy attacks.
+            - Rogue: Use BACKSTAB after another ally has attacked the same target this turn for double damage.
+            - Mage: Use FIREBALL when facing multiple enemies (costs 2 AP).
+            - Cleric: HEAL wounded allies first, then BLESS the highest-damage dealer.
+            - Rogue: DISARM TRAPS when entering rooms with active traps.
+            - Use items wisely: healing potions on the most wounded, damage scrolls on tough enemies.
+            - Do NOT end turn with unused AP if enemies are alive and actions are possible.
+            - Each action costs 1 AP (fireball costs 2 AP).
+            """
+          }
         end
-      },
-      section_overrides: %{
-        decision_contract: """
-        DUNGEON CRAWL TACTICS:
-        - You control the ACTIVE adventurer shown in party status.
-        - COOPERATIVE: All party members work together against enemies.
-        - Focus fire: concentrate attacks on one enemy to kill it quickly.
-        - Warrior: Use TAUNT when allies are low HP to absorb enemy attacks.
-        - Rogue: Use BACKSTAB after another ally has attacked the same target this turn for double damage.
-        - Mage: Use FIREBALL when facing multiple enemies (costs 2 AP).
-        - Cleric: HEAL wounded allies first, then BLESS the highest-damage dealer.
-        - Rogue: DISARM TRAPS when entering rooms with active traps.
-        - Use items wisely: healing potions on the most wounded, damage scrolls on tough enemies.
-        - Do NOT end turn with unused AP if enemies are alive and actions are possible.
-        - Each action costs 1 AP (fireball costs 2 AP).
-        """
       },
       section_order: [
         :world_state,
@@ -261,6 +351,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
       {"warrior",
        %{
          class: "warrior",
+         name: Enum.random(Map.get(@character_names, "warrior", ["Thorin"])),
          hp: 20,
          max_hp: 20,
          ap: 2,
@@ -274,6 +365,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
       {"rogue",
        %{
          class: "rogue",
+         name: Enum.random(Map.get(@character_names, "rogue", ["Shadow"])),
          hp: 14,
          max_hp: 14,
          ap: 3,
@@ -287,6 +379,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
       {"mage",
        %{
          class: "mage",
+         name: Enum.random(Map.get(@character_names, "mage", ["Aldric"])),
          hp: 12,
          max_hp: 12,
          ap: 3,
@@ -300,6 +393,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
       {"cleric",
        %{
          class: "cleric",
+         name: Enum.random(Map.get(@character_names, "cleric", ["Sera"])),
          hp: 16,
          max_hp: 16,
          ap: 2,
@@ -321,6 +415,41 @@ defmodule LemonSim.Examples.DungeonCrawl do
   defp build_turn_order(party_size) do
     all_order = ["warrior", "rogue", "mage", "cleric"]
     Enum.take(all_order, min(party_size, 4))
+  end
+
+  defp assign_traits(class_ids) do
+    Enum.into(class_ids, %{}, fn id ->
+      count = Enum.random(1..2)
+      chosen = @traits |> Enum.shuffle() |> Enum.take(count)
+      {id, chosen}
+    end)
+  end
+
+  defp generate_connections(class_ids, _party) when length(class_ids) < 2, do: []
+
+  defp generate_connections(class_ids, party) do
+    pairs =
+      for a <- class_ids, b <- class_ids, a < b, do: {a, b}
+
+    # Pick 2-3 connections (or all pairs if fewer)
+    count = min(Enum.random(2..3), length(pairs))
+
+    pairs
+    |> Enum.shuffle()
+    |> Enum.take(count)
+    |> Enum.map(fn {a, b} ->
+      conn_type = Enum.random(@connection_types)
+      template = Map.get(@connection_templates, conn_type, " share a mysterious bond.")
+
+      name_a = get(Map.get(party, a, %{}), :name, a)
+      name_b = get(Map.get(party, b, %{}), :name, b)
+
+      %{
+        "between" => [a, b],
+        "type" => conn_type,
+        "description" => "#{name_a} (#{a}) and #{name_b} (#{b})" <> template
+      }
+    end)
   end
 
   defp load_room_enemies(room) do
@@ -367,10 +496,11 @@ defmodule LemonSim.Examples.DungeonCrawl do
     party = get(state.world, :party, %{})
     actor = Map.get(party, actor_id, %{})
     class = get(actor, :class, "?")
+    char_name = get(actor, :name, actor_id)
     room = (MapHelpers.get_key(state.world, :current_room) || 0) + 1
 
     IO.puts(
-      "Step #{turn} | room=#{room} round=#{MapHelpers.get_key(state.world, :round)} actor=#{actor_id} (#{class})"
+      "Step #{turn} | room=#{room} round=#{MapHelpers.get_key(state.world, :round)} actor=#{actor_id}/#{char_name} (#{class})"
     )
   end
 
@@ -388,9 +518,10 @@ defmodule LemonSim.Examples.DungeonCrawl do
 
     Enum.each(get(state.world, :turn_order, []), fn id ->
       adventurer = Map.get(party, id, %{})
+      char_name = get(adventurer, :name, id)
 
       IO.puts(
-        "  #{id} [#{get(adventurer, :class, "?")}] hp=#{get(adventurer, :hp, 0)}/#{get(adventurer, :max_hp, 0)} ap=#{get(adventurer, :ap, 0)}"
+        "  #{id}/#{char_name} [#{get(adventurer, :class, "?")}] hp=#{get(adventurer, :hp, 0)}/#{get(adventurer, :max_hp, 0)} ap=#{get(adventurer, :ap, 0)}"
       )
     end)
 

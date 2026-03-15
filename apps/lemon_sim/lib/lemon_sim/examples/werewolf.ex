@@ -41,15 +41,35 @@ defmodule LemonSim.Examples.Werewolf do
   def initial_world(opts \\ []) do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
     players = Roles.assign_roles(player_count)
-    night_order = Roles.night_turn_order(players)
-    first_actor = List.first(night_order)
+
+    # Assign personality traits and backstory connections
+    player_names = Map.keys(players)
+    traits = Roles.assign_traits(player_names)
+    backstory_connections = Roles.generate_connections(player_names)
+
+    # Add traits to player maps
+    players =
+      Enum.into(players, %{}, fn {name, info} ->
+        {name, Map.put(info, :traits, Map.get(traits, name, []))}
+      end)
+
+    # Start with wolf discussion if there are wolves
+    living_wolves = Roles.living_with_role(players, "werewolf")
+
+    {initial_phase, turn_order, first_actor} =
+      if length(living_wolves) > 0 do
+        {"wolf_discussion", living_wolves, List.first(living_wolves)}
+      else
+        night_order = Roles.night_turn_order(players)
+        {"night", night_order, List.first(night_order)}
+      end
 
     %{
       players: players,
-      phase: "night",
+      phase: initial_phase,
       day_number: 1,
       active_actor_id: first_actor,
-      turn_order: night_order,
+      turn_order: turn_order,
       night_actions: %{},
       discussion_transcript: [],
       votes: %{},
@@ -60,7 +80,36 @@ defmodule LemonSim.Examples.Werewolf do
       discussion_round: 0,
       discussion_round_limit: 0,
       status: "in_progress",
-      winner: nil
+      winner: nil,
+      # Day history for past days
+      past_transcripts: %{},
+      past_votes: %{},
+      # Last words
+      last_words: [],
+      pending_elimination: nil,
+      # Wolf chat
+      wolf_chat_transcript: [],
+      # Runoffs
+      runoff_candidates: nil,
+      # Personality & backstory
+      backstory_connections: backstory_connections,
+      # Internal journals
+      journals: %{},
+      # Evidence tokens
+      evidence_tokens: [],
+      # Night wandering
+      wanderer_results: [],
+      # Private meetings
+      meeting_requests: %{},
+      meeting_pairs: [],
+      meeting_transcripts: [],
+      current_meeting_index: 0,
+      current_meeting_messages: [],
+      # Village events
+      village_event_history: [],
+      current_village_event: nil,
+      # Items
+      player_items: %{}
     }
   end
 
@@ -127,6 +176,8 @@ defmodule LemonSim.Examples.Werewolf do
         discussion_log: fn frame, _tools, _opts ->
           transcript = get(frame.world, :discussion_transcript, [])
           elimination_log = get(frame.world, :elimination_log, [])
+          last_words = get(frame.world, :last_words, [])
+          meeting_transcripts = get(frame.world, :meeting_transcripts, [])
 
           %{
             id: :discussion_log,
@@ -135,10 +186,19 @@ defmodule LemonSim.Examples.Werewolf do
             content: %{
               "discussion_transcript" =>
                 Enum.map(transcript, fn entry ->
-                  %{
+                  base = %{
                     "player" => get(entry, :player),
                     "statement" => get(entry, :statement, "")
                   }
+
+                  if get(entry, :type) == "accusation" do
+                    Map.merge(base, %{
+                      "type" => "accusation",
+                      "target" => get(entry, :target)
+                    })
+                  else
+                    base
+                  end
                 end),
               "elimination_log" =>
                 Enum.map(elimination_log, fn entry ->
@@ -147,6 +207,25 @@ defmodule LemonSim.Examples.Werewolf do
                     "role" => get(entry, :role),
                     "reason" => get(entry, :reason),
                     "day" => get(entry, :day)
+                  }
+                end),
+              "last_words" =>
+                Enum.map(last_words, fn entry ->
+                  %{
+                    "player" => get(entry, :player),
+                    "statement" => get(entry, :statement, "")
+                  }
+                end),
+              "meeting_transcripts" =>
+                meeting_transcripts
+                |> Enum.filter(fn t -> get(t, :day) == get(frame.world, :day_number) end)
+                |> Enum.map(fn t ->
+                  %{
+                    "pair" => get(t, :pair, []),
+                    "messages" =>
+                      Enum.map(get(t, :messages, []), fn m ->
+                        %{"player" => get(m, :player), "message" => get(m, :message, "")}
+                      end)
                   }
                 end)
             }
@@ -178,10 +257,20 @@ defmodule LemonSim.Examples.Werewolf do
         WEREWOLF GAME RULES:
         - You are one of several players in a Werewolf/Mafia game.
         - Use exactly one tool call per turn.
-        - During NIGHT: Use your role's night action (werewolves kill, seer investigates, doctor protects, villagers sleep).
-        - During DAY DISCUSSION: Make a strategic statement. You can accuse, defend, share info (real or fake), or bluff.
+        - During WOLF DISCUSSION: Werewolves privately discuss who to target before night actions.
+        - During NIGHT: Use your role's night action (werewolves kill, seer investigates, doctor protects, villagers sleep or wander).
+        - During MEETING SELECTION: Choose a player for a private 1-on-1 meeting.
+        - During PRIVATE MEETING: Exchange private messages with your meeting partner.
+        - During DAY DISCUSSION: Make a strategic statement or formally accuse another player.
         - During DAY VOTING: Vote to eliminate a suspicious player, or skip if unsure.
+        - During RUNOFF DISCUSSION/VOTING: When no majority, top candidates face a runoff vote.
+        - During LAST WORDS: An eliminated player gives their final statement before dying.
         - IMPORTANT: Your role is SECRET. Do not carelessly reveal it. Werewolves should pretend to be villagers.
+        - PERSONALITY: Play your assigned personality traits. Let them influence how you speak and act.
+        - CONNECTIONS: You have backstory relationships with some players. These may create trust or tension.
+        - JOURNAL: Use the optional "thought" field in any tool to record private observations. These persist across days.
+        - ITEMS: You may find items that provide tactical advantages. Use them wisely.
+        - VILLAGE EVENTS: Random events may affect the village. Factor these into your strategy.
         - Think strategically about who might be a werewolf based on behavior and statements.
         - Dead players' roles are revealed, so use that information.
         - Use player names when referring to other players in discussion and tool calls.
@@ -270,7 +359,7 @@ defmodule LemonSim.Examples.Werewolf do
     phase = get(world, :phase)
 
     case phase do
-      "day_discussion" ->
+      p when p in ["day_discussion", "runoff_discussion"] ->
         transcript = get(world, :discussion_transcript, [])
         last = List.last(transcript)
 
@@ -285,11 +374,37 @@ defmodule LemonSim.Examples.Werewolf do
           )
         )
 
-      "day_voting" ->
+      p when p in ["day_voting", "runoff_voting"] ->
         %{votes: get(world, :votes, %{})}
 
       "night" ->
         %{night_actions: get(world, :night_actions, %{})}
+
+      "wolf_discussion" ->
+        wolf_chat = get(world, :wolf_chat_transcript, [])
+        last = List.last(wolf_chat)
+
+        if last,
+          do: %{speaker: get(last, :player), message: get(last, :message)},
+          else: %{}
+
+      p when p in ["last_words_vote", "last_words_night"] ->
+        pending = get(world, :pending_elimination)
+        if pending, do: %{pending_elimination: pending}, else: %{}
+
+      "meeting_selection" ->
+        %{meeting_requests: get(world, :meeting_requests, %{})}
+
+      "private_meeting" ->
+        %{
+          current_pair:
+            Enum.at(
+              get(world, :meeting_pairs, []),
+              get(world, :current_meeting_index, 0),
+              []
+            ),
+          messages: get(world, :current_meeting_messages, [])
+        }
 
       _ ->
         %{}
@@ -331,20 +446,58 @@ defmodule LemonSim.Examples.Werewolf do
 
   defp build_role_info(world, actor_id, actor_role) do
     players = get(world, :players, %{})
+    actor = Map.get(players, actor_id, %{})
+    traits = get(actor, :traits, [])
+    connections = get(world, :backstory_connections, [])
+    my_connections = Roles.connections_for_player(connections, actor_id)
+    journals = get(world, :journals, %{})
+    my_journal = Map.get(journals, actor_id, [])
+    player_items_map = get(world, :player_items, %{})
+    my_items = Map.get(player_items_map, actor_id, [])
+
+    trait_guidance =
+      traits
+      |> Enum.map(&Roles.trait_description/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(" ")
 
     base = %{
       "your_name" => actor_id,
-      "your_role" => actor_role
+      "your_role" => actor_role,
+      "personality_traits" => traits,
+      "trait_guidance" => trait_guidance,
+      "connections" =>
+        Enum.map(my_connections, fn conn ->
+          other =
+            conn
+            |> Map.get(:players, [])
+            |> Enum.find(&(&1 != actor_id))
+
+          %{
+            "other_player" => other,
+            "type" => Map.get(conn, :type),
+            "description" => Map.get(conn, :description)
+          }
+        end),
+      "your_journal" => Enum.take(my_journal, -10),
+      "your_items" =>
+        Enum.map(my_items, fn item -> Map.get(item, :type) || Map.get(item, "type") end)
     }
 
     case actor_role do
       "werewolf" ->
         partner_ids = Roles.werewolf_partners(players, actor_id)
+        wolf_chat = get(world, :wolf_chat_transcript, [])
 
         Map.merge(base, %{
           "werewolf_partners" => partner_ids,
+          "wolf_chat_transcript" =>
+            Enum.map(wolf_chat, fn entry ->
+              %{"player" => get(entry, :player), "message" => get(entry, :message, "")}
+            end),
           "description" =>
             "You are a WEREWOLF. Your partners are: #{Enum.join(partner_ids, ", ")}. " <>
+              "During wolf discussion, coordinate with your pack before night actions. " <>
               "At night, choose a villager to kill. During the day, pretend to be a villager " <>
               "and deflect suspicion away from yourself and your partners."
         })
@@ -374,9 +527,18 @@ defmodule LemonSim.Examples.Werewolf do
         })
 
       "villager" ->
+        wanderer_results = get(world, :wanderer_results, [])
+
+        my_sightings =
+          wanderer_results
+          |> Enum.filter(fn r -> get(r, :wanderer) == actor_id end)
+          |> Enum.map(fn r -> %{"day" => get(r, :day), "description" => get(r, :description)} end)
+
         Map.merge(base, %{
+          "night_sightings" => my_sightings,
           "description" =>
             "You are a VILLAGER. You have no special abilities, but your vote counts. " <>
+              "At night you can choose to WANDER the village — you might witness something suspicious. " <>
               "Pay attention to the discussion and try to identify suspicious behavior."
         })
 
@@ -388,7 +550,7 @@ defmodule LemonSim.Examples.Werewolf do
   # -- Event visibility filtering --
   # These ensure players only see events they should have access to.
 
-  @secret_night_events ~w(choose_victim investigate_player protect_player sleep)
+  @secret_night_events ~w(choose_victim investigate_player protect_player sleep night_wander use_item)
   @seer_only_events ~w(investigation_result)
 
   defp event_visible?(event, _actor_id, _actor_role) when not is_map(event), do: false
@@ -405,6 +567,10 @@ defmodule LemonSim.Examples.Werewolf do
       kind in @seer_only_events ->
         actor_role == "seer"
 
+      # Wolf chat: werewolves only
+      kind == "wolf_chat" ->
+        actor_role == "werewolf"
+
       # Action rejections: only the rejected player
       kind == "action_rejected" ->
         event_player_id(event) == actor_id
@@ -412,6 +578,26 @@ defmodule LemonSim.Examples.Werewolf do
       # Votes are secret until the public vote_result is announced.
       kind == "cast_vote" ->
         false
+
+      # Wanderer results: only the wanderer
+      kind == "wanderer_result" ->
+        event_player_id(event) == actor_id
+
+      # Lantern results: only the user
+      kind == "lantern_result" ->
+        event_player_id(event) == actor_id
+
+      # Item found: only the finder
+      kind == "item_found" ->
+        event_player_id(event) == actor_id
+
+      # Item used: only the user
+      kind == "item_used" ->
+        event_player_id(event) == actor_id
+
+      # Last words, accusations, meetings, evidence, village events, anonymous messages are public
+      kind in ~w(make_last_words make_accusation request_meeting meeting_message evidence_found village_event anonymous_message) ->
+        true
 
       # Everything else is public (phase_changed, night_resolved, player_eliminated,
       # vote_result, make_statement, game_over)
@@ -483,6 +669,71 @@ defmodule LemonSim.Examples.Werewolf do
             "target" => get(payload, :target_id),
             "role" => get(payload, :role)
           }
+
+        "make_last_words" ->
+          %{
+            "player" => get(payload, :player_id),
+            "statement" => get(payload, :statement, "")
+          }
+
+        "wolf_chat" ->
+          %{
+            "player" => get(payload, :player_id),
+            "message" => get(payload, :message, "")
+          }
+
+        "make_accusation" ->
+          %{
+            "accuser" => get(payload, :player_id),
+            "target" => get(payload, :target_id),
+            "reason" => get(payload, :reason, "")
+          }
+
+        "request_meeting" ->
+          %{"player" => get(payload, :player_id), "target" => get(payload, :target_id)}
+
+        "meeting_message" ->
+          %{"player" => get(payload, :player_id), "message" => get(payload, :message, "")}
+
+        "evidence_found" ->
+          %{
+            "tokens" =>
+              get(payload, :tokens, [])
+              |> Enum.map(fn t -> %{"type" => get(t, :type), "clue" => get(t, :clue)} end)
+          }
+
+        "night_wander" ->
+          %{"player" => get(payload, :player_id)}
+
+        "wanderer_result" ->
+          %{
+            "saw_shadows" => get(payload, :saw_shadows),
+            "description" => get(payload, :description, "")
+          }
+
+        "village_event" ->
+          %{
+            "event_type" => get(payload, :event_type),
+            "description" => get(payload, :description, "")
+          }
+
+        "item_found" ->
+          %{
+            "item_type" => get(payload, :item_type),
+            "description" => get(payload, :description, "")
+          }
+
+        "item_used" ->
+          %{"player" => get(payload, :player_id), "item_type" => get(payload, :item_type)}
+
+        "lantern_result" ->
+          %{
+            "description" => get(payload, :description, ""),
+            "saw_target" => get(payload, :saw_target)
+          }
+
+        "anonymous_message" ->
+          %{"message" => get(payload, :message, "")}
 
         "action_rejected" ->
           %{

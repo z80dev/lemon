@@ -9,13 +9,18 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
   alias LemonSim.State
   alias LemonSim.Examples.SpaceStation.{Events, Roles}
 
-  @repair_amount 20
-  @sabotage_amount 25
+  @repair_min 10
+  @repair_max 22
+  @sabotage_min 8
+  @sabotage_max 18
   @max_health 100
 
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
+
+    # Extract and store thought if present
+    state = maybe_store_thought(state, event)
 
     case event.kind do
       "repair_system" -> apply_repair_system(state, event)
@@ -26,6 +31,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       "call_emergency_meeting" -> apply_call_emergency_meeting(state, event)
       "vent" -> apply_vent(state, event)
       "make_statement" -> apply_make_statement(state, event)
+      "ask_question" -> apply_ask_question(state, event)
+      "accuse" -> apply_accuse(state, event)
       "cast_vote" -> apply_cast_vote(state, event)
       _ -> {:error, {:invalid_event_kind, event.kind}}
     end
@@ -177,7 +184,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       target_player = Map.get(players, target_id, %{})
       last_action = get(target_player, :last_action)
 
-      scan_result_text =
+      # Scans are imperfect — 25% chance of incorrect reading due to station interference
+      raw_result =
         case last_action do
           "sabotage" -> "sabotaged"
           "fake_repair" -> "sabotaged"
@@ -187,20 +195,30 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           _ -> "repaired"
         end
 
+      scan_result_text =
+        if raw_result in ["sabotaged", "repaired"] and :rand.uniform(4) == 1 do
+          # 25% false reading — flip the result (reduced from 40% to make scans more useful)
+          if raw_result == "sabotaged", do: "repaired", else: "sabotaged"
+        else
+          raw_result
+        end
+
       scan_results =
         state.world
         |> get(:scan_results, %{})
         |> Map.put(player_id, %{target: target_id, result: scan_result_text})
 
+      # Engineer appears at a random system for cover (hides scanning activity)
+      cover_system = Enum.random(~w(o2 power hull comms nav medbay shields))
+
       action_log =
         state.world
         |> get(:action_log, %{})
-        |> Map.put(player_id, %{system: "scanner", action: "scan", target: target_id})
+        |> Map.put(player_id, %{system: cover_system, action: "scan", target: target_id})
 
-      # Engineer scanning is not tied to a system location; show as "scanner"
-      location_log = get(state.world, :location_log, []) ++ [{player_id, "scanner"}]
+      location_log = get(state.world, :location_log, []) ++ [{player_id, cover_system}]
 
-      updated_players = put_player_field(players, player_id, :location, "scanner")
+      updated_players = put_player_field(players, player_id, :location, cover_system)
       updated_players = put_player_field(updated_players, player_id, :last_action, "scan")
 
       next_state =
@@ -368,6 +386,96 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
     end
   end
 
+  # -- Discussion: Ask question --
+
+  defp apply_ask_question(%State{} = state, event) do
+    player_id = fetch(event.payload, :player_id, "player_id")
+    target_id = fetch(event.payload, :target_id, "target_id")
+    question = fetch(event.payload, :question, "question")
+    players = get(state.world, :players, %{})
+
+    with :ok <- ensure_in_progress(state.world),
+         :ok <- ensure_phase(state.world, "discussion"),
+         :ok <- ensure_active_actor(state.world, player_id),
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_living(players, target_id) do
+      transcript = get(state.world, :discussion_transcript, [])
+
+      new_entry = %{
+        player: player_id,
+        type: "question",
+        target: target_id,
+        statement: question
+      }
+
+      new_transcript = transcript ++ [new_entry]
+
+      # Track pending questions so targets know they should respond
+      pending_questions = get(state.world, :pending_questions, [])
+      new_pending = pending_questions ++ [%{from: player_id, to: target_id, question: question}]
+
+      next_state =
+        state
+        |> State.put_world(
+          world_updates(state.world, %{
+            discussion_transcript: new_transcript,
+            pending_questions: new_pending
+          })
+        )
+        |> State.append_event(event)
+
+      advance_discussion_turn(next_state)
+    else
+      {:error, reason} ->
+        reject_action(state, event, player_id, reason)
+    end
+  end
+
+  # -- Discussion: Accuse --
+
+  defp apply_accuse(%State{} = state, event) do
+    player_id = fetch(event.payload, :player_id, "player_id")
+    target_id = fetch(event.payload, :target_id, "target_id")
+    evidence = fetch(event.payload, :evidence, "evidence")
+    players = get(state.world, :players, %{})
+
+    with :ok <- ensure_in_progress(state.world),
+         :ok <- ensure_phase(state.world, "discussion"),
+         :ok <- ensure_active_actor(state.world, player_id),
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_living(players, target_id) do
+      transcript = get(state.world, :discussion_transcript, [])
+
+      new_entry = %{
+        player: player_id,
+        type: "accusation",
+        target: target_id,
+        statement: evidence
+      }
+
+      new_transcript = transcript ++ [new_entry]
+
+      # Track accusations for the UI and agent awareness
+      accusations = get(state.world, :accusations, [])
+      new_accusations = accusations ++ [%{accuser: player_id, accused: target_id, evidence: evidence}]
+
+      next_state =
+        state
+        |> State.put_world(
+          world_updates(state.world, %{
+            discussion_transcript: new_transcript,
+            accusations: new_accusations
+          })
+        )
+        |> State.append_event(event)
+
+      advance_discussion_turn(next_state)
+    else
+      {:error, reason} ->
+        reject_action(state, event, player_id, reason)
+    end
+  end
+
   # -- Voting: Cast vote --
 
   defp apply_cast_vote(%State{} = state, event) do
@@ -511,22 +619,36 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         end)
       end
 
+    # Step 1.5: Environmental noise — random system perturbations each round
+    {noisy_systems, environmental_events} = apply_environmental_noise(decayed_systems, round)
+
+    # Step 1.75: Apply crisis effects
+    noisy_systems = apply_crisis_effects(noisy_systems, state.world)
+
     # Step 2: Apply player actions to systems
-    resolved_systems =
-      Enum.reduce(action_log, decayed_systems, fn {_player_id, action_entry}, acc_systems ->
+    # Only 1 repair per system takes effect per round (cap prevents "verified pair = 100%" strategy)
+    {resolved_systems, _repaired_set} =
+      Enum.reduce(action_log, {noisy_systems, MapSet.new()}, fn {_player_id, action_entry}, {acc_systems, repaired} ->
         action = get_action_field(action_entry, :action)
         system_id = get_action_field(action_entry, :system)
 
         case action do
           "repair" when is_binary(system_id) ->
-            apply_system_change(acc_systems, system_id, @repair_amount)
+            if MapSet.member?(repaired, system_id) do
+              # Second repair on same system this round — no effect
+              {acc_systems, repaired}
+            else
+              repair_amt = Enum.random(@repair_min..@repair_max)
+              {apply_system_change(acc_systems, system_id, repair_amt), MapSet.put(repaired, system_id)}
+            end
 
           "sabotage" when is_binary(system_id) ->
-            apply_system_change(acc_systems, system_id, -@sabotage_amount)
+            sabotage_amt = Enum.random(@sabotage_min..@sabotage_max)
+            {apply_system_change(acc_systems, system_id, -sabotage_amt), repaired}
 
           # fake_repair, vent, scan, lock, emergency_meeting -- no system effect
           _ ->
-            acc_systems
+            {acc_systems, repaired}
         end
       end)
 
@@ -547,8 +669,24 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
          }}
       end)
 
-    round_report = build_round_report(state.world, players, system_changes, round)
+    round_report = build_round_report(state.world, system_changes, round, environmental_events)
     action_history = get(state.world, :action_history, [])
+
+    # Emit environmental events so players see them in recent events
+    env_game_events =
+      Enum.map(environmental_events, fn evt ->
+        Events.environmental_event(
+          get(evt, :system, Map.get(evt, "system", "unknown")),
+          get(evt, :damage, Map.get(evt, "damage", 0)),
+          get(evt, :description, Map.get(evt, "description", "System anomaly"))
+        )
+      end)
+
+    state = State.append_events(state, env_game_events)
+
+    # Step 3: Generate clues from this round's actions and distribute to players
+    {state, clue_events} = generate_and_distribute_clues(state, action_log, players, round)
+    state = State.append_events(state, clue_events)
 
     # Check if any system reached 0 (station destroyed)
     station_destroyed =
@@ -718,7 +856,9 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           discussion_round_limit: discussion_round_limit,
           turn_order: discussion_order,
           active_actor_id: first_speaker,
-          emergency_meeting_called: false
+          emergency_meeting_called: false,
+          pending_questions: [],
+          accusations: []
         })
       )
       |> State.append_events(round_events)
@@ -904,6 +1044,15 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
     action_order = Roles.action_turn_order(players, round)
     first_actor = List.first(action_order)
 
+    # Generate crisis for rounds 3, 5, 7
+    {active_crisis, crisis_events} =
+      if round in [3, 5, 7] do
+        crisis = generate_crisis(round, state.world)
+        {crisis, [Events.crisis_triggered(crisis)]}
+      else
+        {nil, []}
+      end
+
     next_state =
       state
       |> State.put_world(
@@ -923,10 +1072,15 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           elimination_log: elimination_log,
           captain_lock: nil,
           scan_results: %{},
-          emergency_meeting_called: false
+          emergency_meeting_called: false,
+          active_crisis: active_crisis,
+          pending_questions: [],
+          accusations: []
         })
       )
-      |> State.append_events(preceding_events ++ [Events.phase_changed("action", round)])
+      |> State.append_events(
+        preceding_events ++ crisis_events ++ [Events.phase_changed("action", round)]
+      )
 
     {:ok, next_state, {:decide, "#{first_actor} action"}}
   end
@@ -997,20 +1151,340 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       else: {:error, :emergency_used}
   end
 
-  defp build_round_report(world, players, system_changes, round) do
-    visible_visits =
-      world
-      |> get(:location_log, [])
-      |> Enum.map(fn {player_id, system_id} -> %{player: player_id, system: system_id} end)
+  # -- Environmental noise --
+  # Random system perturbations each round to prevent deterministic math
 
-    visible_ids = MapSet.new(Enum.map(visible_visits, &get(&1, :player)))
+  defp apply_environmental_noise(systems, _round) do
+    # Light environmental damage — enough to add uncertainty but not swamp signal
+    # Only 3-4 random systems take minor damage each round (not all 7)
+    affected_count = Enum.random(3..4)
 
-    unseen_players =
-      players
-      |> Roles.living_players()
-      |> Enum.map(fn {player_id, _player} -> player_id end)
-      |> Enum.reject(&MapSet.member?(visible_ids, &1))
+    affected_systems =
+      systems
+      |> Map.keys()
+      |> Enum.shuffle()
+      |> Enum.take(affected_count)
 
+    Enum.reduce(systems, {systems, []}, fn {sys_id, _sys_data}, {acc_sys, acc_events} ->
+      if sys_id in affected_systems do
+        damage = Enum.random(0..5)
+
+        if damage > 0 do
+          sys = Map.get(acc_sys, sys_id, %{})
+          health = get(sys, :health, 100)
+          new_health = max(0, health - damage)
+          desc = environmental_event_description(sys_id, damage)
+
+          {
+            Map.put(acc_sys, sys_id, Map.put(sys, :health, new_health)),
+            acc_events ++ [%{system: sys_id, damage: damage, description: desc}]
+          }
+        else
+          {acc_sys, acc_events}
+        end
+      else
+        {acc_sys, acc_events}
+      end
+    end)
+  end
+
+  defp environmental_event_description(_system_id, _damage) do
+    # Deliberately vague — players should NOT know which systems were hit or by how much
+    generic = [
+      "Environmental sensors detected anomalous readings across the station",
+      "Station systems experienced minor perturbations from external conditions",
+      "Automated damage-control routines activated for routine hazard mitigation",
+      "Deep-space radiation spike affected station subsystems",
+      "Micro-debris field contact — damage-control protocols engaged",
+      "Thermal fluctuation detected in station infrastructure"
+    ]
+
+    Enum.random(generic)
+  end
+
+  # -- Clue generation --
+  # After each round, generate evidence based on actual actions and distribute to random players
+
+  defp generate_and_distribute_clues(state, action_log, players, round) do
+    living = Roles.living_players(players) |> Enum.map(fn {id, _p} -> id end)
+
+    # Build pool of possible clues from this round's actions
+    clue_pool =
+      action_log
+      |> Enum.flat_map(fn {player_id, action_entry} ->
+        action = get_action_field(action_entry, :action)
+        system_id = get_action_field(action_entry, :system)
+        build_clues_for_action(player_id, action, system_id, players)
+      end)
+
+    # Select 2-3 clues to distribute
+    clue_count = min(length(clue_pool), Enum.random(2..3))
+    selected_clues = clue_pool |> Enum.shuffle() |> Enum.take(clue_count)
+
+    # Distribute each clue to a random living player (not the actor)
+    {updated_clues, clue_events} =
+      Enum.reduce(selected_clues, {get(state.world, :clues, %{}), []}, fn clue, {acc_clues, acc_events} ->
+        actor_id = Map.get(clue, :about_player)
+        eligible = Enum.reject(living, &(&1 == actor_id))
+
+        case eligible do
+          [] ->
+            {acc_clues, acc_events}
+
+          recipients ->
+            recipient = Enum.random(recipients)
+            clue_with_round = Map.put(clue, :round, round)
+
+            player_clues = Map.get(acc_clues, recipient, [])
+            updated = Map.put(acc_clues, recipient, player_clues ++ [clue_with_round])
+
+            event = Events.clue_found(recipient, clue_with_round)
+            {updated, acc_events ++ [event]}
+        end
+      end)
+
+    updated_state =
+      State.put_world(state, world_updates(state.world, %{clues: updated_clues}))
+
+    {updated_state, clue_events}
+  end
+
+  defp build_clues_for_action(player_id, action, system_id, _players) do
+    system_name = system_display_name(system_id)
+
+    case action do
+      "repair" ->
+        [
+          Enum.random([
+            %{
+              type: "tool_marks",
+              text: "You notice fresh tool marks and repair residue on the #{system_name} system.",
+              about_player: player_id
+            },
+            %{
+              type: "sound",
+              text: "You heard the distinctive hum of repair equipment coming from #{system_name} this round.",
+              about_player: player_id
+            }
+          ])
+        ]
+
+      "sabotage" ->
+        [
+          Enum.random([
+            %{
+              type: "damage_evidence",
+              text: "You spot scorch marks and deliberate cuts on the #{system_name} system — this doesn't look like normal wear.",
+              about_player: player_id
+            },
+            %{
+              type: "suspicious_activity",
+              text: "A security camera near #{system_name} captured a blurred figure working hastily, unlike normal repair posture.",
+              about_player: player_id
+            },
+            %{
+              type: "chemical_residue",
+              text: "You detect an unusual chemical residue near the #{system_name} system — consistent with deliberate interference.",
+              about_player: player_id
+            }
+          ])
+        ]
+
+      "fake_repair" ->
+        [
+          %{
+            type: "incomplete_work",
+            text: "The #{system_name} system shows signs someone was there, but no actual repairs were completed.",
+            about_player: player_id
+          }
+        ]
+
+      "vent" ->
+        [
+          %{
+            type: "vent_noise",
+            text: "You heard unusual sounds from the ventilation system — someone might be moving through the ducts.",
+            about_player: player_id
+          }
+        ]
+
+      "scan" ->
+        [
+          %{
+            type: "scanner_activity",
+            text: "You noticed a brief spike in the station's bio-scanner array. Someone used the scanning equipment.",
+            about_player: player_id
+          }
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  # -- Crisis generation and effects --
+
+  @crisis_types [:cascade_failure, :power_surge, :lockdown, :hull_breach]
+
+  defp generate_crisis(round, world) do
+    systems = get(world, :systems, %{})
+    system_ids = Map.keys(systems) |> Enum.map(&to_string/1)
+
+    # Pick a crisis type, cycling through to avoid repeats
+    crisis_type = Enum.at(@crisis_types, rem(round, length(@crisis_types)))
+
+    case crisis_type do
+      :cascade_failure ->
+        [sys_a, sys_b] = system_ids |> Enum.shuffle() |> Enum.take(2)
+        name_a = system_display_name(sys_a)
+        name_b = system_display_name(sys_b)
+
+        %{
+          type: "cascade_failure",
+          name: "Cascade Failure",
+          linked_systems: [sys_a, sys_b],
+          threshold: 40,
+          extra_damage: 12,
+          description:
+            "WARNING: #{name_a} and #{name_b} systems are linked through a shared conduit. " <>
+              "If either drops below 40 health, the other takes 12 extra damage!",
+          announcement:
+            "CRISIS ALERT: Cascade failure detected! #{name_a} and #{name_b} are linked — " <>
+              "if either drops below 40 HP, the other takes 12 damage."
+        }
+
+      :power_surge ->
+        [victim, beneficiary] = system_ids |> Enum.shuffle() |> Enum.take(2)
+        victim_name = system_display_name(victim)
+        beneficiary_name = system_display_name(beneficiary)
+        surge_damage = Enum.random(15..25)
+        surge_repair = Enum.random(10..15)
+
+        %{
+          type: "power_surge",
+          name: "Power Surge",
+          victim_system: victim,
+          beneficiary_system: beneficiary,
+          surge_damage: surge_damage,
+          surge_repair: surge_repair,
+          description:
+            "A power surge is routing energy away from #{victim_name} (-#{surge_damage} HP) " <>
+              "and overcharging #{beneficiary_name} (+#{surge_repair} HP). " <>
+              "Prioritize repairing #{victim_name} this round!",
+          announcement:
+            "CRISIS ALERT: Power surge! #{victim_name} takes #{surge_damage} damage, " <>
+              "#{beneficiary_name} gains #{surge_repair} health."
+        }
+
+      :lockdown ->
+        %{
+          type: "lockdown",
+          name: "Security Lockdown",
+          description:
+            "Station security lockdown activated! All crew locations will be revealed at the end of this round. " <>
+              "Everyone can see where everyone went.",
+          announcement:
+            "CRISIS ALERT: Security lockdown! All player locations will be revealed this round."
+        }
+
+      :hull_breach ->
+        [sys_a, sys_b] = system_ids |> Enum.shuffle() |> Enum.take(2)
+        name_a = system_display_name(sys_a)
+        name_b = system_display_name(sys_b)
+        breach_damage = 20
+
+        %{
+          type: "hull_breach",
+          name: "Hull Breach",
+          affected_systems: [sys_a, sys_b],
+          breach_damage: breach_damage,
+          description:
+            "Hull breach detected near #{name_a} and #{name_b}! " <>
+              "Both systems take #{breach_damage} extra damage unless someone repairs them this round. " <>
+              "Any system that receives a repair this round is spared the breach damage.",
+          announcement:
+            "CRISIS ALERT: Hull breach! #{name_a} and #{name_b} take #{breach_damage} damage " <>
+              "unless repaired this round."
+        }
+    end
+  end
+
+  defp apply_crisis_effects(systems, world) do
+    crisis = get(world, :active_crisis)
+    action_log = get(world, :action_log, %{})
+
+    if is_nil(crisis) do
+      systems
+    else
+      case get(crisis, :type) do
+        "cascade_failure" ->
+          [sys_a, sys_b] = get(crisis, :linked_systems, [])
+          threshold = get(crisis, :threshold, 40)
+          extra_damage = get(crisis, :extra_damage, 12)
+
+          health_a = get(Map.get(systems, sys_a, %{}), :health, 100)
+          health_b = get(Map.get(systems, sys_b, %{}), :health, 100)
+
+          systems =
+            if health_a < threshold do
+              apply_system_change(systems, sys_b, -extra_damage)
+            else
+              systems
+            end
+
+          if health_b < threshold do
+            apply_system_change(systems, sys_a, -extra_damage)
+          else
+            systems
+          end
+
+        "power_surge" ->
+          victim = get(crisis, :victim_system)
+          beneficiary = get(crisis, :beneficiary_system)
+          damage = get(crisis, :surge_damage, 20)
+          repair = get(crisis, :surge_repair, 12)
+
+          systems
+          |> apply_system_change(victim, -damage)
+          |> apply_system_change(beneficiary, repair)
+
+        "hull_breach" ->
+          affected = get(crisis, :affected_systems, [])
+          breach_damage = get(crisis, :breach_damage, 20)
+
+          # Systems that received a repair this round are spared
+          repaired_systems =
+            action_log
+            |> Enum.filter(fn {_pid, entry} -> get_action_field(entry, :action) == "repair" end)
+            |> Enum.map(fn {_pid, entry} -> get_action_field(entry, :system) end)
+            |> MapSet.new()
+
+          Enum.reduce(affected, systems, fn sys_id, acc ->
+            if MapSet.member?(repaired_systems, sys_id) do
+              acc
+            else
+              apply_system_change(acc, sys_id, -breach_damage)
+            end
+          end)
+
+        # Lockdown has no system effect — it's handled in the projector
+        _ ->
+          systems
+      end
+    end
+  end
+
+  defp system_display_name(nil), do: "unknown"
+  defp system_display_name("o2"), do: "Oxygen"
+  defp system_display_name("power"), do: "Reactor Power"
+  defp system_display_name("hull"), do: "Hull Integrity"
+  defp system_display_name("comms"), do: "Communications"
+  defp system_display_name("nav"), do: "Navigation"
+  defp system_display_name("medbay"), do: "Medical Bay"
+  defp system_display_name("shields"), do: "Shield Array"
+  defp system_display_name(other), do: other
+
+  defp build_round_report(world, system_changes, round, environmental_events) do
     critical_systems =
       system_changes
       |> Enum.filter(fn {_system_id, change} -> get(change, :new_health, 100) <= 35 end)
@@ -1024,12 +1498,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
 
     %{
       round: round,
-      visible_visits: visible_visits,
-      unseen_players: unseen_players,
       critical_systems: critical_systems,
       captain_lock: get(world, :captain_lock),
       emergency_called: get(world, :emergency_meeting_called, false),
-      system_changes: system_changes
+      environmental_events: environmental_events
     }
   end
 end

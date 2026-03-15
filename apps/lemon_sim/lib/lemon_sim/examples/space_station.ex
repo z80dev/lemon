@@ -47,20 +47,29 @@ defmodule LemonSim.Examples.SpaceStation do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
     player_ids = Enum.map(1..player_count, fn i -> "player_#{i}" end)
     players = Roles.assign_roles(player_ids)
+    player_names = Enum.map(players, fn {_id, p} -> get(p, :name) end)
+    traits = Roles.assign_traits(player_names)
+    connections = Roles.generate_connections(player_names)
     action_order = Roles.action_turn_order(players)
     first_actor = List.first(action_order)
 
     %{
       players: players,
+      traits: traits,
+      connections: connections,
+      journals: %{},
       systems: %{
-        "o2" => %{health: 100, decay_rate: 10, name: "Oxygen"},
-        "power" => %{health: 100, decay_rate: 8, name: "Reactor Power"},
-        "hull" => %{health: 100, decay_rate: 5, name: "Hull Integrity"},
-        "comms" => %{health: 100, decay_rate: 3, name: "Communications"}
+        "o2" => %{health: 100, decay_rate: 5, name: "Oxygen"},
+        "power" => %{health: 100, decay_rate: 4, name: "Reactor Power"},
+        "hull" => %{health: 100, decay_rate: 3, name: "Hull Integrity"},
+        "comms" => %{health: 100, decay_rate: 2, name: "Communications"},
+        "nav" => %{health: 100, decay_rate: 3, name: "Navigation"},
+        "medbay" => %{health: 100, decay_rate: 2, name: "Medical Bay"},
+        "shields" => %{health: 100, decay_rate: 4, name: "Shield Array"}
       },
       phase: "action",
       round: 1,
-      max_rounds: 8,
+      max_rounds: 12,
       active_actor_id: first_actor,
       turn_order: action_order,
       action_log: %{},
@@ -77,6 +86,10 @@ defmodule LemonSim.Examples.SpaceStation do
       captain_lock: nil,
       scan_results: %{},
       elimination_log: [],
+      clues: %{},
+      active_crisis: nil,
+      pending_questions: [],
+      accusations: [],
       status: "in_progress",
       winner: nil
     }
@@ -134,12 +147,49 @@ defmodule LemonSim.Examples.SpaceStation do
           players = get(world, :players, %{})
           actor = Map.get(players, actor_id, %{})
           actor_role = get(actor, :role, "unknown")
+          actor_name = get(actor, :name, actor_id)
+
+          # Personality traits
+          traits = get(world, :traits, %{})
+          player_traits = Map.get(traits, actor_name, [])
+
+          trait_info =
+            Enum.map(player_traits, fn t ->
+              %{"trait" => t, "description" => Roles.trait_description(t)}
+            end)
+
+          # Backstory connections
+          connections = get(world, :connections, [])
+          my_connections = Roles.connections_for_player(connections, actor_name)
+
+          connection_info =
+            Enum.map(my_connections, fn conn ->
+              %{"type" => conn.type, "description" => conn.description}
+            end)
+
+          # Journal entries
+          journals = get(world, :journals, %{})
+          my_journal = Map.get(journals, actor_id, [])
+
+          role_info = build_role_info(world, actor_id, actor_role)
+
+          # Clues this player has received
+          clues = get(world, :clues, %{})
+          my_clues = Map.get(clues, actor_id, [])
+
+          enriched =
+            Map.merge(role_info, %{
+              "personality_traits" => trait_info,
+              "backstory_connections" => connection_info,
+              "journal" => my_journal,
+              "clues_found" => my_clues
+            })
 
           %{
             id: :role_info,
             title: "Your Role (SECRET - do not reveal unless strategically advantageous)",
             format: :json,
-            content: build_role_info(world, actor_id, actor_role)
+            content: enriched
           }
         end,
         discussion_log: fn frame, _tools, _opts ->
@@ -155,21 +205,50 @@ defmodule LemonSim.Examples.SpaceStation do
               "discussion_transcript" =>
                 Enum.map(transcript, fn entry ->
                   player_id = get(entry, :player)
+                  entry_type = get(entry, :type, "statement")
 
-                  %{
+                  base = %{
                     "player_id" => player_id,
                     "player_name" => player_name(players, player_id),
-                    "statement" => rewrite_public_text(get(entry, :statement, ""), players)
+                    "type" => entry_type
                   }
+
+                  case entry_type do
+                    "question" ->
+                      target_id = get(entry, :target)
+
+                      Map.merge(base, %{
+                        "directed_at" => player_name(players, target_id),
+                        "question" => rewrite_public_text(get(entry, :statement, ""), players)
+                      })
+
+                    "accusation" ->
+                      target_id = get(entry, :target)
+
+                      Map.merge(base, %{
+                        "accused" => player_name(players, target_id),
+                        "evidence" => rewrite_public_text(get(entry, :statement, ""), players)
+                      })
+
+                    _ ->
+                      Map.put(
+                        base,
+                        "statement",
+                        rewrite_public_text(get(entry, :statement, ""), players)
+                      )
+                  end
                 end),
               "elimination_log" =>
                 Enum.map(elimination_log, fn entry ->
-                  %{
+                  base = %{
                     "player" => player_name(players, get(entry, :player)),
-                    "role" => get(entry, :role),
                     "reason" => get(entry, :reason),
                     "round" => get(entry, :round)
                   }
+
+                  # Include revealed role for ejected players
+                  role = get(entry, :role)
+                  if role, do: Map.put(base, "role", role), else: base
                 end)
             }
           }
@@ -201,15 +280,24 @@ defmodule LemonSim.Examples.SpaceStation do
         - You are a crew member on a failing space station. One person is secretly a saboteur.
         - Use exactly one tool call per turn.
         - During ACTION phase: Choose to repair a system, or use your special ability if you have one.
-        - During DISCUSSION phase: Make a strategic statement. Accuse, defend, share observations, or bluff.
+        - During DISCUSSION phase: You have THREE tools: make_statement (general), ask_question (direct a question at someone), and accuse (formal accusation with evidence). Use ask_question to probe suspicious players — they'll feel pressure to respond. Use accuse when you've built a case.
         - During VOTING phase: Vote to eject a suspect, or skip if unsure. Majority required.
         - IMPORTANT: Your role is SECRET. The saboteur appears as "crew" to others.
-        - Systems decay every round. If ANY system reaches 0 health, the station is destroyed (saboteur wins).
+        - Systems decay every round and suffer minor environmental damage. If ANY system reaches 0 health, the station is destroyed (saboteur wins).
         - The crew wins by ejecting the saboteur or surviving 8 rounds.
-        - You can see WHO went to WHICH system, but NOT what they did there.
+        - There are 7 systems but only 6 players — most players will be alone at their system each round.
+        - VISIBILITY: You can only see who else was at the SAME system as you. You do NOT know where other players went. You get exact health readings for systems you visit; other systems have slight sensor variance.
+        - Ejected players' roles ARE revealed. This gives you confirmed information to reason with.
+        - CLUES: After each round, you may find evidence — tool marks, sounds, security footage. Use these in discussion to build your case. Clues are private until you share them.
+        - CRISES: The station faces periodic crises (cascade failures, power surges, lockdowns, hull breaches) that force difficult coordination decisions. Pay attention to the active crisis and plan accordingly.
+        - If someone asks you a direct question, you should address it. Dodging questions looks suspicious.
+        - If you are formally accused, defend yourself with specific evidence. Silence after an accusation is damning.
         - Public discussion should refer to players by their assigned names, not internal ids like player_3.
         - Use internal ids only when calling tools that require a target_id/player_id argument.
-        - Think strategically: track which systems improved or degraded and who was there.
+        - Think strategically: compare system health between rounds, cross-reference clues, and look for patterns.
+        - People may lie about where they were or what they did. Trust must be earned through consistent behavior over multiple rounds.
+        - Stay in character based on your personality traits.
+        - Your connections with other crew members may influence your judgment.
         """
       },
       section_order: [
@@ -274,6 +362,8 @@ defmodule LemonSim.Examples.SpaceStation do
     systems = get(world, :systems, %{})
     location_log = get(world, :location_log, [])
     captain_lock = get(world, :captain_lock, nil)
+    actor = Map.get(players, actor_id, %{})
+    actor_location = get(actor, :location)
 
     player_summary =
       players
@@ -283,9 +373,10 @@ defmodule LemonSim.Examples.SpaceStation do
 
         base = %{"id" => id, "name" => player_name(players, id), "status" => status}
 
-        # Ejected players' roles are revealed
+        # Reveal roles of ejected players (confirm ejects)
         if status == "ejected" do
-          Map.put(base, "role", get(p, :role, "unknown"))
+          role = get(p, :role, "unknown")
+          Map.put(base, "revealed_role", role)
         else
           base
         end
@@ -295,25 +386,105 @@ defmodule LemonSim.Examples.SpaceStation do
       systems
       |> Enum.sort_by(fn {id, _s} -> id end)
       |> Enum.map(fn {id, s} ->
+        exact_health = get(s, :health, 100)
+
+        # Show exact health for systems you personally visited; fuzzy for others
+        if id == actor_location do
+          %{
+            "id" => id,
+            "name" => get(s, :name, id),
+            "health" => exact_health,
+            "health_note" => "exact reading (you are at this system)"
+          }
+        else
+          jitter = Enum.random(-3..3)
+          displayed_health = (exact_health + jitter) |> max(0) |> min(100)
+
+          %{
+            "id" => id,
+            "name" => get(s, :name, id),
+            "health" => displayed_health,
+            "health_note" => "approximate reading (station sensors have ±3% variance)"
+          }
+        end
+      end)
+
+    # Location visibility
+    active_crisis = get(world, :active_crisis)
+    lockdown_active = is_map(active_crisis) and get(active_crisis, :type) == "lockdown"
+
+    co_located =
+      if lockdown_active do
+        # Lockdown: reveal ALL player locations
+        location_log
+        |> Enum.reject(fn {pid, _sys} -> pid == actor_id end)
+        |> Enum.map(fn {pid, sys} ->
+          %{
+            "player_id" => pid,
+            "player_name" => player_name(players, pid),
+            "location" => sys
+          }
+        end)
+      else
+        # Normal: you only see who else was at the SAME system as you
+        if actor_location do
+          location_log
+          |> Enum.filter(fn {_pid, sys} -> sys == actor_location end)
+          |> Enum.reject(fn {pid, _sys} -> pid == actor_id end)
+          |> Enum.map(fn {pid, _sys} ->
+            %{"player_id" => pid, "player_name" => player_name(players, pid)}
+          end)
+        else
+          []
+        end
+      end
+
+    location_label =
+      if lockdown_active,
+        do: "all_crew_locations (LOCKDOWN)",
+        else: "co_located_players"
+
+    # Active crisis
+    active_crisis = get(world, :active_crisis)
+
+    crisis_info =
+      if active_crisis do
         %{
-          "id" => id,
-          "name" => get(s, :name, id),
-          "health" => get(s, :health, 100),
-          "decay_rate" => get(s, :decay_rate, 0)
+          "type" => get(active_crisis, :type),
+          "name" => get(active_crisis, :name),
+          "description" => get(active_crisis, :description)
+        }
+      else
+        nil
+      end
+
+    # Pending questions directed at this player
+    pending_questions = get(world, :pending_questions, [])
+
+    my_pending_questions =
+      pending_questions
+      |> Enum.filter(fn q -> get(q, :to) == actor_id end)
+      |> Enum.map(fn q ->
+        %{
+          "from" => player_name(players, get(q, :from)),
+          "question" => get(q, :question)
         }
       end)
 
-    # Location log: who went where (public knowledge)
-    locations =
-      Enum.map(location_log, fn {player_id, system_id} ->
+    # Active accusations against this player
+    accusations = get(world, :accusations, [])
+
+    accusations_against_me =
+      accusations
+      |> Enum.filter(fn a -> get(a, :accused) == actor_id end)
+      |> Enum.map(fn a ->
         %{
-          "player_id" => player_id,
-          "player_name" => player_name(players, player_id),
-          "system" => system_id
+          "accuser" => player_name(players, get(a, :accuser)),
+          "evidence" => get(a, :evidence)
         }
       end)
 
-    %{
+    base = %{
       "phase" => get(world, :phase),
       "round" => get(world, :round),
       "max_rounds" => get(world, :max_rounds, 8),
@@ -326,21 +497,54 @@ defmodule LemonSim.Examples.SpaceStation do
       },
       "players" => player_summary,
       "systems" => system_summary,
-      "location_log" => locations,
+      "your_location" => actor_location,
+      location_label => co_located,
       "captain_lock" => captain_lock,
       "last_round_report" =>
-        format_round_report(List.last(get(world, :round_reports, [])), players),
+        format_round_report(List.last(get(world, :round_reports, []))),
       "living_count" => length(Roles.living_players(players))
     }
+
+    base
+    |> put_if_present("active_crisis", crisis_info)
+    |> put_if_present("questions_directed_at_you", non_empty_list(my_pending_questions))
+    |> put_if_present("accusations_against_you", non_empty_list(accusations_against_me))
   end
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
+
+  defp non_empty_list([]), do: nil
+  defp non_empty_list(list), do: list
 
   defp build_role_info(world, actor_id, actor_role) do
     players = get(world, :players, %{})
     scan_results = get(world, :scan_results, %{})
+    actor_name = player_name(players, actor_id)
+
+    # Trait summary for inline role description
+    traits = get(world, :traits, %{})
+    player_traits = Map.get(traits, actor_name, [])
+
+    trait_summary =
+      case player_traits do
+        [] -> ""
+        ts -> " Your personality: " <> Enum.join(Enum.map(ts, &Roles.trait_description/1), " ")
+      end
+
+    # Connection summary for inline role description
+    connections = get(world, :connections, [])
+    my_connections = Roles.connections_for_player(connections, actor_name)
+
+    connection_summary =
+      case my_connections do
+        [] -> ""
+        conns -> " Backstory: " <> Enum.join(Enum.map(conns, & &1.description), " ")
+      end
 
     base = %{
       "your_id" => actor_id,
-      "your_name" => player_name(players, actor_id),
+      "your_name" => actor_name,
       "your_role" => actor_role
     }
 
@@ -349,9 +553,31 @@ defmodule LemonSim.Examples.SpaceStation do
         Map.merge(base, %{
           "description" =>
             "You are the SABOTEUR. You appear as 'crew' to others. " <>
-              "You can sabotage systems (-25 health), fake-repair (looks like repair but does nothing), " <>
-              "or use vents to avoid being seen. Your goal is to destroy the station by reducing " <>
-              "any system to 0 health. Deflect suspicion during discussions."
+              "ACTIONS: " <>
+              "(1) 'repair_system' — actually repairs (use to build trust). " <>
+              "(2) 'sabotage_system' — damages a system (your main weapon). " <>
+              "(3) 'inspect_system' — you visit a system and appear to work normally, but nothing changes. " <>
+              "Useful when you want to be SEEN at a system without repairing it. " <>
+              "(4) 'vent' — disappear from all locations (risky, absence noticed). " <>
+              "STRATEGY: " <>
+              "Round 1: Use 'repair_system' genuinely to build trust. Go where others go. " <>
+              "Round 2+: Start mixing in sabotage. Environmental hazards hit 3-5 systems per round for " <>
+              "significant damage, so sabotage blends in with the noise. Go to a system WITH another player — " <>
+              "they see you there but cannot tell if you repaired or sabotaged. " <>
+              "CRITICAL DISCUSSION RULES: " <>
+              "(1) Act CALM and NORMAL. Do NOT be aggressive or accusatory — that draws suspicion. " <>
+              "(2) BLEND IN with the group. Agree with reasonable proposals. Be cooperative. " <>
+              "(3) When reporting your location, always say you 'repaired' the system — never mention " <>
+              "inspecting, sabotaging, or any special action. You are crew as far as anyone knows. " <>
+              "(4) If questioned, stay calm and give SHORT, CONFIDENT answers. Do not over-explain or get defensive. " <>
+              "(5) Let OTHERS start accusations. Only join in when the group is already suspicious of someone. " <>
+              "(6) Point out that environmental damage is heavy and unpredictable when systems drop. " <>
+              "(7) If a scan accuses you: DENY IT. Scans have a 25% false reading rate — they get it wrong one in four times. " <>
+              "Say: 'Scans are unreliable, everyone knows interference causes false readings.' " <>
+              "NEVER confess. NEVER admit guilt. ALWAYS claim you repaired and the scan is wrong. " <>
+              "Redirect suspicion to someone else — suggest the engineer is the saboteur framing you. " <>
+              "Your goal: reduce any system to 0 health." <>
+              trait_summary <> connection_summary
         })
 
       "engineer" ->
@@ -370,9 +596,11 @@ defmodule LemonSim.Examples.SpaceStation do
         Map.merge(base, %{
           "scan_history" => scan_history,
           "description" =>
-            "You are the ENGINEER. You can repair systems (+20 health) or scan a player " <>
-              "to learn whether they repaired or sabotaged last turn. Scan results are private. " <>
-              "Use your knowledge wisely during discussions."
+            "You are the ENGINEER. You can repair systems or scan a player " <>
+              "to learn whether they repaired or sabotaged last turn. WARNING: Station interference " <>
+              "means scan results have a 25% error rate — mostly reliable but not perfect. Scan results are private. " <>
+              "Use your knowledge wisely during discussions. When scanning, you appear at a random system." <>
+              trait_summary <> connection_summary
         })
 
       "captain" ->
@@ -381,17 +609,20 @@ defmodule LemonSim.Examples.SpaceStation do
         Map.merge(base, %{
           "emergency_meeting_available" => emergency,
           "description" =>
-            "You are the CAPTAIN. You can repair systems, lock a room (prevents sabotage there), " <>
+            "You are the CAPTAIN. You can repair systems, lock a room (prevents sabotage there for one round), " <>
               "or call an emergency meeting (skip to discussion+vote, once per game). " <>
-              "The lock is public information. Use your authority wisely."
+              "The lock is public information. Use your authority wisely." <>
+              trait_summary <> connection_summary
         })
 
       "crew" ->
         Map.merge(base, %{
           "description" =>
-            "You are CREW. You can repair one system per turn (+20 health). " <>
-              "Pay attention to which systems go up or down and who was in each room. " <>
-              "Work together to find the saboteur before the station is destroyed."
+            "You are CREW. You can repair one system per turn. " <>
+              "Repair effectiveness varies. Pay attention to system health trends and who claims to be where. " <>
+              "Environmental damage makes exact calculations unreliable — focus on patterns over multiple rounds. " <>
+              "Work together to find the saboteur before the station is destroyed." <>
+              trait_summary <> connection_summary
         })
 
       _ ->
@@ -418,12 +649,21 @@ defmodule LemonSim.Examples.SpaceStation do
       kind in @engineer_only_events ->
         actor_role == "engineer" and event_engineer_id(event) == actor_id
 
+      # Clues: only the recipient sees them
+      kind == "clue_found" ->
+        event_player_id(event) == actor_id
+
       # Action rejections: only the rejected player
       kind == "action_rejected" ->
         event_player_id(event) == actor_id
 
+      # Environmental events are hidden — players don't know which systems were hit
+      kind == "environmental_event" ->
+        false
+
       # Everything else is public (phase_changed, round_resolved, player_ejected,
-      # vote_result, make_statement, cast_vote, game_over, lock_room)
+      # vote_result, make_statement, ask_question, accuse, cast_vote,
+      # game_over, lock_room, crisis_triggered)
       true ->
         true
     end
@@ -438,11 +678,22 @@ defmodule LemonSim.Examples.SpaceStation do
     case kind do
       # Strip private action details from round_resolved
       "round_resolved" ->
-        # System changes are public, but we don't leak individual action details
         sanitized_payload =
           payload
           |> Map.delete(:action_log)
           |> Map.delete("action_log")
+          |> Map.delete(:system_changes)
+          |> Map.delete("system_changes")
+
+        put_payload(event, sanitized_payload)
+
+      # Reveal ejected player's role (confirm ejects) — gives crew meaningful info
+      "player_ejected" ->
+        player_id = Map.get(payload, :player_id, Map.get(payload, "player_id", "someone"))
+        role = Map.get(payload, :role, Map.get(payload, "role", "unknown"))
+
+        sanitized_payload =
+          Map.put(payload, "message", "#{player_id} has been ejected from the station. They were #{role}.")
 
         put_payload(event, sanitized_payload)
 
@@ -476,15 +727,29 @@ defmodule LemonSim.Examples.SpaceStation do
     case phase do
       "discussion" ->
         transcript = get(world, :discussion_transcript, [])
+        players = get(world, :players, %{})
 
         case List.last(transcript) do
           nil ->
             :ok
 
           entry ->
-            IO.puts(
-              "  [#{player_name(get(world, :players, %{}), get(entry, :player))}]: \"#{get(entry, :statement)}\""
-            )
+            speaker = player_name(players, get(entry, :player))
+            entry_type = get(entry, :type, "statement")
+            statement = get(entry, :statement, "")
+
+            case entry_type do
+              "question" ->
+                target = player_name(players, get(entry, :target))
+                IO.puts("  [#{speaker}] asks #{target}: \"#{statement}\"")
+
+              "accusation" ->
+                target = player_name(players, get(entry, :target))
+                IO.puts("  [#{speaker}] ACCUSES #{target}: \"#{statement}\"")
+
+              _ ->
+                IO.puts("  [#{speaker}]: \"#{statement}\"")
+            end
         end
 
       "voting" ->
@@ -607,7 +872,19 @@ defmodule LemonSim.Examples.SpaceStation do
       "discussion" ->
         transcript = get(world, :discussion_transcript, [])
         last = List.last(transcript)
-        if last, do: %{statement: get(last, :statement), speaker: get(last, :player)}, else: %{}
+
+        if last do
+          base = %{statement: get(last, :statement), speaker: get(last, :player)}
+          entry_type = get(last, :type, "statement")
+
+          case entry_type do
+            "question" -> Map.merge(base, %{type: "question", target: get(last, :target)})
+            "accusation" -> Map.merge(base, %{type: "accusation", target: get(last, :target)})
+            _ -> base
+          end
+        else
+          %{}
+        end
 
       "voting" ->
         %{votes: get(world, :votes, %{})}
@@ -655,26 +932,22 @@ defmodule LemonSim.Examples.SpaceStation do
 
   defp rewrite_public_text(other, _players), do: other
 
-  defp format_round_report(nil, _players), do: nil
+  defp format_round_report(nil), do: nil
 
-  defp format_round_report(report, players) do
+  defp format_round_report(report) do
+    env_count = length(get(report, :environmental_events, []))
+
     %{
       "round" => get(report, :round),
-      "visible_visits" =>
-        Enum.map(get(report, :visible_visits, []), fn visit ->
-          %{
-            "player_id" => get(visit, :player),
-            "player_name" => player_name(players, get(visit, :player)),
-            "system" => get(visit, :system)
-          }
-        end),
-      "unseen_players" =>
-        Enum.map(get(report, :unseen_players, []), fn player_id ->
-          %{"player_id" => player_id, "player_name" => player_name(players, player_id)}
-        end),
+      "environmental_note" =>
+        if(env_count > 0,
+          do:
+            "Station sensors detected environmental hazards this round. " <>
+              "Exact system impact is unknown — automated damage-control engaged.",
+          else: "No significant environmental hazards detected."
+        ),
       "critical_systems" => get(report, :critical_systems, []),
-      "captain_lock" => get(report, :captain_lock),
-      "system_changes" => get(report, :system_changes, %{})
+      "captain_lock" => get(report, :captain_lock)
     }
   end
 end
