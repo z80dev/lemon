@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "description": "TUI client for Lemon coding agent",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/App.js",
   "bin": {
     "lemon-tui": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsup src/cli.ts src/index.ts --format esm --clean",
-    "dev": "tsup src/cli.ts src/index.ts --format esm --watch",
+    "build": "tsup src/cli.ts src/ink/App.tsx --format esm --clean",
+    "dev": "tsup src/cli.ts src/ink/App.tsx --format esm --watch",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -19,16 +19,22 @@
   },
   "dependencies": {
     "@iarna/toml": "^3.0.0",
-    "@mariozechner/pi-tui": "^0.50.2",
+    "ink": "npm:@jrichman/ink@^6.4.11",
+    "ink-select-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.0.18",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.1",
+    "@types/react": "^19.0.0",
     "@types/ws": "^8.18.0",
     "eslint": "^10.0.2",
     "globals": "^17.3.0",
+    "ink-testing-library": "^4.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.56.1",

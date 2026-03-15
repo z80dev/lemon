@@ -105,6 +105,23 @@ export interface AppState {
   error: string | null;
 
   // ============================================================================
+  // UI feature state
+  // ============================================================================
+
+  /** Set of assistant message IDs whose thinking blocks are expanded */
+  expandedThinkingIds: Set<string>;
+  /** Timestamp when the agent started working (for elapsed timer) */
+  agentStartTime: number | null;
+  /** Compact display mode */
+  compactMode: boolean;
+  /** Terminal bell on agent completion */
+  bellEnabled: boolean;
+  /** Show timestamps on messages */
+  showTimestamps: boolean;
+  /** Notification history (persists after auto-dismiss) */
+  notificationHistory: Array<{ message: string; type: string; timestamp: number }>;
+
+  // ============================================================================
   // Multi-session state
   // ============================================================================
 
@@ -248,6 +265,14 @@ export class StateStore {
       title: 'Lemon',
       pendingUIRequests: [],
       error: null,
+
+      // UI feature state
+      expandedThinkingIds: new Set(),
+      agentStartTime: null,
+      compactMode: false,
+      bellEnabled: true,
+      showTimestamps: true,
+      notificationHistory: [],
 
       // Multi-session state
       primarySessionId: null,
@@ -675,6 +700,40 @@ export class StateStore {
     this.setState({ title });
   }
 
+  toggleThinkingExpanded(messageId: string): void {
+    const expanded = new Set(this.state.expandedThinkingIds);
+    if (expanded.has(messageId)) {
+      expanded.delete(messageId);
+    } else {
+      expanded.add(messageId);
+    }
+    this.setState({ expandedThinkingIds: expanded });
+  }
+
+  toggleCompactMode(): void {
+    this.setState({ compactMode: !this.state.compactMode });
+  }
+
+  toggleBell(): void {
+    this.setState({ bellEnabled: !this.state.bellEnabled });
+  }
+
+  toggleTimestamps(): void {
+    this.setState({ showTimestamps: !this.state.showTimestamps });
+  }
+
+  addNotification(message: string, type: string = 'info'): void {
+    const entry = { message, type, timestamp: Date.now() };
+    const history = [...this.state.notificationHistory, entry];
+    // Keep at most 50 entries
+    if (history.length > 50) history.shift();
+    this.setState({ notificationHistory: history });
+  }
+
+  clearNotificationHistory(): void {
+    this.setState({ notificationHistory: [] });
+  }
+
   /** Add a UI request to the queue */
   enqueueUIRequest(request: UIRequestMessage): void {
     this.setState({
@@ -848,6 +907,7 @@ export class StateStore {
     } else {
       this.setState({ busy: true, error: null });
     }
+    this.setState({ agentStartTime: Date.now() });
   }
 
   private handleAgentEnd(sessionId: string | null): void {
@@ -857,6 +917,7 @@ export class StateStore {
     } else {
       this.setState({ busy: false });
     }
+    this.setState({ agentStartTime: null });
   }
 
   private handleSessionError(reason: string, sessionId: string | null): void {

@@ -131,6 +131,26 @@ export const oceanTheme: Theme = {
   border: (s: string) => `\x1b[38;5;30m${s}\x1b[0m`,      // Muted teal border
 };
 
+/**
+ * The contrast theme - high-contrast accessibility theme with bold primary colors.
+ */
+export const contrastTheme: Theme = {
+  name: 'contrast',
+  primary: (s: string) => `\x1b[38;5;15m${s}\x1b[0m`,     // Bright white
+  secondary: (s: string) => `\x1b[38;5;14m${s}\x1b[0m`,   // Bright cyan
+  accent: (s: string) => `\x1b[38;5;11m${s}\x1b[0m`,      // Bright yellow
+  success: (s: string) => `\x1b[38;5;10m${s}\x1b[0m`,     // Bright green
+  warning: (s: string) => `\x1b[38;5;11m${s}\x1b[0m`,     // Bright yellow
+  error: (s: string) => `\x1b[38;5;9m${s}\x1b[0m`,        // Bright red
+  muted: (s: string) => `\x1b[38;5;250m${s}\x1b[0m`,      // Light gray for better visibility
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
+  bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
+  italic: (s: string) => `\x1b[3m${s}\x1b[0m`,
+  modelineBg: (s: string) => `\x1b[48;5;234m${s}\x1b[0m`, // Very dark bg
+  overlayBg: (s: string) => `\x1b[48;5;234m${s}\x1b[0m`,  // Very dark bg for overlays
+  border: (s: string) => `\x1b[38;5;248m${s}\x1b[0m`,     // Light gray border
+};
+
 // ============================================================================
 // Theme Registry
 // ============================================================================
@@ -144,6 +164,7 @@ export const themes: Record<string, Theme> = {
   midnight: midnightTheme,
   rose: roseTheme,
   ocean: oceanTheme,
+  contrast: contrastTheme,
 };
 
 /**

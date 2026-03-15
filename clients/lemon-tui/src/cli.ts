@@ -3,7 +3,7 @@
  * CLI Entry Point for Lemon TUI
  */
 
-import { LemonTUI } from './index.js';
+import { startApp } from './ink/App.js';
 import { parseModelSpec, resolveConfig, getModelString, type ResolvedConfig } from './config.js';
 import { setTheme } from './theme.js';
 import { loadDotenvFromDir } from './dotenv.js';
@@ -223,5 +223,5 @@ setTheme(resolvedConfig.theme);
 // Build final options for the TUI
 const options = buildOptions(cliArgs, resolvedConfig);
 
-const app = new LemonTUI(options);
-app.start();
+// Start the Ink-based TUI
+startApp(options, resolvedConfig.theme);

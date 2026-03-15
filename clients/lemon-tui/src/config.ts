@@ -18,6 +18,9 @@ export interface ProviderConfig {
 export interface TUIConfig {
   theme?: string;
   debug?: boolean;
+  bell?: boolean;
+  compact?: boolean;
+  timestamps?: boolean;
 }
 
 /**
