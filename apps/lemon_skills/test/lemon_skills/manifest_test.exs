@@ -2,6 +2,7 @@ defmodule LemonSkills.ManifestTest do
   use ExUnit.Case, async: true
 
   alias LemonSkills.Manifest
+  alias LemonSkills.Manifest.{Parser, Validator}
 
   describe "parse/1" do
     test "parses content with YAML frontmatter" do
@@ -190,7 +191,7 @@ defmodule LemonSkills.ManifestTest do
 
   describe "validate/1" do
     test "validates empty manifest" do
-      assert :ok = Manifest.validate(%{})
+      assert {:ok, _} = Manifest.validate(%{})
     end
 
     test "validates manifest with proper requires" do
@@ -202,7 +203,7 @@ defmodule LemonSkills.ManifestTest do
         }
       }
 
-      assert :ok = Manifest.validate(manifest)
+      assert {:ok, _} = Manifest.validate(manifest)
     end
 
     test "rejects non-map requires" do
@@ -239,6 +240,186 @@ defmodule LemonSkills.ManifestTest do
     test "returns config list" do
       manifest = %{"requires" => %{"config" => ["API_KEY", "SECRET"]}}
       assert Manifest.required_config(manifest) == ["API_KEY", "SECRET"]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # v2 field accessors
+  # ---------------------------------------------------------------------------
+
+  describe "validate/1 - v2 defaults" do
+    test "returns ok with defaults for empty manifest" do
+      assert {:ok, normalised} = Manifest.validate(%{})
+      assert normalised["platforms"] == ["any"]
+      assert normalised["requires_tools"] == []
+      assert normalised["fallback_for_tools"] == []
+      assert normalised["required_environment_variables"] == []
+      assert normalised["references"] == []
+    end
+
+    test "promotes requires.config into required_environment_variables" do
+      manifest = %{"requires" => %{"config" => ["MY_TOKEN"]}}
+      assert {:ok, normalised} = Manifest.validate(manifest)
+      assert normalised["required_environment_variables"] == ["MY_TOKEN"]
+    end
+
+    test "does not overwrite explicit required_environment_variables" do
+      manifest = %{
+        "requires" => %{"config" => ["LEGACY"]},
+        "required_environment_variables" => ["EXPLICIT"]
+      }
+
+      assert {:ok, normalised} = Manifest.validate(manifest)
+      assert normalised["required_environment_variables"] == ["EXPLICIT"]
+    end
+
+    test "accepts valid platforms" do
+      manifest = %{"platforms" => ["linux", "darwin"]}
+      assert {:ok, normalised} = Manifest.validate(manifest)
+      assert normalised["platforms"] == ["linux", "darwin"]
+    end
+
+    test "rejects unknown platform values" do
+      assert {:error, msg} = Manifest.validate(%{"platforms" => ["fooOS"]})
+      assert msg =~ "unknown values"
+    end
+
+    test "rejects non-list platforms" do
+      assert {:error, _} = Manifest.validate(%{"platforms" => "linux"})
+    end
+
+    test "accepts valid verification map" do
+      manifest = %{"verification" => %{"command" => "kubectl version", "expect_exit" => "0"}}
+      assert {:ok, _} = Manifest.validate(manifest)
+    end
+
+    test "rejects non-map verification" do
+      assert {:error, _} = Manifest.validate(%{"verification" => "bad"})
+    end
+
+    test "accepts string references" do
+      manifest = %{"references" => ["path/to/file.md"]}
+      assert {:ok, normalised} = Manifest.validate(manifest)
+      assert normalised["references"] == ["path/to/file.md"]
+    end
+
+    test "accepts map references with path key" do
+      manifest = %{"references" => [%{"path" => "examples/deploy.md"}]}
+      assert {:ok, _} = Manifest.validate(manifest)
+    end
+
+    test "accepts map references with url key" do
+      manifest = %{"references" => [%{"url" => "https://example.com/docs"}]}
+      assert {:ok, _} = Manifest.validate(manifest)
+    end
+
+    test "rejects invalid reference entries" do
+      manifest = %{"references" => [%{"not_a_key" => "value"}]}
+      assert {:error, _} = Manifest.validate(manifest)
+    end
+
+    test "rejects non-list references" do
+      assert {:error, _} = Manifest.validate(%{"references" => "bad"})
+    end
+
+    test "rejects non-list requires_tools" do
+      assert {:error, _} = Manifest.validate(%{"requires_tools" => "kubectl"})
+    end
+  end
+
+  describe "version/1" do
+    test "returns :v1 for legacy manifest" do
+      manifest = %{"name" => "old", "requires" => %{"bins" => ["git"]}}
+      assert Manifest.version(manifest) == :v1
+    end
+
+    test "returns :v2 when platforms present" do
+      assert Manifest.version(%{"platforms" => ["linux"]}) == :v2
+    end
+
+    test "returns :v2 when requires_tools present" do
+      assert Manifest.version(%{"requires_tools" => []}) == :v2
+    end
+
+    test "returns :v2 when metadata.lemon present" do
+      manifest = %{"metadata" => %{"lemon" => %{"category" => "devops"}}}
+      assert Manifest.version(manifest) == :v2
+    end
+  end
+
+  describe "platforms/1" do
+    test "returns any for legacy manifest" do
+      assert Manifest.platforms(%{}) == ["any"]
+    end
+
+    test "returns declared platforms" do
+      assert Manifest.platforms(%{"platforms" => ["linux", "darwin"]}) == ["linux", "darwin"]
+    end
+  end
+
+  describe "required_environment_variables/1" do
+    test "returns empty list when absent" do
+      assert Manifest.required_environment_variables(%{}) == []
+    end
+
+    test "falls back to requires.config" do
+      manifest = %{"requires" => %{"config" => ["TOKEN"]}}
+      assert Manifest.required_environment_variables(manifest) == ["TOKEN"]
+    end
+
+    test "prefers explicit field over legacy" do
+      manifest = %{
+        "required_environment_variables" => ["EXPLICIT"],
+        "requires" => %{"config" => ["LEGACY"]}
+      }
+
+      assert Manifest.required_environment_variables(manifest) == ["EXPLICIT"]
+    end
+  end
+
+  describe "lemon_category/1" do
+    test "returns nil when absent" do
+      assert Manifest.lemon_category(%{}) == nil
+    end
+
+    test "returns category when present" do
+      manifest = %{"metadata" => %{"lemon" => %{"category" => "devops"}}}
+      assert Manifest.lemon_category(manifest) == "devops"
+    end
+  end
+
+  describe "references/1" do
+    test "returns empty list when absent" do
+      assert Manifest.references(%{}) == []
+    end
+
+    test "returns references list" do
+      manifest = %{"references" => ["path/to/file.md"]}
+      assert Manifest.references(manifest) == ["path/to/file.md"]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Parser module direct tests
+  # ---------------------------------------------------------------------------
+
+  describe "Parser.parse/1" do
+    test "delegates correctly from Manifest.parse/1" do
+      content = "---\nname: x\n---\nbody"
+      assert {:ok, m, b} = Parser.parse(content)
+      assert m["name"] == "x"
+      assert b == "body"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Validator module direct tests
+  # ---------------------------------------------------------------------------
+
+  describe "Validator.validate/1" do
+    test "validates legacy manifest without v2 fields" do
+      manifest = %{"name" => "old-skill", "description" => "A skill", "requires" => %{"bins" => ["git"]}}
+      assert {:ok, _} = Validator.validate(manifest)
     end
   end
 end

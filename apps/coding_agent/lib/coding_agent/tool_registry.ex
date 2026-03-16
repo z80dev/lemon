@@ -36,6 +36,7 @@ defmodule CodingAgent.ToolRegistry do
   @builtin_tools [
     {:read, Tools.Read},
     {:memory_topic, Tools.MemoryTopic},
+    {:search_memory, Tools.SearchMemory},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},

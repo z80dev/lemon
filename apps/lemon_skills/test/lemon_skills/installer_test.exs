@@ -68,7 +68,7 @@ defmodule LemonSkills.InstallerTest do
 
       result = Installer.install(empty_dir, approve: true)
       assert {:error, reason} = result
-      assert reason =~ "SKILL.md"
+      assert inspect(reason) =~ "SKILL.md"
     end
 
     test "returns error when skill already exists without force", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do

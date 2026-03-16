@@ -101,6 +101,27 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get the global skill drafts directory.
+
+  Returns `~/.lemon/agent/skill_drafts`.  Draft skills live here until
+  promoted (via `mix lemon.skill draft publish`) to the regular skill dir.
+  """
+  @spec global_draft_skills_dir() :: String.t()
+  def global_draft_skills_dir do
+    Path.join(agent_dir(), "skill_drafts")
+  end
+
+  @doc """
+  Get the project skill drafts directory.
+
+  Returns `<cwd>/.lemon/skill_drafts`.
+  """
+  @spec project_draft_skills_dir(String.t()) :: String.t()
+  def project_draft_skills_dir(cwd) do
+    Path.join([cwd, ".lemon", "skill_drafts"])
+  end
+
+  @doc """
   Get all global skills directories.
 
   Directories are returned in precedence order (first wins on key collisions):

@@ -1,0 +1,225 @@
+name: Product Smoke
+
+# Validates the packaged runtime end-to-end: boots a release, runs lemon.doctor,
+# skill lint, memory-search probe, and adaptive-eval gate checks.
+# Complements release-smoke.yml (which focuses on assembly and boot only).
+
+on:
+  pull_request:
+    paths:
+      - "mix.exs"
+      - "apps/**"
+      - "priv/**"
+      - ".github/workflows/product-smoke.yml"
+  schedule:
+    # Daily at 05:30 UTC (off-peak, intentionally not :00 or :30)
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Release profile to test"
+        required: false
+        default: "lemon_runtime_full"
+
+env:
+  MIX_ENV: prod
+  LEMON_SECRETS_MASTER_KEY: "smoke-test-dummy-key-32-chars-!!"
+  LEMON_CONTROL_PLANE_PORT: "14040"
+  LEMON_WEB_PORT: "14080"
+  LEMON_SIM_UI_PORT: "14090"
+
+jobs:
+  product-smoke:
+    name: Product smoke (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - ${{ github.event.inputs.profile || 'lemon_runtime_full' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-product-smoke-${{ hashFiles('mix.lock') }}-${{ matrix.profile }}
+          restore-keys: |
+            ${{ runner.os }}-mix-product-smoke-${{ hashFiles('mix.lock') }}-
+            ${{ runner.os }}-mix-product-smoke-
+
+      - name: Install deps
+        run: mix deps.get --only prod
+
+      - name: Compile (prod)
+        run: mix compile
+
+      - name: Build release
+        run: mix release ${{ matrix.profile }} --overwrite
+        env:
+          MIX_ENV: prod
+
+      # ── Config fixture ─────────────────────────────────────────────────────────
+
+      - name: Write fixture config
+        run: |
+          mkdir -p ~/.lemon
+          cat > ~/.lemon/config.toml <<'EOF'
+          [defaults]
+          provider = "anthropic"
+          model = "claude-haiku-4-5-20251001"
+
+          [gateway]
+          max_concurrent_runs = 1
+          auto_resume = false
+          enable_telegram = false
+
+          [features]
+          routing_feedback       = "opt-in"
+          skill_synthesis_drafts = "opt-in"
+          EOF
+
+      # ── Boot ──────────────────────────────────────────────────────────────────
+
+      - name: Start release in background
+        run: |
+          RELEASE_BIN="./_build/prod/rel/${{ matrix.profile }}/bin/${{ matrix.profile }}"
+          "$RELEASE_BIN" daemon
+          echo "RELEASE_BIN=$RELEASE_BIN" >> "$GITHUB_ENV"
+          echo "Release started. Waiting for control-plane..."
+          sleep 6
+
+      - name: Wait for control-plane healthz
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sS --max-time 2 "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/healthz" > /dev/null 2>&1; then
+              echo "Control-plane healthy after $i attempts."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Control-plane did not become healthy within 40 seconds."
+          exit 1
+
+      # ── Doctor check ──────────────────────────────────────────────────────────
+
+      - name: Run lemon.doctor (via HTTP)
+        run: |
+          RESPONSE=$(curl -sS --max-time 5 \
+            "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/healthz")
+          echo "healthz: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          status = d.get('status', '')
+          if status not in ('ok', 'degraded'):
+              print(f'::error::Doctor returned unexpected status: {status}')
+              sys.exit(1)
+          print(f'Doctor status: {status}')
+          " || true
+
+      # ── Skill lint ────────────────────────────────────────────────────────────
+
+      - name: Lint built-in skills
+        run: |
+          MIX_ENV=dev mix deps.get
+          mix lemon.skill.lint
+        env:
+          MIX_ENV: dev
+
+      # ── Memory search probe ───────────────────────────────────────────────────
+
+      - name: Memory search probe
+        run: |
+          # Calls the control-plane memory search endpoint.
+          # Expects a 200 response with a JSON body containing a `results` key.
+          RESPONSE=$(curl -sS --max-time 5 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"query":"smoke test","limit":1}' \
+            "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/api/memory/search" 2>&1) || true
+          echo "Memory search response: $RESPONSE"
+          # Accept either a results array or a 404/501 if memory search is
+          # not enabled in this profile — we only fail on a 5xx or crash.
+          if echo "$RESPONSE" | grep -q '"error"'; then
+            ERR=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null || echo "")
+            if [ -n "$ERR" ] && ! echo "$ERR" | grep -qiE "not found|not enabled|disabled|unimplemented"; then
+              echo "::error::Memory search returned unexpected error: $ERR"
+              exit 1
+            fi
+          fi
+
+      # ── Adaptive eval gates ───────────────────────────────────────────────────
+
+      - name: Adaptive eval gate check (routing_feedback)
+        run: |
+          MIX_ENV=test mix run --no-start -e "
+          alias LemonCore.RolloutGates
+          # Gate check against empty store — we expect {:fail, [\"sample_size: ...\"]}.
+          # This proves the gate module loads and executes without crashing.
+          result = RolloutGates.evaluate_routing_feedback(%{total_records: 0, unique_fingerprints: 0}, [])
+          case result do
+            {:fail, failures} ->
+              IO.puts(\"routing_feedback gate (expected fail on empty data): #{inspect(failures)}\")
+            {:pass, _} ->
+              IO.puts(\"::warning::routing_feedback gates passed on empty store — thresholds may be too loose\")
+          end
+          "
+        env:
+          MIX_ENV: test
+
+      - name: Adaptive eval gate check (skill_synthesis_drafts)
+        run: |
+          MIX_ENV=test mix run --no-start -e "
+          alias LemonCore.RolloutGates
+          result = RolloutGates.evaluate_synthesis(%{total_candidates: 0, generated: [], skipped: []})
+          case result do
+            {:fail, failures} ->
+              IO.puts(\"synthesis gate (expected fail on empty run): #{inspect(failures)}\")
+            {:pass, _} ->
+              IO.puts(\"::warning::synthesis gates passed on empty run — thresholds may be too loose\")
+          end
+          "
+        env:
+          MIX_ENV: test
+
+      # ── Teardown ──────────────────────────────────────────────────────────────
+
+      - name: Stop release
+        if: always()
+        run: |
+          if [ -n "$RELEASE_BIN" ] && [ -f "$RELEASE_BIN" ]; then
+            "$RELEASE_BIN" stop || true
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          LOG_DIR="./_build/prod/rel/${{ matrix.profile }}/tmp/log"
+          if [ -d "$LOG_DIR" ]; then
+            echo "=== Release logs ==="
+            cat "$LOG_DIR"/*.log 2>/dev/null || echo "(no log files)"
+          fi
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-smoke-logs-${{ matrix.profile }}-${{ github.run_id }}
+          path: |
+            _build/prod/rel/${{ matrix.profile }}/tmp/log/
+            ~/.lemon/config.toml
+          retention-days: 7

@@ -163,12 +163,47 @@ Environment variables override file values. Common overrides:
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
+## Feature Flags
+
+Feature flags gate in-progress behaviour changes so they can be shipped incrementally
+without ad-hoc environment variables.  All flags default to `"off"`.
+
+```toml
+[features]
+product_runtime              = "off"   # M1 runtime boot/profile/health/setup/update
+skills_hub_v2                = "off"   # M2/M3 manifest v2 + progressive skill loading
+skill_manifest_v2            = "off"   # M2-01 manifest v2 parser/validator
+progressive_skill_loading_v2 = "off"   # M3-02/M3-03 partial skill body loading
+session_search               = "off"   # M5-02 SessionSearch API + search_memory tool
+routing_feedback             = "off"   # M6-02 task fingerprinting + routing feedback
+skill_synthesis_drafts       = "off"   # M7-02 skill synthesis draft pipeline
+```
+
+Valid rollout states:
+
+| State | Meaning |
+|---|---|
+| `"off"` | Feature fully disabled (kill-switch). |
+| `"opt-in"` | Available but disabled by default; must be explicitly opted in. |
+| `"default-on"` | Enabled unless explicitly disabled. |
+
+Each flag can be overridden via an environment variable using the pattern
+`LEMON_FEATURE_<FLAG_NAME>` (SCREAMING_SNAKE_CASE):
+
+```bash
+LEMON_FEATURE_SESSION_SEARCH=opt-in
+LEMON_FEATURE_PRODUCT_RUNTIME=default-on
+```
+
+Config validation fails cleanly if a flag is set to an unrecognised state.
+
 ## Canonical Sections
 
 Use only these top-level sections:
 
 - `defaults`
 - `runtime`
+- `features`
 - `profiles.<agent_id>`
 - `providers.<name>`
 - `gateway`

@@ -1,0 +1,16 @@
+{
+  "name": "lemon-docs",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Lemon documentation site (VitePress)",
+  "scripts": {
+    "dev": "vitepress dev .",
+    "build": "vitepress build .",
+    "preview": "vitepress preview .",
+    "link-check": "markdown-link-check --config .mlc.json **/*.md --quiet"
+  },
+  "devDependencies": {
+    "markdown-link-check": "^3.13.6",
+    "vitepress": "^1.5.0"
+  }
+}

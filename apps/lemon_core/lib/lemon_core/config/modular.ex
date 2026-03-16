@@ -39,6 +39,7 @@ defmodule LemonCore.Config.Modular do
 
   alias LemonCore.Config.{
     Agent,
+    Features,
     Gateway,
     Logging,
     Providers,
@@ -56,7 +57,8 @@ defmodule LemonCore.Config.Modular do
     :gateway,
     :logging,
     :tui,
-    :providers
+    :providers,
+    :features
   ]
 
   @type t :: %__MODULE__{
@@ -65,7 +67,8 @@ defmodule LemonCore.Config.Modular do
           gateway: Gateway.t(),
           logging: Logging.t(),
           tui: TUI.t(),
-          providers: Providers.t()
+          providers: Providers.t(),
+          features: Features.t()
         }
 
   @doc """
@@ -267,7 +270,8 @@ defmodule LemonCore.Config.Modular do
       gateway: Gateway.resolve(settings),
       logging: Logging.resolve(settings),
       tui: TUI.resolve(settings),
-      providers: Providers.resolve(settings)
+      providers: Providers.resolve(settings),
+      features: Features.resolve(settings)
     }
   end
 

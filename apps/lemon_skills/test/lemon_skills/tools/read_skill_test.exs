@@ -30,7 +30,7 @@ defmodule LemonSkills.Tools.ReadSkillTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
-  describe "execute/5" do
+  describe "execute/5 — backwards compatible (default full view)" do
     test "returns helpful suggestions when the skill is not found", %{tmp_dir: tmp_dir} do
       write_skill!(
         tmp_dir,
@@ -130,6 +130,351 @@ defmodule LemonSkills.Tools.ReadSkillTest do
       assert text =~ "## Status"
       assert text =~ "**Ready:** false"
       assert text =~ "**Missing config:** #{missing_config}"
+    end
+  end
+
+  describe "execute/5 — view: summary" do
+    test "returns metadata without body content", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "summary-skill",
+        """
+        ---
+        name: Summary Skill
+        description: Tests summary view
+        ---
+
+        This body should NOT appear in summary view.
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-s1",
+                 %{"key" => "summary-skill", "view" => "summary"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "# Skill: Summary Skill"
+      assert text =~ "**Key:** summary-skill"
+      assert text =~ "**Description:** Tests summary view"
+      assert text =~ "**Activation:**"
+      refute text =~ "## Content"
+      refute text =~ "This body should NOT appear"
+    end
+
+    test "summary with include_status still shows status section", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "summary-status-skill",
+        """
+        ---
+        name: Summary Status
+        description: Status summary test
+        ---
+
+        body content
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-s2",
+                 %{"key" => "summary-status-skill", "view" => "summary", "include_status" => true},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "## Status"
+      assert text =~ "**Ready:** true"
+      refute text =~ "body content"
+    end
+  end
+
+  describe "execute/5 — view: section" do
+    test "extracts a specific heading section", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "sectioned-skill",
+        """
+        ---
+        name: Sectioned Skill
+        description: Has multiple sections
+        ---
+
+        ## Overview
+
+        This is the overview section.
+
+        ## Usage
+
+        This is the usage section with specific instructions.
+
+        ## Examples
+
+        Some examples here.
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-sec1",
+                 %{"key" => "sectioned-skill", "view" => "section", "section" => "Usage"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "## Section: Usage"
+      assert text =~ "usage section with specific instructions"
+      refute text =~ "overview section"
+      refute text =~ "Some examples here"
+    end
+
+    test "returns not-found message for missing section", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "nosection-skill",
+        """
+        ---
+        name: No Section Skill
+        description: Section test
+        ---
+
+        ## Existing
+
+        Content.
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-sec2",
+                 %{"key" => "nosection-skill", "view" => "section", "section" => "Missing"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "Section 'Missing' not found"
+    end
+
+    test "returns guidance when section param is omitted", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "nosection-param", "---\nname: x\ndescription: y\n---\nbody")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-sec3",
+                 %{"key" => "nosection-param", "view" => "section"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "No section specified"
+    end
+  end
+
+  describe "execute/5 — view: file" do
+    test "loads a referenced file from the skill directory", %{tmp_dir: tmp_dir} do
+      skill_dir =
+        write_skill!(
+          tmp_dir,
+          "file-skill",
+          """
+          ---
+          name: File Skill
+          description: Has extra files
+          ---
+
+          See extra.md for details.
+          """
+        )
+
+      File.write!(Path.join(skill_dir, "extra.md"), "# Extra\n\nExtra content here.")
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-f1",
+                 %{"key" => "file-skill", "view" => "file", "path" => "extra.md"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "## File: extra.md"
+      assert text =~ "Extra content here."
+    end
+
+    test "returns error for missing file", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "nofile-skill", "---\nname: x\ndescription: y\n---\nbody")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-f2",
+                 %{"key" => "nofile-skill", "view" => "file", "path" => "nonexistent.md"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "Could not read 'nonexistent.md'"
+    end
+
+    test "rejects path traversal attempts", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "traversal-skill", "---\nname: x\ndescription: y\n---\nbody")
+      File.write!(Path.join(tmp_dir, "secret.txt"), "TOP SECRET")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-f3",
+                 %{"key" => "traversal-skill", "view" => "file", "path" => "../../secret.txt"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "outside the skill directory"
+      refute text =~ "TOP SECRET"
+    end
+
+    test "returns guidance when path param is omitted", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "nopath-skill", "---\nname: x\ndescription: y\n---\nbody")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-f4",
+                 %{"key" => "nopath-skill", "view" => "file"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "No path specified"
+    end
+  end
+
+  describe "execute/5 — include_manifest" do
+    test "includes manifest fields when include_manifest is true", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "manifest-skill",
+        """
+        ---
+        name: Manifest Skill
+        description: Has manifest data
+        platforms:
+          - linux
+          - darwin
+        requires:
+          bins:
+            - curl
+        ---
+
+        body
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-m1",
+                 %{"key" => "manifest-skill", "view" => "summary", "include_manifest" => true},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "## Manifest"
+      assert text =~ "platforms:"
+      assert text =~ "linux"
+      assert text =~ "required_bins:"
+      assert text =~ "curl"
+    end
+
+    test "omits manifest section when include_manifest is false", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "no-manifest-skill", "---\nname: x\ndescription: y\n---\nbody")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-m2",
+                 %{"key" => "no-manifest-skill", "include_manifest" => false},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      refute text =~ "## Manifest"
+    end
+  end
+
+  describe "execute/5 — max_chars truncation" do
+    test "truncates full content at max_chars", %{tmp_dir: tmp_dir} do
+      long_body = String.duplicate("A", 5000)
+
+      write_skill!(
+        tmp_dir,
+        "long-skill",
+        """
+        ---
+        name: Long Skill
+        description: Has long content
+        ---
+
+        #{long_body}
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-t1",
+                 %{"key" => "long-skill", "max_chars" => 200},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert text =~ "truncated at 200 chars"
+      # Body portion should not have the full 5000 As
+      refute String.contains?(text, String.duplicate("A", 5000))
+    end
+
+    test "does not truncate when content is within max_chars", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "short-skill", "---\nname: Short\ndescription: Short skill\n---\nHi.")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} =
+               ReadSkill.execute(
+                 "call-t2",
+                 %{"key" => "short-skill", "max_chars" => 10_000},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      refute text =~ "truncated"
+      assert text =~ "Hi."
     end
   end
 

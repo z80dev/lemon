@@ -9,6 +9,8 @@ defmodule LemonSkills.Application do
     LemonSkills.Config.ensure_dirs!()
     # Copy repo-bundled skills into the user's global config dir if missing.
     LemonSkills.BuiltinSeeder.seed!()
+    # Back-fill lockfile provenance for any pre-existing installs.
+    LemonSkills.Migrator.migrate()
 
     children = [
       LemonSkills.Registry,

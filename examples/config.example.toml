@@ -191,3 +191,20 @@ name = "Default Agent"
 # allow = "all"
 # deny = []
 # require_approval = ["bash", "write", "edit"]
+
+# --- Feature Flags ---
+# Each flag controls whether an in-progress milestone feature is active.
+# Valid states: "off" | "opt-in" | "default-on"
+#   off          - feature is fully disabled (kill-switch)
+#   opt-in       - available but disabled by default; enable explicitly
+#   default-on   - enabled unless explicitly disabled
+# Environment variable override: LEMON_FEATURE_<FLAG_NAME> (SCREAMING_SNAKE_CASE)
+
+# [features]
+# product_runtime              = "off"   # M1 runtime boot/profile/health/setup/update
+# skills_hub_v2                = "off"   # M2/M3 manifest v2 + progressive skill loading
+# skill_manifest_v2            = "off"   # M2-01 manifest v2 parser/validator
+# progressive_skill_loading_v2 = "off"   # M3-02/M3-03 partial skill body loading
+# session_search               = "off"   # M5-02 SessionSearch API + search_memory tool
+# routing_feedback             = "off"   # M6-02 task fingerprinting + routing feedback
+# skill_synthesis_drafts       = "off"   # M7-02 skill synthesis draft pipeline

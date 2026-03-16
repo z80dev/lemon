@@ -14,11 +14,29 @@
 
 ---
 
-## Start Here
+## User Guides
 
 | Doc | What it covers |
 |-----|---------------|
+| [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
+| [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
+| [user-guide/adaptive.md](user-guide/adaptive.md) | Adaptive routing, routing feedback, skill synthesis pipeline |
+| [user-guide/rollout.md](user-guide/rollout.md) | Feature promotion gates, rollback procedure, promotion checklist |
+
+## Architecture
+
+| Doc | What it covers |
+|-----|---------------|
+| [architecture/overview.md](architecture/overview.md) | System design, app map, data flow, key abstractions |
 | [architecture_boundaries.md](architecture_boundaries.md) | Dependency policy between umbrella apps, enforcement via `mix lemon.quality` |
+| [beam_agents.md](beam_agents.md) | BEAM/OTP architecture: process-per-agent, supervision, message passing |
+| [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
+
+## Operations
+
+| Doc | What it covers |
+|-----|---------------|
 | [quality_harness.md](quality_harness.md) | Quality checks, eval harness, cleanup routines, CI gates |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
@@ -30,9 +48,7 @@
 | [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill injection, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
-| [beam_agents.md](beam_agents.md) | BEAM agent architecture: process-per-agent, supervision, message passing |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
-| [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
 | [telemetry.md](telemetry.md) | Telemetry events, observability, correlation IDs, monitoring |
 
 ## Product and Capability Docs
@@ -76,7 +92,7 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `apps/*/README.md` | Per-app documentation (architecture, API, usage, dependencies) |
 | `apps/*/AGENTS.md` | Per-app AI agent context (key files, patterns, testing, gotchas) |
 | `AGENTS.md` (root) | Project-wide agent guide (navigation, team composition, conventions) |
-| `README.md` (root) | Project overview, quickstart, architecture deep-dive |
+| `README.md` (root) | 5-minute orientation: what it is, quickstart, feature summary, doc links |
 | `ROADMAP.md` | Living roadmap: Now/Next/Later/Explore items with metadata |
 | `config/` | Elixir application configuration (config.exs, runtime.exs, etc.) |
 | `examples/config.example.toml` | Annotated example TOML configuration |
@@ -89,4 +105,4 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
 5. **Review cycle**: docs are checked for staleness based on `max_age_days` in the catalog.
 
-*Last reviewed: 2026-03-13*
+*Last reviewed: 2026-03-16*

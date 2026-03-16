@@ -13,7 +13,7 @@ defmodule LemonSkills.BuiltinSeeder do
   - Never overwrites an existing skill directory (treat it as user-owned).
   """
 
-  alias LemonSkills.Config
+  alias LemonSkills.{Config, Entry, Lockfile, Manifest}
 
   require Logger
 
@@ -80,6 +80,7 @@ defmodule LemonSkills.BuiltinSeeder do
       true ->
         case File.cp_r(source_skill_dir, dest_skill_dir) do
           {:ok, _} ->
+            seed_lockfile_record(skill_name, dest_skill_dir)
             :ok
 
           {:error, reason, path} ->
@@ -89,6 +90,45 @@ defmodule LemonSkills.BuiltinSeeder do
 
             :ok
         end
+    end
+  end
+
+  defp seed_lockfile_record(skill_name, dest_skill_dir) do
+    entry =
+      Entry.new(dest_skill_dir,
+        source: :global,
+        source_kind: :builtin,
+        trust_level: :builtin,
+        installed_at: DateTime.utc_now()
+      )
+
+    entry =
+      case File.read(Entry.skill_file(entry)) do
+        {:ok, content} ->
+          case Manifest.parse(content) do
+            {:ok, manifest, _body} ->
+              entry
+              |> Entry.with_manifest(manifest)
+              |> Map.put(:content_hash, Entry.compute_content_hash(entry))
+
+            :error ->
+              entry
+          end
+
+        _ ->
+          entry
+      end
+
+    record = Entry.to_lockfile_record(entry)
+
+    case Lockfile.put(:global, record) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.debug(
+          "[BuiltinSeeder] could not write lockfile record for '#{skill_name}': #{inspect(reason)}"
+        )
     end
   end
 

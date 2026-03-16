@@ -2,108 +2,104 @@ defmodule LemonSkills.Installer do
   @moduledoc """
   Skill installation and update management.
 
-  Handles installing skills from various sources:
-  - Git repositories
-  - Local paths
-  - Skill registries (future)
+  Handles installing skills from various sources using the source abstraction
+  layer (`LemonSkills.Source` + `LemonSkills.SourceRouter`).
 
-  ## Installation Process
+  ## Installation flow
 
-  1. Parse source URL/path
-  2. Validate skill structure (SKILL.md exists)
-  3. Check for existing installation
-  4. Request approval if needed (via ApprovalsBridge)
-  5. Copy/clone to target directory
-  6. Register with the skill registry
+      resolve → plan → check_existing → approve → fetch
+        → load_manifest → audit_entry → write_lockfile → register
 
-  ## Approval Gating
+  ## Update flow
 
-  Per parity requirement, skill install/update/uninstall operations
-  require user approval. Approval can be:
+      lookup → get upstream_hash → compare with stored hash
+        → if drifted: fetch → load_manifest → write_lockfile → register
+        → if current: no-op
 
-  - Pre-approved via `:approve` option
-  - Requested at runtime via ApprovalsBridge
-  - Configured globally via skill policy settings
+  ## Approval gating
+
+  Per parity requirement, skill install/update/uninstall operations require
+  user approval. Override via `:approve` option or configure globally.
   """
 
-  alias LemonSkills.{Registry, Entry, Manifest, Config}
+  alias LemonSkills.{Config, Entry, InstallPlan, Lockfile, Manifest, Registry, SourceRouter, TrustPolicy}
+  alias LemonSkills.Audit.Engine, as: AuditEngine
 
   require Logger
 
   @type install_result :: {:ok, Entry.t()} | {:error, term()}
 
   @doc """
-  Install a skill from a source.
+  Install a skill from a source identifier.
 
-  ## Parameters
-
-  - `source` - The source URL or path
+  Accepts any identifier understood by `LemonSkills.SourceRouter.resolve/1`:
+  local paths, git URLs, `gh:owner/repo`, registry refs, etc.
 
   ## Options
 
-  - `:cwd` - Project working directory for local installation
-  - `:global` - Install globally (default: true)
-  - `:approve` - Pre-approve installation (default: false)
-  - `:force` - Overwrite existing installation (default: false)
+  - `:cwd` — project directory; required when `global: false`
+  - `:global` — install globally (default: `true`)
+  - `:approve` — pre-approve installation (default: `false`)
+  - `:force` — overwrite existing installation (default: `false`)
+  - `:branch` — git branch for `:git` sources (default: `"main"`)
 
   ## Examples
 
-      {:ok, entry} = LemonSkills.Installer.install("https://github.com/user/skill")
-      {:ok, entry} = LemonSkills.Installer.install("/local/path", global: false)
+      {:ok, entry} = Installer.install("https://github.com/acme/k8s-skill")
+      {:ok, entry} = Installer.install("official/devops/k8s-rollout")
+      {:ok, entry} = Installer.install("/local/path", global: false, cwd: "/myproject")
   """
   @spec install(String.t(), keyword()) :: install_result()
   def install(source, opts \\ []) do
     global = Keyword.get(opts, :global, true)
-    force = Keyword.get(opts, :force, false)
     cwd = Keyword.get(opts, :cwd)
-    approve = Keyword.get(opts, :approve, false)
-    session_key = Keyword.get(opts, :session_key)
-    agent_id = Keyword.get(opts, :agent_id)
-    run_id = Keyword.get(opts, :run_id)
 
-    with {:ok, source_type, resolved} <- resolve_source(source),
-         {:ok, skill_name} <- extract_skill_name(resolved, source_type),
-         :ok <- check_existing(skill_name, global, cwd, force),
-         :ok <- request_approval_if_needed(:install, skill_name, source, approve, %{
-           session_key: session_key,
-           agent_id: agent_id,
-           run_id: run_id
-         }),
-         {:ok, target_dir} <- determine_target_dir(skill_name, global, cwd),
-         :ok <- ensure_target_exists(target_dir),
-         {:ok, _} <- perform_install(source_type, resolved, target_dir),
-         {:ok, entry} <- load_installed_skill(target_dir, global) do
-      Registry.register(entry)
+    with {:ok, plan} <- build_plan(source, global, cwd, opts),
+         :ok <- check_existing(plan),
+         :ok <- request_approval_if_needed(:install, plan.skill_name, source, plan.trust_level, opts),
+         {:ok, dest_dir} <- plan.source_module.fetch(plan.source_id, plan.dest_dir, opts),
+         {:ok, entry} <- load_entry_from_dir(dest_dir, plan),
+         entry <- audit_entry(entry),
+         :ok <- check_audit_verdict(entry),
+         :ok <- write_lockfile(plan.scope, entry),
+         :ok <- Registry.register(entry) do
       {:ok, entry}
     end
   end
 
+  defp check_audit_verdict(%Entry{audit_status: :block, audit_findings: findings}) do
+    reason =
+      findings
+      |> Enum.take(3)
+      |> Enum.join("; ")
+
+    {:error, "Skill blocked by security audit: #{reason}"}
+  end
+
+  defp check_audit_verdict(_entry), do: :ok
+
   @doc """
   Update an installed skill.
 
-  ## Parameters
-
-  - `key` - The skill key to update
+  Checks the upstream hash (when available) and skips the reinstall if the
+  installed content already matches. Falls back to a full reinstall when
+  the source module does not support remote hash queries.
 
   ## Options
 
-  - `:cwd` - Project working directory (optional)
+  - `:cwd` — project directory (optional)
+  - `:approve` — pre-approve (default: `false`)
+  - `:force` — force reinstall even when up-to-date (default: `false`)
   """
   @spec update(String.t(), keyword()) :: install_result()
   def update(key, opts \\ []) do
-    approve = Keyword.get(opts, :approve, false)
-    session_key = Keyword.get(opts, :session_key)
-    agent_id = Keyword.get(opts, :agent_id)
-    run_id = Keyword.get(opts, :run_id)
+    cwd = Keyword.get(opts, :cwd)
+    force = Keyword.get(opts, :force, false)
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        with :ok <- request_approval_if_needed(:update, key, entry.path, approve, %{
-               session_key: session_key,
-               agent_id: agent_id,
-               run_id: run_id
-             }) do
-          update_entry(entry)
+        with :ok <- request_approval_if_needed(:update, key, entry.path, entry.trust_level, opts) do
+          update_entry(entry, force, cwd, opts)
         end
 
       :error ->
@@ -114,33 +110,25 @@ defmodule LemonSkills.Installer do
   @doc """
   Uninstall a skill.
 
-  ## Parameters
-
-  - `key` - The skill key to uninstall
+  Removes the skill directory, lockfile record, and registry entry.
 
   ## Options
 
-  - `:cwd` - Project working directory (optional)
+  - `:cwd` — project directory (optional)
+  - `:approve` — pre-approve (default: `false`)
   """
   @spec uninstall(String.t(), keyword()) :: :ok | {:error, term()}
   def uninstall(key, opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
-    approve = Keyword.get(opts, :approve, false)
-    session_key = Keyword.get(opts, :session_key)
-    agent_id = Keyword.get(opts, :agent_id)
-    run_id = Keyword.get(opts, :run_id)
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        with :ok <- request_approval_if_needed(:uninstall, key, entry.path, approve, %{
-               session_key: session_key,
-               agent_id: agent_id,
-               run_id: run_id
-             }) do
-          # Remove from filesystem
+        with :ok <- request_approval_if_needed(:uninstall, key, entry.path, entry.trust_level, opts) do
+          scope = entry_scope(entry, cwd)
+
           case File.rm_rf(entry.path) do
             {:ok, _} ->
-              # Unregister
+              Lockfile.delete(scope, key)
               Registry.unregister(key, entry.source, cwd)
               :ok
 
@@ -155,55 +143,51 @@ defmodule LemonSkills.Installer do
   end
 
   # ============================================================================
-  # Private Functions
+  # Plan building
   # ============================================================================
 
-  defp resolve_source(source) do
-    cond do
-      # Git URL
-      String.starts_with?(source, "https://") or String.starts_with?(source, "git@") ->
-        {:ok, :git, source}
+  defp build_plan(source, global, cwd, opts) do
+    with {:ok, mod, id} <- SourceRouter.resolve(source),
+         {:ok, skill_name} <- derive_skill_name(id, source, mod),
+         {:ok, dest_dir} <- determine_target_dir(skill_name, global, cwd),
+         {:ok, parent_dir} <- ensure_parent_dir(dest_dir) do
+      _ = parent_dir
 
-      # Local path
-      File.dir?(source) ->
-        {:ok, :local, Path.expand(source)}
+      source_kind = SourceRouter.source_kind(mod)
+      trust_level = mod.trust_level()
+      force = Keyword.get(opts, :force, false)
+      scope = if global, do: :global, else: {:project, cwd}
 
-      # Could be a registry reference (future)
-      String.match?(source, ~r/^[a-z0-9_-]+\/[a-z0-9_-]+$/i) ->
-        {:error, "Registry references not yet supported: #{source}"}
+      plan = %InstallPlan{
+        source_module: mod,
+        source_id: id,
+        source_kind: source_kind,
+        trust_level: trust_level,
+        skill_name: skill_name,
+        dest_dir: dest_dir,
+        scope: scope,
+        force: force
+      }
 
-      true ->
-        {:error, "Unknown source type: #{source}"}
+      {:ok, plan}
     end
   end
 
-  defp extract_skill_name(resolved, :git) do
-    # Extract repo name from URL
+  defp derive_skill_name(nil, _source, _mod) do
+    {:error, "Cannot determine skill name for builtin source; use BuiltinSeeder instead"}
+  end
+
+  defp derive_skill_name(id, _source, _mod) when is_binary(id) do
     name =
-      resolved
+      id
       |> String.split("/")
       |> List.last()
       |> String.trim_trailing(".git")
 
-    {:ok, name}
-  end
-
-  defp extract_skill_name(resolved, :local) do
-    {:ok, Path.basename(resolved)}
-  end
-
-  defp check_existing(name, global, cwd, force) do
-    target =
-      if global do
-        Path.join(Config.global_skills_dir(), name)
-      else
-        Path.join(Config.project_skills_dir(cwd), name)
-      end
-
-    if File.dir?(target) and not force do
-      {:error, "Skill already installed at #{target}. Use force: true to overwrite."}
+    if name == "" do
+      {:error, "Cannot derive skill name from identifier: #{inspect(id)}"}
     else
-      :ok
+      {:ok, name}
     end
   end
 
@@ -216,114 +200,228 @@ defmodule LemonSkills.Installer do
   end
 
   defp determine_target_dir(_name, false, nil) do
-    {:error, "Project directory (cwd) required for local installation"}
+    {:error, "Project directory (cwd) required for project-local installation"}
   end
 
-  defp ensure_target_exists(target_dir) do
-    parent = Path.dirname(target_dir)
+  defp ensure_parent_dir(dest_dir) do
+    parent = Path.dirname(dest_dir)
 
     case File.mkdir_p(parent) do
-      :ok -> :ok
+      :ok -> {:ok, parent}
       {:error, reason} -> {:error, "Failed to create directory: #{reason}"}
     end
   end
 
-  defp perform_install(:git, url, target_dir) do
-    # Remove existing if present
-    File.rm_rf(target_dir)
+  # ============================================================================
+  # Pre-flight checks
+  # ============================================================================
 
-    case System.cmd("git", ["clone", "--depth", "1", url, target_dir], stderr_to_stdout: true) do
-      {_output, 0} ->
-        # Remove .git directory to save space
-        File.rm_rf(Path.join(target_dir, ".git"))
-        {:ok, target_dir}
-
-      {output, _code} ->
-        {:error, "Git clone failed: #{output}"}
-    end
-  end
-
-  defp perform_install(:local, source_dir, target_dir) do
-    # Validate source has SKILL.md
-    skill_file = Path.join(source_dir, "SKILL.md")
-
-    if File.exists?(skill_file) do
-      # Copy entire directory
-      File.rm_rf(target_dir)
-
-      case File.cp_r(source_dir, target_dir) do
-        {:ok, _} -> {:ok, target_dir}
-        {:error, reason, _path} -> {:error, "Copy failed: #{reason}"}
-      end
+  defp check_existing(%InstallPlan{dest_dir: dest_dir, force: force, skill_name: name}) do
+    if File.dir?(dest_dir) and not force do
+      {:error, "Skill '#{name}' already installed at #{dest_dir}. Pass force: true to overwrite."}
     else
-      {:error, "Source directory missing SKILL.md: #{source_dir}"}
+      :ok
     end
   end
 
-  defp load_installed_skill(path, global) do
-    source = if global, do: :global, else: :project
-    entry = Entry.new(path, source: source)
+  # ============================================================================
+  # Post-fetch helpers
+  # ============================================================================
+
+  defp load_entry_from_dir(dest_dir, %InstallPlan{} = plan) do
+    source = scope_to_source_atom(plan.scope)
+
+    entry =
+      Entry.new(dest_dir,
+        source: source,
+        source_kind: plan.source_kind,
+        source_id: plan.source_id,
+        trust_level: plan.trust_level,
+        installed_at: DateTime.utc_now()
+      )
+
     skill_file = Entry.skill_file(entry)
 
     case File.read(skill_file) do
       {:ok, content} ->
         case Manifest.parse(content) do
           {:ok, manifest, _body} ->
-            {:ok, Entry.with_manifest(entry, manifest)}
+            entry =
+              entry
+              |> Entry.with_manifest(manifest)
+              |> Map.put(:content_hash, Entry.compute_content_hash(entry))
+
+            {:ok, entry}
 
           :error ->
             {:ok, entry}
         end
 
       {:error, reason} ->
-        {:error, "Failed to read SKILL.md: #{reason}"}
+        {:error, "Failed to read SKILL.md after install: #{reason}"}
     end
   end
 
-  defp update_entry(%Entry{source: source_url}) when is_binary(source_url) do
-    # Re-install from original source
+  defp audit_entry(%Entry{trust_level: trust_level} = entry) do
+    if TrustPolicy.requires_audit?(trust_level) do
+      result = AuditEngine.audit_entry(entry)
+      AuditEngine.apply_to_entry(entry, result)
+    else
+      %{entry | audit_status: :pass, audit_findings: []}
+    end
+  end
+
+  defp write_lockfile(scope, entry) do
+    record = Entry.to_lockfile_record(entry)
+
+    case Lockfile.put(scope, record) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Installer] could not write lockfile for '#{entry.key}': #{inspect(reason)}")
+        # Non-fatal: skill is installed even if lockfile write fails.
+        :ok
+    end
+  end
+
+  # ============================================================================
+  # Update logic
+  # ============================================================================
+
+  defp update_entry(entry, force, cwd, opts) do
+    case resolve_update_source(entry) do
+      {:ok, mod, id} ->
+        if force do
+          perform_full_reinstall(entry, mod, id, cwd, opts)
+        else
+          check_drift_and_update(entry, mod, id, cwd, opts)
+        end
+
+      :no_source ->
+        # No provenance data — fall back to legacy path (re-install from source field).
+        legacy_update(entry)
+    end
+  end
+
+  defp resolve_update_source(%Entry{source_id: id, source_kind: kind})
+       when is_binary(id) and not is_nil(kind) do
+    # Re-resolve from source_id so we get the right module.
+    case SourceRouter.resolve(id) do
+      {:ok, mod, canonical} -> {:ok, mod, canonical}
+      {:error, _} -> :no_source
+    end
+  end
+
+  defp resolve_update_source(%Entry{source: source}) when is_binary(source) do
+    # Legacy: source field holds a URL.
+    case SourceRouter.resolve(source) do
+      {:ok, mod, canonical} -> {:ok, mod, canonical}
+      {:error, _} -> :no_source
+    end
+  end
+
+  defp resolve_update_source(_), do: :no_source
+
+  defp check_drift_and_update(entry, mod, id, cwd, opts) do
+    case mod.upstream_hash(id, opts) do
+      {:ok, upstream} when upstream == entry.upstream_hash ->
+        # Already up to date.
+        {:ok, entry}
+
+      {:ok, upstream} ->
+        # Content has drifted — do a full reinstall and record new upstream hash.
+        with {:ok, updated} <- perform_full_reinstall(entry, mod, id, cwd, opts) do
+          {:ok, %{updated | upstream_hash: upstream}}
+        end
+
+      {:error, :unsupported} ->
+        # Source does not support remote hash — reinstall to be safe.
+        perform_full_reinstall(entry, mod, id, cwd, opts)
+
+      {:error, reason} ->
+        Logger.warning("[Installer] upstream_hash failed for '#{entry.key}': #{inspect(reason)}")
+        perform_full_reinstall(entry, mod, id, cwd, opts)
+    end
+  end
+
+  defp perform_full_reinstall(entry, mod, id, cwd, opts) do
+    scope = entry_scope(entry, cwd)
+    global = scope == :global
+
+    build_plan_opts =
+      opts
+      |> Keyword.put(:force, true)
+      |> Keyword.put(:global, global)
+      |> (fn o -> if cwd, do: Keyword.put(o, :cwd, cwd), else: o end).()
+
+    with {:ok, dest_dir} <- mod.fetch(id, entry.path, build_plan_opts),
+         {:ok, updated_entry} <-
+           load_entry_from_dir(dest_dir, %InstallPlan{
+             source_module: mod,
+             source_id: id,
+             source_kind: entry.source_kind || SourceRouter.source_kind(mod),
+             trust_level: entry.trust_level || mod.trust_level(),
+             skill_name: entry.key,
+             dest_dir: entry.path,
+             scope: scope
+           }),
+         updated_entry <- %{updated_entry | updated_at: DateTime.utc_now()},
+         updated_entry <- audit_entry(updated_entry),
+         :ok <- check_audit_verdict(updated_entry),
+         :ok <- write_lockfile(scope, updated_entry),
+         :ok <- Registry.register(updated_entry) do
+      {:ok, updated_entry}
+    end
+  end
+
+  defp legacy_update(%Entry{source: source_url}) when is_binary(source_url) do
     install(source_url, force: true)
   end
 
-  defp update_entry(%Entry{path: path, source: :git}) do
-    # Try git pull if .git exists
-    git_dir = Path.join(path, ".git")
+  defp legacy_update(%Entry{}) do
+    {:error, "Cannot update: skill has no resolvable source"}
+  end
 
-    if File.dir?(git_dir) do
-      case System.cmd("git", ["-C", path, "pull"], stderr_to_stdout: true) do
-        {_output, 0} ->
-          # Reload entry
-          load_installed_skill(path, true)
+  # ============================================================================
+  # Utilities
+  # ============================================================================
 
-        {output, _code} ->
-          {:error, "Git pull failed: #{output}"}
-      end
+  defp scope_to_source_atom(:global), do: :global
+  defp scope_to_source_atom({:project, _cwd}), do: :project
+
+  defp entry_scope(%Entry{source: :global}, _cwd), do: :global
+  defp entry_scope(%Entry{source: :project}, cwd) when is_binary(cwd), do: {:project, cwd}
+
+  defp entry_scope(%Entry{path: path}, nil) do
+    # Best-effort: check whether the path lives under the global skills dir.
+    if String.starts_with?(path, Config.global_skills_dir()) do
+      :global
     else
-      {:error, "Cannot update: skill was not installed from git or .git directory was removed"}
+      # Infer project cwd from path structure: <cwd>/.lemon/skill/<skill-name>
+      inferred_cwd = path |> Path.dirname() |> Path.dirname() |> Path.dirname()
+      {:project, inferred_cwd}
     end
   end
 
-  defp update_entry(%Entry{}) do
-    {:error, "Cannot update: skill source is not a remote URL"}
-  end
+  defp entry_scope(_, _), do: :global
 
   # ============================================================================
-  # Approval Gating
+  # Approval gating
   # ============================================================================
 
-  @doc false
-  # Request approval for skill operations if not pre-approved
-  defp request_approval_if_needed(_operation, _skill_name, _source, true, _ctx) do
-    # Pre-approved via opts
-    :ok
-  end
-
-  defp request_approval_if_needed(operation, skill_name, source, false, ctx) do
-    # Check if approvals are enabled
-    if approvals_enabled?() do
-      request_skill_approval(operation, skill_name, source, ctx)
-    else
+  defp request_approval_if_needed(operation, skill_name, source, trust_level, opts) do
+    if Keyword.get(opts, :approve, false) or not approvals_enabled?() or
+         TrustPolicy.auto_approve?(trust_level) do
       :ok
+    else
+      ctx = %{
+        session_key: Keyword.get(opts, :session_key),
+        agent_id: Keyword.get(opts, :agent_id),
+        run_id: Keyword.get(opts, :run_id)
+      }
+
+      request_skill_approval(operation, skill_name, source, ctx)
     end
   end
 
@@ -334,14 +432,8 @@ defmodule LemonSkills.Installer do
   defp request_skill_approval(operation, skill_name, source, ctx) do
     tool = "skills.#{operation}"
 
-    action = %{
-      operation: operation,
-      skill_name: skill_name,
-      source: source
-    }
-
+    action = %{operation: operation, skill_name: skill_name, source: source}
     rationale = build_rationale(operation, skill_name, source)
-
     timeout_ms = Application.get_env(:lemon_skills, :approval_timeout_ms, 300_000)
 
     params = %{
@@ -354,42 +446,26 @@ defmodule LemonSkills.Installer do
       expires_in_ms: timeout_ms
     }
 
-    Logger.info(
-      "[SkillInstaller] Requesting approval for #{operation} of skill '#{skill_name}'"
-    )
+    Logger.info("[Installer] Requesting approval for #{operation} of skill '#{skill_name}'")
 
     case LemonCore.ExecApprovals.request(params) do
       {:ok, :approved, scope} ->
-        Logger.info(
-          "[SkillInstaller] #{operation} approved at scope #{scope} for skill '#{skill_name}'"
-        )
-
+        Logger.info("[Installer] #{operation} approved at scope #{scope} for '#{skill_name}'")
         :ok
 
       {:ok, :denied} ->
-        Logger.warning("[SkillInstaller] #{operation} denied for skill '#{skill_name}'")
+        Logger.warning("[Installer] #{operation} denied for '#{skill_name}'")
         {:error, "Skill #{operation} denied by user"}
 
       {:error, :timeout} ->
-        Logger.warning("[SkillInstaller] #{operation} approval timed out for skill '#{skill_name}'")
+        Logger.warning("[Installer] #{operation} approval timed out for '#{skill_name}'")
         {:error, "Skill #{operation} approval timed out"}
     end
   rescue
-    _ ->
-      # If approvals infrastructure isn't available, default to allowing so the
-      # installer can still be used in minimal runtimes.
-      :ok
+    _ -> {:error, "Approval service unavailable"}
   end
 
-  defp build_rationale(:install, skill_name, source) do
-    "Install skill '#{skill_name}' from #{source}"
-  end
-
-  defp build_rationale(:update, skill_name, _source) do
-    "Update skill '#{skill_name}' to latest version"
-  end
-
-  defp build_rationale(:uninstall, skill_name, _source) do
-    "Uninstall skill '#{skill_name}'"
-  end
+  defp build_rationale(:install, name, source), do: "Install skill '#{name}' from #{source}"
+  defp build_rationale(:update, name, _source), do: "Update skill '#{name}' to latest version"
+  defp build_rationale(:uninstall, name, _source), do: "Uninstall skill '#{name}'"
 end

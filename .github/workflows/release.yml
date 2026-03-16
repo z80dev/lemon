@@ -1,0 +1,240 @@
+name: Release
+
+# Builds, tags, and publishes a versioned Lemon release.
+#
+# Trigger: push a tag matching `v*.*.*` (e.g. v2026.03.0).
+#
+# Steps:
+#   1. Verify the tag matches CalVer (YYYY.MM.PATCH).
+#   2. Confirm mix.exs version matches the tag.
+#   3. Build release tarballs for each profile × platform matrix.
+#   4. Generate a manifest.json with version, channel, and SHA-256 checksums.
+#   5. Create a GitHub Release and upload artifacts.
+#
+# See docs/release/versioning_and_channels.md for the versioning model.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v2026.03.0). Must already exist."
+        required: true
+      channel:
+        description: "Release channel (stable, preview, nightly)"
+        required: false
+        default: "preview"
+
+jobs:
+  # ── Validate tag and version consistency ────────────────────────────────────
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      channel: ${{ steps.parse.outputs.channel }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Install deps (minimal)
+        run: mix deps.get --only prod
+
+      - name: Parse tag and determine channel
+        id: parse
+        run: |
+          TAG="${{ github.ref_name || github.event.inputs.tag }}"
+          # Strip leading 'v'
+          VERSION="${TAG#v}"
+
+          # Validate CalVer: YYYY.MM.PATCH
+          if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+            echo "::error::Tag '$TAG' does not match CalVer YYYY.MM.PATCH"
+            exit 1
+          fi
+
+          # Determine channel from workflow input or default to stable for
+          # manually pushed tags; nightly tags contain a date suffix.
+          CHANNEL="${{ github.event.inputs.channel || 'stable' }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION  Channel: $CHANNEL"
+
+      - name: Confirm mix.exs version matches tag
+        run: |
+          MIX_VERSION=$(mix run --no-start -e "IO.puts(Mix.Project.config()[:version])")
+          TAG_VERSION="${{ steps.parse.outputs.version }}"
+          if [ "$MIX_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::mix.exs version ($MIX_VERSION) does not match tag ($TAG_VERSION)."
+            echo "Run scripts/bump_version.sh $TAG_VERSION before tagging."
+            exit 1
+          fi
+          echo "mix.exs version matches tag: $MIX_VERSION"
+
+  # ── Build release artifacts ──────────────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.profile }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: validate
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - lemon_runtime_min
+          - lemon_runtime_full
+        os:
+          - ubuntu-latest
+
+    env:
+      MIX_ENV: prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-release-${{ hashFiles('mix.lock') }}-${{ matrix.profile }}
+          restore-keys: |
+            ${{ runner.os }}-mix-release-${{ hashFiles('mix.lock') }}-
+            ${{ runner.os }}-mix-release-
+
+      - name: Install deps
+        run: mix deps.get --only prod
+
+      - name: Compile (prod)
+        run: mix compile
+
+      - name: Build release
+        run: mix release ${{ matrix.profile }} --overwrite
+
+      - name: Package artifact
+        id: package
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          CHANNEL="${{ needs.validate.outputs.channel }}"
+          PROFILE="${{ matrix.profile }}"
+          OS_TAG="linux-x86_64"
+          ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${OS_TAG}-${PROFILE}.tar.gz"
+
+          # Create tarball of the release directory
+          tar -czf "$ARTIFACT_NAME" \
+            -C "./_build/prod/rel/$PROFILE" .
+
+          SHA256=$(sha256sum "$ARTIFACT_NAME" | awk '{print $1}')
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "Artifact: $ARTIFACT_NAME  SHA256: $SHA256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.profile }}-${{ matrix.os }}
+          path: ${{ steps.package.outputs.artifact_name }}
+          retention-days: 30
+
+  # ── Assemble manifest and publish GitHub release ─────────────────────────────
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate manifest.json
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          CHANNEL="${{ needs.validate.outputs.channel }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          cd release-artifacts
+          python3 - <<'PYEOF'
+          import json, hashlib, os, glob, sys
+
+          version = os.environ['VERSION']
+          channel = os.environ['CHANNEL']
+          timestamp = os.environ['TIMESTAMP']
+
+          artifacts = []
+          for path in glob.glob('*.tar.gz'):
+            with open(path, 'rb') as f:
+              sha256 = hashlib.sha256(f.read()).hexdigest()
+            size = os.path.getsize(path)
+            artifacts.append({'file': path, 'sha256': sha256, 'size': size})
+
+          manifest = {
+            'version': version,
+            'channel': channel,
+            'built_at': timestamp,
+            'artifacts': sorted(artifacts, key=lambda a: a['file'])
+          }
+          with open('manifest.json', 'w') as f:
+            json.dump(manifest, f, indent=2)
+          print(json.dumps(manifest, indent=2))
+          PYEOF
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          TIMESTAMP: ${{ steps.timestamp.outputs.timestamp || '' }}
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          # Extract the section for this version from CHANGELOG.md if it exists
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null || true)
+          if [ -z "$NOTES" ]; then
+            NOTES="Release ${VERSION} — see CHANGELOG.md for details."
+          fi
+          # GitHub Actions multiline output
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          name: "Lemon ${{ needs.validate.outputs.version }} (${{ needs.validate.outputs.channel }})"
+          body: ${{ steps.changelog.outputs.notes }}
+          prerelease: ${{ needs.validate.outputs.channel != 'stable' }}
+          files: |
+            release-artifacts/*.tar.gz
+            release-artifacts/manifest.json
+          fail_on_unmatched_files: false

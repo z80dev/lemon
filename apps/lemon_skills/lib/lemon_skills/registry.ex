@@ -33,7 +33,7 @@ defmodule LemonSkills.Registry do
 
   use GenServer
 
-  alias LemonSkills.{Entry, Manifest, Config, Discovery}
+  alias LemonSkills.{Entry, Manifest, Config, Discovery, Lockfile}
 
   @type state :: %{
           global_skills: %{String.t() => Entry.t()},
@@ -362,6 +362,9 @@ defmodule LemonSkills.Registry do
         Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
       end)
 
+    # Hydrate provenance from the global lockfile where records are present.
+    skills = hydrate_from_lockfile(skills, :global)
+
     %{state | global_skills: skills}
   end
 
@@ -377,6 +380,9 @@ defmodule LemonSkills.Registry do
         # from cwd up to git root.
         Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
       end)
+
+    # Hydrate provenance from the project lockfile where records are present.
+    skills = hydrate_from_lockfile(skills, {:project, cwd})
 
     project_skills = Map.put(state.project_skills, cwd, skills)
     %{state | project_skills: project_skills}
@@ -537,6 +543,24 @@ defmodule LemonSkills.Registry do
     |> String.split(~r/[^\w]+/)
     |> Enum.filter(fn word -> String.length(word) > 2 end)
     |> Enum.uniq()
+  end
+
+  defp hydrate_from_lockfile(skills, scope) do
+    case Lockfile.read(scope) do
+      {:ok, records} when map_size(records) > 0 ->
+        Map.new(skills, fn {key, entry} ->
+          entry =
+            case Map.fetch(records, key) do
+              {:ok, record} -> Entry.with_provenance(entry, record)
+              :error -> entry
+            end
+
+          {key, entry}
+        end)
+
+      _ ->
+        skills
+    end
   end
 
   defp add_entry(state, %Entry{source: :global} = entry) do

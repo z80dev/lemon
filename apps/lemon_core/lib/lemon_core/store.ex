@@ -830,6 +830,9 @@ defmodule LemonCore.Store do
                     history_data
                   )
 
+                  # Async memory ingest — non-fatal, feature-flagged
+                  LemonCore.MemoryIngest.ingest(run_id, record, summary)
+
                   update_sessions_index(state.backend, backend_state, session_key, summary, started_at)
 
                 true ->

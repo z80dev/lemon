@@ -1,0 +1,67 @@
+# CODEOWNERS — Lemon repository
+#
+# Ownership lanes: runtime, skills, agent, memory, docs, release, client
+#
+# This repo is currently single-maintainer.  Every alias below resolves to
+# @z80.  When additional contributors join, replace the @z80 entries with
+# the appropriate @lemon/<lane> team.
+#
+# Inheritance rule: files not listed here are owned by the nearest directory
+# entry above.  New files must either be covered by an existing glob or have
+# an explicit entry added here.
+
+# ── Root ──────────────────────────────────────────────────────────────────
+*                                                              @z80
+/mix.exs                                                       @z80
+/mix.lock                                                      @z80
+/README.md                                                     @z80
+/CONTRIBUTING.md                                               @z80
+/SECURITY.md                                                   @z80
+/LICENSE                                                       @z80
+/CHANGELOG.md                                                  @z80
+/.github/ISSUE_TEMPLATE/**                                     @z80
+/.github/pull_request_template.md                              @z80
+
+# ── Runtime lane ──────────────────────────────────────────────────────────
+/bin/**                                                        @z80
+/config/**                                                     @z80
+/apps/lemon_core/lib/lemon_core/runtime/**                     @z80
+/apps/lemon_core/lib/lemon_core/config/**                      @z80
+/apps/lemon_core/lib/lemon_core/onboarding/**                  @z80
+/apps/lemon_core/lib/lemon_core/doctor/**                      @z80
+/apps/lemon_core/lib/lemon_core/update/**                      @z80
+/apps/lemon_gateway/**                                         @z80
+
+# ── Memory lane ───────────────────────────────────────────────────────────
+/apps/lemon_core/lib/lemon_core/store.ex                       @z80
+/apps/lemon_core/lib/lemon_core/run_store.ex                   @z80
+/apps/lemon_core/lib/lemon_core/run_history_store.ex           @z80
+/apps/lemon_core/lib/lemon_core/memory*                        @z80
+/apps/lemon_core/lib/lemon_core/session_search*                @z80
+/apps/lemon_core/lib/lemon_core/outcome*                       @z80
+/apps/lemon_core/lib/lemon_core/routing_feedback*              @z80
+
+# ── Skills lane ───────────────────────────────────────────────────────────
+/apps/lemon_skills/**                                          @z80
+
+# ── Agent lane ────────────────────────────────────────────────────────────
+/apps/coding_agent/**                                          @z80
+/apps/agent_core/**                                            @z80
+/apps/ai/**                                                    @z80
+
+# Cross-cutting: model selection touches both agent and memory lanes
+/apps/lemon_router/lib/lemon_router/model_selection.ex         @z80
+
+# ── Router / control-plane ────────────────────────────────────────────────
+/apps/lemon_router/**                                          @z80
+/apps/lemon_control_plane/**                                   @z80
+
+# ── Client lane ───────────────────────────────────────────────────────────
+/clients/**                                                    @z80
+
+# ── Release lane ──────────────────────────────────────────────────────────
+/scripts/**                                                    @z80
+/.github/workflows/**                                          @z80
+
+# ── Docs lane ─────────────────────────────────────────────────────────────
+/docs/**                                                       @z80

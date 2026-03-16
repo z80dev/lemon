@@ -2,6 +2,8 @@
 
 This document describes the `AgentCore.Context` module for managing conversation context size in agent sessions.
 
+> **Memory scopes:** For the frozen definitions of `session`, `workspace`, `agent`, and `global` memory scopes, see [`docs/assistant_bootstrap_contract.md`](assistant_bootstrap_contract.md#memory-scopes). `AgentCore.Context` operates within the `session` scope — it manages the in-flight conversation window for a single run, not cross-run or cross-workspace memory.
+
 ## Overview
 
 The `AgentCore.Context` module provides utilities for:

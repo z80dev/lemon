@@ -3,13 +3,14 @@ defmodule LemonRouter.ModelSelectionTest do
 
   alias LemonRouter.ModelSelection
 
-  test "model precedence: explicit > meta > session > profile > default" do
+  test "model precedence: explicit > meta > session > profile > history > default" do
     resolved =
       ModelSelection.resolve(%{
         explicit_model: "explicit-model",
         meta_model: "meta-model",
         session_model: "session-model",
         profile_model: "profile-model",
+        history_model: "history-model",
         default_model: "default-model"
       })
 
@@ -21,10 +22,46 @@ defmodule LemonRouter.ModelSelectionTest do
         meta_model: nil,
         session_model: "session-model",
         profile_model: "profile-model",
+        history_model: "history-model",
         default_model: "default-model"
       })
 
     assert resolved_2.model == "session-model"
+  end
+
+  test "history_model is used when higher-precedence slots are empty" do
+    resolved =
+      ModelSelection.resolve(%{
+        explicit_model: nil,
+        meta_model: nil,
+        session_model: nil,
+        profile_model: nil,
+        history_model: "history-model",
+        default_model: "default-model"
+      })
+
+    assert resolved.model == "history-model"
+  end
+
+  test "history_model does not override profile_model" do
+    resolved =
+      ModelSelection.resolve(%{
+        profile_model: "profile-model",
+        history_model: "history-model",
+        default_model: "default-model"
+      })
+
+    assert resolved.model == "profile-model"
+  end
+
+  test "history_model is ignored when nil; falls through to default" do
+    resolved =
+      ModelSelection.resolve(%{
+        history_model: nil,
+        default_model: "default-model"
+      })
+
+    assert resolved.model == "default-model"
   end
 
   test "engine precedence: resume > explicit > model > profile" do

@@ -88,35 +88,12 @@ defmodule CodingAgent.PromptBuilder do
   @spec build_skills_section(String.t(), String.t(), pos_integer()) :: String.t()
   def build_skills_section(cwd, context, max_skills \\ 3) do
     if context != "" do
-      skills =
+      views =
         LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills, refresh: true)
+        |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
+        |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
 
-      if skills != [] do
-        content =
-          skills
-          |> Enum.map(fn entry ->
-            body =
-              case LemonSkills.Entry.content(entry) do
-                {:ok, raw} -> LemonSkills.Manifest.parse_body(raw) |> String.trim()
-                _ -> ""
-              end
-
-            """
-            <skill name="#{entry.name}">
-            #{body}
-            </skill>
-            """
-          end)
-          |> Enum.join("\n")
-
-        """
-        <relevant-skills>
-        #{content}
-        </relevant-skills>
-        """
-      else
-        ""
-      end
+      LemonSkills.PromptView.render_relevant_skills(views)
     else
       ""
     end

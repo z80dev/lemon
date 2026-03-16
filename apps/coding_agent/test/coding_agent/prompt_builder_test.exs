@@ -280,9 +280,8 @@ defmodule CodingAgent.PromptBuilderTest do
         })
 
       assert String.contains?(result, "<relevant-skills>")
-      assert String.contains?(result, long_body)
-      # Verify complete content is present
-      assert String.length(result) > 50_000
+      # Skill bodies are no longer inlined — only metadata is present
+      refute String.contains?(result, long_body)
     end
 
     test "handles multiple long custom sections", %{tmp_dir: tmp_dir} do
@@ -423,8 +422,9 @@ defmodule CodingAgent.PromptBuilderTest do
       result = PromptBuilder.build_skills_section(tmp_dir, "XML examples", 3)
 
       assert String.contains?(result, "<relevant-skills>")
-      assert String.contains?(result, "<config>")
-      assert String.contains?(result, "1 < 2 && 3 > 2")
+      # Skill bodies are no longer inlined — only metadata is present
+      refute String.contains?(result, "<config>")
+      refute String.contains?(result, "1 < 2 && 3 > 2")
     end
   end
 
@@ -620,7 +620,7 @@ defmodule CodingAgent.PromptBuilderTest do
         })
 
       # Should have exactly 3 skills (max_skills limit)
-      matches = Regex.scan(~r/<skill name="[^"]+">/, result)
+      matches = Regex.scan(~r/<\/skill>/, result)
       assert length(matches) == 3
 
       # Should contain odd-numbered skills (which have "database" in description)
@@ -753,11 +753,10 @@ defmodule CodingAgent.PromptBuilderTest do
 
       result = PromptBuilder.build_skills_section(tmp_dir, "skill tags nested", 3)
 
-      # The content is included as-is without escaping
       assert String.contains?(result, "<relevant-skills>")
-      # There will be multiple closing tags due to nested content
       assert String.contains?(result, "</relevant-skills>")
-      assert String.contains?(result, "Nested skill tag")
+      # Skill bodies are no longer inlined — body content must not appear
+      refute String.contains?(result, "Nested skill tag")
     end
 
     test "custom section with self-closing tags", %{tmp_dir: tmp_dir} do
@@ -949,7 +948,7 @@ defmodule CodingAgent.PromptBuilderTest do
 
       result = PromptBuilder.build_skills_section(tmp_dir, "matches context", 1)
 
-      matches = Regex.scan(~r/<skill name="[^"]+">/, result)
+      matches = Regex.scan(~r/<\/skill>/, result)
       assert length(matches) == 1
     end
 

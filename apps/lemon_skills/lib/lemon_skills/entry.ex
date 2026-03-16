@@ -2,36 +2,58 @@ defmodule LemonSkills.Entry do
   @moduledoc """
   Skill entry struct representing a registered skill.
 
-  Contains all metadata about a skill including its manifest,
-  source, status, and configuration.
+  Contains all metadata about a skill including its manifest, source
+  provenance, trust level, content hashes, install timestamps, and audit
+  status.
 
-  ## Fields
+  ## v1 fields (always present)
 
-  - `key` - Unique identifier for the skill (typically the directory name)
-  - `name` - Human-readable display name
-  - `description` - Brief description of what the skill does
-  - `source` - Where the skill was installed from (:global, :project, or URL)
-  - `path` - Absolute path to the skill directory
-  - `enabled` - Whether the skill is currently enabled
-  - `manifest` - Parsed manifest data (see `LemonSkills.Manifest`)
-  - `status` - Current status (:ready, :missing_deps, :error, etc.)
+  - `key` — unique identifier (typically the directory name)
+  - `name` — human-readable display name
+  - `description` — brief description for relevance matching
+  - `source` — legacy install location atom (`:global`, `:project`) or URL
+  - `path` — absolute path to the skill directory
+  - `enabled` — whether the skill is currently enabled
+  - `manifest` — parsed manifest data (see `LemonSkills.Manifest`)
+  - `status` — current status atom
+
+  ## v2 provenance fields (optional, nil when absent)
+
+  - `source_kind` — one of `:builtin`, `:local`, `:git`, `:registry`, `:well_known`
+  - `source_id` — original install identifier (URL, path, registry ref)
+  - `trust_level` — one of `:builtin`, `:official`, `:trusted`, `:community`
+  - `content_hash` — SHA-256 hex of the installed `SKILL.md` content
+  - `upstream_hash` — last known remote hash (used for update detection)
+  - `installed_at` — `DateTime` of first install
+  - `updated_at` — `DateTime` of last update
+  - `audit_status` — `:pending`, `:pass`, `:warn`, or `:block`
+  - `audit_findings` — list of audit finding strings
+
+  Backward-compatible: all v2 fields default to `nil`. Existing call sites
+  that only read v1 fields continue to work without changes.
 
   ## Examples
 
       %LemonSkills.Entry{
-        key: "bun-file-io",
-        name: "Bun File I/O",
-        description: "Patterns for file operations in Bun",
+        key: "k8s-rollout",
+        name: "K8s Rollout",
+        description: "Manage Kubernetes rollouts",
         source: :global,
-        path: "/Users/me/.lemon/agent/skill/bun-file-io",
+        path: "/home/user/.lemon/agent/skill/k8s-rollout",
         enabled: true,
-        manifest: %{...},
-        status: :ready
+        source_kind: :git,
+        source_id: "https://github.com/acme/k8s-rollout-skill",
+        trust_level: :community,
+        content_hash: "abc123...",
+        installed_at: ~U[2026-01-01 00:00:00Z]
       }
   """
 
   @type source :: :global | :project | String.t()
   @type status :: :ready | :missing_deps | :missing_config | :disabled | :error
+  @type source_kind :: :builtin | :local | :git | :registry | :well_known
+  @type trust_level :: :builtin | :official | :trusted | :community
+  @type audit_status :: :pending | :pass | :warn | :block
 
   @type t :: %__MODULE__{
           key: String.t(),
@@ -41,7 +63,17 @@ defmodule LemonSkills.Entry do
           path: String.t(),
           enabled: boolean(),
           manifest: map() | nil,
-          status: status()
+          status: status(),
+          # v2 provenance
+          source_kind: source_kind() | nil,
+          source_id: String.t() | nil,
+          trust_level: trust_level() | nil,
+          content_hash: String.t() | nil,
+          upstream_hash: String.t() | nil,
+          installed_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil,
+          audit_status: audit_status() | nil,
+          audit_findings: [String.t()]
         }
 
   @enforce_keys [:key, :path]
@@ -52,149 +84,78 @@ defmodule LemonSkills.Entry do
     :source,
     :path,
     :manifest,
+    # v2
+    :source_kind,
+    :source_id,
+    :trust_level,
+    :content_hash,
+    :upstream_hash,
+    :installed_at,
+    :updated_at,
+    :audit_status,
     enabled: true,
-    status: :ready
+    status: :ready,
+    audit_findings: []
   ]
 
+  # ---------------------------------------------------------------------------
+  # Constructors
+  # ---------------------------------------------------------------------------
+
   @doc """
-  Create a new skill entry from a path.
-
-  ## Parameters
-
-  - `path` - Absolute path to the skill directory
-  - `opts` - Additional options
+  Create a new skill entry from a local path.
 
   ## Options
 
-  - `:source` - The source type (:global, :project, or URL)
-  - `:enabled` - Whether the skill is enabled (default: true)
-
-  ## Examples
-
-      entry = LemonSkills.Entry.new("/path/to/skill", source: :global)
+  - `:source` — legacy source atom (`:global`, `:project`, or string URL)
+  - `:source_kind` — v2 source kind atom
+  - `:source_id` — original install identifier
+  - `:trust_level` — trust level atom
+  - `:enabled` — whether enabled (default: `true`)
   """
   @spec new(String.t(), keyword()) :: t()
   def new(path, opts \\ []) do
     key = Path.basename(path)
-    source = Keyword.get(opts, :source, :global)
-    enabled = Keyword.get(opts, :enabled, true)
 
     %__MODULE__{
       key: key,
       name: key,
       description: "",
-      source: source,
+      source: Keyword.get(opts, :source, :global),
       path: path,
-      enabled: enabled,
+      enabled: Keyword.get(opts, :enabled, true),
       manifest: nil,
-      status: :ready
+      status: :ready,
+      source_kind: Keyword.get(opts, :source_kind),
+      source_id: Keyword.get(opts, :source_id),
+      trust_level: Keyword.get(opts, :trust_level),
+      content_hash: Keyword.get(opts, :content_hash),
+      upstream_hash: Keyword.get(opts, :upstream_hash),
+      installed_at: Keyword.get(opts, :installed_at),
+      updated_at: Keyword.get(opts, :updated_at),
+      audit_status: Keyword.get(opts, :audit_status),
+      audit_findings: Keyword.get(opts, :audit_findings, [])
     }
   end
 
   @doc """
-  Update entry with parsed manifest data.
-
-  ## Parameters
-
-  - `entry` - The skill entry to update
-  - `manifest` - Parsed manifest data from `LemonSkills.Manifest`
-
-  ## Examples
-
-      entry = LemonSkills.Entry.with_manifest(entry, manifest)
-  """
-  @spec with_manifest(t(), map()) :: t()
-  def with_manifest(%__MODULE__{} = entry, manifest) when is_map(manifest) do
-    %{
-      entry
-      | name: Map.get(manifest, "name", entry.key),
-        description: Map.get(manifest, "description", ""),
-        manifest: manifest
-    }
-  end
-
-  @doc """
-  Update entry with status information.
-
-  ## Parameters
-
-  - `entry` - The skill entry to update
-  - `status` - The new status
-
-  ## Examples
-
-      entry = LemonSkills.Entry.with_status(entry, :missing_deps)
-  """
-  @spec with_status(t(), status()) :: t()
-  def with_status(%__MODULE__{} = entry, status) do
-    %{entry | status: status}
-  end
-
-  @doc """
-  Check if the skill is ready for use.
-
-  ## Parameters
-
-  - `entry` - The skill entry to check
-  """
-  @spec ready?(t()) :: boolean()
-  def ready?(%__MODULE__{enabled: false}), do: false
-  def ready?(%__MODULE__{status: :ready}), do: true
-  def ready?(_), do: false
-
-  @doc """
-  Get the skill file path (SKILL.md).
-
-  ## Parameters
-
-  - `entry` - The skill entry
-  """
-  @spec skill_file(t()) :: String.t()
-  def skill_file(%__MODULE__{path: path}) do
-    Path.join(path, "SKILL.md")
-  end
-
-  @doc """
-  Get the content of the skill file.
-
-  ## Parameters
-
-  - `entry` - The skill entry
-  """
-  @spec content(t()) :: {:ok, String.t()} | {:error, term()}
-  def content(%__MODULE__{} = entry) do
-    entry
-    |> skill_file()
-    |> File.read()
-  end
-
-  @doc """
-  Create a new skill entry from a discovered manifest.
-
-  Used by the Discovery module to create entries from online sources.
-
-  ## Parameters
-
-  - `manifest` - The parsed manifest data
-  - `url` - The URL where the skill was discovered
-  - `opts` - Additional options
+  Create a new skill entry from a discovered manifest (online source).
 
   ## Options
 
-  - `:source` - The source type (:github, :registry, etc.)
-  - `:metadata` - Additional metadata for the entry
-
-  ## Examples
-
-      entry = LemonSkills.Entry.from_manifest(manifest, "https://example.com/skill", source: :github)
+  - `:source` — source atom (`:github`, `:registry`, etc.)
+  - `:source_kind` — v2 source kind atom
+  - `:trust_level` — trust level atom
+  - `:metadata` — additional metadata stored in `manifest["_discovery_metadata"]`
   """
   @spec from_manifest(map(), String.t(), keyword()) :: t()
   def from_manifest(manifest, url, opts \\ []) when is_map(manifest) do
-    key = Map.get(manifest, "key") || Map.get(manifest, "name", "discovered") |> String.downcase() |> String.replace(" ", "-")
+    key =
+      Map.get(manifest, "key") ||
+        (manifest |> Map.get("name", "discovered") |> String.downcase() |> String.replace(" ", "-"))
+
     source = Keyword.get(opts, :source, :discovered)
     metadata = Keyword.get(opts, :metadata, %{})
-
-    # Store metadata in the manifest for discovered skills
     manifest_with_meta = Map.put(manifest, "_discovery_metadata", metadata)
 
     %__MODULE__{
@@ -205,7 +166,124 @@ defmodule LemonSkills.Entry do
       path: url,
       enabled: true,
       manifest: manifest_with_meta,
-      status: :ready
+      status: :ready,
+      source_kind: Keyword.get(opts, :source_kind),
+      source_id: url,
+      trust_level: Keyword.get(opts, :trust_level),
+      audit_findings: []
     }
   end
+
+  # ---------------------------------------------------------------------------
+  # Updaters
+  # ---------------------------------------------------------------------------
+
+  @doc "Apply parsed manifest data to the entry."
+  @spec with_manifest(t(), map()) :: t()
+  def with_manifest(%__MODULE__{} = entry, manifest) when is_map(manifest) do
+    %{
+      entry
+      | name: Map.get(manifest, "name", entry.key),
+        description: Map.get(manifest, "description", ""),
+        manifest: manifest
+    }
+  end
+
+  @doc "Set the status of the entry."
+  @spec with_status(t(), status()) :: t()
+  def with_status(%__MODULE__{} = entry, status), do: %{entry | status: status}
+
+  @doc "Apply v2 provenance fields from a lockfile record."
+  @spec with_provenance(t(), map()) :: t()
+  def with_provenance(%__MODULE__{} = entry, prov) when is_map(prov) do
+    %{
+      entry
+      | source_kind: parse_atom(prov["source_kind"]),
+        source_id: prov["source_id"],
+        trust_level: parse_atom(prov["trust_level"]),
+        content_hash: prov["content_hash"],
+        upstream_hash: prov["upstream_hash"],
+        installed_at: parse_datetime(prov["installed_at"]),
+        updated_at: parse_datetime(prov["updated_at"]),
+        audit_status: parse_atom(prov["audit_status"]),
+        audit_findings: List.wrap(prov["audit_findings"])
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Queries
+  # ---------------------------------------------------------------------------
+
+  @doc "Return `true` if the skill is ready (enabled and no missing deps)."
+  @spec ready?(t()) :: boolean()
+  def ready?(%__MODULE__{enabled: false}), do: false
+  def ready?(%__MODULE__{status: :ready}), do: true
+  def ready?(_), do: false
+
+  @doc "Return the path to the SKILL.md file."
+  @spec skill_file(t()) :: String.t()
+  def skill_file(%__MODULE__{path: path}), do: Path.join(path, "SKILL.md")
+
+  @doc "Read the SKILL.md content."
+  @spec content(t()) :: {:ok, String.t()} | {:error, term()}
+  def content(%__MODULE__{} = entry), do: entry |> skill_file() |> File.read()
+
+  @doc """
+  Compute the SHA-256 hex digest of the entry's SKILL.md content.
+
+  Returns `nil` when the file cannot be read.
+  """
+  @spec compute_content_hash(t()) :: String.t() | nil
+  def compute_content_hash(%__MODULE__{} = entry) do
+    case content(entry) do
+      {:ok, data} ->
+        :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Return a map of provenance fields suitable for lockfile serialisation.
+  """
+  @spec to_lockfile_record(t()) :: map()
+  def to_lockfile_record(%__MODULE__{} = entry) do
+    %{
+      "key" => entry.key,
+      "source_kind" => to_string_or_nil(entry.source_kind),
+      "source_id" => entry.source_id,
+      "trust_level" => to_string_or_nil(entry.trust_level),
+      "content_hash" => entry.content_hash,
+      "upstream_hash" => entry.upstream_hash,
+      "installed_at" => datetime_to_iso(entry.installed_at),
+      "updated_at" => datetime_to_iso(entry.updated_at),
+      "audit_status" => to_string_or_nil(entry.audit_status),
+      "audit_findings" => entry.audit_findings
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
+
+  defp parse_atom(nil), do: nil
+  defp parse_atom(s) when is_binary(s), do: String.to_existing_atom(s)
+  defp parse_atom(a) when is_atom(a), do: a
+
+  defp parse_datetime(nil), do: nil
+
+  defp parse_datetime(s) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+
+  defp datetime_to_iso(nil), do: nil
+  defp datetime_to_iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  defp to_string_or_nil(nil), do: nil
+  defp to_string_or_nil(a) when is_atom(a), do: Atom.to_string(a)
+  defp to_string_or_nil(s) when is_binary(s), do: s
 end

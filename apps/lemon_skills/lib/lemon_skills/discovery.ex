@@ -217,6 +217,8 @@ defmodule LemonSkills.Discovery do
           },
           skill_url,
           source: :github,
+          source_kind: :git,
+          trust_level: :community,
           metadata: %{
             "discovery_score" => score,
             "github_stars" => stars,
@@ -281,6 +283,8 @@ defmodule LemonSkills.Discovery do
         case validate_skill(url) do
           nil -> []
           entry ->
+            entry = %{entry | source_kind: :well_known, trust_level: :community}
+
             [
               %{
                 entry: entry,

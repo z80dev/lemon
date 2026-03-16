@@ -54,3 +54,44 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.
+
+## Skill Source Taxonomy
+
+Skills are classified by source kind. New source kinds must be added here before being used in code. Trust levels are frozen; the set may only be extended via a documented invariant update.
+
+### Source Kinds
+
+| Source kind | Description | Example identifier |
+| --- | --- | --- |
+| `builtin` | Bundled with the Lemon release. Never fetched from the network. | `builtin/commit-guide` |
+| `local` | A directory on the local filesystem outside the installation. | `/path/to/my-skill` |
+| `git` | A git repository cloned by URL. | `https://github.com/user/skill-repo` |
+| `registry` | An entry from the official Lemon skill registry, addressed by namespace path. | `official/devops/k8s-rollout` |
+| `well_known` | A curated community source with a stable short identifier (e.g. GitHub user/repo shorthand). | `gh:user/skill-repo` |
+
+### Trust Levels
+
+Trust levels control install/update policy and audit behavior. Ordered from highest to lowest trust:
+
+| Trust level | Assigned to | Policy |
+| --- | --- | --- |
+| `builtin` | Source kind `builtin` only. | No audit required. Cannot be uninstalled. |
+| `official` | Skills in the `official/` registry namespace. | Audit runs; `warn` verdicts require acknowledgement; `block` verdicts cannot be overridden. |
+| `trusted` | Sources explicitly added to the user's trusted list. | Same audit policy as `official`. |
+| `community` | All other `git`, `registry`, and `well_known` sources not in the trusted list. | Audit runs; `warn` verdicts require explicit approval; `block` verdicts cannot be overridden. |
+
+`local` skills inherit the trust level of the install scope (`builtin` for bundled seeds, `trusted` when explicitly added by the user, `community` otherwise).
+
+## Module Placement Rules
+
+These rules complement the dependency policy table above. They must be respected when adding new modules.
+
+| Domain | Canonical home | Forbidden locations |
+| --- | --- | --- |
+| Memory scope stores (session, workspace, agent, global) | `lemon_core` | Any other app |
+| Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
+| Prompt assembly and tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
+| Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
+| Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |
+
+When a new module does not fit an existing domain, update this table before adding the module.

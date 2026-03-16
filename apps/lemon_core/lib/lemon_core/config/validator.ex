@@ -29,7 +29,7 @@ defmodule LemonCore.Config.Validator do
   - TUI: valid theme names
   """
 
-  alias LemonCore.Config.Modular
+  alias LemonCore.Config.{Features, Modular}
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
   @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
@@ -59,6 +59,7 @@ defmodule LemonCore.Config.Validator do
     errors = validate_providers(config.providers, errors)
     errors = validate_tools(config.tools, errors)
     errors = validate_tui(config.tui, errors)
+    errors = validate_features(config.features, errors)
 
     case errors do
       [] -> :ok
@@ -752,6 +753,23 @@ defmodule LemonCore.Config.Validator do
   def validate_tools(tools, errors) do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
+  end
+
+  @doc """
+  Validates feature flag configuration.
+  """
+  @spec validate_features(Features.t() | nil, [String.t()]) :: [String.t()]
+  def validate_features(nil, errors), do: errors
+
+  def validate_features(%Features{} = features, errors) do
+    case Features.validate(features) do
+      :ok -> errors
+      {:error, feature_errors} -> Enum.reduce(feature_errors, errors, &[&1 | &2])
+    end
+  end
+
+  def validate_features(_, errors) do
+    ["features: must be a map" | errors]
   end
 
   @doc """

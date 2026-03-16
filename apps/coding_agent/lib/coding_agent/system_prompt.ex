@@ -9,7 +9,7 @@ defmodule CodingAgent.SystemPrompt do
   """
 
   alias CodingAgent.Workspace
-  alias LemonSkills.{Config, Status}
+  alias LemonSkills.PromptView
 
   @type opts :: %{
           optional(:workspace_dir) => String.t(),
@@ -55,49 +55,7 @@ defmodule CodingAgent.SystemPrompt do
   # ============================================================================
 
   defp build_skills_section(cwd) do
-    skills =
-      LemonSkills.list(cwd: cwd)
-      |> Enum.reject(fn entry ->
-        not entry.enabled or Config.skill_disabled?(entry.key, cwd)
-      end)
-
-    if skills == [] do
-      ""
-    else
-      body =
-        skills
-        |> Enum.map(fn skill ->
-          status = Status.check_entry(skill, cwd: cwd)
-
-          [
-            "  <skill>",
-            "    <name>#{skill.name}</name>",
-            "    <description>#{escape(skill.description)}</description>",
-            "    <location>#{skill.path}</location>",
-            "    <key>#{skill.key}</key>",
-            "    <ready>#{status.ready}</ready>",
-            "  </skill>"
-          ]
-          |> Enum.join("\n")
-        end)
-        |> Enum.join("\n")
-
-      """
-      ## Skills (available)
-      Before replying: scan <available_skills> <description> entries.
-      - If exactly one skill clearly applies:
-        Use `read_skill` with <key> to load it, then follow it.
-        If `read_skill` isn't available, open its SKILL.md at <location> and follow it.
-      - If multiple could apply: choose the most specific one, then follow it.
-      - If none clearly apply: do not load any skill.
-      - Prefer skills where <ready>true</ready> unless you are intentionally trying to diagnose missing requirements.
-
-      <available_skills>
-      #{body}
-      </available_skills>
-      """
-      |> String.trim()
-    end
+    PromptView.render_for_prompt(cwd)
   end
 
   defp build_workspace_section(workspace_dir) do
@@ -135,6 +93,8 @@ defmodule CodingAgent.SystemPrompt do
     - Use `memory_topic` to scaffold new topic notes from `memory/topics/TEMPLATE.md`.
     - When creating a new topic file, follow the structure in `memory/topics/TEMPLATE.md`.
     - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
+    - Use `search_memory` to recall prior run history (e.g. past bug fixes, commands run, earlier answers).
+      Prefer `scope: "session"` for recent context; use `scope: "agent"` for longer-term patterns.
     - If confidence is still low after checking memory files, say so explicitly.
     """
     |> String.trim()
@@ -188,15 +148,6 @@ defmodule CodingAgent.SystemPrompt do
   defp empty?(""), do: true
   defp empty?(s) when is_binary(s), do: String.trim(s) == ""
   defp empty?(_), do: false
-
-  defp escape(nil), do: ""
-
-  defp escape(text) when is_binary(text) do
-    text
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-  end
 
   defp normalize_session_scope(scope) when scope in [:main, "main"], do: :main
   defp normalize_session_scope(scope) when scope in [:subagent, "subagent"], do: :subagent

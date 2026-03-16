@@ -214,5 +214,83 @@
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
     max_age_days: 45
+  },
+  %{
+    path: "docs/contributor/ownership.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/contributor/public_repo_basics.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/product/runtime_plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/skills_v2.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/memory/session_search_and_feedback.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/release/versioning_and_channels.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/user-guide/setup.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/user-guide/skills.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/user-guide/memory.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/user-guide/adaptive.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/architecture/overview.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/user-guide/rollout.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/release/versioning_and_channels.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 90
   }
 ]

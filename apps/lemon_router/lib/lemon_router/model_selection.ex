@@ -7,8 +7,13 @@ defmodule LemonRouter.ModelSelection do
 
   Precedence (highest to lowest):
 
-  - model: request-level explicit model -> meta model -> session model -> profile model -> router default model
+  - model: request-level explicit model -> meta model -> session model -> profile model -> history model -> router default model
   - engine: resume engine -> explicit engine_id -> model-implied engine -> profile default engine
+
+  The `history_model` slot is populated by the router when the `routing_feedback`
+  feature flag is enabled and sufficient historical performance data exists for the
+  task context. It acts as a soft tie-breaker between the profile default and the
+  router fallback — it never overrides explicit user intent.
 
   If an explicit `engine_id` conflicts with a model-implied engine, we keep the
   explicit engine (caller intent wins) and emit a warning.
@@ -27,6 +32,7 @@ defmodule LemonRouter.ModelSelection do
     meta_model = normalize_string(input[:meta_model])
     session_model = normalize_string(input[:session_model])
     profile_model = normalize_string(input[:profile_model])
+    history_model = normalize_string(input[:history_model])
     default_model = normalize_string(input[:default_model])
 
     explicit_engine_id = normalize_string(input[:explicit_engine_id])
@@ -34,7 +40,8 @@ defmodule LemonRouter.ModelSelection do
     resume_engine = normalize_string(input[:resume_engine])
 
     resolved_model =
-      explicit_model || meta_model || session_model || profile_model || default_model
+      explicit_model || meta_model || session_model || profile_model || history_model ||
+        default_model
 
     model_engine = map_model_to_engine(resolved_model)
 

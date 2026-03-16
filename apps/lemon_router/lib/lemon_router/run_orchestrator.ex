@@ -26,7 +26,7 @@ defmodule LemonRouter.RunOrchestrator do
     SessionCoordinator,
     StickyEngine
   }
-  alias LemonCore.{Cwd, Introspection, RunRequest, SessionKey}
+  alias LemonCore.{Cwd, Introspection, RunRequest, RoutingFeedbackStore, SessionKey, TaskFingerprint}
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -263,12 +263,16 @@ defmodule LemonRouter.RunOrchestrator do
       # Use sticky engine as explicit_engine_id if no request-level override was given
       effective_engine_id = engine_id || sticky_engine_id
 
+      # Look up best historical model as a tie-breaker (behind routing_feedback flag)
+      history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
+
       selection =
         ModelSelection.resolve(%{
           explicit_model: explicit_model,
           meta_model: map_get(meta, :model),
           session_model: session_model,
           profile_model: profile_model,
+          history_model: history_model,
           default_model: default_model,
           explicit_engine_id: effective_engine_id,
           profile_default_engine: profile_default_engine,
@@ -301,6 +305,7 @@ defmodule LemonRouter.RunOrchestrator do
         })
         |> maybe_put(:model_resolution_warning, selection.warning)
         |> maybe_put(:system_prompt, resolved_system_prompt)
+        |> maybe_put(:routing_feedback_model, history_model)
 
       execution_request = %ExecutionRequest{
         run_id: run_id,
@@ -542,6 +547,44 @@ defmodule LemonRouter.RunOrchestrator do
   defp normalize_thinking_level(level) when is_atom(level), do: level
   defp normalize_thinking_level(level) when is_binary(level), do: Map.get(@thinking_levels, level)
   defp normalize_thinking_level(_), do: nil
+
+  # Look up the best historically-performing model for this prompt/workspace context.
+  # Returns nil (no-op) when:
+  #   - routing_feedback feature flag is off
+  #   - an explicit model override is already present (caller intent wins)
+  #   - insufficient data in the store
+  #   - any error (fail-open)
+  defp resolve_history_model(prompt, cwd, explicit_model, _meta)
+       when is_binary(explicit_model) and byte_size(explicit_model) > 0 do
+    _ = {prompt, cwd}
+    nil
+  end
+
+  defp resolve_history_model(prompt, cwd, _explicit_model, _meta) do
+    try do
+      config = LemonCore.Config.Modular.load()
+
+      if LemonCore.Config.Features.enabled?(config.features, :routing_feedback) do
+        fp = %TaskFingerprint{
+          task_family: TaskFingerprint.classify_prompt(prompt),
+          workspace_key: cwd
+        }
+
+        context_key = TaskFingerprint.context_key(fp)
+
+        case RoutingFeedbackStore.best_model_for_context(context_key) do
+          {:ok, model} -> model
+          _ -> nil
+        end
+      else
+        nil
+      end
+    rescue
+      _ -> nil
+    catch
+      :exit, _ -> nil
+    end
+  end
 
   # Produce a safe, bounded label for introspection error payloads.
   defp safe_error_label(nil), do: nil

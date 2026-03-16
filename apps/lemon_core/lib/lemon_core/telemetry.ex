@@ -27,6 +27,12 @@ defmodule LemonCore.Telemetry do
   - `[:lemon, :cron, :tick]`
   - `[:lemon, :cron, :run, :start]`
   - `[:lemon, :cron, :run, :stop]`
+
+  ### Memory Ingest (M5)
+  - `[:lemon, :memory, :ingest, :ok]` - measurements: `%{duration_us: integer()}`,
+    meta: `%{run_id, session_key, agent_id}`. Emitted after each successful ingest.
+  - `[:lemon, :memory, :ingest, :failure]` - measurements: `%{count: 1, duration_us: integer()}`,
+    meta: `%{run_id, error}`. Emitted when an ingest fails (after catching the exception).
   """
 
   @doc """

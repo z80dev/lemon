@@ -8,6 +8,8 @@ defmodule LemonCore.Application do
   - Phoenix.PubSub - PubSub for inter-process communication
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - LemonCore.MemoryStore - Durable memory document store (separate SQLite DB)
+  - LemonCore.MemoryIngest - Async run ingest pipeline for memory documents
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
   - LemonCore.Browser.LocalServer - Local browser automation server
@@ -46,6 +48,8 @@ defmodule LemonCore.Application do
       {LemonCore.ConfigCache, config_cache_opts},
       LemonCore.Store,
       LemonCore.RunHistoryStore,
+      LemonCore.MemoryStore,
+      LemonCore.MemoryIngest,
       LemonCore.ConfigReloader,
       LemonCore.ConfigReloader.Watcher,
       LemonCore.Browser.LocalServer

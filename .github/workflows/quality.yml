@@ -60,11 +60,15 @@ jobs:
               apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
               apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
               apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
-              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs
+              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
+              apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs
           done
 
       - name: Run WASM integration tests
         run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
+
+      - name: Lint builtin skills
+        run: mix lemon.skill.lint
 
       - name: Run quality checks
         run: mix lemon.quality
