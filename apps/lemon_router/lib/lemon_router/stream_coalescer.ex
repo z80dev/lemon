@@ -117,6 +117,32 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @doc """
+  Commit the current turn: flush pending buffer, clear PresentationState for
+  the `:answer` surface so the next delta creates a fresh message, and reset
+  internal text accumulators. No-op when `full_text` is empty or `run_id`
+  doesn't match.
+
+  Used at turn boundaries (model text → tool action) in multi-turn runs so
+  each intermediate answer becomes its own Telegram message instead of
+  overwriting the previous one.
+  """
+  @spec commit_turn(session_key :: binary(), channel_id :: binary(), run_id :: binary()) :: :ok
+  def commit_turn(session_key, channel_id, run_id)
+      when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
+    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, {:commit_turn, run_id}, 5_000)
+        catch
+          :exit, _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc """
   Force flush the coalescer buffer.
   """
   @spec flush(session_key :: binary(), channel_id :: binary()) :: :ok
@@ -268,6 +294,32 @@ defmodule LemonRouter.StreamCoalescer do
     {:reply, :ok, state}
   end
 
+  def handle_call({:commit_turn, run_id}, _from, state) do
+    state =
+      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
+        # Flush any pending buffer so the current answer message is up-to-date.
+        state = do_flush(state)
+
+        # Clear PresentationState so the next delta creates a fresh message.
+        clear_presentation_state_answer(state)
+
+        cancel_timer(state.flush_timer)
+
+        %{
+          state
+          | buffer: "",
+            full_text: "",
+            last_sent_text: nil,
+            flush_timer: nil,
+            first_delta_ts: nil
+        }
+      else
+        state
+      end
+
+    {:reply, :ok, state}
+  end
+
   @impl true
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
@@ -387,6 +439,16 @@ defmodule LemonRouter.StreamCoalescer do
     else
       _ -> :error
     end
+  end
+
+  defp clear_presentation_state_answer(state) do
+    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      LemonChannels.PresentationState.clear(route, state.run_id, :answer)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp cancel_timer(nil), do: :ok

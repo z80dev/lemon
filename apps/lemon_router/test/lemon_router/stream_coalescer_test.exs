@@ -867,6 +867,105 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
+  describe "commit_turn/3" do
+    test "resets state and clears PresentationState so next delta creates new message" do
+      session_key = "agent:test:telegram:bot:dm:54321"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      route = telegram_route("bot", :dm, "54321", nil)
+
+      # Stream some deltas to build up full_text
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "First answer")
+      StreamCoalescer.flush(session_key, channel_id)
+
+      # Wait for PresentationState to register the message
+      assert eventually(fn ->
+               LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+                 101
+             end)
+
+      # Commit the turn
+      assert :ok = StreamCoalescer.commit_turn(session_key, channel_id, run_id)
+
+      # PresentationState should be cleared for the :answer surface
+      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      assert is_nil(entry.platform_message_id)
+
+      # Internal state should be reset
+      [{pid, _}] =
+        Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      state = :sys.get_state(pid)
+      assert state.full_text == ""
+      assert state.buffer == ""
+      assert state.last_sent_text == nil
+    end
+
+    test "deltas after commit create a new message with fresh text" do
+      session_key = "agent:test:telegram:bot:dm:54322"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      # First turn
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Turn one")
+      StreamCoalescer.flush(session_key, channel_id)
+
+      first_key = "#{run_id}:stream:1:stream_snapshot"
+      assert_receive {:delivered, %{idempotency_key: ^first_key}}, 1_000
+
+      # Commit
+      assert :ok = StreamCoalescer.commit_turn(session_key, channel_id, run_id)
+
+      # Second turn - full_text was reset so the snapshot should contain only "Turn two"
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, "Turn two")
+      StreamCoalescer.flush(session_key, channel_id)
+
+      second_key = "#{run_id}:stream:2:stream_snapshot"
+      assert_receive {:delivered, %{idempotency_key: ^second_key, content: content}}, 1_000
+      # After commit, full_text was reset, so content should be just "Turn two"
+      assert content == "Turn two"
+    end
+
+    test "no-op when full_text is empty" do
+      session_key = "agent:test:telegram:bot:dm:54323"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      # Start a coalescer but don't ingest any text
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "")
+      Process.sleep(10)
+
+      # Commit should be a no-op
+      assert :ok = StreamCoalescer.commit_turn(session_key, channel_id, run_id)
+    end
+
+    test "no-op for wrong run_id" do
+      session_key = "agent:test:telegram:bot:dm:54324"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      wrong_run_id = "run_#{System.unique_integer([:positive])}"
+
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Some text")
+      StreamCoalescer.flush(session_key, channel_id)
+      Process.sleep(50)
+
+      [{pid, _}] =
+        Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      state_before = :sys.get_state(pid)
+
+      # Commit with wrong run_id should be no-op
+      assert :ok = StreamCoalescer.commit_turn(session_key, channel_id, wrong_run_id)
+
+      state_after = :sys.get_state(pid)
+      assert state_after.full_text == state_before.full_text
+    end
+
+    test "no-op when no coalescer exists" do
+      assert :ok = StreamCoalescer.commit_turn("non:existent:session", "channel", "run_999")
+    end
+  end
+
   defp telegram_route(account_id, peer_kind, peer_id, thread_id) do
     %DeliveryRoute{
       channel_id: "telegram",

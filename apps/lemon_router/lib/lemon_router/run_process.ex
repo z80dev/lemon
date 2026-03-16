@@ -318,6 +318,16 @@ defmodule LemonRouter.RunProcess do
   def handle_info(%LemonCore.Event{type: :engine_action, payload: action_ev} = event, state) do
     state = Watchdog.touch_run_watchdog(state)
 
+    # Detect turn boundary: model was streaming text, now a tool has started.
+    # Commit the current answer so the next delta creates a fresh message.
+    state =
+      if state.saw_delta and is_tool_start?(action_ev) do
+        OutputTracker.commit_stream_turn(state)
+        %{state | saw_delta: false}
+      else
+        state
+      end
+
     # Forward engine action events to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
@@ -594,6 +604,13 @@ defmodule LemonRouter.RunProcess do
       _ -> false
     end
   end
+
+  defp is_tool_start?(action_ev) when is_map(action_ev) do
+    phase = Map.get(action_ev, :phase) || Map.get(action_ev, "phase")
+    phase in [:started, "started"]
+  end
+
+  defp is_tool_start?(_), do: false
 
   @spec gateway_submit_retry_delay_ms(non_neg_integer()) :: non_neg_integer()
   defp gateway_submit_retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do

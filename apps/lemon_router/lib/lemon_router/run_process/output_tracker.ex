@@ -48,6 +48,25 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> :ok
   end
 
+  # ---- Turn commit ----
+
+  @spec commit_stream_turn(map()) :: :ok
+  def commit_stream_turn(state) do
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        LemonRouter.StreamCoalescer.commit_turn(
+          state.session_key,
+          channel_id,
+          state.run_id
+        )
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   # ---- Final output ----
 
   @spec maybe_emit_final_output(map(), LemonCore.Event.t()) :: :ok
