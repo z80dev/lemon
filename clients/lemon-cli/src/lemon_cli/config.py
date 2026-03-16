@@ -291,13 +291,38 @@ def resolve_config(
         or os.environ.get("LEMON_WS_URL")
         or config.control_plane.ws_url
     )
+    cli_ws_token = getattr(cli_args, "ws_token", None) if cli_args else None
     ws_token = (
-        os.environ.get("LEMON_WS_TOKEN")
+        cli_ws_token
+        or os.environ.get("LEMON_WS_TOKEN")
         or config.control_plane.token
     )
-    ws_role = config.control_plane.role
-    ws_scopes = config.control_plane.scopes
-    ws_client_id = config.control_plane.client_id
+    cli_ws_role = getattr(cli_args, "ws_role", None) if cli_args else None
+    ws_role = (
+        cli_ws_role
+        or os.environ.get("LEMON_WS_ROLE")
+        or config.control_plane.role
+    )
+
+    # Normalize ws_scopes to list[str] | None regardless of source shape
+    cli_ws_scopes = getattr(cli_args, "ws_scopes", None) if cli_args else None
+    _raw_scopes = (
+        cli_ws_scopes
+        or config.control_plane.scopes
+    )
+    if _raw_scopes is None:
+        ws_scopes: list[str] | None = None
+    elif isinstance(_raw_scopes, list):
+        ws_scopes = _raw_scopes
+    else:
+        ws_scopes = [s.strip() for s in str(_raw_scopes).split(",") if s.strip()]
+
+    cli_ws_client_id = getattr(cli_args, "ws_client_id", None) if cli_args else None
+    ws_client_id = (
+        cli_ws_client_id
+        or os.environ.get("LEMON_WS_CLIENT_ID")
+        or config.control_plane.client_id
+    )
 
     return ResolvedConfig(
         provider=provider,

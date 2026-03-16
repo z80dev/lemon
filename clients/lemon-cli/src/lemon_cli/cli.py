@@ -45,12 +45,11 @@ def main():
     # Select connection mode
     if config.ws_url:
         from lemon_cli.connection.websocket import WebSocketConnection
-        scopes = config.ws_scopes.split(",") if config.ws_scopes else None
         connection = WebSocketConnection(
             ws_url=config.ws_url,
             token=config.ws_token,
             role=config.ws_role,
-            scopes=scopes,
+            scopes=config.ws_scopes,
             client_id=config.ws_client_id,
         )
     else:

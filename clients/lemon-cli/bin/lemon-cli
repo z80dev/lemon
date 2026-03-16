@@ -3,10 +3,9 @@ set -euo pipefail
 
 # Resolve lemon root
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLI_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LEMON_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
 export LEMON_PATH="$LEMON_ROOT"
-
-CLI_DIR="$LEMON_ROOT/clients/lemon-cli"
 
 # Check if control plane is running (for auto-WS mode)
 WS_URL="${LEMON_WS_URL:-}"

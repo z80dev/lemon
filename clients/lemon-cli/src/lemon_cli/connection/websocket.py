@@ -59,15 +59,31 @@ class WebSocketConnection(AgentConnection):
         headers = {}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        # Add role, scopes, client_id as query params or headers
         try:
             self._ws = await websockets.connect(self._ws_url, extra_headers=headers)
             self._reconnect_delay = WS_RECONNECT_BASE_DELAY
+            await self._send_connect_handshake()
             asyncio.create_task(self._read_loop())
         except Exception as e:
             self._emit("error", f"WebSocket connect failed: {e}")
             if self._running:
                 await self._reconnect()
+
+    async def _send_connect_handshake(self) -> None:
+        """Send the OpenClaw connect handshake frame immediately after socket open."""
+        params: dict = {
+            "role": self._role or "operator",
+            "client": {"id": self._client_id or "lemon-cli"},
+        }
+        if self._scopes is not None:
+            params["scopes"] = self._scopes
+        if self._token:
+            params["auth"] = {"token": self._token}
+        req_id = str(uuid.uuid4())
+        frame = {"type": "req", "id": req_id, "method": "connect", "params": params}
+        self._pending[req_id] = PendingRequest(method="connect")
+        if self._ws:
+            await self._ws.send(json.dumps(frame))
 
     async def _reconnect(self) -> None:
         await asyncio.sleep(self._reconnect_delay)
@@ -138,14 +154,14 @@ class WebSocketConnection(AgentConnection):
         """Map OpenClaw response payload to normalized ServerMessage list."""
         match method:
             case "sessions.start":
-                model_data = payload.get("model", {})
+                model_data = payload.get("model") or {}
                 model = ModelInfo(
-                    provider=model_data.get("provider", ""),
-                    id=model_data.get("id", ""),
-                ) if model_data else None
+                    provider=model_data.get("provider", "unknown"),
+                    id=model_data.get("id", "unknown"),
+                )
                 return [SessionStartedMessage(
                     type="session_started",
-                    session_id=payload.get("sessionKey", ""),
+                    session_id=payload.get("sessionKey", session_id or ""),
                     cwd=payload.get("cwd", ""),
                     model=model,
                 )]
@@ -155,35 +171,22 @@ class WebSocketConnection(AgentConnection):
                     sessions=payload.get("sessions", []),
                     error=payload.get("error"),
                 )]
-            case "sessions.close":
+            case "sessions.delete":
                 return [SessionClosedMessage(
                     type="session_closed",
-                    session_id=payload.get("sessionKey", ""),
+                    session_id=session_id or payload.get("sessionKey", ""),
                     reason=payload.get("reason", "normal"),
                 )]
-            case "sessions.running":
+            case "sessions.active.list.running":
                 return [RunningSessionsMessage(
                     type="running_sessions",
                     sessions=payload.get("sessions", []),
                     error=payload.get("error"),
                 )]
-            case "session.set_active":
+            case "sessions.active.set":
                 return [ActiveSessionMessage(
                     type="active_session",
                     session_id=payload.get("sessionKey"),
-                )]
-            case "chat.stats":
-                return [StatsMessage(
-                    type="stats",
-                    session_id=payload.get("session_id", ""),
-                    stats=payload.get("stats", payload),
-                )]
-            case "chat.save":
-                return [SaveResultMessage(
-                    type="save_result",
-                    ok=payload.get("ok", False),
-                    path=payload.get("path"),
-                    error=payload.get("error"),
                 )]
             case "models.list":
                 return [ModelsListMessage(
@@ -192,7 +195,7 @@ class WebSocketConnection(AgentConnection):
                     error=payload.get("error"),
                 )]
             case _:
-                # For commands with no meaningful response (abort, reset, etc.)
+                # For commands with no meaningful response (abort, reset, health, connect, etc.)
                 return []
 
     def _map_event(self, event_name: str, payload: dict) -> SessionEvent | None:
@@ -244,13 +247,19 @@ class WebSocketConnection(AgentConnection):
         return SessionEvent(type=event_type, data=data)
 
     def _send_request(self, method: str, params: dict,
-                      session_id: str | None = None) -> str:
-        """Send OpenClaw req frame."""
+                      session_id: str | None = None,
+                      pending_method: str | None = None) -> str:
+        """Send OpenClaw req frame.
+
+        pending_method: if set, used as the key in _pending instead of method,
+        allowing the response handler to map by the logical operation name.
+        """
         req_id = str(uuid.uuid4())
         if len(self._pending) >= WS_COMMAND_QUEUE_LIMIT:
             self._emit("error", "Command queue full")
             return req_id
-        self._pending[req_id] = PendingRequest(method=method, session_id=session_id)
+        effective_method = pending_method or method
+        self._pending[req_id] = PendingRequest(method=effective_method, session_id=session_id)
         frame = {"type": "req", "id": req_id, "method": method, "params": params}
         if self._ws:
             asyncio.create_task(self._ws.send(json.dumps(frame)))
@@ -261,58 +270,50 @@ class WebSocketConnection(AgentConnection):
         session_id = cmd.get("session_id")
         match cmd.get("type"):
             case "prompt":
-                self._send_request("chat.prompt", {
-                    "text": cmd["text"],
+                self._send_request("chat.send", {
                     "sessionKey": session_id,
+                    "prompt": cmd["text"],
                 }, session_id)
             case "start_session":
-                self._send_request("sessions.start", {
+                self._send_request("sessions.active", {
+                    "sessionKey": session_id,
                     "cwd": cmd.get("cwd"),
                     "model": cmd.get("model"),
-                    "systemPrompt": cmd.get("system_prompt"),
-                    "sessionFile": cmd.get("session_file"),
-                    "parentSession": cmd.get("parent_session"),
-                })
+                }, session_id, pending_method="sessions.start")
             case "abort":
                 self._send_request("chat.abort", {
                     "sessionKey": session_id,
                 }, session_id)
             case "reset":
-                self._send_request("chat.reset", {
+                self._send_request("sessions.reset", {
                     "sessionKey": session_id,
                 }, session_id)
             case "save":
-                self._send_request("chat.save", {
-                    "sessionKey": session_id,
-                }, session_id)
+                self._emit("message", {"type": "error",
+                    "message": "Save is not supported over control-plane WebSocket."})
             case "stats":
-                self._send_request("chat.stats", {
+                self._emit("message", {"type": "error",
+                    "message": "Stats is not supported over control-plane WebSocket.",
+                    "session_id": session_id})
+            case "close_session":
+                self._send_request("sessions.delete", {
                     "sessionKey": session_id,
                 }, session_id)
-            case "close_session":
-                self._send_request("sessions.close", {
-                    "sessionKey": cmd.get("session_id"),
-                })
             case "set_active_session":
-                self._send_request("session.set_active", {
-                    "sessionKey": cmd.get("session_id"),
-                })
+                self._send_request("sessions.active", {
+                    "sessionKey": session_id,
+                }, session_id, pending_method="sessions.active.set")
             case "list_sessions":
-                self._send_request("sessions.list", {})
+                self._send_request("sessions.list", {"limit": 100, "offset": 0})
             case "list_running_sessions":
-                self._send_request("sessions.running", {})
+                self._send_request("sessions.active.list", {"limit": 100},
+                                   pending_method="sessions.active.list.running")
             case "list_models":
                 self._send_request("models.list", {})
-            case "ui_response":
-                self._send_request("ui.respond", {
-                    "id": cmd.get("id"),
-                    "result": cmd.get("result"),
-                    "error": cmd.get("error"),
-                })
             case "ping":
-                self._send_request("ping", {})
-            case "quit":
-                pass  # WebSocket connections don't need a quit command
+                self._send_request("health", {})
+            case "ui_response" | "quit":
+                pass  # Not supported over control-plane WebSocket
 
     async def stop(self) -> None:
         self._running = False
