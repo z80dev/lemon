@@ -3,6 +3,8 @@ defmodule LemonCore.Secrets.Keychain do
   macOS Keychain integration for Lemon secrets.
   """
 
+  @behaviour LemonCore.Secrets.KeyBackend
+
   @default_service "Lemon Secrets"
   @default_account "default"
   @default_timeout_ms 5_000

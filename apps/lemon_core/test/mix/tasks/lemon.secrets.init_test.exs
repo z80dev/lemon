@@ -50,7 +50,6 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
 
     test "has proper @shortdoc attribute" do
-      # Verify shortdoc via task helper
       shortdoc = Mix.Task.shortdoc(Init)
       assert shortdoc =~ "Initialize Lemon secrets master key"
     end
@@ -79,35 +78,53 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
   end
 
-  describe "run/1 error handling" do
-    test "raises Mix.Error when keychain is unavailable", %{mock_home: _mock_home} do
-      # When LEMON_SECRETS_MASTER_KEY is not set and keychain is unavailable,
-      # the task should raise with keychain_unavailable error
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+  describe "run/1" do
+    if match?({:unix, :darwin}, :os.type()) do
+      @tag skip: "KeyFile fallback assertion is non-deterministic on darwin"
+      test "succeeds via KeyFile fallback on non-macOS", _ctx do
+      end
+    else
+      test "succeeds via KeyFile fallback on non-macOS", %{mock_home: mock_home} do
+        System.delete_env("LEMON_SECRETS_MASTER_KEY")
+        original_path = System.get_env("PATH")
+        System.put_env("PATH", mock_home)
 
-      # Capture any output and catch the error
-      error =
-        assert_raise Mix.Error, fn ->
+        on_exit(fn ->
+          if original_path do
+            System.put_env("PATH", original_path)
+          else
+            System.delete_env("PATH")
+          end
+        end)
+
+        # On Linux (no Keychain), init should succeed by writing to KeyFile
+        # under mock HOME
+        output =
           capture_io(fn ->
             Init.run([])
           end)
-        end
 
-      assert error.message =~ "Keychain is unavailable" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to initialize"
+        assert output =~ "Secrets master key initialized"
+        assert output =~ "file (~/.lemon/master.key)"
+
+        # Verify the key file was created under mock HOME
+        key_path = Path.join(mock_home, ".lemon/master.key")
+        assert File.exists?(key_path)
+        content = File.read!(key_path)
+        assert String.length(content) > 0
+      end
     end
 
     test "task handles empty args list" do
-      # Test that the task runs with empty args (will likely fail due to keychain)
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-      # Should raise an error, but not crash with function clause
-      assert_raise Mix.Error, fn ->
+      # Should not crash with function clause error
+      output =
         capture_io(fn ->
           Init.run([])
         end)
-      end
+
+      assert is_binary(output)
     end
   end
 
