@@ -179,6 +179,7 @@ MIT — see LICENSE file.
 Lemon is heavily inspired by [pi](https://github.com/badlogic/pi-mono) (Mario Zechner),
 draws architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi) (can1357),
 [takopi](https://github.com/banteg/takopi) (banteg), OpenClaw, and Ironclaw.
+Skill library bootstrapped from [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research).
 
 Built with [Elixir](https://elixir-lang.org/) and the BEAM.
 TUI powered by [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
