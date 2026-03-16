@@ -45,6 +45,27 @@ else
   pass "C11: examples/config.example.toml does not use plaintext api_key with real key prefixes"
 fi
 
+if python3 - "$ROOT/docs/config.md" <<'PYEOF'
+import re, sys
+
+content = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"## Example\s+```toml\n(.*?)\n```", content, re.S)
+if not match:
+    sys.exit(1)
+
+example = match.group(1)
+if re.search(r'^\s*api_key\s*=', example, re.M):
+    sys.exit(1)
+
+if not re.search(r'^\s*api_key_secret\s*=', example, re.M):
+    sys.exit(1)
+PYEOF
+then
+  pass "C11: docs/config.md primary example uses api_key_secret references"
+else
+  fail "C11: docs/config.md primary example still exposes plaintext api_key values"
+fi
+
 # ── J17: release.yml must not reference a nonexistent step output for TIMESTAMP ─
 # The TIMESTAMP env var in publish job should use the inline variable, not steps.timestamp.outputs
 if grep -qE 'steps\.timestamp\.outputs\.timestamp' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
@@ -126,6 +147,16 @@ check_permissions "$ROOT/.github/workflows/quality.yml" "quality.yml"
 check_permissions "$ROOT/.github/workflows/release-smoke.yml" "release-smoke.yml"
 check_permissions "$ROOT/.github/workflows/docs-site.yml" "docs-site.yml"
 
+if awk '
+  /^permissions:/ {in_block=1; next}
+  in_block && /^[^[:space:]]/ {exit}
+  in_block {print}
+' "$ROOT/.github/workflows/docs-site.yml" 2>/dev/null | grep -qE 'pages:\s*write|id-token:\s*write'; then
+  fail "J23: docs-site.yml grants pages/id-token at workflow scope instead of deploy-job scope"
+else
+  pass "J23: docs-site.yml keeps pages/id-token permissions off the workflow scope"
+fi
+
 # ── manual-dispatch: release.yml must use input tag, not ref_name, for dispatch ─
 # When event_name is workflow_dispatch, github.ref_name is the branch, not the tag.
 # The parse step and the gh-release tag_name must prioritize event.inputs.tag.
@@ -133,6 +164,26 @@ if grep -qE 'github\.ref_name\s*\|\|.*github\.event\.inputs\.tag' "$ROOT/.github
   fail "extra: release.yml uses 'ref_name || event.inputs.tag' order — manual dispatch will use branch name instead of requested tag"
 else
   pass "extra: release.yml tag resolution order is correct for manual dispatch"
+fi
+
+if python3 - "$ROOT/.github/workflows/release.yml" <<'PYEOF'
+import re, sys
+
+content = open(sys.argv[1], encoding="utf-8").read()
+checkout_blocks = re.findall(r'- name: Checkout\n(?: {2,}.*\n)+', content)
+if not checkout_blocks:
+    sys.exit(1)
+
+for block in checkout_blocks:
+    if "uses: actions/checkout@v4" not in block:
+        continue
+    if "ref: ${{ github.event.inputs.tag || github.ref_name }}" not in block:
+        sys.exit(1)
+PYEOF
+then
+  pass "extra: release.yml pins each checkout step to the requested tag ref"
+else
+  fail "extra: release.yml has a checkout step that does not pin ref to the requested tag"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

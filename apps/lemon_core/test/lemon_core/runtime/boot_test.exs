@@ -62,4 +62,24 @@ defmodule LemonCore.Runtime.BootTest do
       System.delete_env("LEMON_FEATURE_PRODUCT_RUNTIME")
     end
   end
+
+  describe "start/2 — production cookie guard" do
+    test "rejects boot in production context when node cookie is missing" do
+      System.put_env("MIX_ENV", "prod")
+      System.put_env("LEMON_FEATURE_PRODUCT_RUNTIME", "default-on")
+      System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
+      System.delete_env("LEMON_GATEWAY_COOKIE")
+
+      env = %Env{control_port: 19_989, web_port: 19_990, sim_port: 19_991, dotenv_dir: nil}
+
+      assert_raise RuntimeError, ~r/production.*cookie/i, fn ->
+        Boot.start(:runtime_min, env: env, check_running: false)
+      end
+    after
+      System.delete_env("MIX_ENV")
+      System.delete_env("LEMON_FEATURE_PRODUCT_RUNTIME")
+      System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
+      System.delete_env("LEMON_GATEWAY_COOKIE")
+    end
+  end
 end

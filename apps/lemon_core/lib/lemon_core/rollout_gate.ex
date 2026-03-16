@@ -1,4 +1,23 @@
 defmodule LemonCore.RolloutGate do
+  @routing_min_samples 50
+  @routing_min_success_delta 0.05
+  @routing_max_retry_delta_abs 0.05
+
+  @synthesis_min_candidates 20
+  @synthesis_min_generation_rate 0.60
+  @synthesis_max_fp_rate 0.10
+
+  # ── Store-based (aggregated) thresholds — used by evaluate_routing_from_store/2
+  # and evaluate_synthesis_from_run/1.  These functions accept the raw output of
+  # RoutingFeedbackStore / Synthesis.Pipeline rather than pre-computed deltas.
+  @store_routing_min_sample_size 20
+  @store_routing_min_success_rate 0.60
+  @store_routing_max_failure_rate 0.20
+
+  @store_synthesis_min_candidates 5
+  @store_synthesis_max_block_rate 0.50
+  @store_synthesis_min_gen_rate 0.20
+
   @moduledoc """
   Measurable graduation gates for adaptive features.
 
@@ -77,25 +96,6 @@ defmodule LemonCore.RolloutGate do
           IO.inspect(computed)
       end
   """
-
-  @routing_min_samples 50
-  @routing_min_success_delta 0.05
-  @routing_max_retry_delta_abs 0.05
-
-  @synthesis_min_candidates 20
-  @synthesis_min_generation_rate 0.60
-  @synthesis_max_fp_rate 0.10
-
-  # ── Store-based (aggregated) thresholds — used by evaluate_routing_from_store/2
-  # and evaluate_synthesis_from_run/1.  These functions accept the raw output of
-  # RoutingFeedbackStore / Synthesis.Pipeline rather than pre-computed deltas.
-  @store_routing_min_sample_size 20
-  @store_routing_min_success_rate 0.60
-  @store_routing_max_failure_rate 0.20
-
-  @store_synthesis_min_candidates 5
-  @store_synthesis_max_block_rate 0.50
-  @store_synthesis_min_gen_rate 0.20
 
   # ── Types ──────────────────────────────────────────────────────────────────
 
@@ -372,7 +372,8 @@ defmodule LemonCore.RolloutGate do
     end
   end
 
-  def evaluate_synthesis_from_run(_), do: {:fail, ["invalid_run_result: missing total_candidates"]}
+  def evaluate_synthesis_from_run(_),
+    do: {:fail, ["invalid_run_result: missing total_candidates"]}
 
   # ── Private ────────────────────────────────────────────────────────────────
 
@@ -382,7 +383,7 @@ defmodule LemonCore.RolloutGate do
   defp result([], computed), do: {:ready, computed}
   defp result(reasons, computed), do: {:not_ready, reasons, computed}
 
-  # Store-based check uses prepend (reversed at the end) to match RolloutGates behaviour.
+  # Store-based checks use prepend + reverse so failure ordering stays stable.
   defp check_store(failures, true, _message), do: failures
   defp check_store(failures, false, message), do: [message | failures]
 

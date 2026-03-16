@@ -97,9 +97,9 @@ defmodule LemonSkills.Sources.Git do
 
     case File.read(skill_file) do
       {:ok, content} ->
-        case Manifest.parse(content) do
+        case Manifest.parse_and_validate(content) do
           {:ok, manifest, _body} -> {:ok, Entry.with_manifest(entry, manifest)}
-          :error -> {:ok, entry}
+          {:error, reason} -> {:error, {:invalid_manifest, reason}}
         end
 
       {:error, reason} ->

@@ -1,7 +1,7 @@
-defmodule LemonCore.RolloutGatesTest do
+defmodule LemonCore.RolloutGateTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.RolloutGates
+  alias LemonCore.RolloutGate
 
   # ── Eval fixtures ────────────────────────────────────────────────────────────
 
@@ -63,115 +63,106 @@ defmodule LemonCore.RolloutGatesTest do
 
   # ── Routing feedback gate tests ───────────────────────────────────────────────
 
-  describe "evaluate_routing_feedback/2 — passing cases" do
+  describe "evaluate_routing_from_store/2 — passing cases" do
     test "passes with healthy store stats and fingerprints" do
-      assert {:pass, notes} = RolloutGates.evaluate_routing_feedback(
-        @healthy_store_stats,
-        @healthy_fingerprints
-      )
+      assert {:pass, notes} =
+               RolloutGate.evaluate_routing_from_store(
+                 @healthy_store_stats,
+                 @healthy_fingerprints
+               )
+
       assert Enum.any?(notes, &String.starts_with?(&1, "sample_size:"))
     end
 
     test "notes include sample count and unique fingerprints" do
-      {:pass, notes} = RolloutGates.evaluate_routing_feedback(
-        @healthy_store_stats,
-        @healthy_fingerprints
-      )
+      {:pass, notes} =
+        RolloutGate.evaluate_routing_from_store(
+          @healthy_store_stats,
+          @healthy_fingerprints
+        )
+
       assert Enum.any?(notes, &(&1 =~ "50"))
       assert Enum.any?(notes, &(&1 =~ "unique_fingerprints"))
     end
   end
 
-  describe "evaluate_routing_feedback/2 — failing cases" do
+  describe "evaluate_routing_from_store/2 — failing cases" do
     test "fails when sample size is below threshold" do
-      assert {:fail, failures} = RolloutGates.evaluate_routing_feedback(
-        @small_store_stats,
-        @small_fingerprints
-      )
+      assert {:fail, failures} =
+               RolloutGate.evaluate_routing_from_store(
+                 @small_store_stats,
+                 @small_fingerprints
+               )
+
       assert Enum.any?(failures, &(&1 =~ "sample_size"))
     end
 
     test "fails when success rate is too low" do
-      assert {:fail, failures} = RolloutGates.evaluate_routing_feedback(
-        @low_success_store_stats,
-        @low_success_fingerprints
-      )
+      assert {:fail, failures} =
+               RolloutGate.evaluate_routing_from_store(
+                 @low_success_store_stats,
+                 @low_success_fingerprints
+               )
+
       assert Enum.any?(failures, &(&1 =~ "success_rate"))
     end
 
     test "fails when failure rate is too high" do
-      assert {:fail, failures} = RolloutGates.evaluate_routing_feedback(
-        @high_failure_store_stats,
-        @high_failure_fingerprints
-      )
+      assert {:fail, failures} =
+               RolloutGate.evaluate_routing_from_store(
+                 @high_failure_store_stats,
+                 @high_failure_fingerprints
+               )
+
       assert Enum.any?(failures, &(&1 =~ ~r/failure_rate|success_rate/))
     end
 
     test "fails with empty fingerprints and zero sample size" do
-      assert {:fail, _} = RolloutGates.evaluate_routing_feedback(%{total_records: 0}, [])
+      assert {:fail, _} = RolloutGate.evaluate_routing_from_store(%{total_records: 0}, [])
     end
   end
 
   # ── Synthesis gate tests ──────────────────────────────────────────────────────
 
-  describe "evaluate_synthesis/1 — passing cases" do
+  describe "evaluate_synthesis_from_run/1 — passing cases" do
     test "passes with healthy pipeline output" do
-      assert {:pass, notes} = RolloutGates.evaluate_synthesis(@healthy_synthesis)
+      assert {:pass, notes} = RolloutGate.evaluate_synthesis_from_run(@healthy_synthesis)
       assert Enum.any?(notes, &String.starts_with?(&1, "total_candidates:"))
     end
 
     test "notes include generation rate" do
-      {:pass, notes} = RolloutGates.evaluate_synthesis(@healthy_synthesis)
+      {:pass, notes} = RolloutGate.evaluate_synthesis_from_run(@healthy_synthesis)
       assert Enum.any?(notes, &(&1 =~ "generated_rate:"))
     end
   end
 
-  describe "evaluate_synthesis/1 — failing cases" do
+  describe "evaluate_synthesis_from_run/1 — failing cases" do
     test "fails when too few candidates processed" do
-      assert {:fail, failures} = RolloutGates.evaluate_synthesis(@thin_synthesis)
+      assert {:fail, failures} = RolloutGate.evaluate_synthesis_from_run(@thin_synthesis)
       assert Enum.any?(failures, &(&1 =~ "candidates_processed"))
     end
 
     test "fails when audit block rate is too high" do
-      assert {:fail, failures} = RolloutGates.evaluate_synthesis(@high_block_synthesis)
+      assert {:fail, failures} = RolloutGate.evaluate_synthesis_from_run(@high_block_synthesis)
       assert Enum.any?(failures, &(&1 =~ "draft_block_rate"))
     end
 
     test "fails when generated rate is too low" do
-      assert {:fail, failures} = RolloutGates.evaluate_synthesis(@low_gen_rate_synthesis)
+      assert {:fail, failures} = RolloutGate.evaluate_synthesis_from_run(@low_gen_rate_synthesis)
       assert Enum.any?(failures, &(&1 =~ "generated_rate"))
     end
 
     test "fails with invalid input (missing total_candidates)" do
-      assert {:fail, [msg]} = RolloutGates.evaluate_synthesis(%{generated: [], skipped: []})
+      assert {:fail, [msg]} =
+               RolloutGate.evaluate_synthesis_from_run(%{generated: [], skipped: []})
+
       assert msg =~ "invalid_run_result"
     end
   end
 
-  # ── Gate threshold accessors ──────────────────────────────────────────────────
-
-  describe "gate accessors" do
-    test "routing_gates/0 returns expected keys" do
-      gates = RolloutGates.routing_gates()
-      assert Map.has_key?(gates, :min_sample_size)
-      assert Map.has_key?(gates, :min_success_rate)
-      assert Map.has_key?(gates, :max_failure_rate)
-    end
-
-    test "synthesis_gates/0 returns expected keys" do
-      gates = RolloutGates.synthesis_gates()
-      assert Map.has_key?(gates, :min_candidates_processed)
-      assert Map.has_key?(gates, :max_draft_block_rate)
-      assert Map.has_key?(gates, :min_generated_rate)
-    end
-
-    test "min_sample_size is at least 10" do
-      assert RolloutGates.routing_gates().min_sample_size >= 10
-    end
-
-    test "max_draft_block_rate is between 0 and 1" do
-      rate = RolloutGates.synthesis_gates().max_draft_block_rate
-      assert rate > 0.0 and rate < 1.0
+  describe "public API" do
+    test "does not expose the deprecated plural rollout module" do
+      refute Code.ensure_loaded?(LemonCore.RolloutGates)
     end
   end
 end

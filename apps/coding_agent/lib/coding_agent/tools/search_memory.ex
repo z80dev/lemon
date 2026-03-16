@@ -18,12 +18,21 @@ defmodule CodingAgent.Tools.SearchMemory do
 
   ## Options
 
-  - `:session_key` - forwarded from tool_opts; used as the default scope_key
-    for session-scoped queries.
+  - `:session_key` - current session scope key
+  - `:agent_id` - current agent scope key
+  - `:workspace_dir` - current workspace scope key
+  - `:search_fn` - test override for search execution
+  - `:format_results_fn` - test override for result formatting
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
-    session_key = Keyword.get(opts, :session_key)
+    context = %{
+      session_key: Keyword.get(opts, :session_key),
+      agent_id: Keyword.get(opts, :agent_id),
+      workspace_key: Keyword.get(opts, :workspace_dir) || Keyword.get(opts, :cwd),
+      search_fn: Keyword.get(opts, :search_fn, &SessionSearch.search/2),
+      format_results_fn: Keyword.get(opts, :format_results_fn, &SessionSearch.format_results/1)
+    }
 
     %AgentTool{
       name: "search_memory",
@@ -57,7 +66,7 @@ defmodule CodingAgent.Tools.SearchMemory do
         },
         "required" => ["query"]
       },
-      execute: &execute(&1, &2, &3, &4, session_key)
+      execute: &execute(&1, &2, &3, &4, context)
     }
   end
 
@@ -66,9 +75,9 @@ defmodule CodingAgent.Tools.SearchMemory do
           map(),
           reference() | nil,
           (AgentToolResult.t() -> :ok) | nil,
-          String.t() | nil
+          map()
         ) :: AgentToolResult.t()
-  def execute(_tool_call_id, params, _signal, _on_update, session_key) do
+  def execute(_tool_call_id, params, _signal, _on_update, context) do
     query = Map.get(params, "query", "") |> to_string() |> String.trim()
     scope = parse_scope(Map.get(params, "scope", "session"))
     limit = parse_limit(Map.get(params, "limit", 5))
@@ -76,12 +85,18 @@ defmodule CodingAgent.Tools.SearchMemory do
     if query == "" do
       text_result("query must be a non-empty string")
     else
-      scope_key = resolve_scope_key(scope, params, session_key)
-      search_opts = [scope: scope, scope_key: scope_key, limit: limit]
+      scope_key = resolve_scope_key(scope, params, context)
 
-      docs = SessionSearch.search(query, search_opts)
-      text = SessionSearch.format_results(docs)
-      text_result(text, %{count: length(docs), query: query, scope: scope})
+      cond do
+        scope != :all and is_nil(scope_key) ->
+          text_result(scope_resolution_error(scope), %{query: query, scope: scope})
+
+        true ->
+          search_opts = [scope: scope, scope_key: scope_key, limit: limit]
+          docs = context.search_fn.(query, search_opts)
+          text = context.format_results_fn.(docs)
+          text_result(text, %{count: length(docs), query: query, scope: scope})
+      end
     end
   rescue
     e ->
@@ -98,10 +113,28 @@ defmodule CodingAgent.Tools.SearchMemory do
   defp parse_limit(n) when is_integer(n) and n >= 1 and n <= 20, do: n
   defp parse_limit(_), do: 5
 
-  defp resolve_scope_key(:session, _params, session_key), do: session_key
-  defp resolve_scope_key(:agent, params, _session_key), do: Map.get(params, "scope_key")
-  defp resolve_scope_key(:workspace, params, _session_key), do: Map.get(params, "scope_key")
-  defp resolve_scope_key(:all, _params, _session_key), do: nil
+  defp resolve_scope_key(:session, params, context) do
+    Map.get(params, "scope_key") || context.session_key
+  end
+
+  defp resolve_scope_key(:agent, params, context) do
+    Map.get(params, "scope_key") || context.agent_id
+  end
+
+  defp resolve_scope_key(:workspace, params, context) do
+    Map.get(params, "scope_key") || context.workspace_key
+  end
+
+  defp resolve_scope_key(:all, _params, _context), do: nil
+
+  defp scope_resolution_error(:session),
+    do: "search_memory scope 'session' requires a current session key"
+
+  defp scope_resolution_error(:agent),
+    do: "search_memory scope 'agent' requires a current agent context"
+
+  defp scope_resolution_error(:workspace),
+    do: "search_memory scope 'workspace' requires a current workspace context"
 
   defp text_result(text, details \\ %{}) do
     %AgentToolResult{

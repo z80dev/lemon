@@ -40,7 +40,9 @@ defmodule LemonSkills.Sources.Github do
 
     search_query = "topic:lemon-skill #{query} in:name,description,readme"
     encoded = URI.encode_www_form(search_query)
-    url = "#{@github_api_base}/search/repositories?q=#{encoded}&sort=stars&order=desc&per_page=#{per_page}"
+
+    url =
+      "#{@github_api_base}/search/repositories?q=#{encoded}&sort=stars&order=desc&per_page=#{per_page}"
 
     headers = build_headers(token)
 
@@ -97,7 +99,8 @@ defmodule LemonSkills.Sources.Github do
   # Private
   # ---------------------------------------------------------------------------
 
-  defp build_headers(nil), do: [{"User-Agent", @user_agent}, {"Accept", "application/vnd.github.v3+json"}]
+  defp build_headers(nil),
+    do: [{"User-Agent", @user_agent}, {"Accept", "application/vnd.github.v3+json"}]
 
   defp build_headers(token) do
     [{"Authorization", "token #{token} "} | build_headers(nil)]
@@ -162,9 +165,9 @@ defmodule LemonSkills.Sources.Github do
 
     case HttpClient.impl().fetch(url, headers) do
       {:ok, body} ->
-        case Manifest.parse(body) do
+        case Manifest.parse_and_validate(body) do
           {:ok, manifest, md_body} -> {:ok, manifest, md_body}
-          :error -> {:error, :invalid_manifest}
+          {:error, reason} -> {:error, {:invalid_manifest, reason}}
         end
 
       {:error, reason} ->

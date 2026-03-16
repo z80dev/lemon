@@ -258,7 +258,10 @@ defmodule LemonSkills.Registry do
   - `:max_online` - Maximum online results (default: 5)
   - `:include_online` - Whether to include online discovery (default: true)
   """
-  @spec search(String.t(), keyword()) :: %{local: [Entry.t()], online: [Discovery.discovery_result()]}
+  @spec search(String.t(), keyword()) :: %{
+          local: [Entry.t()],
+          online: [Discovery.discovery_result()]
+        }
   def search(query, opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
     max_local = Keyword.get(opts, :max_local, 3)
@@ -449,13 +452,12 @@ defmodule LemonSkills.Registry do
 
     case File.read(skill_file) do
       {:ok, content} ->
-        case Manifest.parse(content) do
+        case Manifest.parse_and_validate(content) do
           {:ok, manifest, _body} ->
             Entry.with_manifest(entry, manifest)
 
-          :error ->
-            # Skill file exists but has no/invalid frontmatter
-            entry
+          {:error, _reason} ->
+            nil
         end
 
       {:error, _} ->
@@ -521,7 +523,8 @@ defmodule LemonSkills.Registry do
 
     partial_name_match =
       if exact_name_match == 0 and
-           (String.contains?(key_lower, context_lower) or String.contains?(name_lower, context_lower)),
+           (String.contains?(key_lower, context_lower) or
+              String.contains?(name_lower, context_lower)),
          do: 50,
          else: 0
 

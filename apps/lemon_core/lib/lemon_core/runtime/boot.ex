@@ -26,7 +26,7 @@ defmodule LemonCore.Runtime.Boot do
 
   require Logger
 
-  alias LemonCore.Config.{Features, Modular}
+  alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
 
   @doc """
@@ -50,8 +50,8 @@ defmodule LemonCore.Runtime.Boot do
       LemonCore.Dotenv.load_and_log(dotenv_dir)
     end
 
-    # 2. Reject dev cookie in production releases
-    if System.get_env("RELEASE_NODE") do
+    # 2. Reject missing/dev cookie in production contexts
+    if production_context?() do
       Env.require_prod_cookie!()
     end
 
@@ -112,5 +112,9 @@ defmodule LemonCore.Runtime.Boot do
           {:halt, {:error, {app, reason}}}
       end
     end)
+  end
+
+  defp production_context? do
+    is_binary(System.get_env("RELEASE_NODE")) or System.get_env("MIX_ENV") == "prod"
   end
 end

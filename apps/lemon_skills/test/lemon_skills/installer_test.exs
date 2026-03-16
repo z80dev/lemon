@@ -71,7 +71,33 @@ defmodule LemonSkills.InstallerTest do
       assert inspect(reason) =~ "SKILL.md"
     end
 
-    test "returns error when skill already exists without force", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+    test "rejects invalid manifests during install", %{tmp_dir: tmp_dir} do
+      invalid_dir = Path.join(tmp_dir, "invalid-skill")
+      File.mkdir_p!(invalid_dir)
+
+      File.write!(
+        Path.join(invalid_dir, "SKILL.md"),
+        """
+        ---
+        name: invalid-skill
+        platforms: linux
+        ---
+
+        bad manifest
+        """
+      )
+
+      assert {:error, reason} =
+               Installer.install(invalid_dir, global: false, cwd: tmp_dir, approve: true)
+
+      assert reason =~ "Invalid SKILL.md manifest"
+      assert reason =~ "platforms"
+    end
+
+    test "returns error when skill already exists without force", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
       # First install
       with_mock_config(tmp_dir, fn ->
         Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
@@ -99,10 +125,13 @@ defmodule LemonSkills.InstallerTest do
         Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
 
         # Force reinstall should not error on existing
-        result = Installer.install(skill_dir, global: false, cwd: tmp_dir, force: true, approve: true)
+        result =
+          Installer.install(skill_dir, global: false, cwd: tmp_dir, force: true, approve: true)
 
         case result do
-          {:ok, _entry} -> :ok
+          {:ok, _entry} ->
+            :ok
+
           {:error, reason} ->
             # Registry errors are OK
             refute reason =~ "already installed"
@@ -118,7 +147,10 @@ defmodule LemonSkills.InstallerTest do
       assert reason =~ "not found"
     end
 
-    test "persists new upstream_hash to lockfile after drift is detected", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+    test "persists new upstream_hash to lockfile after drift is detected", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
       skill_name = "test-skill"
       dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
       File.mkdir_p!(dest_dir)
@@ -165,7 +197,10 @@ defmodule LemonSkills.InstallerTest do
   end
 
   describe "lockfile write failure" do
-    test "propagates lockfile write failure as {:error, _}", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+    test "propagates lockfile write failure as {:error, _}", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
       lemon_dir = Path.join([tmp_dir, ".lemon"])
       File.mkdir_p!(Path.join(lemon_dir, "skill"))
       lockfile_path = Path.join(lemon_dir, "skills.lock.json")
@@ -201,7 +236,10 @@ defmodule LemonSkills.InstallerTest do
       end
     end
 
-    test "requests approval when approve: false and approvals enabled", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+    test "requests approval when approve: false and approvals enabled", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
       Application.put_env(:lemon_skills, :require_approval, true)
 
       # Without ApprovalsBridge running, should timeout quickly or skip
@@ -229,7 +267,10 @@ defmodule LemonSkills.InstallerTest do
       end
     end
 
-    test "proceeds without approval when approvals disabled", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+    test "proceeds without approval when approvals disabled", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
       Application.put_env(:lemon_skills, :require_approval, false)
 
       result =

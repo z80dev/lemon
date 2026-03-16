@@ -76,9 +76,9 @@ defmodule LemonCore.Runtime.EnvTest do
   end
 
   describe "node_cookie/0" do
-    test "returns default when env vars are unset" do
+    test "returns nil when env vars are unset" do
       clear_env(["LEMON_GATEWAY_NODE_COOKIE", "LEMON_GATEWAY_COOKIE"])
-      assert Env.node_cookie() == "lemon_gateway_dev_cookie"
+      assert Env.node_cookie() == nil
     end
 
     test "reads from LEMON_GATEWAY_NODE_COOKIE" do
@@ -90,12 +90,22 @@ defmodule LemonCore.Runtime.EnvTest do
   end
 
   describe "require_prod_cookie!/0" do
-    test "raises when no cookie env var is set (dev default would be used)" do
+    test "raises when no cookie env var is set" do
       clear_env(["LEMON_GATEWAY_NODE_COOKIE", "LEMON_GATEWAY_COOKIE"])
 
       assert_raise RuntimeError, ~r/production.*cookie/i, fn ->
         Env.require_prod_cookie!()
       end
+    end
+
+    test "raises when the hardcoded dev cookie is configured explicitly" do
+      System.put_env("LEMON_GATEWAY_NODE_COOKIE", "lemon_gateway_dev_cookie")
+
+      assert_raise RuntimeError, ~r/default dev cookie/i, fn ->
+        Env.require_prod_cookie!()
+      end
+    after
+      System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
     end
 
     test "succeeds when a non-default cookie is configured" do

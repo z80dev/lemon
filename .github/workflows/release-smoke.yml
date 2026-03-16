@@ -29,6 +29,7 @@ env:
   LEMON_CONTROL_PLANE_PORT: "14040"
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
+  LEMON_GATEWAY_NODE_COOKIE: "release-smoke-cookie"
 
 jobs:
   smoke-test:

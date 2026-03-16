@@ -15,13 +15,13 @@ model/thinking values override config defaults at runtime, but they are not pers
 
 ```toml
 [providers.anthropic]
-api_key = "sk-ant-..."
+api_key_secret = "ANTHROPIC_API_KEY"
 
 [providers.openai]
-api_key = "sk-..."
+api_key_secret = "OPENAI_API_KEY"
 
 [providers.opencode]
-api_key = "opencode-..."
+api_key_secret = "OPENCODE_API_KEY"
 base_url = "https://opencode.ai/zen/v1"
 
 [defaults]

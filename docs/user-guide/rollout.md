@@ -78,7 +78,7 @@ If an enabled feature causes problems, disable it immediately:
 ## Routing Feedback Gates
 
 The `routing_feedback` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonCore.RolloutGates.evaluate_routing_feedback/2`.
+Gates are evaluated via `LemonCore.RolloutGate.evaluate_routing_from_store/2`.
 
 | Gate | Threshold | What it measures |
 |---|---|---|
@@ -89,11 +89,11 @@ Gates are evaluated via `LemonCore.RolloutGates.evaluate_routing_feedback/2`.
 ### How to check
 
 ```elixir
-alias LemonCore.{RoutingFeedbackStore, RolloutGates}
+alias LemonCore.{RoutingFeedbackStore, RolloutGate}
 
 {:ok, stats} = RoutingFeedbackStore.store_stats()
 {:ok, fingerprints} = RoutingFeedbackStore.list_fingerprints()
-RolloutGates.evaluate_routing_feedback(stats, fingerprints)
+RolloutGate.evaluate_routing_from_store(stats, fingerprints)
 # => {:pass, [...]} or {:fail, [...]}
 ```
 
@@ -112,7 +112,7 @@ RolloutGates.evaluate_routing_feedback(stats, fingerprints)
 ## Skill Synthesis Gates
 
 The `skill_synthesis_drafts` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonCore.RolloutGates.evaluate_synthesis/1`.
+Gates are evaluated via `LemonCore.RolloutGate.evaluate_synthesis_from_run/1`.
 
 | Gate | Threshold | What it measures |
 |---|---|---|
@@ -124,10 +124,10 @@ Gates are evaluated via `LemonCore.RolloutGates.evaluate_synthesis/1`.
 
 ```elixir
 alias LemonSkills.Synthesis.Pipeline
-alias LemonCore.RolloutGates
+alias LemonCore.RolloutGate
 
 {:ok, result} = Pipeline.run(:agent, "my-agent-id", max_docs: 50)
-RolloutGates.evaluate_synthesis(result)
+RolloutGate.evaluate_synthesis_from_run(result)
 # => {:pass, [...]} or {:fail, [...]}
 ```
 
@@ -159,6 +159,6 @@ Before setting a flag to `"default-on"` in the codebase:
 
 - [`docs/user-guide/adaptive.md`](adaptive.md) — using adaptive features day-to-day
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
-- `LemonCore.RolloutGates` — module documentation and gate thresholds
+- `LemonCore.RolloutGate` — module documentation and gate thresholds
 
 *Last reviewed: 2026-03-16*

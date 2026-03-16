@@ -22,7 +22,17 @@ defmodule LemonSkills.Installer do
   user approval. Override via `:approve` option or configure globally.
   """
 
-  alias LemonSkills.{Config, Entry, InstallPlan, Lockfile, Manifest, Registry, SourceRouter, TrustPolicy}
+  alias LemonSkills.{
+    Config,
+    Entry,
+    InstallPlan,
+    Lockfile,
+    Manifest,
+    Registry,
+    SourceRouter,
+    TrustPolicy
+  }
+
   alias LemonSkills.Audit.Engine, as: AuditEngine
 
   require Logger
@@ -56,7 +66,8 @@ defmodule LemonSkills.Installer do
 
     with {:ok, plan} <- build_plan(source, global, cwd, opts),
          :ok <- check_existing(plan),
-         :ok <- request_approval_if_needed(:install, plan.skill_name, source, plan.trust_level, opts),
+         :ok <-
+           request_approval_if_needed(:install, plan.skill_name, source, plan.trust_level, opts),
          {:ok, dest_dir} <- plan.source_module.fetch(plan.source_id, plan.dest_dir, opts),
          {:ok, entry} <- load_entry_from_dir(dest_dir, plan),
          entry <- audit_entry(entry),
@@ -123,7 +134,8 @@ defmodule LemonSkills.Installer do
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        with :ok <- request_approval_if_needed(:uninstall, key, entry.path, entry.trust_level, opts) do
+        with :ok <-
+               request_approval_if_needed(:uninstall, key, entry.path, entry.trust_level, opts) do
           scope = entry_scope(entry, cwd)
 
           case File.rm_rf(entry.path) do
@@ -161,6 +173,7 @@ defmodule LemonSkills.Installer do
         else
           mod.trust_level()
         end
+
       force = Keyword.get(opts, :force, false)
       scope = if global, do: :global, else: {:project, cwd}
 
@@ -250,7 +263,7 @@ defmodule LemonSkills.Installer do
 
     case File.read(skill_file) do
       {:ok, content} ->
-        case Manifest.parse(content) do
+        case Manifest.parse_and_validate(content) do
           {:ok, manifest, _body} ->
             entry =
               entry
@@ -259,8 +272,8 @@ defmodule LemonSkills.Installer do
 
             {:ok, entry}
 
-          :error ->
-            {:ok, entry}
+          {:error, reason} ->
+            {:error, "Invalid SKILL.md manifest: #{reason}"}
         end
 
       {:error, reason} ->
@@ -285,7 +298,10 @@ defmodule LemonSkills.Installer do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Installer] could not write lockfile for '#{entry.key}': #{inspect(reason)}")
+        Logger.warning(
+          "[Installer] could not write lockfile for '#{entry.key}': #{inspect(reason)}"
+        )
+
         {:error, {:lockfile_write_failed, reason}}
     end
   end

@@ -32,7 +32,7 @@ defmodule LemonCore.Runtime.Env do
             dotenv_dir: nil,
             debug: false,
             node_name: "lemon",
-            node_cookie: "lemon_gateway_dev_cookie"
+            node_cookie: nil
 
   @type t :: %__MODULE__{
           control_port: pos_integer(),
@@ -42,7 +42,7 @@ defmodule LemonCore.Runtime.Env do
           dotenv_dir: String.t() | nil,
           debug: boolean(),
           node_name: String.t(),
-          node_cookie: String.t()
+          node_cookie: String.t() | nil
         }
 
   @doc """
@@ -115,11 +115,13 @@ defmodule LemonCore.Runtime.Env do
   @doc """
   Returns the Erlang distribution cookie.
   """
-  @spec node_cookie() :: String.t()
+  @spec node_cookie() :: String.t() | nil
   def node_cookie do
-    System.get_env("LEMON_GATEWAY_NODE_COOKIE") ||
-      System.get_env("LEMON_GATEWAY_COOKIE") ||
-      "lemon_gateway_dev_cookie"
+    case System.get_env("LEMON_GATEWAY_NODE_COOKIE") || System.get_env("LEMON_GATEWAY_COOKIE") do
+      nil -> nil
+      "" -> nil
+      cookie -> cookie
+    end
   end
 
   @dev_cookie "lemon_gateway_dev_cookie"
@@ -133,15 +135,24 @@ defmodule LemonCore.Runtime.Env do
   """
   @spec require_prod_cookie!() :: :ok
   def require_prod_cookie! do
-    if node_cookie() == @dev_cookie do
-      raise RuntimeError,
-        message:
-          "Production boot requires an explicit Erlang distribution cookie. " <>
-            "Set LEMON_GATEWAY_NODE_COOKIE or LEMON_GATEWAY_COOKIE to a " <>
-            "strong random secret (not the default dev cookie)."
-    end
+    case node_cookie() do
+      nil ->
+        raise RuntimeError,
+          message:
+            "Production boot requires an explicit Erlang distribution cookie. " <>
+              "Set LEMON_GATEWAY_NODE_COOKIE or LEMON_GATEWAY_COOKIE to a " <>
+              "strong random secret."
 
-    :ok
+      @dev_cookie ->
+        raise RuntimeError,
+          message:
+            "Production boot requires an explicit Erlang distribution cookie. " <>
+              "Set LEMON_GATEWAY_NODE_COOKIE or LEMON_GATEWAY_COOKIE to a " <>
+              "strong random secret (not the default dev cookie)."
+
+      _cookie ->
+        :ok
+    end
   end
 
   @doc """

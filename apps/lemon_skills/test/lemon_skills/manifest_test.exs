@@ -217,6 +217,39 @@ defmodule LemonSkills.ManifestTest do
     end
   end
 
+  describe "parse_and_validate/1" do
+    test "returns a normalized manifest" do
+      content = """
+      ---
+      name: validated-skill
+      requires:
+        config:
+          - OPENAI_API_KEY
+      ---
+
+      body
+      """
+
+      assert {:ok, manifest, "body"} = Manifest.parse_and_validate(content)
+      assert manifest["required_environment_variables"] == ["OPENAI_API_KEY"]
+      assert manifest["requires_tools"] == []
+    end
+
+    test "rejects invalid manifest fields after parsing" do
+      content = """
+      ---
+      name: broken-skill
+      platforms: linux
+      ---
+
+      body
+      """
+
+      assert {:error, reason} = Manifest.parse_and_validate(content)
+      assert reason =~ "platforms"
+    end
+  end
+
   describe "required_bins/1" do
     test "returns empty list when no requires" do
       assert Manifest.required_bins(%{}) == []
@@ -418,7 +451,12 @@ defmodule LemonSkills.ManifestTest do
 
   describe "Validator.validate/1" do
     test "validates legacy manifest without v2 fields" do
-      manifest = %{"name" => "old-skill", "description" => "A skill", "requires" => %{"bins" => ["git"]}}
+      manifest = %{
+        "name" => "old-skill",
+        "description" => "A skill",
+        "requires" => %{"bins" => ["git"]}
+      }
+
       assert {:ok, _} = Validator.validate(manifest)
     end
   end

@@ -109,10 +109,13 @@ defmodule LemonSkills.Discovery do
 
       # Sort by relevance and limit results
       deduplicated
-      |> Enum.sort_by(fn result ->
-        # Get score from manifest's discovery metadata
-        get_in(result.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
-      end, :desc)
+      |> Enum.sort_by(
+        fn result ->
+          # Get score from manifest's discovery metadata
+          get_in(result.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
+        end,
+        :desc
+      )
       |> Enum.take(max_results)
     end
   end
@@ -173,7 +176,8 @@ defmodule LemonSkills.Discovery do
         headers
       end
 
-    url = "https://api.github.com/search/repositories?q=#{URI.encode_www_form(search_query)}&sort=stars&order=desc&per_page=10"
+    url =
+      "https://api.github.com/search/repositories?q=#{URI.encode_www_form(search_query)}&sort=stars&order=desc&per_page=10"
 
     case fetch_json(url, headers) do
       {:ok, %{"items" => items}} when is_list(items) ->
@@ -209,22 +213,23 @@ defmodule LemonSkills.Discovery do
 
     [
       %{
-        entry: Entry.from_manifest(
-          %{
-            "key" => String.replace(repo_name, "/", "-"),
-            "name" => repo["name"] || repo_name,
-            "description" => description
-          },
-          skill_url,
-          source: :github,
-          source_kind: :git,
-          trust_level: :community,
-          metadata: %{
-            "discovery_score" => score,
-            "github_stars" => stars,
-            "github_url" => repo_url
-          }
-        ),
+        entry:
+          Entry.from_manifest(
+            %{
+              "key" => String.replace(repo_name, "/", "-"),
+              "name" => repo["name"] || repo_name,
+              "description" => description
+            },
+            skill_url,
+            source: :github,
+            source_kind: :git,
+            trust_level: :community,
+            metadata: %{
+              "discovery_score" => score,
+              "github_stars" => stars,
+              "github_url" => repo_url
+            }
+          ),
         source: :github,
         validated: false,
         url: skill_url
@@ -241,7 +246,8 @@ defmodule LemonSkills.Discovery do
   end
 
   defp calculate_github_score(name, description, query, stars) do
-    score = min(stars, 100)  # Cap stars contribution at 100
+    # Cap stars contribution at 100
+    score = min(stars, 100)
 
     query_lower = String.downcase(query)
     name_lower = String.downcase(name)
@@ -278,24 +284,27 @@ defmodule LemonSkills.Discovery do
     ]
 
     # Try each pattern concurrently
-    tasks = Enum.map(patterns, fn url ->
-      Task.async(fn ->
-        case validate_skill(url) do
-          nil -> []
-          entry ->
-            entry = %{entry | source_kind: :well_known, trust_level: :community}
+    tasks =
+      Enum.map(patterns, fn url ->
+        Task.async(fn ->
+          case validate_skill(url) do
+            nil ->
+              []
 
-            [
-              %{
-                entry: entry,
-                source: :registry,
-                validated: true,
-                url: url
-              }
-            ]
-        end
+            entry ->
+              entry = %{entry | source_kind: :well_known, trust_level: :community}
+
+              [
+                %{
+                  entry: entry,
+                  source: :registry,
+                  validated: true,
+                  url: url
+                }
+              ]
+          end
+        end)
       end)
-    end)
 
     # Collect results with 5 second timeout per pattern
     tasks
@@ -328,9 +337,9 @@ defmodule LemonSkills.Discovery do
   defp fetch_skill_manifest(url) do
     case fetch(url, [{"User-Agent", @user_agent}]) do
       {:ok, body} ->
-        case Manifest.parse(body) do
+        case Manifest.parse_and_validate(body) do
           {:ok, manifest, _body} -> {:ok, manifest}
-          :error -> {:error, :invalid_manifest}
+          {:error, reason} -> {:error, {:invalid_manifest, reason}}
         end
 
       {:error, reason} ->

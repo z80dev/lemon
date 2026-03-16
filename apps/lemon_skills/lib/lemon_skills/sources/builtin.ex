@@ -87,9 +87,9 @@ defmodule LemonSkills.Sources.Builtin do
     entry =
       case File.read(Entry.skill_file(entry)) do
         {:ok, content} ->
-          case Manifest.parse(content) do
+          case Manifest.parse_and_validate(content) do
             {:ok, manifest, _} -> Entry.with_manifest(entry, manifest)
-            :error -> entry
+            {:error, _reason} -> entry
           end
 
         _ ->

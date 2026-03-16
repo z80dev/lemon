@@ -1,13 +1,15 @@
-"""Task #8 — codex-4: Python WS protocol incompatibility tests.
+"""Task #8 — codex-4: Python WS protocol compatibility tests.
 
 1. First outbound frame after connect must be a 'req' with method='connect'.
 2. Method names must align with control-plane schemas.
+3. hello-ok must produce a ready message.
+4. Current control-plane agent/chat frames must map to normalized TUI events.
 """
 import asyncio
 import json
 import pytest
 
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +146,97 @@ def test_method_names(cmd, expected_method):
     assert method == expected_method, (
         f"cmd type={cmd['type']!r}: expected method={expected_method!r}, got={method!r}"
     )
+
+
+def test_hello_ok_emits_ready_message():
+    from lemon_cli.connection.websocket import WebSocketConnection
+
+    conn = WebSocketConnection(ws_url="ws://localhost:4040/ws")
+    ready_messages = []
+    conn.on_ready = ready_messages.append
+    conn._pending["connect-1"] = MagicMock(method="connect")
+
+    conn._handle_hello_ok({
+        "type": "hello-ok",
+        "snapshot": {"activeSessionId": "session-1"},
+        "auth": {"role": "operator", "scopes": ["operator.read"]},
+    })
+
+    assert len(ready_messages) == 1
+    ready = ready_messages[0]
+    assert ready.type == "ready"
+    assert ready.active_session_id == "session-1"
+    assert conn._pending == {}
+
+
+def test_current_agent_and_chat_frames_map_to_normalized_events():
+    from lemon_cli.connection.websocket import WebSocketConnection
+
+    conn = WebSocketConnection(ws_url="ws://localhost:4040/ws")
+    messages = []
+    conn.on_message = messages.append
+
+    session_key = "agent:test:main"
+
+    conn._handle_event({
+        "type": "event",
+        "event": "agent",
+        "seq": 1,
+        "payload": {"type": "started", "sessionKey": session_key, "runId": "run-1"},
+    })
+    conn._handle_event({
+        "type": "event",
+        "event": "chat",
+        "seq": 2,
+        "payload": {"type": "delta", "sessionKey": session_key, "runId": "run-1", "text": "Hello"},
+    })
+    conn._handle_event({
+        "type": "event",
+        "event": "chat",
+        "seq": 3,
+        "payload": {"type": "delta", "sessionKey": session_key, "runId": "run-1", "text": " world"},
+    })
+    conn._handle_event({
+        "type": "event",
+        "event": "agent",
+        "seq": 4,
+        "payload": {
+            "type": "tool_use",
+            "phase": "started",
+            "sessionKey": session_key,
+            "action": {"id": "tool-1", "kind": "bash", "title": "bash", "detail": "echo hi"},
+        },
+    })
+    conn._handle_event({
+        "type": "event",
+        "event": "agent",
+        "seq": 5,
+        "payload": {
+            "type": "tool_use",
+            "phase": "completed",
+            "sessionKey": session_key,
+            "ok": True,
+            "message": "done",
+            "action": {"id": "tool-1", "kind": "bash", "title": "bash", "detail": "echo hi"},
+        },
+    })
+    conn._handle_event({
+        "type": "event",
+        "event": "agent",
+        "seq": 6,
+        "payload": {"type": "completed", "sessionKey": session_key, "runId": "run-1", "answer": "Hello world"},
+    })
+
+    event_types = [msg.event.type for msg in messages if msg.type == "event"]
+
+    assert "agent_start" in event_types
+    assert "message_start" in event_types
+    assert "message_update" in event_types
+    assert "tool_execution_start" in event_types
+    assert "tool_execution_end" in event_types
+    assert "message_end" in event_types
+    assert "agent_end" in event_types
+
+    message_end = next(msg for msg in messages if msg.event.type == "message_end")
+    assistant_message = message_end.event.data[0]
+    assert assistant_message["content"][0]["text"] == "Hello world"

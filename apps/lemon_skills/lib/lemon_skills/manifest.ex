@@ -87,6 +87,20 @@ defmodule LemonSkills.Manifest do
     end
   end
 
+  @doc """
+  Parse, validate, and normalize a skill manifest in one step.
+
+  Returns `{:ok, normalised_manifest, body}` on success or `{:error, reason}`
+  when frontmatter is malformed or validation fails.
+  """
+  @spec parse_and_validate(String.t()) :: {:ok, manifest(), String.t()} | {:error, String.t()}
+  def parse_and_validate(content) when is_binary(content) do
+    with {:ok, manifest, body} <- parse_with_reason(content),
+         {:ok, normalised} <- validate(manifest) do
+      {:ok, normalised, body}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Validation
   # ---------------------------------------------------------------------------
@@ -177,6 +191,13 @@ defmodule LemonSkills.Manifest do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  defp parse_with_reason(content) do
+    case parse(content) do
+      {:ok, manifest, body} -> {:ok, manifest, body}
+      :error -> {:error, "invalid frontmatter"}
+    end
+  end
 
   defp ensure_list(v) when is_list(v), do: v
   defp ensure_list(_), do: []

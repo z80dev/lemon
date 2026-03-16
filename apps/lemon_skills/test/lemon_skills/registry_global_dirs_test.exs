@@ -29,4 +29,32 @@ defmodule LemonSkills.RegistryGlobalDirsTest do
     assert {:ok, entry} = LemonSkills.get(skill_name)
     assert entry.path == skill_dir
   end
+
+  test "skips invalid manifests when loading ~/.agents/skills entries" do
+    skill_name = "agents-invalid-#{System.unique_integer([:positive])}"
+    skill_dir = Path.join([System.user_home!(), ".agents", "skills", skill_name])
+
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      """
+      ---
+      name: #{skill_name}
+      platforms: linux
+      ---
+
+      body
+      """
+    )
+
+    on_exit(fn ->
+      File.rm_rf(skill_dir)
+      LemonSkills.refresh()
+    end)
+
+    LemonSkills.refresh()
+
+    assert :error = LemonSkills.get(skill_name)
+  end
 end

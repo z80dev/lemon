@@ -15,23 +15,42 @@ defmodule LemonCore.RoutingFingerprintMismatchTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.{MemoryDocument, RoutingFeedbackStore, TaskFingerprint}
+  @moduletag :tmp_dir
 
-  setup do
-    dir = System.tmp_dir!() |> Path.join("rfm_#{:erlang.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+  alias LemonCore.{MemoryIngest, MemoryStore, RoutingFeedbackStore, TaskFingerprint}
 
-    {:ok, pid} =
-      GenServer.start_link(RoutingFeedbackStore, [path: dir],
-        name: :"rfm_#{:erlang.unique_integer([:positive])}"
+  setup %{tmp_dir: tmp_dir} do
+    routing_dir = Path.join(tmp_dir, "rfm_#{System.unique_integer([:positive])}")
+    memory_dir = Path.join(tmp_dir, "mem_#{System.unique_integer([:positive])}")
+    routing_name = :"rfm_#{System.unique_integer([:positive])}"
+    memory_name = :"mem_#{System.unique_integer([:positive])}"
+
+    {:ok, feedback_pid} =
+      RoutingFeedbackStore.start_link(path: routing_dir, name: routing_name, min_sample_size: 1)
+
+    {:ok, memory_pid} = MemoryStore.start_link(path: memory_dir, name: memory_name)
+
+    {:ok, ingest_pid} =
+      GenServer.start_link(MemoryIngest,
+        config_loader: fn ->
+          %{
+            features: %LemonCore.Config.Features{
+              session_search: :off,
+              routing_feedback: :"default-on"
+            }
+          }
+        end,
+        memory_store: memory_pid,
+        routing_feedback_store: feedback_pid
       )
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
-      File.rm_rf!(dir)
+      if Process.alive?(ingest_pid), do: GenServer.stop(ingest_pid)
+      if Process.alive?(memory_pid), do: GenServer.stop(memory_pid)
+      if Process.alive?(feedback_pid), do: GenServer.stop(feedback_pid)
     end)
 
-    %{pid: pid}
+    %{feedback_pid: feedback_pid, ingest_pid: ingest_pid}
   end
 
   defp seed(pid, key, n \\ 5) do
@@ -39,67 +58,75 @@ defmodule LemonCore.RoutingFingerprintMismatchTest do
     Process.sleep(30)
   end
 
-  defp sample_doc do
-    %MemoryDocument{
-      doc_id: "mem_rfm",
-      run_id: "run_rfm",
+  defp sample_inputs do
+    record = %{
+      started_at: 1_000,
+      events: [
+        %{type: :tool_call, tool: "bash"},
+        %{type: :tool_call, tool: "read_file"}
+      ]
+    }
+
+    summary = %{
       session_key: "agent:bot:main",
       agent_id: "bot",
-      workspace_key: "/workspace",
-      prompt_summary: "implement the feature",
-      tools_used: ["bash", "read_file"],
-      model: "claude-sonnet",
+      cwd: "/workspace",
+      prompt: "implement the feature",
+      completed: %{ok: true, answer: "Done."},
       provider: "anthropic",
-      outcome: :success,
-      scope: :workspace,
-      started_at_ms: 0,
-      ingested_at_ms: 1000,
-      answer_summary: "",
-      meta: %{}
+      model: "claude-sonnet"
     }
+
+    {record, summary}
   end
 
-  test "empty-toolset lookup finds keys written without toolset (post-fix write path)", %{pid: pid} do
-    doc = sample_doc()
+  test "MemoryIngest writes routing feedback that the router lookup can read", %{
+    feedback_pid: feedback_pid,
+    ingest_pid: ingest_pid
+  } do
+    {record, summary} = sample_inputs()
 
-    # Post-fix MemoryIngest writes with toolset stripped to []
-    ingest_fp = TaskFingerprint.from_document(doc)
-    stored_key = TaskFingerprint.key(%{ingest_fp | toolset: []})
+    for idx <- 1..3 do
+      MemoryIngest.ingest(ingest_pid, "run_rfm_#{idx}", record, summary)
+    end
 
-    seed(pid, stored_key)
+    :sys.get_state(ingest_pid)
+    GenServer.call(feedback_pid, :store_stats)
 
-    # RunOrchestrator builds a lookup fingerprint with no toolset
     lookup_fp = %TaskFingerprint{
-      task_family: TaskFingerprint.classify_prompt(doc.prompt_summary),
-      workspace_key: doc.workspace_key
+      task_family: TaskFingerprint.classify_prompt(summary.prompt),
+      workspace_key: summary.cwd
       # toolset defaults to []
     }
 
     lookup_context = TaskFingerprint.context_key(lookup_fp)
 
     assert {:ok, "claude-sonnet"} =
-             GenServer.call(pid, {:best_model_for_context, lookup_context})
+             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context})
   end
 
-  test "keys written WITH real toolset are not found by empty-toolset lookup (pre-fix bug)", %{pid: pid} do
-    doc = sample_doc()
+  test "keys written WITH real toolset are not found by empty-toolset lookup (pre-fix bug)", %{
+    feedback_pid: feedback_pid
+  } do
+    {record, summary} = sample_inputs()
 
     # Pre-fix MemoryIngest wrote with full toolset in key
+    doc = LemonCore.MemoryDocument.from_run("run_rfm_pre_fix", record, summary)
     ingest_fp = TaskFingerprint.from_document(doc)
     stored_key_with_toolset = TaskFingerprint.key(ingest_fp)
 
-    seed(pid, stored_key_with_toolset)
+    seed(feedback_pid, stored_key_with_toolset)
 
     # RunOrchestrator lookup uses empty toolset
     lookup_fp = %TaskFingerprint{
-      task_family: TaskFingerprint.classify_prompt(doc.prompt_summary),
-      workspace_key: doc.workspace_key
+      task_family: TaskFingerprint.classify_prompt(summary.prompt),
+      workspace_key: summary.cwd
     }
 
     lookup_context = TaskFingerprint.context_key(lookup_fp)
 
     # LIKE prefix mismatch: stored key has real toolset, lookup context has "-" toolset
     assert {:insufficient_data, 0} =
-             GenServer.call(pid, {:best_model_for_context, lookup_context})
+             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context})
   end
 end

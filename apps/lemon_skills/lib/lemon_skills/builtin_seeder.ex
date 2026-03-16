@@ -105,13 +105,13 @@ defmodule LemonSkills.BuiltinSeeder do
     entry =
       case File.read(Entry.skill_file(entry)) do
         {:ok, content} ->
-          case Manifest.parse(content) do
+          case Manifest.parse_and_validate(content) do
             {:ok, manifest, _body} ->
               entry
               |> Entry.with_manifest(manifest)
               |> Map.put(:content_hash, Entry.compute_content_hash(entry))
 
-            :error ->
+            {:error, _reason} ->
               entry
           end
 
@@ -144,4 +144,3 @@ defmodule LemonSkills.BuiltinSeeder do
     end
   end
 end
-

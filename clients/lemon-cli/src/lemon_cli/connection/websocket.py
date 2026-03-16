@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,6 +10,7 @@ from lemon_cli.connection.protocol import parse_server_message
 from lemon_cli.types import (
     ErrorMessage,
     EventMessage,
+    ReadyMessage,
     SessionEvent,
     SessionStartedMessage,
     SessionClosedMessage,
@@ -50,6 +52,7 @@ class WebSocketConnection(AgentConnection):
         self._pending: dict[str, PendingRequest] = {}
         self._reconnect_delay = WS_RECONNECT_BASE_DELAY
         self._running = False
+        self._streaming_messages: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         self._running = True
@@ -108,8 +111,30 @@ class WebSocketConnection(AgentConnection):
 
     def _handle_hello_ok(self, frame: dict) -> None:
         """Handle initial handshake."""
-        # Extract server capabilities, policy, etc.
-        pass
+        connect_ids = [
+            req_id for req_id, pending in self._pending.items()
+            if pending.method == "connect"
+        ]
+        for req_id in connect_ids:
+            self._pending.pop(req_id, None)
+
+        snapshot = frame.get("snapshot") or {}
+        auth = frame.get("auth") or {}
+
+        ready = ReadyMessage(
+            type="ready",
+            cwd=snapshot.get("cwd", ""),
+            model=ModelInfo(provider="", id=""),
+            debug=False,
+            ui=True,
+            primary_session_id=snapshot.get("primarySessionId"),
+            active_session_id=snapshot.get("activeSessionId"),
+        )
+
+        if auth.get("clientId"):
+            ready.active_session_id = ready.active_session_id or snapshot.get("sessionKey")
+
+        self._emit("ready", ready)
 
     def _handle_response(self, frame: dict) -> None:
         """Handle req/res response. Map to normalized ServerMessage."""
@@ -141,13 +166,12 @@ class WebSocketConnection(AgentConnection):
         seq = frame.get("seq", 0)
 
         session_key = payload.get("sessionKey") or payload.get("session_key")
-        # Map OpenClaw event to SessionEvent
-        session_event = self._map_event(event_name, payload)
-        if session_event and session_key:
-            msg = EventMessage(
-                type="event", session_id=session_key,
-                event_seq=seq, event=session_event)
-            self._emit("message", msg)
+        for session_event in self._map_event(event_name, payload):
+            if session_event and session_key:
+                msg = EventMessage(
+                    type="event", session_id=session_key,
+                    event_seq=seq, event=session_event)
+                self._emit("message", msg)
 
     def _map_response(self, method: str, payload: dict,
                       session_id: str | None = None) -> list:
@@ -198,8 +222,13 @@ class WebSocketConnection(AgentConnection):
                 # For commands with no meaningful response (abort, reset, health, connect, etc.)
                 return []
 
-    def _map_event(self, event_name: str, payload: dict) -> SessionEvent | None:
-        """Map OpenClaw event name to SessionEvent."""
+    def _map_event(self, event_name: str, payload: dict) -> list[SessionEvent]:
+        """Map control-plane event frames to normalized SessionEvent values."""
+        if event_name == "agent":
+            return self._map_agent_event(payload)
+        if event_name == "chat":
+            return self._map_chat_event(payload)
+
         # OpenClaw events use dot notation: "agent.message_start" -> "message_start"
         # Strip any prefix like "agent." or "chat."
         parts = event_name.split(".")
@@ -242,9 +271,102 @@ class WebSocketConnection(AgentConnection):
             case "error":
                 data = [payload.get("reason", ""), payload.get("partial_state", {})]
             case _:
-                return None
+                return []
 
-        return SessionEvent(type=event_type, data=data)
+        return [SessionEvent(type=event_type, data=data)]
+
+    def _map_agent_event(self, payload: dict) -> list[SessionEvent]:
+        session_key = payload.get("sessionKey") or payload.get("session_key")
+        event_type = (payload.get("type") or "").lower()
+
+        if event_type == "started":
+            if session_key:
+                self._streaming_messages.pop(session_key, None)
+            return [SessionEvent(type="agent_start", data=[])]
+
+        if event_type == "completed":
+            events: list[SessionEvent] = []
+            buffer = self._streaming_messages.pop(session_key, None) if session_key else None
+            final_text = payload.get("answer") or (buffer or {}).get("text", "")
+
+            if final_text:
+                message = self._assistant_message_payload(final_text, payload)
+                if buffer and buffer.get("started"):
+                    events.append(SessionEvent(type="message_end", data=[message]))
+                else:
+                    events.append(SessionEvent(type="message_start", data=[message]))
+                    events.append(SessionEvent(type="message_end", data=[message]))
+
+            events.append(SessionEvent(type="agent_end", data=[]))
+            return events
+
+        if event_type == "tool_use":
+            action = payload.get("action") or {}
+            tool_id = action.get("id", "")
+            tool_name = action.get("title") or action.get("kind") or ""
+            args = {
+                "kind": action.get("kind"),
+                "detail": action.get("detail"),
+            }
+            phase = str(payload.get("phase") or "").lower()
+
+            if phase in {"start", "started"}:
+                return [SessionEvent(type="tool_execution_start", data=[tool_id, tool_name, args])]
+
+            if phase in {"progress", "running", "update"}:
+                partial = payload.get("message") or action.get("detail")
+                return [
+                    SessionEvent(
+                        type="tool_execution_update",
+                        data=[tool_id, tool_name, args, partial],
+                    )
+                ]
+
+            result = payload.get("message") or action.get("detail")
+            is_error = payload.get("ok") is False
+            return [
+                SessionEvent(
+                    type="tool_execution_end",
+                    data=[tool_id, tool_name, result, is_error],
+                )
+            ]
+
+        if event_type == "error":
+            reason = payload.get("message") or payload.get("reason", "Unknown error")
+            return [SessionEvent(type="error", data=[reason, payload])]
+
+        return []
+
+    def _map_chat_event(self, payload: dict) -> list[SessionEvent]:
+        session_key = payload.get("sessionKey") or payload.get("session_key")
+        event_type = (payload.get("type") or "").lower()
+        text = payload.get("text", "")
+
+        if event_type != "delta" or not session_key or not text:
+            return []
+
+        message_state = self._streaming_messages.setdefault(
+            session_key,
+            {"text": "", "started": False},
+        )
+        message_state["text"] += text
+
+        message = self._assistant_message_payload(message_state["text"], payload)
+
+        if not message_state["started"]:
+            message_state["started"] = True
+            return [SessionEvent(type="message_start", data=[message])]
+
+        return [SessionEvent(type="message_update", data=[message, []])]
+
+    def _assistant_message_payload(self, text: str, payload: dict) -> dict:
+        return {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "provider": payload.get("provider", ""),
+            "model": payload.get("model", ""),
+            "timestamp": payload.get("timestamp", int(time.time() * 1000)),
+        }
 
     def _send_request(self, method: str, params: dict,
                       session_id: str | None = None,

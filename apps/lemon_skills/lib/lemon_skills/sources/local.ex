@@ -37,9 +37,9 @@ defmodule LemonSkills.Sources.Local do
       true ->
         case File.read(skill_file) do
           {:ok, content} ->
-            case Manifest.parse(content) do
+            case Manifest.parse_and_validate(content) do
               {:ok, manifest, _body} -> {:ok, manifest}
-              :error -> {:error, :invalid_manifest}
+              {:error, reason} -> {:error, {:invalid_manifest, reason}}
             end
 
           {:error, reason} ->
