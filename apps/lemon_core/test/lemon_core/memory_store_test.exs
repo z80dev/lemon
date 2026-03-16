@@ -209,6 +209,89 @@ defmodule LemonCore.MemoryStoreTest do
     assert results == []
   end
 
+  describe "J4: search scope must not broaden to :all when scope_key is nil" do
+    test "scoped :session search with nil scope_key returns empty list", %{store_pid: pid} do
+      session_a = "agent:scope_a_#{:rand.uniform(9999)}:main"
+      session_b = "agent:scope_b_#{:rand.uniform(9999)}:main"
+
+      doc_a = make_doc(session_key: session_a, prompt: "deploy to production")
+      doc_b = make_doc(session_key: session_b, prompt: "deploy to production")
+      MemoryStore.put(pid, doc_a)
+      MemoryStore.put(pid, doc_b)
+
+      assert eventually(fn ->
+        MemoryStore.get_by_session(pid, session_a, limit: 10) != []
+      end)
+
+      # Scoped search with nil scope_key must NOT fall back to :all
+      results = MemoryStore.search(pid, "deploy", scope: :session, scope_key: nil, limit: 10)
+      assert results == [], "scoped search with nil scope_key must return empty, not all docs"
+    end
+
+    test "scoped :agent search with nil scope_key returns empty list", %{store_pid: pid} do
+      agent_id = "agent_j4_#{:rand.uniform(9999)}"
+      doc = make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main", prompt: "fix the bug")
+      MemoryStore.put(pid, doc)
+
+      assert eventually(fn ->
+        MemoryStore.get_by_agent(pid, agent_id, limit: 10) != []
+      end)
+
+      results = MemoryStore.search(pid, "fix", scope: :agent, scope_key: nil, limit: 10)
+      assert results == [], "agent-scoped search with nil scope_key must return empty"
+    end
+
+    test "scoped :workspace search with nil scope_key returns empty list", %{store_pid: pid} do
+      wk = "/ws/j4_#{:rand.uniform(9999)}"
+      doc = make_doc(workspace_key: wk, scope: :workspace, prompt: "refactor the module")
+      MemoryStore.put(pid, doc)
+
+      assert eventually(fn ->
+        MemoryStore.get_by_workspace(pid, wk, limit: 10) != []
+      end)
+
+      results = MemoryStore.search(pid, "refactor", scope: :workspace, scope_key: nil, limit: 10)
+      assert results == [], "workspace-scoped search with nil scope_key must return empty"
+    end
+
+    test ":all scope still returns results without scope_key", %{store_pid: pid} do
+      session = "agent:all_scope_#{:rand.uniform(9999)}:main"
+      doc = make_doc(session_key: session, prompt: "deploy application")
+      MemoryStore.put(pid, doc)
+
+      assert eventually(fn ->
+        MemoryStore.get_by_session(pid, session, limit: 10) != []
+      end)
+
+      results = MemoryStore.search(pid, "deploy", scope: :all, limit: 10)
+      assert Enum.any?(results, &(&1.doc_id == doc.doc_id))
+    end
+  end
+
+  describe "J5: memory_documents and FTS writes must be atomic" do
+    test "FTS failure leaves no orphan row in memory_documents", %{store_pid: pid, dir: dir} do
+      db_path = Path.join(dir, "memory.sqlite3")
+
+      # Wait for the MemoryStore to fully initialize (no pending puts)
+      _ = MemoryStore.stats(pid)
+
+      # Open a second connection to drop the FTS table, forcing the next put to fail on FTS
+      {:ok, conn2} = Exqlite.Sqlite3.open(db_path)
+      :ok = Exqlite.Sqlite3.execute(conn2, "DROP TABLE IF EXISTS memory_fts")
+      :ok = Exqlite.Sqlite3.close(conn2)
+
+      doc = make_doc(session_key: "agent:fts_atomic_test:main")
+      MemoryStore.put(pid, doc)
+
+      # Use a synchronous call to flush the cast queue
+      stats = MemoryStore.stats(pid)
+
+      # With transaction wrapping: FTS failure rolls back main-table insert
+      assert stats.total == 0,
+             "orphan row found in memory_documents after FTS failure; expected atomic rollback"
+    end
+  end
+
   defp eventually(fun, attempts \\ 20)
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

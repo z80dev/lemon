@@ -185,5 +185,35 @@ defmodule LemonCore.MemoryDocumentTest do
 
       assert is_binary(doc.run_id)
     end
+
+    test "J3: truncation at multibyte UTF-8 boundary produces valid UTF-8" do
+      # Build a string that is just over the 2000-byte limit and ends with a 4-byte emoji
+      # Each ASCII char is 1 byte; emoji (e.g. 🎉) is 4 bytes.
+      # Fill to 1998 bytes with ASCII then append a 4-byte emoji so the string is 2002 bytes.
+      # binary_part(text, 0, 2000) would cut the emoji in the middle → invalid UTF-8.
+      ascii_fill = String.duplicate("a", 1998)
+      emoji = "🎉"  # U+1F389, 4 bytes in UTF-8
+      long_text = ascii_fill <> emoji  # 2002 bytes total
+
+      assert byte_size(long_text) == 2002
+      assert String.valid?(long_text)
+
+      record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
+      summary = %{
+        session_key: "agent:bot:main",
+        prompt: long_text,
+        completed: %{answer: long_text}
+      }
+
+      doc = MemoryDocument.from_run("run_utf8", record, summary)
+
+      assert String.valid?(doc.prompt_summary),
+             "truncated prompt_summary must be valid UTF-8"
+
+      assert String.valid?(doc.answer_summary),
+             "truncated answer_summary must be valid UTF-8"
+
+      assert String.ends_with?(doc.prompt_summary, "...[truncated]")
+    end
   end
 end

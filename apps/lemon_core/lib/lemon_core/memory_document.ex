@@ -163,8 +163,20 @@ defmodule LemonCore.MemoryDocument do
   defp parse_agent_id(_), do: "default"
 
   defp truncate(text) when is_binary(text) and byte_size(text) > @max_summary_bytes do
-    binary_part(text, 0, @max_summary_bytes) <> "...[truncated]"
+    cut = utf8_safe_boundary(text, @max_summary_bytes)
+    binary_part(text, 0, cut) <> "...[truncated]"
   end
+
+  # Walk back up to 3 bytes to avoid splitting a multibyte UTF-8 codepoint.
+  defp utf8_safe_boundary(binary, pos) when pos > 0 do
+    if String.valid?(binary_part(binary, 0, pos)) do
+      pos
+    else
+      utf8_safe_boundary(binary, pos - 1)
+    end
+  end
+
+  defp utf8_safe_boundary(_, 0), do: 0
 
   defp truncate(text) when is_binary(text), do: text
   defp truncate(_), do: ""

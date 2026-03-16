@@ -57,8 +57,11 @@ defmodule LemonCore.MemoryIngest do
   # ── GenServer callbacks ────────────────────────────────────────────────────────
 
   @impl true
-  def init(_opts) do
-    {:ok, %{}}
+  def init(opts) do
+    config_loader =
+      Keyword.get(opts, :config_loader, fn -> LemonCore.Config.Modular.load() end)
+
+    {:ok, %{config_loader: config_loader}}
   end
 
   @impl true
@@ -69,11 +72,20 @@ defmodule LemonCore.MemoryIngest do
       doc = MemoryDocument.from_run(run_id, record, summary)
 
       if valid_doc?(doc) do
-        if session_search_enabled?() do
+        config =
+          try do
+            state.config_loader.()
+          rescue
+            _ -> %{features: %{}}
+          end
+
+        features = Map.get(config, :features, %{})
+
+        if LemonCore.Config.Features.enabled?(features, :session_search) do
           MemoryStore.put(doc)
         end
 
-        if routing_feedback_enabled?() do
+        if LemonCore.Config.Features.enabled?(features, :routing_feedback) do
           record_routing_feedback(doc, record)
         end
 
@@ -134,7 +146,8 @@ defmodule LemonCore.MemoryIngest do
 
   defp record_routing_feedback(%MemoryDocument{} = doc, record) do
     fingerprint = TaskFingerprint.from_document(doc)
-    fingerprint_key = TaskFingerprint.key(fingerprint)
+    # Strip toolset so the stored key matches the empty-toolset lookup used by RunOrchestrator
+    fingerprint_key = TaskFingerprint.key(%{fingerprint | toolset: []})
     duration_ms = compute_duration_ms(record, doc)
     RoutingFeedbackStore.record(fingerprint_key, doc.outcome, duration_ms)
   rescue

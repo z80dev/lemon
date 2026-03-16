@@ -273,5 +273,32 @@ defmodule LemonCore.RoutingFeedbackStoreTest do
 
       assert {:insufficient_data, 0} = best_model(pid, context)
     end
+
+    test "J1: LIKE metachar % in lookup context_key must not cross-match other workspaces", %{pid: pid} do
+      # Seed data for workspace /project_foo (no metacharacters in path)
+      for _ <- 1..5, do: record(pid, "code|-|/project_foo|p|model-a", :success)
+
+      # Without escaping, LIKE 'code|-|/proj%|%' matches 'code|-|/project_foo|p|model-a'
+      # because % swallows 'ect_foo'. After the fix, % must be escaped so no cross-match.
+      assert {:insufficient_data, 0} = best_model(pid, "code|-|/proj%")
+    end
+
+    test "J1: LIKE metachar _ in lookup context_key must not cross-match other workspaces", %{pid: pid} do
+      # Seed data for workspace /tmp/doneXnow (X is a literal character)
+      for _ <- 1..5, do: record(pid, "code|-|/tmp/doneXnow|p|model-b", :success)
+
+      # Without escaping, LIKE 'code|-|/tmp/done_now|%' matches 'code|-|/tmp/doneXnow|...'
+      # because _ is a single-char wildcard matching X. After the fix, _ must be escaped.
+      assert {:insufficient_data, 0} = best_model(pid, "code|-|/tmp/done_now")
+    end
+
+    test "J1: workspace with % returns its own model correctly", %{pid: pid} do
+      context = "code|-|/tmp/100%_done"
+
+      for _ <- 1..5, do: record(pid, "#{context}|p|model-pct", :success)
+
+      # Must find its OWN model when queried with the exact same context (% and _ escaped)
+      assert {:ok, "model-pct"} = best_model(pid, context)
+    end
   end
 end

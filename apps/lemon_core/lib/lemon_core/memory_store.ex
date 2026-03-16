@@ -643,20 +643,30 @@ defmodule LemonCore.MemoryStore do
       {:blob, meta_blob}
     ]
 
+    :ok = Sqlite3.execute(state.conn, "BEGIN")
+
     with :ok <- Sqlite3.reset(state.stmts.put),
          :ok <- Sqlite3.bind(state.stmts.put, params),
          :done <- Sqlite3.step(state.conn, state.stmts.put),
          :ok <- Sqlite3.reset(state.stmts.fts_put),
          :ok <- Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
          :done <- Sqlite3.step(state.conn, state.stmts.fts_put) do
+      :ok = Sqlite3.execute(state.conn, "COMMIT")
       :ok
     else
-      :busy -> {:error, :sqlite_busy}
-      {:error, reason} -> {:error, reason}
-      other -> {:error, {:put_failed, other}}
+      err ->
+        Sqlite3.execute(state.conn, "ROLLBACK")
+
+        case err do
+          :busy -> {:error, :sqlite_busy}
+          {:error, reason} -> {:error, reason}
+          other -> {:error, {:put_failed, other}}
+        end
     end
   rescue
-    e -> {:error, {:exception, Exception.message(e)}}
+    e ->
+      Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:exception, Exception.message(e)}}
   end
 
   defp do_query(state, stmt, params) do
@@ -818,22 +828,27 @@ defmodule LemonCore.MemoryStore do
   defp do_search(state, query, scope, scope_key, limit) do
     safe_query = sanitize_fts_query(query)
 
-    {stmt, params} =
-      case scope do
-        :session when is_binary(scope_key) ->
-          {state.stmts.search_session, [safe_query, scope_key, limit]}
+    # Scoped searches with a nil scope_key must NOT fall back to :all
+    if scope in [:session, :agent, :workspace] and not is_binary(scope_key) do
+      []
+    else
+      {stmt, params} =
+        case scope do
+          :session ->
+            {state.stmts.search_session, [safe_query, scope_key, limit]}
 
-        :agent when is_binary(scope_key) ->
-          {state.stmts.search_agent, [safe_query, scope_key, limit]}
+          :agent ->
+            {state.stmts.search_agent, [safe_query, scope_key, limit]}
 
-        :workspace when is_binary(scope_key) ->
-          {state.stmts.search_workspace, [safe_query, scope_key, limit]}
+          :workspace ->
+            {state.stmts.search_workspace, [safe_query, scope_key, limit]}
 
-        _ ->
-          {state.stmts.search_all, [safe_query, limit]}
-      end
+          _ ->
+            {state.stmts.search_all, [safe_query, limit]}
+        end
 
-    do_query(state, stmt, params)
+      do_query(state, stmt, params)
+    end
   end
 
   # Strip FTS5 special characters and join tokens for AND-matching.

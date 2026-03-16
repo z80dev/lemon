@@ -105,7 +105,7 @@ defmodule LemonCore.RoutingFeedbackStore do
          COUNT(*) AS total,
          SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) AS success_count
   FROM routing_feedback
-  WHERE fingerprint_key LIKE ?1 || '|%'
+  WHERE fingerprint_key LIKE ?1 || '|%' ESCAPE '\\'
   GROUP BY fingerprint_key
   """
 
@@ -467,9 +467,16 @@ defmodule LemonCore.RoutingFeedbackStore do
     end
   end
 
+  defp escape_like(str) do
+    str
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
+
   defp do_best_model_for_context(state, context_key) do
     with :ok <- Sqlite3.reset(state.stmts.best_model),
-         :ok <- Sqlite3.bind(state.stmts.best_model, [context_key]),
+         :ok <- Sqlite3.bind(state.stmts.best_model, [escape_like(context_key)]),
          {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.stmts.best_model) do
       # Aggregate by model (last segment of fingerprint_key) across providers
       by_model =
