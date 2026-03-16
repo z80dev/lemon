@@ -3,6 +3,9 @@ name: Release Smoke Tests
 # Assembles runtime releases, verifies they start and pass doctor checks,
 # then tears down. Runs on PRs touching release-related files and weekly.
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
@@ -37,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         profile:
-          - lemon_runtime_min
+          - ${{ github.event.inputs.profile || 'lemon_runtime_min' }}
 
     steps:
       - name: Checkout

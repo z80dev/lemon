@@ -129,7 +129,7 @@ jobs:
               print(f'::error::Doctor returned unexpected status: {status}')
               sys.exit(1)
           print(f'Doctor status: {status}')
-          " || true
+          "
 
       # ── Skill lint ────────────────────────────────────────────────────────────
 

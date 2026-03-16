@@ -56,7 +56,7 @@ provider = "openai"
 model = "gpt-4.1"
 
 [runtime.cli.claude]
-dangerously_skip_permissions = true
+# dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
 
 [runtime.tools.web.search]
 provider = "brave" # "brave" | "perplexity"

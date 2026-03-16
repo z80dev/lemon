@@ -1,19 +1,28 @@
+# Provider credentials — prefer secret refs (api_key_secret) over plaintext api_key.
+# Run `mix lemon.secrets.set <secret_name> <value>` to store keys in the encrypted keychain.
+# Plaintext api_key is supported but discouraged; use it only for quick local testing.
+
 [providers.anthropic]
-api_key = "sk-ant-your-api-key-here"
+api_key_secret = "anthropic_api_key"
+# api_key = "sk-ant-..."  # plaintext fallback — discouraged
 
 [providers.openai]
-api_key = "sk-your-openai-key-here"
+api_key_secret = "openai_api_key"
+# api_key = "sk-..."  # plaintext fallback — discouraged
 
 [providers.opencode]
-api_key = "opencode-your-api-key-here"
+api_key_secret = "opencode_api_key"
+# api_key = "opencode-..."  # plaintext fallback — discouraged
 base_url = "https://opencode.ai/zen/v1"
 
 [providers.kimi]
-api_key = "sk-kimi-your-kimi-key-here"
+api_key_secret = "kimi_api_key"
+# api_key = "sk-kimi-..."  # plaintext fallback — discouraged
 base_url = "https://api.kimi.com/coding/"
 
 [providers.google]
-api_key = "your-google-api-key-here"
+api_key_secret = "google_api_key"
+# api_key = "..."  # plaintext fallback — discouraged
 
 [defaults]
 provider = "anthropic"
@@ -40,7 +49,7 @@ extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
 [runtime.cli.claude]
-dangerously_skip_permissions = true
+# dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
 # yolo = false
 # allowed_tools = []
 # scrub_env = false

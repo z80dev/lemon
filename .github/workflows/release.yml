@@ -54,7 +54,7 @@ jobs:
       - name: Parse tag and determine channel
         id: parse
         run: |
-          TAG="${{ github.ref_name || github.event.inputs.tag }}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           # Strip leading 'v'
           VERSION="${TAG#v}"
 
@@ -180,6 +180,7 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           CHANNEL="${{ needs.validate.outputs.channel }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          export TIMESTAMP
 
           cd release-artifacts
           python3 - <<'PYEOF'
@@ -209,7 +210,6 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
-          TIMESTAMP: ${{ steps.timestamp.outputs.timestamp || '' }}
 
       - name: Extract changelog section
         id: changelog
@@ -230,7 +230,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "Lemon ${{ needs.validate.outputs.version }} (${{ needs.validate.outputs.channel }})"
           body: ${{ steps.changelog.outputs.notes }}
           prerelease: ${{ needs.validate.outputs.channel != 'stable' }}

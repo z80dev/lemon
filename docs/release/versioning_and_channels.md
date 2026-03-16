@@ -20,7 +20,7 @@ hotfixes and out-of-cycle releases within the same month.
 
 | Channel | Audience | Cadence | Stability |
 |---|---|---|---|
-| `stable` | General users | Monthly | Fully tested and signed |
+| `stable` | General users | Monthly | Fully tested |
 | `preview` | Early adopters | Weekly | Feature-complete, light testing |
 | `nightly` | Contributors | Daily | Automated build, may be broken |
 
@@ -36,15 +36,13 @@ lemon-2026.03.1-preview-macos-aarch64.tar.gz
 Each release produces:
 
 - A self-contained `.tar.gz` with the Erlang runtime baked in (via `mix release`).
-- A `manifest.json` with version, channel, SHA-256 checksums, and minimum
-  required config schema version.
-- A detached `.sig` file (ed25519) for artefact verification.
+- A `manifest.json` with version, channel, and SHA-256 checksums.
 
 ## Update flow (`mix lemon.update`)
 
 1. Fetch the latest `manifest.json` from the configured release channel URL.
 2. Compare the remote version against the running version.
-3. Download the new tarball and verify the checksum and signature.
+3. Download the new tarball and verify the checksum.
 4. Perform a staged swap: unpack to a side-by-side directory, then atomically
    replace the active binary on next start (or hot-swap via BEAM hot code loading
    when the `product_runtime` feature flag is `"default-on"`).

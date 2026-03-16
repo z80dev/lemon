@@ -8,7 +8,7 @@ Only the latest release on the `main` branch receives security fixes.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email: `security@lemon` (replace with actual contact when available)
+Open a [GitHub private security advisory](https://github.com/z80/lemon/security/advisories/new) to report vulnerabilities confidentially.
 
 Include:
 - Description of the vulnerability

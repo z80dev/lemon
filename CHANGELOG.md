@@ -2,7 +2,7 @@
 
 All notable changes to Lemon are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-Versions follow [Semantic Versioning](https://semver.org/).
+Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ---
 
@@ -83,7 +83,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 | Channel | Cadence | Stability |
 |---|---|---|
-| `stable` | Monthly | Fully tested, signed |
+| `stable` | Monthly | Fully tested |
 | `preview` | Weekly | Feature-complete, light testing |
 | `nightly` | Daily | Automated, may be broken |
 
