@@ -64,7 +64,8 @@ defmodule LemonCore.Config.Providers do
     "openai" => %{api_key: "OPENAI_API_KEY", base_url: "OPENAI_BASE_URL"},
     "openai-codex" => %{api_key: "OPENAI_CODEX_API_KEY", base_url: "OPENAI_BASE_URL"},
     "google_gemini_cli" => %{api_key: "GOOGLE_GEMINI_CLI_API_KEY"},
-    "opencode" => %{api_key: "OPENCODE_API_KEY", base_url: "OPENCODE_BASE_URL"}
+    "opencode" => %{api_key: "OPENCODE_API_KEY", base_url: "OPENCODE_BASE_URL"},
+    "zai" => %{api_key: "ZAI_API_KEY", base_url: "ZAI_BASE_URL"}
   }
 
   @doc """

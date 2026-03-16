@@ -20,6 +20,11 @@ api_key_secret = "kimi_api_key"
 # api_key = "sk-kimi-..."  # plaintext fallback — discouraged
 base_url = "https://api.kimi.com/coding/"
 
+[providers.zai]
+api_key_secret = "llm_zai_api_key"
+# api_key = "..."  # plaintext fallback — discouraged
+base_url = "https://api.z.ai/api/coding/paas/v4"
+
 [providers.google]
 api_key_secret = "google_api_key"
 # api_key = "..."  # plaintext fallback — discouraged

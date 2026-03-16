@@ -98,6 +98,21 @@ defmodule LemonCore.Onboarding.Providers do
       oauth_failure_label: "Google Antigravity OAuth login failed"
     },
     %Provider{
+      id: "zai",
+      display_name: "Z.AI (GLM)",
+      description: "Z.AI API key for GLM models",
+      provider_table: "providers.zai",
+      default_secret_name: "llm_zai_api_key",
+      api_key_secret_provider: "onboarding_zai",
+      auth_modes: [:api_key],
+      default_auth_mode: :api_key,
+      preferred_models: ["glm-5", "glm-5-turbo", "glm-4.7"],
+      aliases: ["glm", "zhipu", "z-ai", "z.ai"],
+      api_key_prompt: "Enter your Z.AI API key: ",
+      api_key_choice_label: "Paste API key",
+      auth_source_by_mode: %{api_key: "api_key"}
+    },
+    %Provider{
       id: "google_gemini_cli",
       display_name: "Google Gemini CLI",
       description: "Google OAuth for Gemini CLI / Code Assist",
