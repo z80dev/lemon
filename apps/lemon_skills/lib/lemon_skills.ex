@@ -60,6 +60,26 @@ defmodule LemonSkills do
   defdelegate list(opts \\ []), to: Registry
 
   @doc """
+  List all available skills grouped by category.
+
+  Returns a map where keys are category strings (from `metadata.lemon.category`)
+  and values are lists of skill entries. Skills without a category are grouped
+  under `"uncategorized"`.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  - `:refresh` - Force refresh from disk (default: false)
+
+  ## Examples
+
+      categories = LemonSkills.list_by_category()
+      Map.keys(categories)  # => ["devops", "ml-training", "uncategorized"]
+  """
+  @spec list_by_category(keyword()) :: %{String.t() => [Entry.t()]}
+  defdelegate list_by_category(opts \\ []), to: Registry
+
+  @doc """
   Get a skill by key.
 
   ## Parameters

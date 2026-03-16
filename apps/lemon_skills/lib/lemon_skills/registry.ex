@@ -72,6 +72,40 @@ defmodule LemonSkills.Registry do
   end
 
   @doc """
+  List all available skills grouped by category.
+
+  Returns a map where keys are category strings and values are lists of
+  skill entries. Skills without a `metadata.lemon.category` in their
+  manifest are grouped under `"uncategorized"`.
+
+  Categories are sorted alphabetically, and skills within each category
+  are sorted by key.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  - `:refresh` - Force refresh from disk (default: false)
+
+  ## Examples
+
+      %{
+        "devops" => [%Entry{key: "k8s-rollout", ...}],
+        "ml-training" => [%Entry{key: "axolotl", ...}],
+        "uncategorized" => [%Entry{key: "misc-skill", ...}]
+      } = LemonSkills.Registry.list_by_category()
+  """
+  @spec list_by_category(keyword()) :: %{String.t() => [Entry.t()]}
+  def list_by_category(opts \\ []) do
+    opts
+    |> list()
+    |> Enum.group_by(fn entry ->
+      (entry.manifest && Manifest.lemon_category(entry.manifest)) || "uncategorized"
+    end)
+    |> Enum.sort_by(fn {category, _} -> category end)
+    |> Map.new()
+  end
+
+  @doc """
   Find skills relevant to a given context/query.
 
   Uses simple keyword matching on key/name/description/body content.
