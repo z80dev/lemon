@@ -267,8 +267,20 @@ defmodule LemonSkills.Entry do
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  @valid_atoms ~w(
+    builtin local git registry well_known
+    official trusted community
+    pending pass warn block
+    ready missing_deps missing_config disabled error
+    global project
+  )a
+
   defp parse_atom(nil), do: nil
-  defp parse_atom(s) when is_binary(s), do: String.to_existing_atom(s)
+
+  defp parse_atom(s) when is_binary(s) do
+    Enum.find(@valid_atoms, fn a -> Atom.to_string(a) == s end)
+  end
+
   defp parse_atom(a) when is_atom(a), do: a
 
   defp parse_datetime(nil), do: nil

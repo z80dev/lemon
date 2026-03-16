@@ -149,6 +149,21 @@ defmodule LemonSkills.MigratorTest do
     assert String.length(record["content_hash"]) == 64
   end
 
+  test "returns {:error, _} when an unexpected exception occurs during migration" do
+    prev_agent_dir_env = System.get_env("LEMON_AGENT_DIR")
+    System.delete_env("LEMON_AGENT_DIR")
+    # Inject a non-binary as agent_dir so Path.join/2 raises ArgumentError
+    Application.put_env(:lemon_skills, :agent_dir, :not_a_valid_path_type)
+
+    on_exit(fn ->
+      Application.delete_env(:lemon_skills, :agent_dir)
+      if prev_agent_dir_env, do: System.put_env("LEMON_AGENT_DIR", prev_agent_dir_env)
+    end)
+
+    result = Migrator.migrate()
+    assert {:error, _} = result
+  end
+
   test "populates name from manifest frontmatter", %{skills_dir: skills_dir} do
     make_skill(skills_dir, "manifest-skill",
       content: "---\nname: Manifest Skill\ndescription: Parsed from SKILL.md\n---\nBody.\n"

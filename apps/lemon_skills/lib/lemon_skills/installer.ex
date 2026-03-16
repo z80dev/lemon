@@ -154,7 +154,13 @@ defmodule LemonSkills.Installer do
       _ = parent_dir
 
       source_kind = SourceRouter.source_kind(mod)
-      trust_level = mod.trust_level()
+
+      trust_level =
+        if function_exported?(mod, :trust_for_ref, 1) do
+          mod.trust_for_ref(id)
+        else
+          mod.trust_level()
+        end
       force = Keyword.get(opts, :force, false)
       scope = if global, do: :global, else: {:project, cwd}
 
@@ -280,8 +286,7 @@ defmodule LemonSkills.Installer do
 
       {:error, reason} ->
         Logger.warning("[Installer] could not write lockfile for '#{entry.key}': #{inspect(reason)}")
-        # Non-fatal: skill is installed even if lockfile write fails.
-        :ok
+        {:error, {:lockfile_write_failed, reason}}
     end
   end
 
@@ -331,9 +336,7 @@ defmodule LemonSkills.Installer do
 
       {:ok, upstream} ->
         # Content has drifted — do a full reinstall and record new upstream hash.
-        with {:ok, updated} <- perform_full_reinstall(entry, mod, id, cwd, opts) do
-          {:ok, %{updated | upstream_hash: upstream}}
-        end
+        perform_full_reinstall(entry, mod, id, cwd, Keyword.put(opts, :upstream_hash, upstream))
 
       {:error, :unsupported} ->
         # Source does not support remote hash — reinstall to be safe.
@@ -348,6 +351,7 @@ defmodule LemonSkills.Installer do
   defp perform_full_reinstall(entry, mod, id, cwd, opts) do
     scope = entry_scope(entry, cwd)
     global = scope == :global
+    new_upstream_hash = Keyword.get(opts, :upstream_hash)
 
     build_plan_opts =
       opts
@@ -367,6 +371,7 @@ defmodule LemonSkills.Installer do
              scope: scope
            }),
          updated_entry <- %{updated_entry | updated_at: DateTime.utc_now()},
+         updated_entry <- maybe_set_upstream_hash(updated_entry, new_upstream_hash),
          updated_entry <- audit_entry(updated_entry),
          :ok <- check_audit_verdict(updated_entry),
          :ok <- write_lockfile(scope, updated_entry),
@@ -374,6 +379,9 @@ defmodule LemonSkills.Installer do
       {:ok, updated_entry}
     end
   end
+
+  defp maybe_set_upstream_hash(entry, nil), do: entry
+  defp maybe_set_upstream_hash(entry, hash), do: %{entry | upstream_hash: hash}
 
   defp legacy_update(%Entry{source: source_url}) when is_binary(source_url) do
     install(source_url, force: true)

@@ -220,6 +220,21 @@ defmodule Mix.Tasks.Lemon.SkillTest do
     end
   end
 
+  describe "remove command - confirmation" do
+    test "answering n cancels and leaves skill and lockfile intact", %{tmp_dir: tmp_dir} do
+      skill_dir = write_skill!(tmp_dir, "remove-cancel-skill", "---\nname: Cancel\n---\nbody")
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      output =
+        capture_io("n\n", fn ->
+          Skill.run(["remove", "remove-cancel-skill", "--cwd=#{tmp_dir}"])
+        end)
+
+      assert output =~ "Cancelled."
+      assert File.dir?(skill_dir), "skill directory should still exist after cancelled remove"
+    end
+  end
+
   describe "install command" do
     test "shows usage on missing source" do
       output =

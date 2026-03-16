@@ -34,7 +34,7 @@ defmodule LemonSkills.Audit.SkillLint do
       Enum.filter(results, &(!&1.valid?))  # failures only
   """
 
-  alias LemonSkills.Manifest
+  alias LemonSkills.{Manifest, PathBoundary}
   alias LemonSkills.Audit.Engine, as: AuditEngine
 
   @type severity :: :error | :warn
@@ -161,7 +161,7 @@ defmodule LemonSkills.Audit.SkillLint do
             expanded_skill = Path.expand(skill_path)
 
             cond do
-              not (String.starts_with?(expanded, expanded_skill <> "/") or expanded == expanded_skill) ->
+              not PathBoundary.within?(expanded_skill, expanded) ->
                 [error(:reference_path_traversal, "Reference path escapes skill directory: #{rel_path}")]
 
               not File.exists?(expanded) ->

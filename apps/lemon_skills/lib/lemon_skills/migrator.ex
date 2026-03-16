@@ -72,7 +72,7 @@ defmodule LemonSkills.Migrator do
   rescue
     e ->
       Logger.warning("[Migrator] migration failed: #{Exception.message(e)}")
-      {:ok, %{classified: 0, skipped: 0}}
+      {:error, {:migration_error, Exception.message(e)}}
   end
 
   # ---------------------------------------------------------------------------

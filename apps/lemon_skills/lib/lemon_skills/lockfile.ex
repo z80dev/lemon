@@ -52,6 +52,8 @@ defmodule LemonSkills.Lockfile do
 
   @lockfile_name "skills.lock.json"
   @current_version 1
+  @lock_retries 100
+  @lock_sleep_ms 10
 
   @type scope :: :global | {:project, String.t()}
   @type record :: %{String.t() => term()}
@@ -134,9 +136,11 @@ defmodule LemonSkills.Lockfile do
   """
   @spec put(scope(), record()) :: :ok | {:error, term()}
   def put(scope, %{"key" => key} = record) when is_binary(key) do
-    with {:ok, skills} <- read(scope) do
-      write(scope, Map.put(skills, key, record))
-    end
+    with_file_lock(scope, fn ->
+      with {:ok, skills} <- read(scope) do
+        write(scope, Map.put(skills, key, record))
+      end
+    end)
   end
 
   @doc """
@@ -146,9 +150,11 @@ defmodule LemonSkills.Lockfile do
   """
   @spec delete(scope(), String.t()) :: :ok | {:error, term()}
   def delete(scope, key) when is_binary(key) do
-    with {:ok, skills} <- read(scope) do
-      write(scope, Map.delete(skills, key))
-    end
+    with_file_lock(scope, fn ->
+      with {:ok, skills} <- read(scope) do
+        write(scope, Map.delete(skills, key))
+      end
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -164,6 +170,33 @@ defmodule LemonSkills.Lockfile do
     case Jason.encode(payload, pretty: true) do
       {:ok, json} -> File.write(path, json)
       {:error, reason} -> {:error, {:json_encode, reason}}
+    end
+  end
+
+  defp with_file_lock(scope, fun) do
+    lock_path = path(scope) <> ".lock"
+    File.mkdir_p!(Path.dirname(lock_path))
+    acquire_lock(to_charlist(lock_path), fun, @lock_retries)
+  end
+
+  defp acquire_lock(_lock_path, _fun, 0), do: {:error, :lock_timeout}
+
+  defp acquire_lock(lock_path, fun, retries) do
+    case :file.open(lock_path, [:write, :exclusive]) do
+      {:ok, fd} ->
+        try do
+          fun.()
+        after
+          :file.close(fd)
+          :file.delete(lock_path)
+        end
+
+      {:error, :eexist} ->
+        Process.sleep(@lock_sleep_ms)
+        acquire_lock(lock_path, fun, retries - 1)
+
+      {:error, reason} ->
+        {:error, {:lock_failed, reason}}
     end
   end
 end

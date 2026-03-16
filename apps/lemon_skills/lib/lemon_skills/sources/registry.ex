@@ -94,6 +94,28 @@ defmodule LemonSkills.Sources.Registry do
   @impl true
   def trust_level, do: :official
 
+  @doc """
+  Derive the trust level from the namespace of a registry ref.
+
+  The `official` namespace carries `:official` trust; all other namespaces
+  default to `:community`.
+
+  ## Examples
+
+      iex> LemonSkills.Sources.Registry.trust_for_ref("official/devops/k8s-rollout")
+      :official
+
+      iex> LemonSkills.Sources.Registry.trust_for_ref("community/tools/my-skill")
+      :community
+  """
+  @spec trust_for_ref(String.t()) :: LemonSkills.Entry.trust_level()
+  def trust_for_ref(ref) when is_binary(ref) do
+    ref
+    |> String.split("/")
+    |> List.first("")
+    |> trust_for_namespace()
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------

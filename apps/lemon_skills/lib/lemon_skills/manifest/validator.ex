@@ -114,9 +114,18 @@ defmodule LemonSkills.Manifest.Validator do
 
   defp validate_string_list(manifest, key) do
     case Map.get(manifest, key) do
-      nil -> :ok
-      list when is_list(list) -> :ok
-      _ -> {:error, "#{key} must be a list"}
+      nil ->
+        :ok
+
+      list when is_list(list) ->
+        if Enum.all?(list, &is_binary/1) do
+          :ok
+        else
+          {:error, "#{key} must be a list of strings"}
+        end
+
+      _ ->
+        {:error, "#{key} must be a list"}
     end
   end
 

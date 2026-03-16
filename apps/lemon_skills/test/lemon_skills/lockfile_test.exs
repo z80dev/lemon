@@ -190,6 +190,28 @@ defmodule LemonSkills.LockfileTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Concurrent write safety
+  # ---------------------------------------------------------------------------
+
+  describe "concurrent writes" do
+    test "all records survive when multiple tasks write simultaneously", %{tmp_dir: tmp_dir} do
+      scope = {:project, Path.join(tmp_dir, "concurrent")}
+      num_writers = 10
+      keys = Enum.map(1..num_writers, fn i -> "concurrent-skill-#{i}" end)
+
+      tasks = Enum.map(keys, fn key ->
+        Task.async(fn -> Lockfile.put(scope, sample_record(key)) end)
+      end)
+
+      Enum.each(tasks, &Task.await/1)
+
+      {:ok, skills} = Lockfile.read(scope)
+      missing = Enum.reject(keys, &Map.has_key?(skills, &1))
+      assert missing == [], "missing records after concurrent writes: #{inspect(missing)}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Scope isolation
   # ---------------------------------------------------------------------------
 

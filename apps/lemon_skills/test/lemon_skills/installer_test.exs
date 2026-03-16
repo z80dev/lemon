@@ -117,6 +117,43 @@ defmodule LemonSkills.InstallerTest do
       assert {:error, reason} = result
       assert reason =~ "not found"
     end
+
+    test "persists new upstream_hash to lockfile after drift is detected", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+      skill_name = "test-skill"
+      dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
+      File.mkdir_p!(dest_dir)
+      File.cp!(Path.join(skill_dir, "SKILL.md"), Path.join(dest_dir, "SKILL.md"))
+
+      {:ok, expected_hash} = LemonSkills.Sources.Local.upstream_hash(skill_dir, [])
+
+      entry =
+        LemonSkills.Entry.new(dest_dir,
+          source: :project,
+          source_id: skill_dir,
+          source_kind: :local,
+          trust_level: :trusted,
+          audit_status: :pass,
+          upstream_hash: "stale-hash-that-does-not-match"
+        )
+
+      scope = {:project, tmp_dir}
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon"]))
+      :ok = LemonSkills.Lockfile.put(scope, LemonSkills.Entry.to_lockfile_record(entry))
+      :ok = LemonSkills.Registry.register(entry)
+
+      result = Installer.update(skill_name, cwd: tmp_dir, approve: true)
+
+      assert {:ok, updated_entry} = result
+
+      assert updated_entry.upstream_hash == expected_hash,
+             "returned entry has upstream_hash #{inspect(updated_entry.upstream_hash)}, want #{inspect(expected_hash)}"
+
+      {:ok, skills} = LemonSkills.Lockfile.read(scope)
+      lockfile_hash = skills[skill_name]["upstream_hash"]
+
+      assert lockfile_hash == expected_hash,
+             "lockfile has upstream_hash #{inspect(lockfile_hash)}, want #{inspect(expected_hash)}"
+    end
   end
 
   describe "uninstall/2" do
@@ -124,6 +161,23 @@ defmodule LemonSkills.InstallerTest do
       result = Installer.uninstall("non-existent-skill", approve: true)
       assert {:error, reason} = result
       assert reason =~ "not found"
+    end
+  end
+
+  describe "lockfile write failure" do
+    test "propagates lockfile write failure as {:error, _}", %{skill_dir: skill_dir, tmp_dir: tmp_dir} do
+      lemon_dir = Path.join([tmp_dir, ".lemon"])
+      File.mkdir_p!(Path.join(lemon_dir, "skill"))
+      lockfile_path = Path.join(lemon_dir, "skills.lock.json")
+      # Pre-create read-only lockfile so writes fail
+      File.write!(lockfile_path, ~s({"version": 1, "skills": {}}))
+      File.chmod!(lockfile_path, 0o444)
+
+      on_exit(fn -> File.chmod(lockfile_path, 0o644) end)
+
+      result = Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
+
+      assert {:error, _} = result
     end
   end
 

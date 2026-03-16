@@ -339,26 +339,28 @@ defmodule Mix.Tasks.Lemon.Skill do
     cwd = get_cwd(opts)
     force = "--force" in opts
 
-    # Confirm removal unless --force
-    unless force do
-      Mix.shell().info("This will remove the skill '#{key}'.")
-      answer = Mix.shell().prompt("Are you sure? [y/N] ")
-
-      unless String.downcase(String.trim(answer)) == "y" do
-        Mix.shell().info("Cancelled.")
-        :ok
+    confirmed =
+      if force do
+        true
+      else
+        Mix.shell().info("This will remove the skill '#{key}'.")
+        answer = Mix.shell().prompt("Are you sure? [y/N] ")
+        String.downcase(String.trim(answer)) == "y"
       end
-    end
 
-    Mix.shell().info("Removing skill '#{key}'...")
+    unless confirmed do
+      Mix.shell().info("Cancelled.")
+    else
+      Mix.shell().info("Removing skill '#{key}'...")
 
-    case Installer.uninstall(key, cwd: cwd) do
-      :ok ->
-        Mix.shell().info([:green, "✓", :reset, " Successfully removed '#{key}'"])
+      case Installer.uninstall(key, cwd: cwd) do
+        :ok ->
+          Mix.shell().info([:green, "✓", :reset, " Successfully removed '#{key}'"])
 
-      {:error, reason} ->
-        Mix.shell().error([:red, "✗", :reset, " Removal failed: #{inspect(reason)}"])
-        Mix.raise("Skill removal failed")
+        {:error, reason} ->
+          Mix.shell().error([:red, "✗", :reset, " Removal failed: #{inspect(reason)}"])
+          Mix.raise("Skill removal failed")
+      end
     end
 
     :ok

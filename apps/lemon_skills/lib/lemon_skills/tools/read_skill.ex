@@ -24,7 +24,7 @@ defmodule LemonSkills.Tools.ReadSkill do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonSkills.{Registry, Entry, Manifest, SkillView}
+  alias LemonSkills.{Registry, Entry, Manifest, PathBoundary, SkillView}
 
   @doc """
   Returns the ReadSkill tool definition.
@@ -320,7 +320,7 @@ defmodule LemonSkills.Tools.ReadSkill do
     expanded = Path.expand(full_path)
     expanded_skill = Path.expand(skill_path)
 
-    if String.starts_with?(expanded, expanded_skill <> "/") or expanded == expanded_skill do
+    if PathBoundary.within?(expanded_skill, expanded) do
       case File.read(expanded) do
         {:ok, content} -> content
         {:error, reason} -> "Could not read '#{rel_path}': #{:file.format_error(reason)}"
