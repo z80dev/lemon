@@ -69,6 +69,18 @@ defmodule Ai.Models.ZAI do
       context_window: 256_000,
       max_tokens: 16384
     },
+    "glm-5-turbo" => %Model{
+      id: "glm-5-turbo",
+      name: "GLM-5-Turbo",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/coding/paas/v4",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 1.2, output: 4.0, cache_read: 0.24, cache_write: 0.0},
+      context_window: 200_000,
+      max_tokens: 131_072
+    },
     "glm-4.5v" => %Model{
       id: "glm-4.5v",
       name: "GLM-4.5V",
