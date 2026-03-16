@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve lemon root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export LEMON_PATH="$LEMON_ROOT"
+
+CLI_DIR="$LEMON_ROOT/clients/lemon-cli"
+
+# Check if control plane is running (for auto-WS mode)
+WS_URL="${LEMON_WS_URL:-}"
+if [ -z "$WS_URL" ]; then
+    if curl -sf http://localhost:4040/health > /dev/null 2>&1; then
+        export LEMON_WS_URL="ws://localhost:4040/ws"
+    fi
+fi
+
+# Ensure uv is available
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv is required. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+
+# Run the CLI
+cd "$CLI_DIR"
+exec uv run lemon-cli "$@"
