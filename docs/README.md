@@ -38,6 +38,7 @@
 ## Product and Capability Docs
 
 - [`docs/skills.md`](skills.md)
+- [`docs/testing/missing-tests-plan.md`](testing/missing-tests-plan.md) - Ranked backlog of the highest-impact missing automated tests across the umbrella apps
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/games-platform.md`](games-platform.md) - Agent-vs-Agent game platform (REST API + LiveView spectator)
 - [`docs/benchmarks.md`](benchmarks.md)

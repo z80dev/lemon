@@ -156,6 +156,12 @@
     max_age_days: 45
   },
   %{
+    path: "docs/testing/missing-tests-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-16],
+    max_age_days: 45
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-08],
