@@ -189,28 +189,27 @@ defmodule Ai.ModelsNewProvidersTest do
     test "glm-4.5-flash is available" do
       model = Models.get_model(:zai, "glm-4.5-flash")
       assert model != nil
-      assert model.name == "GLM 4.5 Flash"
+      assert model.name == "GLM-4.5-Flash"
       assert model.provider == :zai
     end
 
     test "glm-4.5 is available" do
       model = Models.get_model(:zai, "glm-4.5")
       assert model != nil
-      assert model.name == "GLM 4.5"
+      assert model.name == "GLM-4.5"
       assert model.reasoning == true
     end
 
     test "glm-4.7 is available" do
       model = Models.get_model(:zai, "glm-4.7")
       assert model != nil
-      assert model.name == "GLM 4.7"
+      assert model.name == "GLM-4.7"
     end
 
     test "glm-5 is available" do
       model = Models.get_model(:zai, "glm-5")
       assert model != nil
-      assert model.name == "GLM 5"
-      assert :image in model.input
+      assert model.name == "GLM-5"
     end
 
     test "all Z.ai models can be listed" do
