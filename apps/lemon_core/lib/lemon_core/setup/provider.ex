@@ -48,18 +48,30 @@ defmodule LemonCore.Setup.Provider do
   end
 
   defp maybe_bootstrap_config(io) do
-    unless Scaffold.global_config_exists?() do
-      case Scaffold.bootstrap_global() do
+    if Scaffold.global_config_exists?() do
+      :ok
+    else
+      result =
+        try do
+          Scaffold.bootstrap_global()
+        rescue
+          e -> {:error, Exception.message(e)}
+        end
+
+      case result do
         {:ok, path} ->
           io.info.("Created minimal config: #{path}")
           io.info.("Edit it to add your preferred defaults, then re-run this command.")
           io.info.("")
+          :ok
+
+        {:exists, _path} ->
+          :ok
 
         {:error, reason} ->
           io.error.("Failed to create config scaffold: #{inspect(reason)}")
+          {:error, {:scaffold_failed, reason}}
       end
     end
-
-    :ok
   end
 end

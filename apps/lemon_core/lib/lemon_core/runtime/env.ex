@@ -122,6 +122,28 @@ defmodule LemonCore.Runtime.Env do
       "lemon_gateway_dev_cookie"
   end
 
+  @dev_cookie "lemon_gateway_dev_cookie"
+
+  @doc """
+  Validates that a production-grade cookie has been configured.
+
+  Raises `RuntimeError` if the cookie is the hardcoded dev default.  Call this
+  from the boot sequence when running in a production context (e.g. when
+  `RELEASE_NODE` is set or `MIX_ENV=prod`).
+  """
+  @spec require_prod_cookie!() :: :ok
+  def require_prod_cookie! do
+    if node_cookie() == @dev_cookie do
+      raise RuntimeError,
+        message:
+          "Production boot requires an explicit Erlang distribution cookie. " <>
+            "Set LEMON_GATEWAY_NODE_COOKIE or LEMON_GATEWAY_COOKIE to a " <>
+            "strong random secret (not the default dev cookie)."
+    end
+
+    :ok
+  end
+
   @doc """
   Applies resolved port values to the OTP application environment so running
   apps pick up the right port without restarts.
@@ -162,11 +184,13 @@ defmodule LemonCore.Runtime.Env do
 
   defp apply_web_port(port) do
     existing = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
+    existing_http = Keyword.get(existing, :http, [])
+    merged_http = Keyword.merge(existing_http, ip: {127, 0, 0, 1}, port: port)
 
     Application.put_env(
       :lemon_web,
       LemonWeb.Endpoint,
-      Keyword.merge(existing, http: [ip: {127, 0, 0, 1}, port: port])
+      Keyword.put(existing, :http, merged_http)
     )
   end
 

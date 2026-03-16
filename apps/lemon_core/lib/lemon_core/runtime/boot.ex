@@ -9,11 +9,11 @@ defmodule LemonCore.Runtime.Boot do
   ## Boot sequence
 
   1. Load `.env` from `dotenv_dir` (if present).
-  2. Apply port values from the resolved `Env` struct to the OTP application
+  2. Reject dev Erlang distribution cookie in production releases.
+  3. Check that the `product_runtime` feature flag permits boot.
+  4. Apply port values from the resolved `Env` struct to the OTP application
      environment.
-  3. Check that the `product_runtime` feature flag permits boot (gated in M1).
-  4. Start each application in the requested `Profile` in order.
-  5. Log any failures and halt with exit code 1.
+  5. Start each application in the requested `Profile` in order.
 
   ## Usage (from a mix eval or release boot)
 
@@ -26,6 +26,7 @@ defmodule LemonCore.Runtime.Boot do
 
   require Logger
 
+  alias LemonCore.Config.{Features, Modular}
   alias LemonCore.Runtime.{Env, Health, Profile}
 
   @doc """
@@ -38,7 +39,7 @@ defmodule LemonCore.Runtime.Boot do
     * `:check_running` - when `true` (default), abort if a runtime is already
       running on the control-plane port.
   """
-  @spec start(atom(), keyword()) :: :ok
+  @spec start(atom(), keyword()) :: :ok | {:error, {atom(), term()}}
   def start(profile_name \\ :runtime_full, opts \\ []) do
     env = Keyword.get(opts, :env, Env.resolve())
     dotenv_dir = Keyword.get(opts, :dotenv_dir, env.dotenv_dir)
@@ -49,22 +50,30 @@ defmodule LemonCore.Runtime.Boot do
       LemonCore.Dotenv.load_and_log(dotenv_dir)
     end
 
-    # 2. Apply ports to OTP application env
-    Env.apply_ports(env)
+    # 2. Reject dev cookie in production releases
+    if System.get_env("RELEASE_NODE") do
+      Env.require_prod_cookie!()
+    end
 
-    # 3. Guard: already running?
-    if check_running? and Health.running?(env.control_port) do
-      Logger.warning(
-        "[boot] Control plane already healthy on :#{env.control_port}. " <>
-          "Another runtime may already be running — leaving existing runtime in place."
-      )
+    # 3. Check product_runtime feature gate
+    with :ok <- check_product_runtime_gate() do
+      # 4. Apply ports to OTP application env
+      Env.apply_ports(env)
 
-      :ok
-    else
-      # 4. Start all apps in the profile
-      profile = Profile.get(profile_name)
-      Logger.info("[boot] Starting profile :#{profile_name} (#{length(profile.apps)} apps)")
-      start_apps(profile.apps)
+      # 5. Guard: already running?
+      if check_running? and Health.running?(env.control_port) do
+        Logger.warning(
+          "[boot] Control plane already healthy on :#{env.control_port}. " <>
+            "Another runtime may already be running — leaving existing runtime in place."
+        )
+
+        :ok
+      else
+        # 6. Start all apps in the profile
+        profile = Profile.get(profile_name)
+        Logger.info("[boot] Starting profile :#{profile_name} (#{length(profile.apps)} apps)")
+        start_apps(profile.apps)
+      end
     end
   end
 
@@ -81,15 +90,26 @@ defmodule LemonCore.Runtime.Boot do
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
 
+  defp check_product_runtime_gate do
+    features = Modular.load().features
+
+    if features.product_runtime == :off do
+      {:error, {:feature_disabled, :product_runtime}}
+    else
+      :ok
+    end
+  end
+
   defp start_apps(apps) do
-    Enum.each(apps, fn app ->
+    Enum.reduce_while(apps, :ok, fn app, :ok ->
       case Application.ensure_all_started(app) do
         {:ok, _started} ->
           Logger.info("[boot] Started :#{app}")
+          {:cont, :ok}
 
         {:error, reason} ->
           Logger.error("[boot] Failed to start :#{app}: #{inspect(reason)}")
-          System.halt(1)
+          {:halt, {:error, {app, reason}}}
       end
     end)
   end

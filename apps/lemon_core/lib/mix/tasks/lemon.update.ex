@@ -178,9 +178,7 @@ defmodule Mix.Tasks.Lemon.Update do
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp start_apps!(opts) do
-    check_only? = opts[:check] || false
-
+  defp start_apps!(_opts) do
     Mix.Task.run("loadpaths")
 
     case Application.ensure_all_started(:lemon_core) do
@@ -188,9 +186,7 @@ defmodule Mix.Tasks.Lemon.Update do
         :ok
 
       {:error, {app, reason}} ->
-        unless check_only? do
-          Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-        end
+        Mix.raise("Failed to start #{app}: #{inspect(reason)}")
     end
   end
 end

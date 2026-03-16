@@ -451,6 +451,9 @@ defmodule LemonCore.Config.ValidatorTest do
       errors = Validator.validate_queue_config([], %{mode: "priority"})
       assert errors == []
 
+      errors = Validator.validate_queue_config([], %{mode: "collect"})
+      assert errors == []
+
       errors = Validator.validate_queue_config([], %{mode: "invalid"})
       assert Enum.any?(errors, &String.contains?(&1, "mode"))
     end
@@ -482,6 +485,13 @@ defmodule LemonCore.Config.ValidatorTest do
 
     test "accepts nil queue config" do
       errors = Validator.validate_queue_config([], nil)
+      assert errors == []
+    end
+
+    test "example config queue section passes validation" do
+      # Regression: config.example.toml uses mode = "collect" which was previously rejected
+      example_queue = %{mode: "collect", cap: 50, drop: "oldest"}
+      errors = Validator.validate_queue_config([], example_queue)
       assert errors == []
     end
   end

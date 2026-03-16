@@ -128,6 +128,7 @@ defmodule LemonCore.Update.ConfigMigrator do
     |> migrate_agents_section()
     |> migrate_tools_section()
     |> migrate_agent_tools_section()
+    |> migrate_agent_section()
   end
 
   # Renames [agents.x] → [profiles.x]
@@ -143,5 +144,79 @@ defmodule LemonCore.Update.ConfigMigrator do
   # Renames [agent.tools.x] → [runtime.tools.x]
   defp migrate_agent_tools_section(content) do
     String.replace(content, ~r/^\[agent\.tools\b/m, "[runtime.tools")
+  end
+
+  # Rewrites the standalone [agent] section:
+  #   - Fields provider/model/thinking_level move to [defaults]
+  #   - All other fields move to [runtime]
+  #   - The [agent] header itself is removed
+  #
+  # We do a line-by-line scan so we can route each key to the right section
+  # without relying on a full TOML parser (preserving comments and order).
+  defp migrate_agent_section(content) do
+    lines = String.split(content, "\n")
+    {result, pending_defaults, pending_runtime, _in_agent} =
+      Enum.reduce(lines, {[], [], [], false}, fn line, {acc, defaults, runtime, in_agent} ->
+        trimmed = String.trim(line)
+
+        cond do
+          # Start of [agent] section (not [agent.something])
+          Regex.match?(~r/^\[agent\]/, trimmed) ->
+            {acc, defaults, runtime, true}
+
+          # Start of another top-level section — flush buffered agent keys
+          in_agent and Regex.match?(~r/^\[/, trimmed) ->
+            flushed = flush_agent_keys(acc, defaults, runtime)
+            {flushed ++ [line], [], [], false}
+
+          # Inside [agent]: route keys to their new homes
+          in_agent ->
+            cond do
+              Regex.match?(~r/^(provider|model|thinking_level)\s*=/, trimmed) ->
+                {acc, defaults ++ [line], runtime, true}
+
+              # Comment or blank line inside [agent] — keep with runtime keys
+              trimmed == "" or String.starts_with?(trimmed, "#") ->
+                {acc, defaults, runtime ++ [line], true}
+
+              true ->
+                {acc, defaults, runtime ++ [line], true}
+            end
+
+          true ->
+            {acc ++ [line], defaults, runtime, false}
+        end
+      end)
+
+    # Flush any remaining buffered agent keys at EOF
+    final = flush_agent_keys(result, pending_defaults, pending_runtime)
+    Enum.join(final, "\n")
+  end
+
+  defp flush_agent_keys(acc, [], []), do: acc
+
+  defp flush_agent_keys(acc, defaults, runtime) do
+    defaults_block =
+      if defaults != [] do
+        ["", "[defaults]"] ++ defaults
+      else
+        []
+      end
+
+    runtime_block =
+      if runtime != [] do
+        # Filter out blank-only lines to avoid empty [runtime] sections
+        non_blank = Enum.reject(runtime, &(String.trim(&1) == ""))
+
+        if non_blank != [] do
+          ["", "[runtime]"] ++ runtime
+        else
+          []
+        end
+      else
+        []
+      end
+
+    acc ++ defaults_block ++ runtime_block
   end
 end

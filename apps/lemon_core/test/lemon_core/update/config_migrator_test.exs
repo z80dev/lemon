@@ -99,5 +99,43 @@ defmodule LemonCore.Update.ConfigMigratorTest do
         File.rm_rf(ConfigMigrator.backup_path(path))
       end
     end
+
+    test "migrates [agent] section: provider/model/thinking_level to [defaults], rest to [runtime]" do
+      content = """
+      [agent]
+      provider = "anthropic"
+      model = "claude-opus"
+      thinking_level = "high"
+      max_tokens = 4096
+      timeout = 30
+      """
+
+      path = tmp_config(content)
+
+      try do
+        assert :ok = ConfigMigrator.migrate!(path)
+        migrated = File.read!(path)
+
+        # [agent] header must be gone
+        refute String.contains?(migrated, "[agent]")
+
+        # defaults-bound keys must appear under [defaults]
+        assert String.contains?(migrated, "[defaults]")
+        assert String.contains?(migrated, "provider = \"anthropic\"")
+        assert String.contains?(migrated, "model = \"claude-opus\"")
+        assert String.contains?(migrated, "thinking_level = \"high\"")
+
+        # runtime-bound keys must appear under [runtime]
+        assert String.contains?(migrated, "[runtime]")
+        assert String.contains?(migrated, "max_tokens = 4096")
+        assert String.contains?(migrated, "timeout = 30")
+
+        # No deprecated sections remain
+        assert :ok = ConfigMigrator.check(path)
+      after
+        File.rm_rf(path)
+        File.rm_rf(ConfigMigrator.backup_path(path))
+      end
+    end
   end
 end

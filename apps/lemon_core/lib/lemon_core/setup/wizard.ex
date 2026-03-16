@@ -231,10 +231,12 @@ defmodule LemonCore.Setup.Wizard do
         end
 
       profile_str ->
-        atom = String.to_atom(profile_str)
+        # Validate as string first to avoid creating atoms for arbitrary user input.
+        # Only convert to atom after confirming the name is a known profile.
+        valid_strings = Enum.map(profile_names, &Atom.to_string/1)
 
-        if atom in profile_names do
-          atom
+        if profile_str in valid_strings do
+          String.to_existing_atom(profile_str)
         else
           io.error.("Unknown profile #{inspect(profile_str)}, using #{default}.")
           default

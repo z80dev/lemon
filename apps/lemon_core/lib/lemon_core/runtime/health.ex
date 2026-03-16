@@ -124,14 +124,25 @@ defmodule LemonCore.Runtime.Health do
     host = ~c"127.0.0.1"
     request = "GET #{path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"
 
-    with {:ok, socket} <-
-           :gen_tcp.connect(host, port, [:binary, active: false], timeout_ms),
-         :ok <- :gen_tcp.send(socket, request),
-         {:ok, response} <- recv_response(socket, timeout_ms) do
-      :gen_tcp.close(socket)
-      parse_status(response)
-    else
-      _ -> {:error, :unreachable}
+    case :gen_tcp.connect(host, port, [:binary, active: false], timeout_ms) do
+      {:ok, socket} ->
+        result =
+          try do
+            with :ok <- :gen_tcp.send(socket, request),
+                 {:ok, response} <- recv_response(socket, timeout_ms) do
+              parse_status(response)
+            else
+              _ -> {:error, :unreachable}
+            end
+          rescue
+            _ -> {:error, :unreachable}
+          end
+
+        :gen_tcp.close(socket)
+        result
+
+      _ ->
+        {:error, :unreachable}
     end
   end
 

@@ -1,5 +1,6 @@
 defmodule LemonCore.Runtime.EnvTest do
-  use ExUnit.Case, async: true
+  # async: false — tests call System.put_env/delete_env which mutates shared process state
+  use ExUnit.Case, async: false
 
   alias LemonCore.Runtime.Env
 
@@ -85,6 +86,52 @@ defmodule LemonCore.Runtime.EnvTest do
       assert Env.node_cookie() == "mysecret"
     after
       System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
+    end
+  end
+
+  describe "require_prod_cookie!/0" do
+    test "raises when no cookie env var is set (dev default would be used)" do
+      clear_env(["LEMON_GATEWAY_NODE_COOKIE", "LEMON_GATEWAY_COOKIE"])
+
+      assert_raise RuntimeError, ~r/production.*cookie/i, fn ->
+        Env.require_prod_cookie!()
+      end
+    end
+
+    test "succeeds when a non-default cookie is configured" do
+      System.put_env("LEMON_GATEWAY_NODE_COOKIE", "my-strong-secret-cookie")
+
+      assert :ok = Env.require_prod_cookie!()
+    after
+      System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
+    end
+  end
+
+  describe "apply_ports/1" do
+    test "apply_web_port preserves existing :http options beyond ip and port" do
+      # Set up a pre-existing :http config with extra transport options
+      Application.put_env(:lemon_web, LemonWeb.Endpoint,
+        http: [transport_options: [num_acceptors: 10], keyfile: "priv/cert/key.pem"]
+      )
+
+      env = %Env{
+        control_port: 4040,
+        web_port: 9090,
+        sim_port: 4090
+      }
+
+      Env.apply_ports(env)
+
+      result = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
+      http = Keyword.get(result, :http, [])
+
+      assert http[:port] == 9090
+      assert http[:ip] == {127, 0, 0, 1}
+      # Extra options must survive the port apply
+      assert http[:transport_options] == [num_acceptors: 10]
+      assert http[:keyfile] == "priv/cert/key.pem"
+    after
+      Application.delete_env(:lemon_web, LemonWeb.Endpoint)
     end
   end
 

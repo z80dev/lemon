@@ -693,7 +693,7 @@ defmodule LemonCore.Config.Validator do
   defp validate_queue_mode(errors, nil), do: errors
 
   defp validate_queue_mode(errors, mode) when is_binary(mode) do
-    valid_modes = ["fifo", "lifo", "priority"]
+    valid_modes = ["fifo", "lifo", "priority", "collect"]
 
     if mode in valid_modes do
       errors

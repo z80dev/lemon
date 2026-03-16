@@ -86,6 +86,17 @@ defmodule LemonCore.RolloutGate do
   @synthesis_min_generation_rate 0.60
   @synthesis_max_fp_rate 0.10
 
+  # ── Store-based (aggregated) thresholds — used by evaluate_routing_from_store/2
+  # and evaluate_synthesis_from_run/1.  These functions accept the raw output of
+  # RoutingFeedbackStore / Synthesis.Pipeline rather than pre-computed deltas.
+  @store_routing_min_sample_size 20
+  @store_routing_min_success_rate 0.60
+  @store_routing_max_failure_rate 0.20
+
+  @store_synthesis_min_candidates 5
+  @store_synthesis_max_block_rate 0.50
+  @store_synthesis_min_gen_rate 0.20
+
   # ── Types ──────────────────────────────────────────────────────────────────
 
   @type routing_metrics :: %{
@@ -257,6 +268,112 @@ defmodule LemonCore.RolloutGate do
     result(reasons, computed)
   end
 
+  # ── Store-based evaluation (aggregated input format) ───────────────────────
+
+  @doc """
+  Evaluate the `:routing_feedback` gate from raw store data.
+
+  Unlike `evaluate_routing_feedback/1`, this variant accepts the output of
+  `RoutingFeedbackStore.store_stats/0` and `RoutingFeedbackStore.list_fingerprints/0`
+  directly, using absolute success/failure rate thresholds instead of deltas.
+
+  Returns `{:pass, notes}` or `{:fail, failures}`.
+  """
+  @spec evaluate_routing_from_store(map(), [map()]) ::
+          {:pass, [String.t()]} | {:fail, [String.t()]}
+  def evaluate_routing_from_store(store_stats, fingerprints)
+      when is_map(store_stats) and is_list(fingerprints) do
+    total = Map.get(store_stats, :total_records, 0)
+    {agg_total, agg_success, agg_failure} = aggregate_fingerprints(fingerprints)
+
+    failures =
+      []
+      |> check_store(
+        total >= @store_routing_min_sample_size,
+        "sample_size: #{total} < #{@store_routing_min_sample_size} (need more recorded runs)"
+      )
+
+    failures =
+      if agg_total > 0 do
+        success_rate = agg_success / agg_total
+        failure_rate = agg_failure / agg_total
+
+        failures
+        |> check_store(
+          success_rate >= @store_routing_min_success_rate,
+          "success_rate: #{Float.round(success_rate, 3)} < #{@store_routing_min_success_rate}"
+        )
+        |> check_store(
+          failure_rate <= @store_routing_max_failure_rate,
+          "failure_rate: #{Float.round(failure_rate, 3)} > #{@store_routing_max_failure_rate}"
+        )
+      else
+        failures
+      end
+
+    case failures do
+      [] ->
+        {:pass,
+         [
+           "sample_size: #{total} >= #{@store_routing_min_sample_size}",
+           "unique_fingerprints: #{Map.get(store_stats, :unique_fingerprints, 0)}"
+         ]}
+
+      _ ->
+        {:fail, Enum.reverse(failures)}
+    end
+  end
+
+  @doc """
+  Evaluate the `:skill_synthesis_drafts` gate from a pipeline run result.
+
+  Unlike `evaluate_synthesis/1`, this variant accepts the structured output of
+  `LemonSkills.Synthesis.Pipeline.run/3` (with `generated` as a list of keys and
+  `skipped` as a list of `{key, reason}` tuples) rather than pre-counted integers.
+
+  Returns `{:pass, notes}` or `{:fail, failures}`.
+  """
+  @spec evaluate_synthesis_from_run(map()) :: {:pass, [String.t()]} | {:fail, [String.t()]}
+  def evaluate_synthesis_from_run(%{total_candidates: total} = run_result)
+      when is_integer(total) do
+    generated = length(Map.get(run_result, :generated, []))
+    skipped = Map.get(run_result, :skipped, [])
+    blocked = Enum.count(skipped, fn {_key, reason} -> reason == :blocked_by_audit end)
+
+    gen_rate = if total > 0, do: generated / total, else: 0.0
+    block_rate = if total > 0, do: blocked / total, else: 0.0
+
+    failures =
+      []
+      |> check_store(
+        total >= @store_synthesis_min_candidates,
+        "candidates_processed: #{total} < #{@store_synthesis_min_candidates}"
+      )
+      |> check_store(
+        block_rate <= @store_synthesis_max_block_rate,
+        "draft_block_rate: #{Float.round(block_rate, 3)} > #{@store_synthesis_max_block_rate} (too many candidates blocked by audit)"
+      )
+      |> check_store(
+        gen_rate >= @store_synthesis_min_gen_rate,
+        "generated_rate: #{Float.round(gen_rate, 3)} < #{@store_synthesis_min_gen_rate} (too few candidates produce stored drafts)"
+      )
+
+    case failures do
+      [] ->
+        {:pass,
+         [
+           "total_candidates: #{total}",
+           "generated: #{generated}",
+           "generated_rate: #{Float.round(gen_rate, 3)}"
+         ]}
+
+      _ ->
+        {:fail, Enum.reverse(failures)}
+    end
+  end
+
+  def evaluate_synthesis_from_run(_), do: {:fail, ["invalid_run_result: missing total_candidates"]}
+
   # ── Private ────────────────────────────────────────────────────────────────
 
   defp check(reasons, true, _message), do: reasons
@@ -264,4 +381,17 @@ defmodule LemonCore.RolloutGate do
 
   defp result([], computed), do: {:ready, computed}
   defp result(reasons, computed), do: {:not_ready, reasons, computed}
+
+  # Store-based check uses prepend (reversed at the end) to match RolloutGates behaviour.
+  defp check_store(failures, true, _message), do: failures
+  defp check_store(failures, false, message), do: [message | failures]
+
+  defp aggregate_fingerprints(fingerprints) do
+    Enum.reduce(fingerprints, {0, 0, 0}, fn fp, {total, success, failure} ->
+      fp_total = Map.get(fp, :total, 0)
+      fp_success = Map.get(fp, :success_count, 0)
+      fp_failure = fp_total - fp_success
+      {total + fp_total, success + fp_success, failure + fp_failure}
+    end)
+  end
 end
