@@ -832,13 +832,19 @@ defmodule DebugAgentRPC do
     end
   end
 
-  defp get_model(provider, model_id) do
+  defp get_model(provider, model_id) when is_atom(provider) do
+    get_model(Atom.to_string(provider), model_id)
+  end
+
+  defp get_model(provider, model_id) when is_binary(provider) do
     provider_atom =
       try do
         String.to_existing_atom(provider)
       rescue
         ArgumentError -> String.to_atom(provider)
       end
+
+    model_id = if is_atom(model_id), do: Atom.to_string(model_id), else: model_id
 
     case Ai.Models.get_model(provider_atom, model_id) do
       nil -> raise "Unknown model #{inspect(model_id)} for provider #{inspect(provider)}"
