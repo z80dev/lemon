@@ -868,7 +868,7 @@ defmodule LemonRouter.StreamCoalescerTest do
   end
 
   describe "commit_turn/3" do
-    test "resets state and clears PresentationState so next delta creates new message" do
+    test "resets state and defers PresentationState clear until next delta" do
       session_key = "agent:test:telegram:bot:dm:54321"
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer([:positive])}"
@@ -887,10 +887,6 @@ defmodule LemonRouter.StreamCoalescerTest do
       # Commit the turn
       assert :ok = StreamCoalescer.commit_turn(session_key, channel_id, run_id)
 
-      # PresentationState should be cleared for the :answer surface
-      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
-      assert is_nil(entry.platform_message_id)
-
       # Internal state should be reset
       [{pid, _}] =
         Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
@@ -899,6 +895,19 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert state.full_text == ""
       assert state.buffer == ""
       assert state.last_sent_text == nil
+      assert state.pending_clear == true
+
+      # PresentationState is NOT cleared yet (deferred to avoid race with outbox)
+      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      assert entry.platform_message_id == 101
+
+      # Next delta triggers the deferred clear
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, "Second answer")
+      Process.sleep(50)
+
+      # Now PresentationState should be cleared
+      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      assert is_nil(entry.platform_message_id)
     end
 
     test "deltas after commit create a new message with fresh text" do

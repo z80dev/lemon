@@ -8,10 +8,6 @@ defmodule LemonCore.Config.Features do
   ## Configuration
 
       [features]
-      product_runtime            = "off"        # "off" | "opt-in" | "default-on"
-      skills_hub_v2              = "off"
-      skill_manifest_v2          = "off"
-      progressive_skill_loading_v2 = "off"
       session_search             = "off"
       routing_feedback           = "opt-in"     # enable with "default-on" once gate passes
       skill_synthesis_drafts     = "opt-in"     # enable with "default-on" once gate passes
@@ -56,7 +52,7 @@ defmodule LemonCore.Config.Features do
   For example:
 
       LEMON_FEATURE_SESSION_SEARCH=opt-in
-      LEMON_FEATURE_PRODUCT_RUNTIME=default-on
+      LEMON_FEATURE_ROUTING_FEEDBACK=default-on
 
   ## Kill-switch behaviour
 
@@ -71,30 +67,18 @@ defmodule LemonCore.Config.Features do
   @valid_states ~w[off opt-in default-on on]
 
   @flags ~w[
-    product_runtime
-    skills_hub_v2
-    skill_manifest_v2
-    progressive_skill_loading_v2
     session_search
     routing_feedback
     skill_synthesis_drafts
   ]
 
-  defstruct product_runtime: :off,
-            skills_hub_v2: :off,
-            skill_manifest_v2: :off,
-            progressive_skill_loading_v2: :off,
-            session_search: :off,
+  defstruct session_search: :off,
             routing_feedback: :"opt-in",
             skill_synthesis_drafts: :"opt-in"
 
   @type rollout_state :: :off | :"opt-in" | :"default-on"
 
   @type t :: %__MODULE__{
-          product_runtime: rollout_state(),
-          skills_hub_v2: rollout_state(),
-          skill_manifest_v2: rollout_state(),
-          progressive_skill_loading_v2: rollout_state(),
           session_search: rollout_state(),
           routing_feedback: rollout_state(),
           skill_synthesis_drafts: rollout_state()
@@ -110,10 +94,6 @@ defmodule LemonCore.Config.Features do
     features = ensure_map(settings["features"])
 
     %__MODULE__{
-      product_runtime: resolve_flag("product_runtime", features),
-      skills_hub_v2: resolve_flag("skills_hub_v2", features),
-      skill_manifest_v2: resolve_flag("skill_manifest_v2", features),
-      progressive_skill_loading_v2: resolve_flag("progressive_skill_loading_v2", features),
       session_search: resolve_flag("session_search", features),
       routing_feedback: resolve_flag("routing_feedback", features),
       skill_synthesis_drafts: resolve_flag("skill_synthesis_drafts", features)

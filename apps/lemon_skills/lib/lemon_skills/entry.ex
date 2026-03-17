@@ -152,7 +152,7 @@ defmodule LemonSkills.Entry do
   def from_manifest(manifest, url, opts \\ []) when is_map(manifest) do
     key =
       Map.get(manifest, "key") ||
-        (manifest |> Map.get("name", "discovered") |> String.downcase() |> String.replace(" ", "-"))
+        manifest |> Map.get("name", "discovered") |> String.downcase() |> String.replace(" ", "-")
 
     source = Keyword.get(opts, :source, :discovered)
     metadata = Keyword.get(opts, :metadata, %{})

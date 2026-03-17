@@ -532,8 +532,19 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     %{state | accumulated_text: state.accumulated_text <> delta}
   end
 
+  defp translate_and_emit({:message_update, _msg, event}, state) when is_tuple(event) do
+    # Extract text from AI stream event tuples (e.g. {:text_delta, idx, text, partial})
+    case extract_delta_text(event) do
+      text when is_binary(text) and text != "" ->
+        state = emit_delta(state, text)
+        %{state | accumulated_text: state.accumulated_text <> text}
+
+      _ ->
+        state
+    end
+  end
+
   defp translate_and_emit({:message_update, _msg, _delta}, state) do
-    # Non-string delta (could be structured content), skip
     state
   end
 
@@ -610,6 +621,12 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp emit_delta(state, _text), do: state
+
+  # Extract text content from AI stream event tuples.
+  # Events come as {:text_delta, idx, text, partial_msg} or similar shapes.
+  defp extract_delta_text({:text_delta, _idx, text, _partial}) when is_binary(text), do: text
+  defp extract_delta_text({:text_delta, _idx, text}) when is_binary(text), do: text
+  defp extract_delta_text(_), do: nil
 
   # ============================================================================
   # Completion Helpers

@@ -115,7 +115,13 @@ defmodule LemonSkills.EntryTest do
   describe "with_provenance/2 - unknown atom safety" do
     test "does not crash when trust_level is an unknown string", %{tmp_dir: tmp_dir} do
       entry = Entry.new(Path.join(tmp_dir, "safe-skill"))
-      record = %{"trust_level" => "future_level", "source_kind" => "future_source", "audit_status" => "future_status"}
+
+      record = %{
+        "trust_level" => "future_level",
+        "source_kind" => "future_source",
+        "audit_status" => "future_status"
+      }
+
       # Must not raise ArgumentError from String.to_existing_atom
       updated = Entry.with_provenance(entry, record)
       assert updated.trust_level == nil

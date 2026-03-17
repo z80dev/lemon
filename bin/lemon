@@ -187,7 +187,7 @@ info "Dotenv dir:    $LEMON_DOTENV_DIR"
 
 # Boot logic (already-running check, port wiring, and app start) is now
 # centralised in LemonCore.Runtime.Boot. This eval is a thin wrapper.
-EVAL='LemonCore.Runtime.Boot.start(:runtime_full)'
+EVAL='LemonCore.Runtime.Boot.start!(:runtime_full)'
 
 if [[ "$DAEMON" == "1" ]]; then
   if [[ "$DISTRIBUTED" == "1" ]]; then

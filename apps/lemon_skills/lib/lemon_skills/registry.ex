@@ -491,7 +491,6 @@ defmodule LemonSkills.Registry do
     key_lower = String.downcase(entry.key || "")
     name_lower = String.downcase(entry.name || entry.key || "")
     desc_lower = String.downcase(entry.description || "")
-
     # Read and score against the body content as a low-weight signal.
     body_lower =
       case Entry.content(entry) do

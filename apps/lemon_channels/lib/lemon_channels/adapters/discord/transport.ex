@@ -1696,7 +1696,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
-  defp format_model_line(_, _), do: "(default)"
+  defp format_model_line(_, _) do
+    cfg = LemonCore.Config.cached()
+    agent = map_get(cfg, :agent) || %{}
+    default = map_get(agent, :default_model) || "claude-sonnet-4-20250514"
+    "#{default} (default)"
+  end
 
   defp started_new_session_message(state, %ChatScope{} = scope, session_key, project, base_msg) do
     {model_hint, model_scope} = resolve_model_hint(state, session_key, scope.chat_id, scope.topic_id)

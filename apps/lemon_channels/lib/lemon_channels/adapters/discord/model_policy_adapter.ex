@@ -112,7 +112,15 @@ defmodule LemonChannels.Adapters.Discord.ModelPolicyAdapter do
     end
   end
 
-  def format_thinking_line(_level, _source), do: "(default)"
+  def format_thinking_line(_level, _source) do
+    cfg = LemonCore.Config.cached()
+    agent = get_agent_map(cfg)
+    default = agent[:default_thinking_level] || agent["default_thinking_level"] || "medium"
+    "#{default} (default)"
+  end
+
+  defp get_agent_map(%{agent: agent}) when is_map(agent), do: agent
+  defp get_agent_map(_), do: %{}
 
   # ============================================================================
   # Persistent Model Preferences

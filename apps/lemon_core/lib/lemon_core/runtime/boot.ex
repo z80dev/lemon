@@ -10,10 +10,9 @@ defmodule LemonCore.Runtime.Boot do
 
   1. Load `.env` from `dotenv_dir` (if present).
   2. Reject dev Erlang distribution cookie in production releases.
-  3. Check that the `product_runtime` feature flag permits boot.
-  4. Apply port values from the resolved `Env` struct to the OTP application
+  3. Apply port values from the resolved `Env` struct to the OTP application
      environment.
-  5. Start each application in the requested `Profile` in order.
+  4. Start each application in the requested `Profile` in order.
 
   ## Usage (from a mix eval or release boot)
 
@@ -26,7 +25,6 @@ defmodule LemonCore.Runtime.Boot do
 
   require Logger
 
-  alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
 
   @doc """
@@ -55,25 +53,48 @@ defmodule LemonCore.Runtime.Boot do
       Env.require_prod_cookie!()
     end
 
-    # 3. Check product_runtime feature gate
-    with :ok <- check_product_runtime_gate() do
-      # 4. Apply ports to OTP application env
-      Env.apply_ports(env)
+    # 3. Apply ports to OTP application env
+    Env.apply_ports(env)
 
-      # 5. Guard: already running?
-      if check_running? and Health.running?(env.control_port) do
-        Logger.warning(
-          "[boot] Control plane already healthy on :#{env.control_port}. " <>
-            "Another runtime may already be running — leaving existing runtime in place."
+    # 4. Guard: already running?
+    if check_running? and Health.running?(env.control_port) do
+      Logger.warning(
+        "[boot] Control plane already healthy on :#{env.control_port}. " <>
+          "Another runtime may already be running — leaving existing runtime in place."
+      )
+
+      :ok
+    else
+      # 5. Start all apps in the profile
+      profile = Profile.get(profile_name)
+      Logger.info("[boot] Starting profile :#{profile_name} (#{length(profile.apps)} apps)")
+
+      start_apps(profile.apps)
+    end
+  end
+
+  @doc """
+  Like `start/2` but halts the BEAM on failure.
+
+  Used by `bin/lemon` where the process runs with `--no-halt` — without this,
+  a boot failure would leave the BEAM sitting idle with no apps running and
+  no error visible to the user.
+  """
+  @spec start!(atom(), keyword()) :: :ok
+  def start!(profile_name \\ :runtime_full, opts \\ []) do
+    case start(profile_name, opts) do
+      :ok ->
+        :ok
+
+      {:error, {app, reason}} ->
+        Logger.error(
+          "[boot] Boot failed at :#{app}: #{inspect(reason)}\n" <>
+            "[boot] Halting. Fix the error above and retry."
         )
 
-        :ok
-      else
-        # 6. Start all apps in the profile
-        profile = Profile.get(profile_name)
-        Logger.info("[boot] Starting profile :#{profile_name} (#{length(profile.apps)} apps)")
-        start_apps(profile.apps)
-      end
+        # Give the logger a moment to flush before exiting.
+        Process.sleep(500)
+        System.halt(1)
     end
   end
 
@@ -89,16 +110,6 @@ defmodule LemonCore.Runtime.Boot do
   # ──────────────────────────────────────────────────────────────────────────
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
-
-  defp check_product_runtime_gate do
-    features = Modular.load().features
-
-    if features.product_runtime == :off do
-      {:error, {:feature_disabled, :product_runtime}}
-    else
-      :ok
-    end
-  end
 
   defp start_apps(apps) do
     Enum.reduce_while(apps, :ok, fn app, :ok ->

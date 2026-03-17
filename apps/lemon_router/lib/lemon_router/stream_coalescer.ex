@@ -42,7 +42,8 @@ defmodule LemonRouter.StreamCoalescer do
     :config,
     :meta,
     :last_sent_text,
-    :finalized
+    :finalized,
+    :pending_clear
   ]
 
   def start_link(opts) do
@@ -193,7 +194,8 @@ defmodule LemonRouter.StreamCoalescer do
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
       last_sent_text: nil,
-      finalized: false
+      finalized: false,
+      pending_clear: false
     }
 
     {:ok, state}
@@ -202,6 +204,17 @@ defmodule LemonRouter.StreamCoalescer do
   @impl true
   def handle_cast({:delta, run_id, seq, text, meta}, state) do
     now = System.system_time(:millisecond)
+
+    # If a commit_turn deferred PresentationState clearing, do it now.
+    # By this point the previous message's outbox delivery has had time to
+    # complete, so the clear won't race with a pending create.
+    state =
+      if state.pending_clear and state.run_id == run_id do
+        clear_presentation_state_answer(state)
+        %{state | pending_clear: false}
+      else
+        state
+      end
 
     # Reset if run changed
     state =
@@ -218,7 +231,8 @@ defmodule LemonRouter.StreamCoalescer do
             flush_timer: nil,
             meta: compact_meta(meta),
             last_sent_text: nil,
-            finalized: false
+            finalized: false,
+            pending_clear: false
         }
       else
         %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
@@ -297,21 +311,25 @@ defmodule LemonRouter.StreamCoalescer do
   def handle_call({:commit_turn, run_id}, _from, state) do
     state =
       if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
-        # Flush any pending buffer so the current answer message is up-to-date.
-        state = do_flush(state)
-
-        # Clear PresentationState so the next delta creates a fresh message.
-        clear_presentation_state_answer(state)
+        # Finalize the current answer message (handles pending creates, deferred
+        # edits, and ensures the full text is delivered before we detach).
+        state = do_finalize(state, state.full_text)
 
         cancel_timer(state.flush_timer)
 
+        # Defer the PresentationState clear until the next delta arrives.
+        # This avoids a race where the outbox hasn't delivered the finalize
+        # edit yet (pending_create_ref still set) and clearing would discard
+        # the deferred text update.
         %{
           state
           | buffer: "",
             full_text: "",
             last_sent_text: nil,
             flush_timer: nil,
-            first_delta_ts: nil
+            first_delta_ts: nil,
+            finalized: false,
+            pending_clear: true
         }
       else
         state

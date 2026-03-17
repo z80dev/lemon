@@ -94,6 +94,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
   test "format_thinking_line reports the effective scope" do
     assert "high (topic default)" = ModelPolicyAdapter.format_thinking_line("high", :topic)
     assert "low (chat default)" = ModelPolicyAdapter.format_thinking_line("low", :chat)
-    assert "(default)" = ModelPolicyAdapter.format_thinking_line(nil, nil)
+    result = ModelPolicyAdapter.format_thinking_line(nil, nil)
+    assert String.ends_with?(result, "(default)")
   end
 end

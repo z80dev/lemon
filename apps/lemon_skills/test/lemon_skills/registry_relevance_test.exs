@@ -3,7 +3,9 @@ defmodule LemonSkills.RegistryRelevanceTest do
 
   @moduletag :tmp_dir
 
-  test "find_relevant/2 scores by key/name/description and returns best matches", %{tmp_dir: tmp_dir} do
+  test "find_relevant/2 scores by key/name/description and returns best matches", %{
+    tmp_dir: tmp_dir
+  } do
     foo_dir = Path.join([tmp_dir, ".lemon", "skill", "foo-skill"])
     bar_dir = Path.join([tmp_dir, ".lemon", "skill", "bar-skill"])
     File.mkdir_p!(foo_dir)
@@ -208,4 +210,3 @@ defmodule LemonSkills.RegistryRelevanceTest do
     assert hd(results).key == "project-skill"
   end
 end
-

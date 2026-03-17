@@ -855,7 +855,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     thinking_line = format_thinking_line(thinking_hint, thinking_scope)
 
     provider_line =
-      if(is_binary(provider_hint) and provider_hint != "", do: provider_hint, else: "(default)")
+      if is_binary(provider_hint) and provider_hint != "" do
+        provider_hint
+      else
+        cfg = Config.cached()
+        agent = map_get(cfg, :agent) || %{}
+        default_prov = map_get(agent, :default_provider) || "anthropic"
+        "#{default_prov} (default)"
+      end
 
     engine_line = resolve_new_session_engine(session_key, model_hint)
     cwd_line = resolve_new_session_cwd(scope)
@@ -905,7 +912,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
   end
 
-  defp format_model_line(_model_value, _model_scope), do: "(default)"
+  defp format_model_line(_model_value, _model_scope) do
+    cfg = Config.cached()
+    agent = map_get(cfg, :agent) || %{}
+    default = map_get(agent, :default_model) || "claude-sonnet-4-20250514"
+    "#{default} (default)"
+  end
 
   defp resolve_new_session_engine(session_key, model_hint) do
     cond do
@@ -915,11 +927,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       true ->
         case last_engine_hint(session_key) do
           engine when is_binary(engine) and engine != "" -> engine
-          _ -> "(default)"
+          _ ->
+            cfg = Config.cached()
+            gw = map_get(cfg, :gateway) || %{}
+            default_eng = map_get(gw, :default_engine) || "lemon"
+            "#{default_eng} (default)"
         end
     end
   rescue
-    _ -> "(default)"
+    _ ->
+      cfg = Config.cached()
+      gw = map_get(cfg, :gateway) || %{}
+      default_eng = map_get(gw, :default_engine) || "lemon"
+      "#{default_eng} (default)"
   end
 
   defp resolve_new_session_cwd(%ChatScope{} = scope) do
