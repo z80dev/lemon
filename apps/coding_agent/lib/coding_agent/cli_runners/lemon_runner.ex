@@ -450,7 +450,6 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     title = tool_title(name, args)
     detail = %{name: name, args: args}
 
-
     action = Action.new(action_id, kind, title, detail)
 
     {event, factory} =
@@ -560,7 +559,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp translate_and_emit({:error, reason, _partial_state}, state) do
-    error_msg = format_error(reason)
+    error_msg = format_error(reason, state)
 
     Logger.error(
       "LemonRunner stream error " <>
@@ -947,13 +946,120 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     end)
   end
 
-  defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_error({:error, reason}), do: format_error(reason)
-  defp format_error(reason), do: inspect(reason)
+  defp format_error({:assistant_error, msg}, _state) when is_binary(msg), do: msg
+
+  defp format_error({:assistant_error, reason}, state),
+    do: "assistant error: #{format_error(reason, state)}"
+
+  defp format_error(:circuit_open, state), do: format_circuit_open_error(state)
+
+  defp format_error(reason, _state) when is_binary(reason), do: reason
+
+  defp format_error(reason, _state)
+       when reason in [
+              :rate_limited,
+              :max_concurrency,
+              :timeout,
+              :closed,
+              :econnrefused,
+              :econnreset,
+              :nxdomain
+            ] do
+    Ai.Error.format_error(reason)
+  end
+
+  defp format_error({:http_error, _status, _body} = reason, _state),
+    do: Ai.Error.format_error(reason)
+
+  defp format_error({:error, reason}, state), do: format_error(reason, state)
+  defp format_error(reason, _state) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_error(reason, _state), do: inspect(reason)
+
+  defp format_circuit_open_error(state) do
+    base = Ai.Error.format_error(:circuit_open)
+
+    with provider when is_atom(provider) <- current_provider(state),
+         {:ok, breaker_state} <- Ai.CircuitBreaker.get_state(provider) do
+      detail =
+        breaker_state
+        |> Map.get(:last_failure_reason)
+        |> format_circuit_failure_reason()
+
+      retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
+      parts = ["Provider: #{provider}"]
+
+      parts =
+        if is_binary(detail) and detail != "",
+          do: parts ++ ["Last failure: #{detail}"],
+          else: parts
+
+      parts =
+        if retry_after_ms > 0,
+          do: parts ++ ["Retry in ~#{div(retry_after_ms + 999, 1000)}s"],
+          else: parts
+
+      if Enum.empty?(parts) do
+        base
+      else
+        base <> " " <> Enum.join(parts, ". ") <> "."
+      end
+    else
+      _ -> base
+    end
+  end
+
+  defp format_circuit_failure_reason(nil), do: nil
+
+  defp format_circuit_failure_reason({:stream_tracking_start_failed, reason}) do
+    "stream tracking start failed: #{format_circuit_failure_reason(reason) || inspect(reason)}"
+  end
+
+  defp format_circuit_failure_reason({:stream_tracking_exception, message})
+       when is_binary(message),
+       do: message
+
+  defp format_circuit_failure_reason({:stream_tracking_exit, reason}),
+    do: "stream tracking exited: #{inspect(reason)}"
+
+  defp format_circuit_failure_reason({:unexpected_stream_result, result}),
+    do: "unexpected stream result: #{inspect(result)}"
+
+  defp format_circuit_failure_reason({:exception, message}) when is_binary(message), do: message
+
+  defp format_circuit_failure_reason(reason) when is_binary(reason), do: reason
+
+  defp format_circuit_failure_reason(reason)
+       when reason in [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
+    Ai.Error.format_error(reason)
+  end
+
+  defp format_circuit_failure_reason({:http_error, _status, _body} = reason),
+    do: Ai.Error.format_error(reason)
+
+  defp format_circuit_failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_circuit_failure_reason(reason), do: inspect(reason)
+
+  defp current_provider(%{session: session}) when is_pid(session) do
+    case Process.alive?(session) do
+      true ->
+        try do
+          case CodingAgent.Session.get_state(session) do
+            %{model: %{provider: provider}} when is_atom(provider) -> provider
+            _ -> nil
+          end
+        catch
+          :exit, _reason -> nil
+        end
+
+      false ->
+        nil
+    end
+  end
+
+  defp current_provider(_state), do: nil
 
   defp cancel_error_message(:user_requested), do: "Cancelled by user"
-  defp cancel_error_message(reason), do: "Cancelled: #{format_error(reason)}"
+  defp cancel_error_message(reason), do: "Cancelled: #{format_error(reason, %{})}"
 
   defp normalize_extra_tools_opt(tools) when is_list(tools) and tools != [], do: tools
   defp normalize_extra_tools_opt(_), do: nil

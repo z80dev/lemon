@@ -294,6 +294,9 @@ Ai.CircuitBreaker.reset(:anthropic)
 Ai.CircuitBreaker.get_state(:anthropic)
 ```
 
+`get_state/1` includes the current breaker state, failure counts, recovery timeout,
+and the last recorded failure reason that opened or last refreshed the breaker.
+
 ## Key Types
 
 All types are defined in `Ai.Types`:

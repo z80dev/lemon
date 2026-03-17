@@ -261,6 +261,9 @@ Ai.CircuitBreaker.record_success(:anthropic)
 Ai.CircuitBreaker.record_failure(:anthropic)
 ```
 
+`Ai.CircuitBreaker.get_state/1` returns the current state plus the last recorded
+failure reason, which is the fastest way to diagnose why a provider circuit opened.
+
 ## Rate Limiter
 
 Token bucket algorithm. **Configuration**:

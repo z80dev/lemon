@@ -586,8 +586,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert format_error("Connection failed") == "Connection failed"
     end
 
-    test "atom errors are converted to string" do
-      assert format_error(:timeout) == "timeout"
+    test "known atom errors use AI formatting" do
+      assert format_error(:timeout) == "Request timed out. Please try again."
+      assert format_error(:econnreset) == "Connection reset. Please try again."
+    end
+
+    test "unknown atom errors are converted to string" do
       assert format_error(:connection_refused) == "connection_refused"
     end
 
@@ -596,14 +600,40 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert format_error({:error, :inner_atom}) == "inner_atom"
     end
 
+    test "assistant_error tuples surface the underlying message" do
+      assert format_error({:assistant_error, "breaker open"}) == "breaker open"
+    end
+
+    test "http errors use AI formatting" do
+      assert format_error({:http_error, 503, "overloaded"}) ==
+               "Service temporarily unavailable (HTTP 503): overloaded"
+    end
+
     test "complex terms are inspected" do
       assert format_error({:failed, %{reason: :unknown}}) == "{:failed, %{reason: :unknown}}"
     end
 
     # Helper to mirror the private function logic
+    defp format_error({:assistant_error, msg}) when is_binary(msg), do: msg
+    defp format_error({:assistant_error, reason}), do: "assistant error: #{format_error(reason)}"
     defp format_error(reason) when is_binary(reason), do: reason
-    defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+    defp format_error(reason)
+         when reason in [
+                :rate_limited,
+                :max_concurrency,
+                :timeout,
+                :closed,
+                :econnrefused,
+                :econnreset,
+                :nxdomain
+              ] do
+      Ai.Error.format_error(reason)
+    end
+
+    defp format_error({:http_error, _status, _body} = reason), do: Ai.Error.format_error(reason)
     defp format_error({:error, reason}), do: format_error(reason)
+    defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
     defp format_error(reason), do: inspect(reason)
   end
 

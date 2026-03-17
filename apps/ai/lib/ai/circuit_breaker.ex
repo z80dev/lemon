@@ -54,6 +54,7 @@ defmodule Ai.CircuitBreaker do
           failure_threshold: pos_integer(),
           recovery_timeout: pos_integer(),
           last_failure_time: integer() | nil,
+          last_failure_reason: term() | nil,
           success_count_in_half_open: non_neg_integer()
         }
 
@@ -132,10 +133,10 @@ defmodule Ai.CircuitBreaker do
   @doc """
   Record a failed request. May open the circuit.
   """
-  @spec record_failure(provider()) :: :ok
-  def record_failure(provider) do
+  @spec record_failure(provider(), term()) :: :ok
+  def record_failure(provider, reason \\ :unknown) do
     _ = ensure_started(provider)
-    GenServer.cast(via_tuple(provider), :record_failure)
+    GenServer.cast(via_tuple(provider), {:record_failure, reason})
   catch
     :exit, {:noproc, _} -> :ok
   end
@@ -192,6 +193,7 @@ defmodule Ai.CircuitBreaker do
       failure_threshold: failure_threshold,
       recovery_timeout: recovery_timeout,
       last_failure_time: nil,
+      last_failure_reason: nil,
       success_count_in_half_open: 0
     }
 
@@ -230,7 +232,8 @@ defmodule Ai.CircuitBreaker do
       circuit_state: state.circuit_state,
       failure_count: state.failure_count,
       failure_threshold: state.failure_threshold,
-      recovery_timeout: state.recovery_timeout
+      recovery_timeout: state.recovery_timeout,
+      last_failure_reason: state.last_failure_reason
     }
 
     {:reply, {:ok, info}, state}
@@ -272,7 +275,7 @@ defmodule Ai.CircuitBreaker do
   end
 
   @impl true
-  def handle_cast(:record_failure, state) do
+  def handle_cast({:record_failure, reason}, state) do
     state = maybe_transition_to_half_open(state)
 
     new_state =
@@ -291,7 +294,8 @@ defmodule Ai.CircuitBreaker do
               %{
                 provider: state.provider,
                 failure_count: new_count,
-                failure_threshold: state.failure_threshold
+                failure_threshold: state.failure_threshold,
+                reason: reason
               }
             )
 
@@ -299,10 +303,11 @@ defmodule Ai.CircuitBreaker do
               state
               | circuit_state: :open,
                 failure_count: new_count,
-                last_failure_time: System.monotonic_time(:millisecond)
+                last_failure_time: System.monotonic_time(:millisecond),
+                last_failure_reason: reason
             }
           else
-            %{state | failure_count: new_count}
+            %{state | failure_count: new_count, last_failure_reason: reason}
           end
 
         :half_open ->
@@ -312,19 +317,24 @@ defmodule Ai.CircuitBreaker do
           LemonCore.Telemetry.emit(
             [:ai, :circuit_breaker, :reopened],
             %{system_time: System.system_time()},
-            %{provider: state.provider}
+            %{provider: state.provider, reason: reason}
           )
 
           %{
             state
             | circuit_state: :open,
               last_failure_time: System.monotonic_time(:millisecond),
+              last_failure_reason: reason,
               success_count_in_half_open: 0
           }
 
         :open ->
           # Update failure time to extend recovery timeout
-          %{state | last_failure_time: System.monotonic_time(:millisecond)}
+          %{
+            state
+            | last_failure_time: System.monotonic_time(:millisecond),
+              last_failure_reason: reason
+          }
       end
 
     {:noreply, new_state}
@@ -339,6 +349,7 @@ defmodule Ai.CircuitBreaker do
       | circuit_state: :closed,
         failure_count: 0,
         last_failure_time: nil,
+        last_failure_reason: nil,
         success_count_in_half_open: 0
     }
 

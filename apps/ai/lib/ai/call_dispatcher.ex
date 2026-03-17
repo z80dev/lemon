@@ -110,7 +110,12 @@ defmodule Ai.CallDispatcher do
               rescue
                 error ->
                   release_slot(slot_ref)
-                  Ai.CircuitBreaker.record_failure(provider)
+
+                  Ai.CircuitBreaker.record_failure(
+                    provider,
+                    {:exception, Exception.message(error)}
+                  )
+
                   reraise error, __STACKTRACE__
               after
                 Ai.RateLimiter.release(provider)
@@ -277,7 +282,7 @@ defmodule Ai.CallDispatcher do
         )
 
         release_slot(slot_ref)
-        Ai.CircuitBreaker.record_failure(provider)
+        Ai.CircuitBreaker.record_failure(provider, {:stream_tracking_start_failed, reason})
         result
     end
   end
@@ -309,14 +314,17 @@ defmodule Ai.CallDispatcher do
           "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
         )
 
-        Ai.CircuitBreaker.record_failure(provider)
+        Ai.CircuitBreaker.record_failure(
+          provider,
+          {:stream_tracking_exception, Exception.message(error)}
+        )
     catch
       :exit, reason ->
         Logger.warning(
           "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
         )
 
-        Ai.CircuitBreaker.record_failure(provider)
+        Ai.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
     after
       release_slot(slot_ref)
     end
@@ -351,15 +359,15 @@ defmodule Ai.CallDispatcher do
     Ai.CircuitBreaker.record_success(provider)
   end
 
-  defp record_stream_terminal_result(provider, {:error, _reason}) do
+  defp record_stream_terminal_result(provider, {:error, reason}) do
     # Stream-level errors are always service failures — the connection broke,
     # the stream timed out, or the provider returned an error mid-stream.
     # Unlike request-level errors, these can't be client errors (400/429/etc).
-    Ai.CircuitBreaker.record_failure(provider)
+    Ai.CircuitBreaker.record_failure(provider, reason)
   end
 
-  defp record_stream_terminal_result(provider, _unexpected_result) do
-    Ai.CircuitBreaker.record_failure(provider)
+  defp record_stream_terminal_result(provider, unexpected_result) do
+    Ai.CircuitBreaker.record_failure(provider, {:unexpected_stream_result, unexpected_result})
   end
 
   defp release_slot_by_ref(state, monitor_ref, opts \\ [])
@@ -391,7 +399,7 @@ defmodule Ai.CallDispatcher do
 
       {:error, reason} ->
         if circuit_breaker_failure?(reason) do
-          Ai.CircuitBreaker.record_failure(provider)
+          Ai.CircuitBreaker.record_failure(provider, reason)
         else
           # Client errors (400, 413), rate limits (429), and auth errors (401/403)
           # are not service-level failures — don't trip the circuit breaker.

@@ -27,6 +27,7 @@ defmodule Ai.CircuitBreakerTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
       assert state.failure_count == 0
+      assert state.last_failure_reason == nil
     end
 
     test "uses default failure threshold of 5", %{provider: provider} do
@@ -104,11 +105,12 @@ defmodule Ai.CircuitBreakerTest do
     test "increments failure count", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
-      CircuitBreaker.record_failure(provider)
+      CircuitBreaker.record_failure(provider, :timeout)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 1
       assert state.circuit_state == :closed
+      assert state.last_failure_reason == :timeout
     end
 
     test "opens circuit when threshold is reached", %{provider: provider} do
@@ -183,6 +185,16 @@ defmodule Ai.CircuitBreakerTest do
       # We can't directly check last_failure_time from public API,
       # but we verify the circuit opened
       assert CircuitBreaker.is_open?(provider)
+    end
+
+    test "exposes last failure reason in state", %{provider: provider} do
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1})
+
+      CircuitBreaker.record_failure(provider, {:http_error, 503, "overloaded"})
+
+      {:ok, state} = CircuitBreaker.get_state(provider)
+      assert state.circuit_state == :open
+      assert state.last_failure_reason == {:http_error, 503, "overloaded"}
     end
   end
 
@@ -659,6 +671,7 @@ defmodule Ai.CircuitBreakerTest do
       assert metadata.provider == provider
       assert metadata.failure_count == 2
       assert metadata.failure_threshold == 2
+      assert metadata.reason == :unknown
 
       :telemetry.detach("test-opened-#{inspect(ref)}")
     end
@@ -749,10 +762,11 @@ defmodule Ai.CircuitBreakerTest do
       {:ok, _} = CircuitBreaker.get_state(provider)
 
       # Failure in half-open reopens
-      CircuitBreaker.record_failure(provider)
+      CircuitBreaker.record_failure(provider, :econnreset)
 
       assert_receive {:telemetry_reopened, metadata}, 1000
       assert metadata.provider == provider
+      assert metadata.reason == :econnreset
 
       :telemetry.detach("test-reopened-#{inspect(ref)}")
     end
