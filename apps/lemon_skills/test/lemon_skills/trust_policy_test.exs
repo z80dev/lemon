@@ -17,12 +17,12 @@ defmodule LemonSkills.TrustPolicyTest do
       refute TrustPolicy.requires_audit?(:builtin)
     end
 
-    test "official skills skip audit" do
-      refute TrustPolicy.requires_audit?(:official)
+    test "official skills require audit" do
+      assert TrustPolicy.requires_audit?(:official)
     end
 
-    test "trusted skills skip audit" do
-      refute TrustPolicy.requires_audit?(:trusted)
+    test "trusted skills require audit" do
+      assert TrustPolicy.requires_audit?(:trusted)
     end
 
     test "nil (no trust recorded) requires audit" do
@@ -100,13 +100,13 @@ defmodule LemonSkills.TrustPolicyTest do
              "Only :builtin should skip both audit and approval; got #{inspect(combined_bypass)}"
     end
 
-    test "community is the only level requiring audit" do
+    test "all non-builtin levels require audit" do
       all_levels = [:builtin, :official, :trusted, :community]
 
       audited = Enum.filter(all_levels, &TrustPolicy.requires_audit?/1)
 
-      assert audited == [:community],
-             "Only :community should require audit; got #{inspect(audited)}"
+      assert audited == [:official, :trusted, :community],
+             "All non-builtin levels should require audit; got #{inspect(audited)}"
     end
   end
 end

@@ -88,8 +88,9 @@ The synthesis pipeline runs on demand and processes recent memory documents:
    - YAML frontmatter: name, description, requires_tools, category, `synthesized: true`
    - Body: task pattern from prompt_summary, approach from answer_summary, date generated
 
-3. **Audit** — the audit engine runs the 5 quality rules. Drafts with `:block` findings
-   are discarded; `:warn` findings are acceptable (human review required anyway).
+3. **Audit** — the draft passes through the same deterministic skill audit engine used for installs.
+   If optional LLM audit is configured, that reviewer also runs here. Drafts with `:block`
+   findings are discarded; `:warn` findings are acceptable (human review required anyway).
 
 4. **Storage** — passing drafts are written to `~/.lemon/agent/skill_drafts/<key>/`.
 

@@ -86,7 +86,7 @@ Runs the audit engine against the skill. Outputs pass/warn/block verdicts with r
 mix lemon.skill install /path/to/skill-directory
 ```
 
-Copies the skill into `~/.lemon/agent/skills/` (global) or `.lemon/skills/` (project).
+Copies the skill into `~/.lemon/agent/skill/` (global) or `.lemon/skill/` (project).
 
 ### From a remote source
 
@@ -103,8 +103,8 @@ mix lemon.skill browse         # Browse available skills
 mix lemon.skill install registry:lemon-official/git-workflow
 ```
 
-Trust policy: official registry skills are trusted by default. Third-party sources
-require explicit trust approval.
+Trust policy: built-in skills skip audit. All other skills are audited on install/update; `:warn`
+verdicts require explicit approval and `:block` verdicts are refused.
 
 ---
 
@@ -127,20 +127,31 @@ mix lemon.skill remove <skill-key>
 
 ## Quality Checks
 
-The audit engine (`LemonSkills.Audit.Engine`) runs 5 rules against every skill:
+The audit engine (`LemonSkills.Audit.Engine`) runs deterministic security checks for:
 
-| Rule | Verdict when failing |
-|---|---|
-| Valid manifest v2 schema | `:block` |
-| Name field present and non-empty | `:block` |
-| Description field present | `:warn` |
-| No banned patterns (secrets, shell injection) | `:block` |
-| Required tools declared | `:warn` |
+- destructive commands
+- remote execution patterns
+- data exfiltration patterns
+- path traversal
+- symlink / escape patterns
+
+If configured, Lemon also runs `LemonSkills.Audit.LlmReviewer` to classify higher-level suspicious or malicious intent.
 
 Run `mix lemon.skill check <key>` to see the full audit report.
 
-Skills with `:block` verdicts cannot be promoted or activated by the runtime.
-Skills with `:warn` verdicts load but show a warning in doctor output.
+Install/update behavior:
+
+- `:pass` continues normally
+- `:warn` requires explicit approval before the skill is kept
+- `:block` refuses the operation
+
+Optional LLM audit config:
+
+```elixir
+config :lemon_skills, :audit_llm,
+  enabled: true,
+  model: "openai:gpt-4o-mini"
+```
 
 ---
 

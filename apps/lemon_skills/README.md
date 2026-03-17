@@ -1,8 +1,8 @@
 # LemonSkills
 
-Skill registry, discovery, installation, and lifecycle management for the Lemon agent platform.
+Skill registry, discovery, installation, audit, and lifecycle management for the Lemon agent platform.
 
-LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, status checking, and relevance-based retrieval.
+LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
 
 ## Architecture Overview
 
@@ -49,7 +49,8 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 2. **Retrieval** -- Agents and tools query the registry for skills by key or by relevance to a context string. The `find_relevant/2` function scores skills using keyword matching across name, description, keywords, and body content.
 3. **Content delivery** -- The `Entry.content/1` function reads the raw `SKILL.md` content, which is then injected into agent system prompts or returned via the `read_skill` tool.
 4. **Status gating** -- Before a skill is used, `Status.check/2` verifies that required binaries and environment variables are present.
-5. **Installation** -- New skills can be installed from Git repositories or local paths, with optional approval gating via `LemonCore.ExecApprovals`.
+5. **Installation** -- New skills can be installed from Git repositories or local paths, with approval gating via `LemonCore.ExecApprovals`.
+6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
 
 ### Application Startup
 
@@ -70,6 +71,8 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Manifest` | `lib/lemon_skills/manifest.ex` | Hand-rolled YAML/TOML frontmatter parser for SKILL.md files |
 | `LemonSkills.Status` | `lib/lemon_skills/status.ex` | Status checking: binary availability, config presence, disabled state |
 | `LemonSkills.Installer` | `lib/lemon_skills/installer.ex` | Install/update/uninstall with approval gating via LemonCore.ExecApprovals |
+| `LemonSkills.Audit.Engine` | `lib/lemon_skills/audit/engine.ex` | Static security audit and verdict aggregation |
+| `LemonSkills.Audit.LlmReviewer` | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed review for suspicious or malicious skill content |
 | `LemonSkills.Config` | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection |
 | `LemonSkills.BuiltinSeeder` | `lib/lemon_skills/builtin_seeder.ex` | Copies bundled skills from priv/ to user config dir on startup |
 | `LemonSkills.Discovery` | `lib/lemon_skills/discovery.ex` | Online skill discovery from GitHub (topic search) and registry URL probing |
@@ -192,6 +195,27 @@ The `find_relevant/2` function scores skills against a context string using weig
 | Project-source bonus | +1000 |
 
 Project skills always rank above equivalently-scored global skills. Skills that are disabled (via `skills.json` or the entry's `enabled` flag) are excluded from relevance results.
+
+## Audit
+
+Every install/update for a non-builtin skill runs through the audit path before the skill is registered.
+
+1. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns.
+2. If configured, `LemonSkills.Audit.LlmReviewer` asks an LLM to classify the skill as `pass`, `warn`, or `block` and return structured findings.
+3. The installer enforces the verdict:
+   - `:pass` continues
+   - `:warn` requires explicit approval before the install/update completes
+   - `:block` aborts the operation
+
+Enable the optional LLM reviewer with:
+
+```elixir
+config :lemon_skills, :audit_llm,
+  enabled: true,
+  model: "openai:gpt-4o-mini"
+```
+
+The configured model can be either a bare model id such as `"gpt-4o-mini"` or a provider-qualified id such as `"openai:gpt-4o-mini"`.
 
 ## How Skills Are Executed (Consumed)
 

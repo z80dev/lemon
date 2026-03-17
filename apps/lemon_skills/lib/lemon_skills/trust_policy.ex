@@ -10,8 +10,8 @@ defmodule LemonSkills.TrustPolicy do
   | Level       | Source                                  | Audit? | Auto-approve? |
   |-------------|-----------------------------------------|--------|---------------|
   | `:builtin`  | Bundled in `priv/builtin_skills/`       | No     | Yes           |
-  | `:official` | `official/<category>/<name>` namespace  | No     | No            |
-  | `:trusted`  | Local filesystem path you control       | No     | No            |
+  | `:official` | `official/<category>/<name>` namespace  | Yes    | No            |
+  | `:trusted`  | Local filesystem path you control       | Yes    | No            |
   | `:community`| Third-party git URL or unknown registry | Yes    | No            |
 
   ## Audit policy
@@ -19,14 +19,12 @@ defmodule LemonSkills.TrustPolicy do
   The audit engine scans SKILL.md content for destructive commands, remote
   code execution, data exfiltration, and path traversal patterns.
 
-  `:community` skills are always audited — they come from arbitrary third-party
-  sources and may contain unsafe instructions.
-
-  `:builtin`, `:official`, and `:trusted` skills skip the audit:
-  - `:builtin` — pre-vetted and bundled by the Lemon application maintainers.
-  - `:official` — curated content from the official skills registry namespace.
-  - `:trusted` — files on the user's own filesystem, which they control
-    directly and can inspect at any time.
+  All non-builtin skills are audited before install/update:
+  - `:official` — curated content from the official skills registry namespace,
+    but still scanned so `warn` and `block` findings are enforced consistently.
+  - `:trusted` — files on the user's own filesystem, still scanned to catch
+    accidental unsafe content and to drive warning acknowledgements.
+  - `:community` — arbitrary third-party content, always scanned.
 
   ## Approval policy
 
@@ -50,6 +48,8 @@ defmodule LemonSkills.TrustPolicy do
       false
   """
   @spec requires_audit?(Entry.trust_level() | nil) :: boolean()
+  def requires_audit?(:official), do: true
+  def requires_audit?(:trusted), do: true
   def requires_audit?(:community), do: true
   def requires_audit?(nil), do: true
   def requires_audit?(_), do: false
@@ -95,10 +95,10 @@ defmodule LemonSkills.TrustPolicy do
     do: "Pre-bundled with the Lemon application; always safe."
 
   def description(:official),
-    do: "From the official/ registry namespace; curated and verified."
+    do: "From the official/ registry namespace; curated and still audited before install."
 
   def description(:trusted),
-    do: "Installed from a local filesystem path you control."
+    do: "Installed from a local filesystem path you control and audited before install."
 
   def description(:community),
     do: "From a third-party source; audited for safety before installation."

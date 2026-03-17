@@ -40,6 +40,7 @@ defmodule LemonSkills.Audit.Engine do
 
   alias LemonSkills.Audit.Finding
   alias LemonSkills.Entry
+  alias LemonSkills.Audit.LlmReviewer
 
   @type verdict :: :pass | :warn | :block
 
@@ -52,6 +53,17 @@ defmodule LemonSkills.Audit.Engine do
   """
   @spec audit_content(String.t()) :: {verdict(), [Finding.t()]}
   def audit_content(content) when is_binary(content) do
+    audit_content(content, [])
+  end
+
+  @doc """
+  Audit the raw SKILL.md content string with optional overrides.
+
+  Supported options:
+  - `:llm` — keyword list with `:enabled`, `:model`, `:reviewer`, and `:runner`
+  """
+  @spec audit_content(String.t(), keyword()) :: {verdict(), [Finding.t()]}
+  def audit_content(content, opts) when is_binary(content) and is_list(opts) do
     findings =
       []
       |> run_rule(&check_destructive_commands/1, content)
@@ -59,6 +71,7 @@ defmodule LemonSkills.Audit.Engine do
       |> run_rule(&check_exfiltration/1, content)
       |> run_rule(&check_path_traversal/1, content)
       |> run_rule(&check_symlink_escape/1, content)
+      |> Kernel.++(run_llm_review(content, opts))
 
     {overall_verdict(findings), findings}
   end
@@ -71,9 +84,14 @@ defmodule LemonSkills.Audit.Engine do
   """
   @spec audit_entry(Entry.t()) :: {verdict(), [Finding.t()]}
   def audit_entry(%Entry{} = entry) do
+    audit_entry(entry, [])
+  end
+
+  @spec audit_entry(Entry.t(), keyword()) :: {verdict(), [Finding.t()]}
+  def audit_entry(%Entry{} = entry, opts) when is_list(opts) do
     case Entry.content(entry) do
       {:ok, content} ->
-        audit_content(content)
+        audit_content(content, opts)
 
       {:error, reason} ->
         finding =
@@ -110,6 +128,60 @@ defmodule LemonSkills.Audit.Engine do
     acc ++ rule_fn.(content)
   end
 
+  defp run_llm_review(content, opts) do
+    llm_opts = Keyword.get(opts, :llm, [])
+    enabled = Keyword.get(llm_opts, :enabled, audit_llm_enabled?())
+
+    if enabled do
+      reviewer = Keyword.get(llm_opts, :reviewer, configured_llm_reviewer())
+
+      review_opts =
+        llm_opts
+        |> Keyword.put_new(:model, configured_llm_model())
+
+      case reviewer.review(content, review_opts) do
+        {:ok, {_verdict, findings}} ->
+          findings
+
+        {:error, reason} ->
+          [
+            Finding.warn(
+              "llm_audit_unavailable",
+              "LLM audit enabled but could not complete: #{format_review_error(reason)}",
+              nil
+            )
+          ]
+      end
+    else
+      []
+    end
+  end
+
+  defp audit_llm_enabled? do
+    Application.get_env(:lemon_skills, :audit_llm, [])
+    |> Keyword.get(:enabled, false)
+  end
+
+  defp configured_llm_model do
+    Application.get_env(:lemon_skills, :audit_llm, [])
+    |> Keyword.get(:model)
+  end
+
+  defp configured_llm_reviewer do
+    Application.get_env(:lemon_skills, :audit_llm_reviewer, LlmReviewer)
+  end
+
+  defp format_review_error({:unknown_model, model}), do: "unknown model #{inspect(model)}"
+
+  defp format_review_error({:unknown_provider, provider}),
+    do: "unknown provider #{inspect(provider)}"
+
+  defp format_review_error({:invalid_json, _reason}), do: "reviewer did not return valid JSON"
+  defp format_review_error(:missing_model), do: "no audit_llm model configured"
+  defp format_review_error(:invalid_payload), do: "reviewer returned an invalid payload"
+  defp format_review_error(reason) when is_binary(reason), do: reason
+  defp format_review_error(reason), do: inspect(reason)
+
   # ── Rule: destructive_commands ───────────────────────────────────────────────
 
   @destructive_patterns [
@@ -127,7 +199,9 @@ defmodule LemonSkills.Audit.Engine do
     @destructive_patterns
     |> Enum.flat_map(fn {pattern, desc} ->
       case Regex.run(pattern, content) do
-        nil -> []
+        nil ->
+          []
+
         [match | _] ->
           [Finding.warn("destructive_commands", "Destructive command detected: #{desc}", match)]
       end
@@ -143,10 +217,8 @@ defmodule LemonSkills.Audit.Engine do
      "curl piped to shell interpreter (remote code execution)"},
     {~r/wget\s+[^|]+\|\s*(bash|sh|python\d*|ruby|perl|node)\b/i,
      "wget piped to shell interpreter (remote code execution)"},
-    {~r/\beval\s*\$\s*[\(\`].*curl/,
-     "eval of curl output (remote code execution)"},
-    {~r/\beval\s*\$\s*[\(\`].*wget/,
-     "eval of wget output (remote code execution)"},
+    {~r/\beval\s*\$\s*[\(\`].*curl/, "eval of curl output (remote code execution)"},
+    {~r/\beval\s*\$\s*[\(\`].*wget/, "eval of wget output (remote code execution)"},
     {~r/python\s+-c\s+['""].*urllib.*urlopen.*exec/i,
      "Python urllib + exec (remote code execution)"}
   ]
@@ -155,7 +227,9 @@ defmodule LemonSkills.Audit.Engine do
     @remote_exec_patterns
     |> Enum.flat_map(fn {pattern, desc} ->
       case Regex.run(pattern, content) do
-        nil -> []
+        nil ->
+          []
+
         [match | _] ->
           [Finding.block("remote_exec", "Remote execution pattern: #{desc}", match)]
       end
@@ -165,11 +239,25 @@ defmodule LemonSkills.Audit.Engine do
 
   # ── Rule: exfiltration ───────────────────────────────────────────────────────
 
-  @sensitive_paths ["/etc/passwd", "/etc/shadow", "/etc/sudoers", "~/.ssh/", "~/.aws/",
-                    "~/.gnupg/", "/root/", "$HOME/.ssh", "$HOME/.aws"]
+  @sensitive_paths [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/sudoers",
+    "~/.ssh/",
+    "~/.aws/",
+    "~/.gnupg/",
+    "/root/",
+    "$HOME/.ssh",
+    "$HOME/.aws"
+  ]
 
-  @exfil_upload_patterns [~r/\bcurl\b.*--data\b/, ~r/\bcurl\b.*-d\s/, ~r/\bnc\s.*<\s*/,
-                           ~r/\bsocat\b/, ~r/\btelnet\b.*<\s*/]
+  @exfil_upload_patterns [
+    ~r/\bcurl\b.*--data\b/,
+    ~r/\bcurl\b.*-d\s/,
+    ~r/\bnc\s.*<\s*/,
+    ~r/\bsocat\b/,
+    ~r/\btelnet\b.*<\s*/
+  ]
 
   defp check_exfiltration(content) do
     sensitive_hits =
@@ -178,11 +266,13 @@ defmodule LemonSkills.Audit.Engine do
       |> Enum.flat_map(fn path ->
         # Only flag when a sensitive path appears alongside a network tool
         if content_has_network_tool?(content) do
-          [Finding.block(
-            "exfiltration",
-            "Sensitive path '#{path}' referenced alongside network tool — potential data exfiltration",
-            path
-          )]
+          [
+            Finding.block(
+              "exfiltration",
+              "Sensitive path '#{path}' referenced alongside network tool — potential data exfiltration",
+              path
+            )
+          ]
         else
           []
         end
@@ -193,10 +283,18 @@ defmodule LemonSkills.Audit.Engine do
       @exfil_upload_patterns
       |> Enum.flat_map(fn pattern ->
         case Regex.run(pattern, content) do
-          nil -> []
+          nil ->
+            []
+
           [match | _] ->
             if content_has_sensitive_path?(content) do
-              [Finding.block("exfiltration", "Upload pattern with sensitive path access: #{match}", match)]
+              [
+                Finding.block(
+                  "exfiltration",
+                  "Upload pattern with sensitive path access: #{match}",
+                  match
+                )
+              ]
             else
               []
             end
@@ -221,7 +319,7 @@ defmodule LemonSkills.Audit.Engine do
 
   @traversal_patterns [
     {~r/\.\.\/\.\.\//, "Directory traversal sequence (../../)"},
-    {~r/\.\.\\\.\.\\/,  "Windows traversal sequence (..\\..\\)"},
+    {~r/\.\.\\\.\.\\/, "Windows traversal sequence (..\\..\\)"},
     {~r/\/etc\/passwd/, "Direct reference to /etc/passwd"},
     {~r/\/etc\/shadow/, "Direct reference to /etc/shadow"},
     {~r/\/etc\/sudoers/, "Direct reference to /etc/sudoers"},
@@ -232,7 +330,9 @@ defmodule LemonSkills.Audit.Engine do
     @traversal_patterns
     |> Enum.flat_map(fn {pattern, desc} ->
       case Regex.run(pattern, content) do
-        nil -> []
+        nil ->
+          []
+
         [match | _] ->
           [Finding.warn("path_traversal", "Path traversal pattern: #{desc}", match)]
       end
@@ -245,7 +345,8 @@ defmodule LemonSkills.Audit.Engine do
   @symlink_patterns [
     {~r/\bln\s+-[a-zA-Z]*s[a-zA-Z]*\s+\/etc\//, :block, "Symlink to /etc/ (potential escape)"},
     {~r/\bln\s+-[a-zA-Z]*s[a-zA-Z]*\s+\/root\//, :block, "Symlink to /root/ (potential escape)"},
-    {~r/\bln\s+-[a-zA-Z]*s[a-zA-Z]*\s+~\/\.ssh\//, :block, "Symlink to ~/.ssh/ (potential escape)"},
+    {~r/\bln\s+-[a-zA-Z]*s[a-zA-Z]*\s+~\/\.ssh\//, :block,
+     "Symlink to ~/.ssh/ (potential escape)"},
     {~r/\bchmod\s+\+x\b/, :warn, "chmod +x (making file executable)"},
     {~r/\bchown\s+root\b/i, :warn, "chown root (changing ownership to root)"}
   ]
@@ -254,12 +355,16 @@ defmodule LemonSkills.Audit.Engine do
     @symlink_patterns
     |> Enum.flat_map(fn {pattern, severity, desc} ->
       case Regex.run(pattern, content) do
-        nil -> []
+        nil ->
+          []
+
         [match | _] ->
-          finding = case severity do
-            :block -> Finding.block("symlink_escape", desc, match)
-            :warn -> Finding.warn("symlink_escape", desc, match)
-          end
+          finding =
+            case severity do
+              :block -> Finding.block("symlink_escape", desc, match)
+              :warn -> Finding.warn("symlink_escape", desc, match)
+            end
+
           [finding]
       end
     end)

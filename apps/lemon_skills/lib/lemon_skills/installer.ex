@@ -72,6 +72,7 @@ defmodule LemonSkills.Installer do
          {:ok, entry} <- load_entry_from_dir(dest_dir, plan),
          entry <- audit_entry(entry),
          :ok <- check_audit_verdict(entry),
+         :ok <- request_audit_warning_approval_if_needed(:install, entry, source, opts),
          :ok <- write_lockfile(plan.scope, entry),
          :ok <- Registry.register(entry) do
       {:ok, entry}
@@ -390,6 +391,7 @@ defmodule LemonSkills.Installer do
          updated_entry <- maybe_set_upstream_hash(updated_entry, new_upstream_hash),
          updated_entry <- audit_entry(updated_entry),
          :ok <- check_audit_verdict(updated_entry),
+         :ok <- request_audit_warning_approval_if_needed(:update, updated_entry, id, opts),
          :ok <- write_lockfile(scope, updated_entry),
          :ok <- Registry.register(updated_entry) do
       {:ok, updated_entry}
@@ -453,11 +455,46 @@ defmodule LemonSkills.Installer do
     Application.get_env(:lemon_skills, :require_approval, true)
   end
 
-  defp request_skill_approval(operation, skill_name, source, ctx) do
+  defp request_audit_warning_approval_if_needed(operation, entry, source, opts)
+       when is_list(opts) do
+    if Keyword.get(opts, :approve, false) do
+      :ok
+    else
+      do_request_audit_warning_approval_if_needed(operation, entry, source, opts)
+    end
+  end
+
+  defp do_request_audit_warning_approval_if_needed(
+         _operation,
+         %Entry{audit_status: status},
+         _source,
+         _opts
+       )
+       when status != :warn do
+    :ok
+  end
+
+  defp do_request_audit_warning_approval_if_needed(operation, %Entry{} = entry, source, opts) do
+    ctx = %{
+      session_key: Keyword.get(opts, :session_key),
+      agent_id: Keyword.get(opts, :agent_id),
+      run_id: Keyword.get(opts, :run_id)
+    }
+
+    request_skill_approval(
+      operation,
+      entry.key,
+      source,
+      ctx,
+      build_audit_warning_rationale(operation, entry, source)
+    )
+  end
+
+  defp request_skill_approval(operation, skill_name, source, ctx, rationale \\ nil) do
     tool = "skills.#{operation}"
 
     action = %{operation: operation, skill_name: skill_name, source: source}
-    rationale = build_rationale(operation, skill_name, source)
+    rationale = rationale || build_rationale(operation, skill_name, source)
     timeout_ms = Application.get_env(:lemon_skills, :approval_timeout_ms, 300_000)
 
     params = %{
@@ -492,4 +529,13 @@ defmodule LemonSkills.Installer do
   defp build_rationale(:install, name, source), do: "Install skill '#{name}' from #{source}"
   defp build_rationale(:update, name, _source), do: "Update skill '#{name}' to latest version"
   defp build_rationale(:uninstall, name, _source), do: "Uninstall skill '#{name}'"
+
+  defp build_audit_warning_rationale(operation, %Entry{} = entry, source) do
+    findings =
+      entry.audit_findings
+      |> Enum.take(3)
+      |> Enum.join("; ")
+
+    "#{build_rationale(operation, entry.key, source)}. Security audit warnings: #{findings}"
+  end
 end

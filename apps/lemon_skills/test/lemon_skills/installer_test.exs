@@ -3,6 +3,20 @@ defmodule LemonSkills.InstallerTest do
 
   alias LemonSkills.Installer
 
+  defmodule WarnReviewer do
+    def review(_content, _opts) do
+      {:ok,
+       {:warn,
+        [
+          LemonSkills.Audit.Finding.warn(
+            "llm_security_review",
+            "Skill asks for credentials in a risky way",
+            "paste your token"
+          )
+        ]}}
+    end
+  end
+
   @moduletag :tmp_dir
 
   setup %{tmp_dir: tmp_dir} do
@@ -31,6 +45,8 @@ defmodule LemonSkills.InstallerTest do
     on_exit(fn ->
       Application.delete_env(:lemon_skills, :require_approval)
       Application.delete_env(:lemon_skills, :approval_timeout_ms)
+      Application.delete_env(:lemon_skills, :audit_llm)
+      Application.delete_env(:lemon_skills, :audit_llm_reviewer)
     end)
 
     {:ok, skill_dir: skill_dir, tmp_dir: tmp_dir}
@@ -285,6 +301,53 @@ defmodule LemonSkills.InstallerTest do
 
         {:ok, _} ->
           :ok
+      end
+    end
+
+    test "audit warnings request approval even when general approvals are disabled", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      Application.put_env(:lemon_skills, :require_approval, false)
+      Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+
+      result =
+        with_mock_config(tmp_dir, fn ->
+          Installer.install(skill_dir,
+            global: false,
+            cwd: tmp_dir,
+            approve: false,
+            session_key: "test-session",
+            agent_id: "test-agent",
+            run_id: "test-run"
+          )
+        end)
+
+      assert {:error, reason} = result
+      assert reason =~ "Approval service unavailable" or reason =~ "approval"
+    end
+
+    test "explicit approve bypasses post-audit warning approval", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      Application.put_env(:lemon_skills, :require_approval, false)
+      Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+
+      result =
+        with_mock_config(tmp_dir, fn ->
+          Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
+        end)
+
+      case result do
+        {:error, reason} ->
+          refute reason =~ "approval"
+
+        {:ok, entry} ->
+          assert entry.audit_status == :warn
+          assert Enum.any?(entry.audit_findings, &String.contains?(&1, "llm_security_review"))
       end
     end
   end

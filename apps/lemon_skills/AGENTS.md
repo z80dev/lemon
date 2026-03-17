@@ -21,6 +21,8 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection | Changing where skills are found on disk |
 | `lib/lemon_skills/status.ex` | Checks binary availability (`which`) and env var presence | Adding new status checks |
 | `lib/lemon_skills/installer.ex` | Install/update/uninstall with approval gating via `LemonCore.ExecApprovals` | Changing installation flow |
+| `lib/lemon_skills/audit/engine.ex` | Deterministic skill security audit; merges static checks with optional LLM review | Changing audit behavior or verdict handling |
+| `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed audit reviewer for suspicious/malicious skill content | Changing LLM audit prompts, model resolution, or parsing |
 | `lib/lemon_skills/builtin_seeder.ex` | Copies `priv/builtin_skills/` to `~/.lemon/agent/skill/` on startup (idempotent) | Adding/modifying bundled skills |
 | `lib/lemon_skills/discovery.ex` | GitHub topic search + registry URL probing for online skill discovery | Changing online discovery sources |
 
@@ -122,9 +124,27 @@ Body content is truncated to 10,000 chars before scoring to avoid performance is
 
 ### Approval Gating
 
-The `Installer` requests approval via `LemonCore.ExecApprovals.request/1` before install/update/uninstall operations. If the approvals infrastructure is not available (rescue clause), it defaults to allowing the operation. This allows the installer to work in minimal runtimes.
+The `Installer` requests approval via `LemonCore.ExecApprovals.request/1` before install/update/uninstall operations. It also requests approval after audit when a skill receives a `:warn` verdict, even if global install approvals are otherwise disabled.
 
 Key config: `:require_approval` (default `true`), `:approval_timeout_ms` (default 300,000ms = 5 minutes).
+
+### Skill Audit
+
+All non-builtin skills are audited during install/update. The audit path is:
+
+- deterministic scan in `LemonSkills.Audit.Engine`
+- optional LLM review in `LemonSkills.Audit.LlmReviewer`
+- installer enforcement: `:block` rejects, `:warn` requires explicit approval
+
+LLM audit config lives under:
+
+```elixir
+config :lemon_skills, :audit_llm,
+  enabled: false,
+  model: "openai:gpt-4o-mini"
+```
+
+The model string may be either `provider:model-id` or a bare `model-id` that exists in `Ai.Models`.
 
 ### HTTP Client Injection
 
@@ -165,6 +185,9 @@ test/lemon_skills/
   ancestor_skills_test.exs       # End-to-end ancestor .agents/skills walking
   manifest_test.exs              # YAML/TOML parsing, validation, edge cases
   entry_test.exs                 # Entry struct creation and transformation
+  audit/engine_test.exs          # Static + LLM audit engine behavior
+  audit/llm_reviewer_test.exs    # LLM audit model resolution and JSON parsing
+  audit/skill_lint_test.exs      # Bundle lint + audit integration
   status_test.exs                # Binary/config availability checking
   installer_test.exs             # Local path install, approval gating
   builtin_seeder_test.exs        # Seeding behavior, idempotency
