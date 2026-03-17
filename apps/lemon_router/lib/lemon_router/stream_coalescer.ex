@@ -25,9 +25,9 @@ defmodule LemonRouter.StreamCoalescer do
   alias LemonRouter.ChannelContext
   alias LemonRouter.DeliveryRouteResolver
 
-  @default_min_chars 48
-  @default_idle_ms 400
-  @default_max_latency_ms 1200
+  @default_min_chars 200
+  @default_idle_ms 800
+  @default_max_latency_ms 3000
 
   defstruct [
     :session_key,

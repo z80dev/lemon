@@ -34,7 +34,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     # Use existing Telegram API if available
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
-        case api_mod.send_message(token, chat_id, text, opts, nil) do
+        case with_retry(fn -> api_mod.send_message(token, chat_id, text, opts, nil) end) do
           {:ok, result} ->
             Logger.debug("Telegram outbound text sent successfully: chat_id=#{chat_id}")
             {:ok, result}
@@ -73,7 +73,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
-        case api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts) do
+        case with_retry(fn ->
+               api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts)
+             end) do
           {:ok, result} ->
             Logger.debug(
               "Telegram outbound edit successful: chat_id=#{chat_id} message_id=#{msg_id}"
