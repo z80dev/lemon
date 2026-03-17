@@ -234,6 +234,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/product/skill_synthesis_planning.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
+    max_age_days: 45
+  },
+  %{
     path: "docs/skills_v2.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
