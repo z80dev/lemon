@@ -450,6 +450,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     title = tool_title(name, args)
     detail = %{name: name, args: args}
 
+
     action = Action.new(action_id, kind, title, detail)
 
     {event, factory} =
@@ -722,51 +723,98 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp tool_kind(name) do
-    case name do
-      "Bash" -> :command
-      "Read" -> :tool
-      "Write" -> :file_change
-      "Edit" -> :file_change
-      "Glob" -> :tool
-      "Grep" -> :tool
-      "WebSearch" -> :web_search
-      "WebFetch" -> :web_search
-      "Task" -> :subagent
+    case String.downcase(name || "") do
+      "bash" -> :command
+      "read" -> :tool
+      "write" -> :file_change
+      "edit" -> :file_change
+      "glob" -> :tool
+      "grep" -> :tool
+      "websearch" -> :web_search
+      "webfetch" -> :web_search
+      "task" -> :subagent
+      "agent" -> :subagent
       _ -> :tool
     end
   end
 
   defp tool_title(name, args) do
-    case {name, args} do
-      {"Bash", %{"command" => cmd}} ->
+    a = stringify_keys(args)
+
+    case String.downcase(name || "") do
+      "bash" ->
+        cmd = a["command"] || ""
         cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-        "$ #{cmd_preview}"
+        "`#{cmd_preview}`"
 
-      {"Read", %{"file_path" => path}} ->
-        "Read #{Path.basename(path)}"
+      "read" ->
+        path = a["path"] || a["file_path"] || ""
+        "read: `#{path_label(path)}`"
 
-      {"Write", %{"file_path" => path}} ->
-        "Write #{Path.basename(path)}"
+      "write" ->
+        path = a["path"] || a["file_path"] || ""
+        "write: `#{path_label(path)}`"
 
-      {"Edit", %{"file_path" => path}} ->
-        "Edit #{Path.basename(path)}"
+      "edit" ->
+        path = a["path"] || a["file_path"] || ""
+        "edit: `#{path_label(path)}`"
 
-      {"Glob", %{"pattern" => pattern}} ->
-        "Glob #{pattern}"
+      "glob" ->
+        "glob: `#{a["pattern"] || ""}`"
 
-      {"Grep", %{"pattern" => pattern}} ->
-        "Grep #{pattern}"
+      "grep" ->
+        pattern = String.slice(a["pattern"] || "", 0, 30)
+        path = a["path"]
 
-      {"WebSearch", %{"query" => query}} ->
-        "Search: #{String.slice(query, 0, 40)}"
+        if is_binary(path) and path != "" do
+          "grep: `#{pattern}` in #{path_label(path)}"
+        else
+          "grep: `#{pattern}`"
+        end
 
-      {"Task", %{"description" => desc}} ->
-        "Task: #{String.slice(desc, 0, 40)}"
+      "websearch" ->
+        "search: #{String.slice(a["query"] || "", 0, 50)}"
 
-      {name, _} ->
-        name
+      "webfetch" ->
+        "fetch: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "task" ->
+        "task: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
+
+      "agent" ->
+        "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
+
+      "cron" ->
+        "cron: #{String.slice(a["prompt"] || "", 0, 50)}"
+
+      "skill" ->
+        "skill: #{a["skill"] || a["name"] || ""}"
+
+      n ->
+        n
     end
   end
+
+  defp path_label(path) when is_binary(path) do
+    # Show last 2 path components for context
+    parts = Path.split(path)
+
+    case length(parts) do
+      n when n > 2 -> Path.join(Enum.take(parts, -2))
+      _ -> path
+    end
+  end
+
+  defp path_label(other), do: inspect(other)
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp stringify_keys(_), do: %{}
 
   defp truncate_result(result) when is_binary(result) do
     if String.length(result) > 500 do

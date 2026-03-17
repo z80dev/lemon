@@ -125,19 +125,15 @@ defmodule LemonRouter.ToolStatusRenderer do
       :completed ->
         ok? = (action[:ok] || action["ok"]) == true
         symbol = if ok?, do: "\u2713", else: "\u2717"
+        preview = extract_result_preview(action[:detail] || action["detail"])
+        base = symbol <> " " <> title <> (extra || "")
 
-        if ok? do
-          symbol <> " " <> title <> (extra || "")
+        if preview in [nil, ""] do
+          base
         else
-          preview = extract_result_preview(action[:detail] || action["detail"])
-          base = symbol <> " " <> title <> (extra || "")
-
-          if preview in [nil, ""] do
-            base
-          else
-            prev = truncate_one_line(preview, 140)
-            base <> " -> " <> prev
-          end
+          max_len = if ok?, do: 80, else: 140
+          prev = truncate_one_line(preview, max_len)
+          base <> " -> " <> prev
         end
 
       other ->
