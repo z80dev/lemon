@@ -499,7 +499,7 @@ defmodule CodingAgent.Tools.Agent do
         })
 
         if validated.auto_followup do
-          maybe_send_auto_followup(completion, run_id, task_id, validated.agent_id, request, opts)
+          maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
         end
 
       {:error, :timeout} ->
@@ -514,8 +514,8 @@ defmodule CodingAgent.Tools.Agent do
       TaskStore.fail(task_id, {:watcher_crash, error})
   end
 
-  defp maybe_send_auto_followup(completion, run_id, task_id, target_agent_id, request, opts) do
-    text = auto_followup_text(completion, run_id, target_agent_id)
+  defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do
+    text = auto_followup_text(completion, run_id, validated)
     session_pid = Keyword.get(opts, :session_pid)
 
     Logger.info(
@@ -523,6 +523,8 @@ defmodule CodingAgent.Tools.Agent do
         "session_pid=#{inspect(session_pid)} alive=#{is_pid(session_pid) and Process.alive?(session_pid)} " <>
         "parent_session_key=#{inspect(Keyword.get(opts, :session_key))}"
     )
+
+    target_agent_id = validated.agent_id
 
     if send_followup_via_live_session(text, opts) do
       :ok
@@ -775,23 +777,69 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp auto_followup_text(completion, run_id, target_agent_id) do
-    base = "[agent #{target_agent_id}] delegated run #{run_id}"
+  defp auto_followup_text(completion, run_id, validated) do
+    agent_id = validated.agent_id
+    description = normalize_optional_string(validated[:description])
+    engine_id = normalize_optional_string(validated[:engine_id])
+    model = normalize_optional_string(validated[:model])
+    role = normalize_optional_string(validated[:role_id])
+
+    summary = if is_binary(description) and description != "", do: description, else: "delegated task"
+
+    base = "[agent #{agent_id}] #{summary}"
+
+    engine_label =
+      cond do
+        is_binary(engine_id) and engine_id != "" -> engine_id
+        true -> nil
+      end
+
+    model_label = if is_binary(model) and model != "", do: model, else: nil
+
+    parts = [engine_label, model_label] |> Enum.filter(&(&1 != nil))
+    engine_str = Enum.join(parts, "/")
+
+    role_str = if is_binary(role) and role != "", do: " | role: #{role}", else: ""
+
+    paren_content =
+      if engine_str != "" or role_str != "" do
+        inner = String.trim(String.trim(engine_str) <> " " <> String.trim(role_str))
+        " (#{inner})"
+      else
+        ""
+      end
+
+    base = base <> paren_content <> " run=#{short_id(run_id)}"
+
+    duration_str =
+      if is_integer(completion.duration_ms) and completion.duration_ms > 0 do
+        " #{format_duration(completion.duration_ms)}"
+      else
+        ""
+      end
 
     cond do
       completion.ok and String.trim(completion.answer || "") == "" ->
-        "#{base} completed with no textual answer."
+        "#{base} completed.#{duration_str}"
 
       completion.ok ->
-        "#{base} completed.\n\n#{completion.answer}"
+        "#{base} completed.#{duration_str}\n\n#{completion.answer}"
 
       String.trim(completion.answer || "") == "" ->
-        "#{base} failed: #{format_error(completion.error)}"
+        "#{base} failed: #{format_error(completion.error)}#{duration_str}"
 
       true ->
-        "#{base} failed: #{format_error(completion.error)}\n\nPartial output:\n#{completion.answer}"
+        "#{base} failed: #{format_error(completion.error)}#{duration_str}\n\nPartial output:\n#{completion.answer}"
     end
   end
+
+  defp short_id(id) when is_binary(id) and byte_size(id) > 8, do: String.slice(id, 0, 8)
+  defp short_id(id) when is_binary(id), do: id
+  defp short_id(_), do: "?"
+
+  defp format_duration(ms) when ms < 1000, do: "#{ms}ms"
+  defp format_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
+  defp format_duration(ms), do: "#{Float.round(ms / 60_000, 1)}m"
 
   defp validate_run_params(params, cwd) when is_map(params) do
     agent_id = Map.get(params, "agent_id") |> normalize_optional_string()

@@ -97,6 +97,9 @@ defmodule CodingAgent.Tools.Task.Execution do
       parent_agent_id: parent_agent_id,
       queue_mode: validated.queue_mode,
       meta: validated.meta,
+      engine: validated.engine || "internal",
+      role: role_id,
+      model: validated.model,
       session_pid: Keyword.get(opts, :session_pid),
       session_module: Keyword.get(opts, :session_module, Session),
       run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())

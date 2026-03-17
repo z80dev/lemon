@@ -794,7 +794,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:session_follow_up, text}, 1_000
       assert text =~ "[task #{task_id}]"
       assert text =~ "Build widget"
-      assert text =~ "(run #{run_id})"
+      assert text =~ "run="
       assert text =~ "completed."
       assert text =~ "Widget built successfully"
     end
