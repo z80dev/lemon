@@ -1,0 +1,9 @@
+{
+  "name": "whatsapp-bridge",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^9.6.0"
+  }
+}

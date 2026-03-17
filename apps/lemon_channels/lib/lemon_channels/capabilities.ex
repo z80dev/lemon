@@ -330,6 +330,17 @@ defmodule LemonChannels.Capabilities.Registry do
     ])
   end
 
+  def lookup("whatsapp") do
+    Capabilities.new([
+      :threads,
+      :reactions,
+      :voice,
+      {:attachments, max_size: 50_000_000, features: [:images, :videos, :documents, :audio]},
+      {:rich_blocks, features: [:markdown]},
+      {:chunk_limit, value: 4096}
+    ])
+  end
+
   def lookup(_) do
     Capabilities.empty()
   end

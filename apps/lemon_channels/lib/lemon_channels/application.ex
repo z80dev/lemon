@@ -84,6 +84,17 @@ defmodule LemonChannels.Application do
       end
     end
 
+    # Register WhatsApp adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_whatsapp, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.WhatsApp) do
+        :ok ->
+          Logger.info("WhatsApp adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start WhatsApp adapter: #{inspect(reason)}")
+      end
+    end
+
     :ok
   end
 
@@ -126,6 +137,8 @@ defmodule LemonChannels.Application do
         :discord -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
         "xmtp" -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
         :xmtp -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
+        "whatsapp" -> LemonChannels.GatewayConfig.get(:enable_whatsapp, false) == true
+        :whatsapp -> LemonChannels.GatewayConfig.get(:enable_whatsapp, false) == true
         _ -> true
       end
 
