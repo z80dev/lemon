@@ -611,6 +611,83 @@ defmodule LemonChannels.Telegram.MarkdownTest do
       assert text =~ "- item two"
       assert text =~ "After the list."
     end
+
+    test "list followed by paragraph preserves paragraph break" do
+      md = "- item one\n- item two\n\nAfter the list."
+      {text, _entities} = Markdown.render(md)
+
+      # Paragraph break must exist between list and next paragraph
+      assert String.contains?(text, "item two\n\nAfter"),
+             "Expected blank line between list end and next paragraph, got: #{inspect(text)}"
+    end
+
+    test "paragraphs after list are not collapsed" do
+      md = "- a\n- b\n\nFirst after list.\n\nSecond after list."
+      {text, _entities} = Markdown.render(md)
+
+      # Both paragraph breaks must be present
+      assert String.contains?(text, "- b\n\nFirst"),
+             "Expected blank line after list, got: #{inspect(text)}"
+      assert String.contains?(text, "list.\n\nSecond"),
+             "Expected blank line between paragraphs, got: #{inspect(text)}"
+    end
+
+    test "ordered list followed by paragraph preserves break" do
+      md = "1. first\n2. second\n\nAfter numbered list."
+      {text, _entities} = Markdown.render(md)
+
+      assert String.contains?(text, "second\n\nAfter"),
+             "Expected blank line after ordered list, got: #{inspect(text)}"
+    end
+
+    test "mixed lists and paragraphs preserve all breaks" do
+      md = "Intro.\n\n- a\n- b\n\nMiddle.\n\n1. x\n2. y\n\nEnd."
+      {text, _entities} = Markdown.render(md)
+
+      assert String.contains?(text, "Intro.\n\n- a"),
+             "Expected break after intro, got: #{inspect(text)}"
+      assert String.contains?(text, "- b\n\nMiddle"),
+             "Expected break after ul, got: #{inspect(text)}"
+      assert String.contains?(text, "Middle.\n\n1."),
+             "Expected break after middle paragraph, got: #{inspect(text)}"
+      assert String.contains?(text, "2. y\n\nEnd"),
+             "Expected break after ol, got: #{inspect(text)}"
+    end
+
+    test "list mode does not leak past list boundary" do
+      md = "- item\n\nParagraph with **bold** text."
+      {text, entities} = Markdown.render(md)
+
+      assert text =~ "Paragraph with"
+      assert text =~ "bold"
+      bold = find_entity(entities, "bold")
+      assert bold != nil, "Bold entity should exist after list when list mode is properly reset"
+
+      # The key assertion: paragraph break must be present after the list
+      assert String.contains?(text, "item\n\nParagraph"),
+             "Expected blank line between list and paragraph (mode leak check), got: #{inspect(text)}"
+    end
+
+    test "nested list preserves outer mode after inner list" do
+      md = "- outer one\n  - inner a\n  - inner b\n- outer two\n\nAfter nested list."
+      {text, _entities} = Markdown.render(md)
+
+      # After the nested list completes, paragraph breaks should work
+      assert String.contains?(text, "outer two\n\nAfter"),
+             "Expected paragraph break after nested list, got: #{inspect(text)}"
+    end
+
+    test "two separate lists with paragraph between preserve all breaks" do
+      md = "- ul a\n- ul b\n\nMiddle paragraph.\n\n1. ol one\n2. ol two\n\nFinal paragraph."
+      {text, _entities} = Markdown.render(md)
+
+      assert String.contains?(text, "- ul b\n\nMiddle"),
+             "Expected break after first list, got: #{inspect(text)}"
+      assert String.contains?(text, "paragraph.\n\n1."),
+             "Expected break after middle paragraph, got: #{inspect(text)}"
+      assert String.contains?(text, "two\n\nFinal"),
+             "Expected break after second list, got: #{inspect(text)}"
+    end
   end
 
   # ------------------------------------------------------------------

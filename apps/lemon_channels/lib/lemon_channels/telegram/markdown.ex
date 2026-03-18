@@ -193,6 +193,8 @@ defmodule LemonChannels.Telegram.Markdown do
   end
 
   defp render_ul(items, acc) do
+    outer_mode = acc.mode
+
     acc =
       Enum.reduce(items, acc, fn
         {"li", _attrs, li_children, _meta}, a ->
@@ -204,7 +206,9 @@ defmodule LemonChannels.Telegram.Markdown do
           render_node(other, a)
       end)
 
-    if acc.mode == :list_item do
+    acc = %{acc | mode: outer_mode}
+
+    if outer_mode == :list_item do
       acc
     else
       emit(acc, "\n")
@@ -212,6 +216,8 @@ defmodule LemonChannels.Telegram.Markdown do
   end
 
   defp render_ol(attrs, items, acc) do
+    outer_mode = acc.mode
+
     start =
       case get_attr(attrs, "start") do
         nil -> 1
@@ -229,7 +235,9 @@ defmodule LemonChannels.Telegram.Markdown do
           {render_node(other, a), n}
       end)
 
-    if acc.mode == :list_item do
+    acc = %{acc | mode: outer_mode}
+
+    if outer_mode == :list_item do
       acc
     else
       emit(acc, "\n")

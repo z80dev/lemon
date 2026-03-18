@@ -197,9 +197,10 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp surface_for(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
+    surface = meta[:surface] || meta["surface"]
 
     cond do
-      (meta[:surface] || meta["surface"]) in [:status, "status"] -> :status
+      not is_nil(surface) -> surface
       intent.kind in [:tool_status_snapshot, :tool_status_finalize, :watchdog_prompt] -> :status
       true -> :answer
     end
