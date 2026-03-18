@@ -72,7 +72,7 @@ Ai (main API)
 - `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
 - `Ai.Auth.GoogleGeminiCliOAuth` - Gemini CLI PKCE OAuth helpers, Code Assist project onboarding, token refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
 - `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
-- `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution
+- `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution (supports both current and legacy onboarding secret payloads)
 - `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific OAuth secret payloads
 - `Ai.Auth.OAuthPKCE` - PKCE verifier/challenge generation utility
 

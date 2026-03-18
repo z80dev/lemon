@@ -63,6 +63,25 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
     assert String.split(token, ".") |> length() == 3
   end
 
+  test "resolve_api_key_from_secret accepts legacy onboarding payloads" do
+    payload =
+      Jason.encode!(%{
+        "type" => "onboarding_openai_codex_oauth",
+        "refresh_token" => "refresh-token",
+        "access_token" => make_jwt("acc_legacy", 3_600),
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "account_id" => "acc_legacy",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, token} =
+             OpenAICodexOAuth.resolve_api_key_from_secret("llm_openai_codex_api_key", payload)
+
+    assert is_binary(token)
+    assert String.split(token, ".") |> length() == 3
+  end
+
   test "resolve_access_token prefers OPENAI_CODEX_API_KEY env over stored secrets" do
     oauth_secret =
       Jason.encode!(%{

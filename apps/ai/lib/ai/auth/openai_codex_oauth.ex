@@ -19,6 +19,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   @scope "openid profile email offline_access"
   @jwt_claim_path "https://api.openai.com/auth"
   @secret_type "openai_codex_oauth"
+  @legacy_secret_types ["onboarding_openai_codex_oauth"]
   @near_expiry_ms 10 * 60 * 1000
   @default_secret_names ["llm_openai_codex_api_key"]
   @default_callback_timeout_ms 120_000
@@ -214,7 +215,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   def decode_secret(secret_value) when is_binary(secret_value) do
     case Jason.decode(secret_value) do
       {:ok, decoded} when is_map(decoded) ->
-        if decoded["type"] == @secret_type do
+        if oauth_secret_type?(decoded["type"]) do
           {:ok, decoded}
         else
           :not_oauth
@@ -438,6 +439,10 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     |> pad_base64()
     |> Base.decode64()
   end
+
+  defp oauth_secret_type?(type) when type == @secret_type, do: true
+  defp oauth_secret_type?(type) when type in @legacy_secret_types, do: true
+  defp oauth_secret_type?(_type), do: false
 
   defp pad_base64(str) do
     case rem(String.length(str), 4) do
