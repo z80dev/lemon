@@ -4,6 +4,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
   alias LemonCore.DeliveryIntent
   alias LemonCore.DeliveryRoute
+  alias Elixir.LemonRouter.StreamCoalescer
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
   defmodule ToolStatusCoalescerTestTelegramPlugin do
@@ -42,6 +43,18 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
   end
 
   setup do
+    if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerRegistry)) do
+      {:ok, _} = Registry.start_link(keys: :unique, name: Elixir.LemonRouter.CoalescerRegistry)
+    end
+
+    if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerSupervisor)) do
+      {:ok, _} =
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: Elixir.LemonRouter.CoalescerSupervisor
+        )
+    end
+
     if is_nil(Process.whereis(Elixir.LemonRouter.ToolStatusRegistry)) do
       {:ok, _} = Registry.start_link(keys: :unique, name: Elixir.LemonRouter.ToolStatusRegistry)
     end
@@ -204,6 +217,111 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
            end)
   end
 
+  test "expands embedded task current_action into a child action" do
+    session_key = "agent:embedded:telegram:bot:dm:654"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    ev = %{
+      engine: "lemon",
+      action: %{
+        id: "task_1",
+        kind: "subagent",
+        title: "task: Read AGENTS.md in lemon repo",
+        detail: %{
+          name: "task",
+          partial_result: %AgentCore.Types.AgentToolResult{
+            content: [%Ai.Types.TextContent{type: :text, text: "pwd"}],
+            details: %{
+              status: "running",
+              description: "Read AGENTS.md in lemon repo",
+              engine: "claude",
+              current_action: %{title: "pwd", kind: "command", phase: "started"}
+            },
+            trust: :trusted
+          }
+        }
+      },
+      phase: :updated,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+
+    child_action =
+      state.actions
+      |> Map.values()
+      |> Enum.find(fn action ->
+        action[:detail][:parent_tool_use_id] == "task_1"
+      end)
+
+    assert child_action.title == "pwd"
+    assert child_action.kind == "command"
+    assert child_action.phase == :started
+    assert child_action.caller_engine == "claude"
+    assert String.contains?(state.last_text, "▸ task: Read AGENTS.md in lemon repo")
+    assert String.contains?(state.last_text, "  ▸ pwd")
+  end
+
+  test "expands embedded codex task current_action into a child action" do
+    session_key = "agent:embedded:telegram:bot:dm:655"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    ev = %{
+      engine: "lemon",
+      action: %{
+        id: "task_codex_1",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{
+          name: "task",
+          partial_result: %AgentCore.Types.AgentToolResult{
+            content: [%Ai.Types.TextContent{type: :text, text: "Read: AGENTS.md"}],
+            details: %{
+              status: "running",
+              description: "inspect repo",
+              engine: "codex",
+              current_action: %{title: "Read: AGENTS.md", kind: "tool", phase: "completed"}
+            },
+            trust: :trusted
+          }
+        }
+      },
+      phase: :updated,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+
+    child_action =
+      state.actions
+      |> Map.values()
+      |> Enum.find(fn action ->
+        action[:detail][:parent_tool_use_id] == "task_codex_1"
+      end)
+
+    assert child_action.title == "Read: AGENTS.md"
+    assert child_action.kind == "tool"
+    assert child_action.phase == :completed
+    assert child_action.ok == true
+    assert child_action.caller_engine == "codex"
+    assert String.contains?(state.last_text, "▸ task(codex): inspect repo")
+    assert String.contains?(state.last_text, "  ✓ Read: AGENTS.md")
+  end
+
   test "telegram tool status creates a new message when only progress_msg_id is present (no status_msg_id)" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
@@ -262,6 +380,124 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                    1_000
 
     assert String.contains?(text, "working")
+  end
+
+  test "anchored tool status edits the handed-off answer message and finalizes in place" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:778"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    route = telegram_route("bot", :group, "12345", "778")
+    prefix = "Found the key files. Let me read the markdown renderer and the formatter:"
+
+    StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, prefix,
+      meta: %{user_msg_id: 9}
+    )
+
+    StreamCoalescer.flush(session_key, channel_id)
+
+    assert eventually(fn ->
+             LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+               1001
+           end)
+
+    assert {:ok, ^prefix} = StreamCoalescer.handoff_turn(session_key, channel_id, run_id, :status)
+
+    assert :ok =
+             ToolStatusCoalescer.anchor_segment(session_key, channel_id, run_id, prefix,
+               meta: %{user_msg_id: 9}
+             )
+
+    started = %{
+      engine: "lemon",
+      action: %{id: "a1", kind: "tool", title: "Read: markdown.ex", detail: %{}},
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      content: %{message_id: "1001", text: text}
+                    }},
+                   1_000
+
+    assert String.contains?(text, prefix <> "\n\n")
+    assert String.contains?(text, "Read: markdown.ex")
+
+    assert :ok = ToolStatusCoalescer.commit_segment(session_key, channel_id, run_id)
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      content: %{message_id: "1001", text: final_text},
+                      meta: %{reply_markup: %{"inline_keyboard" => []}}
+                    }},
+                   1_000
+
+    assert final_text == text
+  end
+
+  test "task-specific surface keeps its message separate from generic status" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:779"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    route = telegram_route("bot", :group, "12345", "779")
+    surface = {:status_task, "task_1"}
+    prefix = "Inspecting the repo layout"
+
+    StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, prefix,
+      meta: %{user_msg_id: 9}
+    )
+
+    StreamCoalescer.flush(session_key, channel_id)
+
+    assert eventually(fn ->
+             LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+               1001
+           end)
+
+    assert {:ok, ^prefix} = StreamCoalescer.handoff_turn(session_key, channel_id, run_id, surface)
+
+    assert :ok =
+             ToolStatusCoalescer.anchor_segment(session_key, channel_id, run_id, prefix,
+               meta: %{user_msg_id: 9},
+               surface: surface
+             )
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_1",
+        kind: "subagent",
+        title: "task(claude): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
+
+    assert eventually(fn ->
+             LemonChannels.PresentationState.get(route, run_id, surface).platform_message_id ==
+               1001
+           end)
+
+    assert is_nil(LemonChannels.PresentationState.get(route, run_id, :status).platform_message_id)
   end
 
   test "finalize_run does not create status output when there are no tool actions" do

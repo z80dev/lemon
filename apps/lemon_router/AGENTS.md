@@ -136,6 +136,17 @@ Use `LemonCore.EngineCatalog` for engine ID validation/normalization and `LemonC
 
 If the change is semantic, update router coalescers or `RunProcess.OutputTracker`.
 If the change is platform UX, change `lemon_channels` renderers instead.
+`ToolStatusRenderer` may use parent-child metadata already present in action `detail`
+such as Claude's `parent_tool_use_id`; preserve that metadata in upstream runners instead
+of re-deriving hierarchy in channel adapters.
+`ToolStatusCoalescer` also expands embedded subagent progress from
+`detail.partial_result.details.current_action` into child actions so task-tool updates can show
+inner CLI steps over Telegram and similar channels.
+When a tool phase starts immediately after streamed assistant text, `RunProcess.OutputTracker`
+hands the finalized `:answer` message over to the tool-status surface so the next status edits
+append under that assistant text instead of reusing an older standalone status message.
+`ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
+assistant delta starts, at which point the segment is finalized in place and reset.
 
 ### Change compaction behavior
 

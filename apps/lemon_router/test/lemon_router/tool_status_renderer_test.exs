@@ -134,7 +134,12 @@ defmodule LemonRouter.ToolStatusRendererTest do
     actions = %{
       "a1" => %{title: "read foo", phase: :started, ok: nil},
       "a2" => %{title: "grep bar", phase: :completed, ok: true},
-      "a3" => %{title: "npm test", phase: :completed, ok: false, detail: %{result_preview: "Command failed"}}
+      "a3" => %{
+        title: "npm test",
+        phase: :completed,
+        ok: false,
+        detail: %{result_preview: "Command failed"}
+      }
     }
 
     text = ToolStatusRenderer.render("telegram", actions, ["a1", "a2", "a3"])
@@ -142,6 +147,30 @@ defmodule LemonRouter.ToolStatusRendererTest do
     assert String.contains?(text, "\u25b8 read foo")
     assert String.contains?(text, "\u2713 grep bar")
     assert String.contains?(text, "\u2717 npm test -> Command failed")
+  end
+
+  test "indents child actions when parent_tool_use_id is present" do
+    actions = %{
+      "task_1" => %{title: "Task: investigate", phase: :started, ok: nil, detail: %{}},
+      "child_1" => %{
+        title: "Read: foo.ex",
+        phase: :completed,
+        ok: true,
+        detail: %{parent_tool_use_id: "task_1", result_preview: "ok"}
+      },
+      "grandchild_1" => %{
+        title: "Grep: defmodule",
+        phase: :completed,
+        ok: true,
+        detail: %{parent_tool_use_id: "child_1", result_preview: "1 match"}
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["task_1", "child_1", "grandchild_1"])
+
+    assert String.contains?(text, "▸ Task: investigate")
+    assert String.contains?(text, "  ✓ Read: foo.ex")
+    assert String.contains?(text, "    ✓ Grep: defmodule")
   end
 
   test "empty order renders just header" do

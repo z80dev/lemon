@@ -67,6 +67,58 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> :ok
   end
 
+  @spec handoff_stream_turn_to_tool_status(map(), term()) :: :ok
+  def handoff_stream_turn_to_tool_status(state, surface \\ :status) do
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        meta = coalescer_meta(state)
+
+        case LemonRouter.StreamCoalescer.handoff_turn(
+               state.session_key,
+               channel_id,
+               state.run_id,
+               surface
+             ) do
+          {:ok, text} ->
+            LemonRouter.ToolStatusCoalescer.anchor_segment(
+              state.session_key,
+              channel_id,
+              state.run_id,
+              text,
+              meta: meta,
+              surface: surface
+            )
+
+          :noop ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  @spec commit_tool_status_segment(map(), term()) :: :ok
+  def commit_tool_status_segment(state, surface \\ :status) do
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        LemonRouter.ToolStatusCoalescer.commit_segment(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          meta: coalescer_meta(state),
+          surface: surface
+        )
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   # ---- Final output ----
 
   @spec maybe_emit_final_output(map(), LemonCore.Event.t()) :: :ok
@@ -149,13 +201,16 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
         meta = coalescer_meta(state)
 
-        LemonRouter.ToolStatusCoalescer.finalize_run(
-          state.session_key,
-          channel_id,
-          state.run_id,
-          ok?,
-          meta: meta
-        )
+        Enum.each(tool_status_surfaces(state), fn surface ->
+          LemonRouter.ToolStatusCoalescer.finalize_run(
+            state.session_key,
+            channel_id,
+            state.run_id,
+            ok?,
+            meta: meta,
+            surface: surface
+          )
+        end)
 
       _ ->
         :ok
@@ -166,8 +221,33 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> :ok
   end
 
-  @spec ingest_action_to_tool_status_coalescer(map(), map()) :: :ok
-  def ingest_action_to_tool_status_coalescer(state, action_ev) do
+  @spec prepare_tool_status_action(map(), map()) :: {map(), term(), boolean()}
+  def prepare_tool_status_action(state, action_ev) do
+    task_surfaces = Map.get(state, :task_status_surfaces, %{})
+    action = Map.get(action_ev, :action) || %{}
+    action_id = Map.get(action, :id)
+    parent_id = action_parent_tool_use_id(action)
+
+    cond do
+      is_binary(parent_id) and Map.has_key?(task_surfaces, parent_id) ->
+        {state, Map.fetch!(task_surfaces, parent_id), false}
+
+      is_binary(action_id) and Map.has_key?(task_surfaces, action_id) ->
+        {state, Map.fetch!(task_surfaces, action_id), false}
+
+      task_root_action?(action) and is_binary(action_id) and action_id != "" ->
+        surface = task_surface(action_id)
+
+        {Map.put(state, :task_status_surfaces, Map.put(task_surfaces, action_id, surface)),
+         surface, true}
+
+      true ->
+        {state, :status, true}
+    end
+  end
+
+  @spec ingest_action_to_tool_status_coalescer(map(), map(), term()) :: :ok
+  def ingest_action_to_tool_status_coalescer(state, action_ev, surface) do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
         meta = coalescer_meta(state)
@@ -177,7 +257,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
           channel_id,
           state.run_id,
           action_ev,
-          meta: meta
+          meta: meta,
+          surface: surface
         )
 
       _ ->
@@ -192,7 +273,10 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
         LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
-        LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
+
+        Enum.each(tool_status_surfaces(state), fn surface ->
+          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
+        end)
 
       _ ->
         :ok
@@ -205,7 +289,9 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   def flush_tool_status(state) do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
-        LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
+        Enum.each(tool_status_surfaces(state), fn surface ->
+          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
+        end)
 
       _ ->
         :ok
@@ -302,6 +388,33 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     do: ChannelContext.coalescer_meta_from_job(request)
 
   defp coalescer_meta(_), do: %{}
+
+  defp tool_status_surfaces(state) do
+    [:status | Map.values(Map.get(state, :task_status_surfaces, %{}))]
+    |> Enum.uniq()
+  end
+
+  defp task_surface(task_id), do: {:status_task, task_id}
+
+  defp task_root_action?(action) when is_map(action) do
+    detail = Map.get(action, :detail) || %{}
+    kind = Map.get(action, :kind)
+
+    is_map(detail) and (detail[:name] == "task" or detail["name"] == "task") and
+      kind in ["subagent", :subagent]
+  end
+
+  defp task_root_action?(_action), do: false
+
+  defp action_parent_tool_use_id(action) when is_map(action) do
+    detail = Map.get(action, :detail) || %{}
+
+    if is_map(detail) do
+      detail[:parent_tool_use_id] || detail["parent_tool_use_id"]
+    end
+  end
+
+  defp action_parent_tool_use_id(_action), do: nil
 
   defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
        when is_binary(cwd) and cwd != "",

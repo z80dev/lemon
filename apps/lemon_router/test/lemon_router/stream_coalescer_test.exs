@@ -632,8 +632,88 @@ defmodule LemonRouter.StreamCoalescerTest do
                         channel_id: "telegram",
                         kind: :text,
                         idempotency_key: ^send_key,
-                        content: "Done",
+                        content: "⚠️ Empty response from model — no output was generated.",
                         peer: %{id: "12340"},
+                        reply_to: "222",
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
+                      }},
+                     1_000
+    end
+
+    test "uses accumulated full_text when final_text is empty but deltas were streamed" do
+      session_key = "agent:test:telegram:bot:dm:12341"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer()}"
+
+      # Stream some deltas first
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Hello, I looked at the code and ",
+                 meta: %{progress_msg_id: 111, user_msg_id: 222}
+               )
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 2,
+                 "here are my findings.",
+                 meta: %{progress_msg_id: 111, user_msg_id: 222}
+               )
+
+      # Finalize with empty final_text — should use accumulated full_text, NOT the empty-warning
+      assert :ok =
+               StreamCoalescer.finalize_run(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 meta: %{progress_msg_id: 111, user_msg_id: 222},
+                 final_text: ""
+               )
+
+      send_key = "#{run_id}:stream:2:stream_finalize"
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        channel_id: "telegram",
+                        kind: :text,
+                        idempotency_key: ^send_key,
+                        content: "Hello, I looked at the code and here are my findings.",
+                        peer: %{id: "12341"},
+                        reply_to: "222",
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
+                      }},
+                     1_000
+    end
+
+    test "handles explicit nil final_text with no prior deltas" do
+      session_key = "agent:test:telegram:bot:dm:12342"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer()}"
+
+      assert :ok =
+               StreamCoalescer.finalize_run(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 meta: %{progress_msg_id: 111, user_msg_id: 222},
+                 final_text: nil
+               )
+
+      send_key = "#{run_id}:stream:0:stream_finalize"
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        channel_id: "telegram",
+                        kind: :text,
+                        idempotency_key: ^send_key,
+                        content: "⚠️ Empty response from model — no output was generated.",
+                        peer: %{id: "12342"},
                         reply_to: "222",
                         meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
                       }},
@@ -972,6 +1052,32 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     test "no-op when no coalescer exists" do
       assert :ok = StreamCoalescer.commit_turn("non:existent:session", "channel", "run_999")
+    end
+  end
+
+  describe "handoff_turn/4" do
+    test "moves the finalized answer message to the status surface" do
+      session_key = "agent:test:telegram:bot:dm:54325"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      route = telegram_route("bot", :dm, "54325", nil)
+
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Intermediate text")
+      StreamCoalescer.flush(session_key, channel_id)
+
+      assert eventually(fn ->
+               LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+                 101
+             end)
+
+      assert {:ok, "Intermediate text"} =
+               StreamCoalescer.handoff_turn(session_key, channel_id, run_id, :status)
+
+      answer_entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      status_entry = LemonChannels.PresentationState.get(route, run_id, :status)
+
+      assert is_nil(answer_entry.platform_message_id)
+      assert status_entry.platform_message_id == 101
     end
   end
 

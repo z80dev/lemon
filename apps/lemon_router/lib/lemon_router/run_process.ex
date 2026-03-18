@@ -153,7 +153,8 @@ defmodule LemonRouter.RunProcess do
         opts[:conversation_key] ||
           match_conversation_key(execution_request),
       generated_image_paths: [],
-      requested_send_files: []
+      requested_send_files: [],
+      task_status_surfaces: %{}
     }
 
     Logger.debug(
@@ -304,9 +305,9 @@ defmodule LemonRouter.RunProcess do
     # Forward delta to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-    # Ensure any pending tool-status output is emitted before we start streaming the answer.
+    # Finalize the previous tool-status segment before we start streaming a new answer chunk.
     if state.saw_delta == false do
-      OutputTracker.flush_tool_status(state)
+      OutputTracker.commit_tool_status_segment(state)
     end
 
     # Also ingest into StreamCoalescer for channel delivery
@@ -318,11 +319,12 @@ defmodule LemonRouter.RunProcess do
   def handle_info(%LemonCore.Event{type: :engine_action, payload: action_ev} = event, state) do
     state = Watchdog.touch_run_watchdog(state)
 
-    # Detect turn boundary: model was streaming text, now a tool has started.
-    # Commit the current answer so the next delta creates a fresh message.
+    {state, tool_status_surface, capture_current_turn?} =
+      OutputTracker.prepare_tool_status_action(state, action_ev)
+
     state =
-      if state.saw_delta and is_tool_start?(action_ev) do
-        OutputTracker.commit_stream_turn(state)
+      if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
+        OutputTracker.handoff_stream_turn_to_tool_status(state, tool_status_surface)
         %{state | saw_delta: false}
       else
         state
@@ -332,7 +334,7 @@ defmodule LemonRouter.RunProcess do
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
     # Also ingest into ToolStatusCoalescer for channel delivery
-    OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev)
+    OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev, tool_status_surface)
 
     state = OutputTracker.maybe_track_generated_images(state, action_ev)
     state = OutputTracker.maybe_track_requested_send_files(state, action_ev)

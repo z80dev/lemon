@@ -39,7 +39,7 @@ defmodule LemonRouter.ToolStatusRenderer do
       Enum.map(display_order, fn id ->
         case Map.get(actions, id) do
           nil -> nil
-          action -> format_action_line(action)
+          action -> format_action_line(action, actions)
         end
       end)
       |> Enum.reject(&is_nil/1)
@@ -111,33 +111,75 @@ defmodule LemonRouter.ToolStatusRenderer do
   defp tool_word(1), do: "tool"
   defp tool_word(_n), do: "tools"
 
-  defp format_action_line(action) when is_map(action) do
+  defp format_action_line(action, actions) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
     extra = nil
+    indent = String.duplicate("  ", action_depth(action, actions))
 
     case action[:phase] || action["phase"] do
       :started ->
-        "\u25b8 " <> title <> (extra || "")
+        indent <> "\u25b8 " <> title <> (extra || "")
 
       :updated ->
-        "\u25b8 " <> title <> (extra || "")
+        indent <> "\u25b8 " <> title <> (extra || "")
 
       :completed ->
         ok? = (action[:ok] || action["ok"]) == true
         symbol = if ok?, do: "\u2713", else: "\u2717"
         preview = extract_result_preview(action[:detail] || action["detail"])
-        base = symbol <> " " <> title <> (extra || "")
+        base = indent <> symbol <> " " <> title <> (extra || "")
 
-        if preview in [nil, ""] do
+        if ok? or preview in [nil, ""] do
           base
         else
-          max_len = if ok?, do: 80, else: 140
-          prev = truncate_one_line(preview, max_len)
+          prev = truncate_one_line(preview, 140)
           base <> " -> " <> prev
         end
 
       other ->
-        "\u25b8 " <> "[#{other}] " <> title <> (extra || "")
+        indent <> "\u25b8 " <> "[#{other}] " <> title <> (extra || "")
+    end
+  end
+
+  defp action_depth(action, actions) when is_map(action) and is_map(actions) do
+    do_action_depth(action_parent_id(action), actions, MapSet.new(), 0)
+  end
+
+  defp action_depth(_action, _actions), do: 0
+
+  defp do_action_depth(nil, _actions, _seen, depth), do: depth
+
+  defp do_action_depth(_parent_id, _actions, _seen, depth) when depth >= 6, do: depth
+
+  defp do_action_depth(parent_id, actions, seen, depth) do
+    cond do
+      not is_binary(parent_id) or parent_id == "" ->
+        depth
+
+      MapSet.member?(seen, parent_id) ->
+        depth
+
+      true ->
+        case Map.get(actions, parent_id) do
+          nil ->
+            depth
+
+          parent_action ->
+            seen = MapSet.put(seen, parent_id)
+            do_action_depth(action_parent_id(parent_action), actions, seen, depth + 1)
+        end
+    end
+  end
+
+  defp action_parent_id(action) when is_map(action) do
+    detail = action[:detail] || action["detail"] || %{}
+
+    case detail do
+      detail when is_map(detail) ->
+        detail[:parent_tool_use_id] || detail["parent_tool_use_id"]
+
+      _ ->
+        nil
     end
   end
 
