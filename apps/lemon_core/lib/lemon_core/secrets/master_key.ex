@@ -5,6 +5,7 @@ defmodule LemonCore.Secrets.MasterKey do
   Resolution order:
   1. macOS Keychain entry (preferred)
   2. `LEMON_SECRETS_MASTER_KEY` environment variable
+  3. `~/.lemon/secrets_master_key` file
   """
 
   alias LemonCore.Secrets.Keychain
@@ -12,7 +13,8 @@ defmodule LemonCore.Secrets.MasterKey do
   @env_var "LEMON_SECRETS_MASTER_KEY"
   @master_key_bytes 32
 
-  @spec resolve(keyword()) :: {:ok, binary(), :keychain | :env} | {:error, atom() | tuple()}
+  @spec resolve(keyword()) ::
+          {:ok, binary(), :keychain | :env | :file} | {:error, atom() | tuple()}
   def resolve(opts \\ []) do
     keychain_module = Keyword.get(opts, :keychain_module, Keychain)
 
@@ -21,20 +23,20 @@ defmodule LemonCore.Secrets.MasterKey do
         ok
 
       {:error, :missing} ->
-        resolve_from_env(opts)
+        resolve_from_env_or_file(opts)
 
       {:error, :keychain_unavailable} ->
-        resolve_from_env(opts)
+        resolve_from_env_or_file(opts)
 
       {:error, :invalid_master_key} ->
-        case resolve_from_env(opts) do
-          {:ok, _key, :env} = ok -> ok
+        case resolve_from_env_or_file(opts) do
+          {:ok, _key, source} = ok when source in [:env, :file] -> ok
           {:error, _} -> {:error, :invalid_master_key}
         end
 
       {:error, reason} ->
-        case resolve_from_env(opts) do
-          {:ok, _key, :env} = ok -> ok
+        case resolve_from_env_or_file(opts) do
+          {:ok, _key, source} = ok when source in [:env, :file] -> ok
           {:error, :invalid_master_key} -> {:error, :invalid_master_key}
           {:error, :missing_master_key} -> {:error, {:keychain_failed, reason}}
         end
@@ -76,18 +78,31 @@ defmodule LemonCore.Secrets.MasterKey do
         _ -> false
       end
 
+    file_present? =
+      case default_file_path(opts) do
+        nil ->
+          false
+
+        path ->
+          case file_reader(opts).(path) do
+            {:ok, value} when is_binary(value) -> String.trim(value) != ""
+            _ -> false
+          end
+      end
+
     keychain_result = resolve_from_keychain(keychain_module, opts)
 
     env_result =
       case keychain_result do
         {:ok, _key, :keychain} -> nil
-        _ -> resolve_from_env(opts)
+        _ -> resolve_from_env_or_file(opts)
       end
 
     source =
       cond do
         match?({:ok, _key, :keychain}, keychain_result) -> :keychain
         match?({:ok, _key, :env}, env_result) -> :env
+        match?({:ok, _key, :file}, env_result) -> :file
         true -> nil
       end
 
@@ -103,6 +118,7 @@ defmodule LemonCore.Secrets.MasterKey do
       source: source,
       keychain_available: keychain_available,
       env_fallback: env_present?,
+      file_fallback: file_present?,
       keychain_error: keychain_error
     }
   end
@@ -145,6 +161,37 @@ defmodule LemonCore.Secrets.MasterKey do
     end
   end
 
+  defp resolve_from_env_or_file(opts) do
+    case resolve_from_env(opts) do
+      {:error, :missing_master_key} -> resolve_from_file(opts)
+      other -> other
+    end
+  end
+
+  defp resolve_from_file(opts) do
+    case default_file_path(opts) do
+      nil ->
+        {:error, :missing_master_key}
+
+      path ->
+        case file_reader(opts).(path) do
+          {:ok, value} when is_binary(value) and value != "" ->
+            with {:ok, decoded} <- decode_master_key(value) do
+              {:ok, decoded, :file}
+            end
+
+          {:ok, _value} ->
+            {:error, :invalid_master_key}
+
+          {:error, :enoent} ->
+            {:error, :missing_master_key}
+
+          {:error, _reason} ->
+            {:error, :missing_master_key}
+        end
+    end
+  end
+
   defp decode_master_key(value) when is_binary(value) do
     trimmed = String.trim(value)
 
@@ -164,4 +211,15 @@ defmodule LemonCore.Secrets.MasterKey do
   defp decode_master_key(_), do: {:error, :invalid_master_key}
 
   defp env_getter(opts), do: Keyword.get(opts, :env_getter, &System.get_env/1)
+  defp file_reader(opts), do: Keyword.get(opts, :file_reader, &File.read/1)
+
+  defp default_file_path(opts) do
+    case Keyword.get(opts, :home_dir) || env_getter(opts).("HOME") do
+      value when is_binary(value) and value != "" ->
+        Path.join([value, ".lemon", "secrets_master_key"])
+
+      _ ->
+        nil
+    end
+  end
 end

@@ -61,7 +61,11 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   test "falls back to env key when keychain is unavailable" do
     encoded = Base.encode64(:binary.copy(<<4>>, 32))
-    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> encoded
+      _ -> nil
+    end
 
     assert {:ok, key, :env} =
              MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
@@ -69,9 +73,34 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     assert byte_size(key) >= 32
   end
 
+  test "falls back to ~/.lemon/secrets_master_key when env is missing" do
+    temp_home =
+      Path.join(System.tmp_dir!(), "lemon-master-key-test-#{System.unique_integer([:positive])}")
+
+    key_path = Path.join([temp_home, ".lemon", "secrets_master_key"])
+    File.mkdir_p!(Path.dirname(key_path))
+
+    encoded = Base.encode64(:binary.copy(<<7>>, 32))
+    File.write!(key_path, encoded)
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> nil
+      "HOME" -> temp_home
+    end
+
+    assert {:ok, key, :file} =
+             MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+
+    assert byte_size(key) >= 32
+  end
+
   test "falls back to env master key when keychain has no key" do
     encoded = Base.encode64(:binary.copy(<<2>>, 32))
-    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> encoded
+      _ -> nil
+    end
 
     assert {:ok, key, :env} =
              MasterKey.resolve(keychain_module: KeychainMissing, env_getter: env_getter)
@@ -88,7 +117,11 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   test "falls back to env key when keychain lookup fails" do
     encoded = Base.encode64(:binary.copy(<<3>>, 32))
-    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> encoded
+      _ -> nil
+    end
 
     assert {:ok, key, :env} =
              MasterKey.resolve(keychain_module: KeychainDenied, env_getter: env_getter)
@@ -105,7 +138,11 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   test "uses env key when keychain key is malformed but env is valid" do
     encoded = Base.encode64(:binary.copy(<<5>>, 32))
-    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> encoded
+      _ -> nil
+    end
 
     assert {:ok, key, :env} =
              MasterKey.resolve(keychain_module: KeychainInvalid, env_getter: env_getter)
@@ -133,13 +170,44 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   test "status reports env source without keychain error when keychain is unavailable" do
     encoded = Base.encode64(:binary.copy(<<6>>, 32))
-    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> encoded
+      _ -> nil
+    end
 
     status = MasterKey.status(keychain_module: KeychainUnavailable, env_getter: env_getter)
 
     refute status.keychain_available
     assert status.source == :env
     assert status.configured
+    assert status.keychain_error == nil
+  end
+
+  test "status reports file source when default local master key file exists" do
+    temp_home =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-master-key-status-#{System.unique_integer([:positive])}"
+      )
+
+    key_path = Path.join([temp_home, ".lemon", "secrets_master_key"])
+    File.mkdir_p!(Path.dirname(key_path))
+
+    encoded = Base.encode64(:binary.copy(<<8>>, 32))
+    File.write!(key_path, encoded)
+
+    env_getter = fn
+      "LEMON_SECRETS_MASTER_KEY" -> nil
+      "HOME" -> temp_home
+    end
+
+    status = MasterKey.status(keychain_module: KeychainUnavailable, env_getter: env_getter)
+
+    refute status.keychain_available
+    assert status.source == :file
+    assert status.configured
+    assert status.file_fallback
     assert status.keychain_error == nil
   end
 end

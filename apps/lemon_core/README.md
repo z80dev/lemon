@@ -269,7 +269,8 @@ Secrets are encrypted at rest with AES-256-GCM. Per-secret encryption keys are d
 
 1. macOS Keychain (`Lemon Secrets` service, `default` account) -- preferred
 2. `LEMON_SECRETS_MASTER_KEY` environment variable -- fallback
-3. Fail with `:missing_master_key`
+3. `~/.lemon/secrets_master_key` file -- local non-keychain fallback
+4. Fail with `:missing_master_key`
 
 ### API
 
