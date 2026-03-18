@@ -1,4 +1,6 @@
 defmodule LemonWeb.Router do
+  @moduledoc "Phoenix router for LemonWeb — serves authenticated session views and public games lobby."
+
   use LemonWeb, :router
 
   pipeline :public_browser do

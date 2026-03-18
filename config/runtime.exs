@@ -36,6 +36,12 @@ if is_binary(access_token) and access_token != "" do
   config :lemon_web, :access_token, access_token
 end
 
+sim_ui_access_token = System.get_env("LEMON_SIM_UI_ACCESS_TOKEN")
+
+if is_binary(sim_ui_access_token) and sim_ui_access_token != "" do
+  config :lemon_sim_ui, :access_token, sim_ui_access_token
+end
+
 uploads_dir = System.get_env("LEMON_WEB_UPLOADS_DIR")
 
 if is_binary(uploads_dir) and uploads_dir != "" do
@@ -43,23 +49,42 @@ if is_binary(uploads_dir) and uploads_dir != "" do
 end
 
 if config_env() == :prod do
-  host = System.get_env("LEMON_WEB_HOST") || "localhost"
-  port = String.to_integer(System.get_env("LEMON_WEB_PORT") || "4080")
+  release_name = System.get_env("RELEASE_NAME")
 
-  secret_key_base = System.fetch_env!("LEMON_WEB_SECRET_KEY_BASE")
+  configure_endpoint = fn otp_app, endpoint, env_prefix, default_port, required_release ->
+    required? = release_name == required_release
+    secret_key_base = System.get_env("#{env_prefix}_SECRET_KEY_BASE")
 
-  endpoint_config = [
-    url: [host: host, port: 443, scheme: "https"],
-    http: [ip: {0, 0, 0, 0}, port: port],
-    secret_key_base: secret_key_base
-  ]
+    if required? or (is_binary(secret_key_base) and secret_key_base != "") do
+      host = System.get_env("#{env_prefix}_HOST") || "localhost"
 
-  endpoint_config =
-    if System.get_env("PHX_SERVER") in ["1", "true", "TRUE"] do
-      Keyword.put(endpoint_config, :server, true)
-    else
-      endpoint_config
+      port =
+        String.to_integer(System.get_env("#{env_prefix}_PORT") || Integer.to_string(default_port))
+
+      endpoint_config = [
+        url: [host: host, port: 443, scheme: "https"],
+        http: [ip: {0, 0, 0, 0}, port: port],
+        secret_key_base: secret_key_base || System.fetch_env!("#{env_prefix}_SECRET_KEY_BASE")
+      ]
+
+      endpoint_config =
+        if System.get_env("PHX_SERVER") in ["1", "true", "TRUE"] do
+          Keyword.put(endpoint_config, :server, true)
+        else
+          endpoint_config
+        end
+
+      config otp_app, endpoint, endpoint_config
     end
+  end
 
-  config :lemon_web, LemonWeb.Endpoint, endpoint_config
+  configure_endpoint.(:lemon_web, LemonWeb.Endpoint, "LEMON_WEB", 4080, "games_platform")
+
+  configure_endpoint.(
+    :lemon_sim_ui,
+    LemonSimUi.Endpoint,
+    "LEMON_SIM_UI",
+    4090,
+    "sim_broadcast_platform"
+  )
 end

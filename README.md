@@ -159,9 +159,12 @@ mix lemon.quality                 # lint + doc freshness + architecture boundari
 |---|---|
 | `lemon_runtime_min` | Headless / CI / embedded |
 | `lemon_runtime_full` | Local development |
+| `games_platform` | Public games web deployment |
+| `sim_broadcast_platform` | Public sim broadcast deployment (`lemon_sim_ui`) |
 
 ```bash
 MIX_ENV=prod mix release lemon_runtime_full
+MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
 See [`ROADMAP.md`](ROADMAP.md) for what's planned.

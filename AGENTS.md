@@ -415,6 +415,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
+- `docs/remote-cli-task-execution-plan.md` - Planning note for remote `codex`/`claude` task execution over generic runner backends
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
 - `docs/missions.md` - Reverse-engineered Factory Missions behavior and Lemon implementation spec
 - `docs/missions_phase1_plan.md` - Concrete Phase 1 implementation plan for Lemon Missions
@@ -466,4 +467,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-03-13* (added subagent parent-question design doc to docs index)
+*Last updated: 2026-03-18* (added remote CLI task execution planning doc to docs index)

@@ -30,6 +30,15 @@ defmodule Lemon.MixProject do
         ],
         include_executables_for: [:unix],
         steps: [:assemble, :tar]
+      ],
+      sim_broadcast_platform: [
+        applications: [
+          lemon_core: :permanent,
+          lemon_sim: :permanent,
+          lemon_sim_ui: :permanent
+        ],
+        include_executables_for: [:unix],
+        steps: [:assemble, :tar]
       ]
     ]
   end

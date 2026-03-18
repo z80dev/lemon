@@ -47,6 +47,8 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
   pubsub_server: LemonCore.PubSub,
   live_view: [signing_salt: "lemonsimuilv"]
 
+config :lemon_sim_ui, :access_token, nil
+
 # MarketIntel ingestion feature flags.
 # Each flag gates the corresponding worker in the supervision tree.
 # Core infrastructure (Cache, Repo) always starts regardless.

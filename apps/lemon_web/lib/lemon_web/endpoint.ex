@@ -1,4 +1,6 @@
 defmodule LemonWeb.Endpoint do
+  @moduledoc "Phoenix endpoint for the LemonWeb application."
+
   use Phoenix.Endpoint, otp_app: :lemon_web
 
   @session_options [
