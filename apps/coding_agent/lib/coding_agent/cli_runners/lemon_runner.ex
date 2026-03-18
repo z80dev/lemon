@@ -778,7 +778,13 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         "fetch: #{String.slice(a["url"] || "", 0, 50)}"
 
       "task" ->
-        "task: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
+        engine_suffix =
+          case a["engine"] do
+            engine when is_binary(engine) and engine not in ["", "internal"] -> "(#{engine})"
+            _ -> ""
+          end
+
+        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
 
       "agent" ->
         "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"

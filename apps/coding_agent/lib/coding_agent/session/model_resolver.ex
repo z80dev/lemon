@@ -693,10 +693,13 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   defp provider_config(providers, provider_name) when is_binary(provider_name) do
+    canonical_name = canonical_provider_name(provider_name)
+
     Map.get(providers, provider_name) ||
+      Map.get(providers, canonical_name) ||
       Enum.find_value(providers, fn
-        {key, value} when is_atom(key) ->
-          if Atom.to_string(key) == provider_name, do: value, else: nil
+        {key, value} ->
+          if canonical_provider_name(key) == canonical_name, do: value, else: nil
 
         _ ->
           nil
@@ -704,6 +707,21 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   defp provider_config(_providers, _provider_name), do: nil
+
+  defp canonical_provider_name(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> canonical_provider_name()
+  end
+
+  defp canonical_provider_name(provider) when is_binary(provider) do
+    provider
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+  end
+
+  defp canonical_provider_name(_provider), do: nil
 
   defp provider_config_value(nil, _key), do: nil
 

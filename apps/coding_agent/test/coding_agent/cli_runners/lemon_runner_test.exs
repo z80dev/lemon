@@ -462,6 +462,13 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert title == "Task: Review the pull request"
     end
 
+    test "Task shows engine suffix for external engines" do
+      title =
+        tool_title("Task", %{"description" => "Review the pull request", "engine" => "claude"})
+
+      assert title == "Task(claude): Review the pull request"
+    end
+
     test "Unknown tool shows just the name" do
       title = tool_title("CustomTool", %{})
       assert title == "CustomTool"
@@ -491,6 +498,10 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
         {"WebSearch", %{"query" => query}} ->
           "Search: #{String.slice(query, 0, 40)}"
+
+        {"Task", %{"description" => desc, "engine" => engine}}
+        when engine not in [nil, "", "internal"] ->
+          "Task(#{engine}): #{String.slice(desc, 0, 40)}"
 
         {"Task", %{"description" => desc}} ->
           "Task: #{String.slice(desc, 0, 40)}"

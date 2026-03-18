@@ -508,6 +508,32 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
+  test "openai codex oauth secret resolves when provider config uses underscored alias" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "openai_codex_oauth",
+        "refresh_token" => "codex-refresh-token",
+        "access_token" => "codex-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "account_id" => "acc-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "openai_codex" => %{auth_source: "oauth", api_key_secret: "llm_openai_codex_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
   test "openai codex env key overrides api_key_secret when auth_source is api_key" do
     oauth_secret =
       Jason.encode!(%{
@@ -526,6 +552,21 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     settings =
       settings(%{
         "openai-codex" => %{auth_source: "api_key", api_key_secret: "llm_openai_codex_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-from-env"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "openai codex api_key auth resolves when provider config uses underscored alias" do
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+
+    settings =
+      settings(%{
+        "openai_codex" => %{auth_source: "api_key"}
       })
 
     session = start_session(self(), settings, mock_model(:"openai-codex"))
