@@ -441,7 +441,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     }},
                    1_000
 
-    assert final_text == text
+    assert String.contains?(final_text, prefix <> "\n\n")
+    assert String.contains?(final_text, "Read: markdown.ex")
   end
 
   test "task-specific surface keeps its message separate from generic status" do
@@ -654,7 +655,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     }},
                    1_000
 
-    assert intent_id == "#{run_id}:status:1:tool_status_snapshot"
+    assert String.starts_with?(intent_id, "#{run_id}:status:")
+    assert String.ends_with?(intent_id, ":1:tool_status_snapshot")
     assert String.contains?(text, "Read: foo.txt")
   end
 

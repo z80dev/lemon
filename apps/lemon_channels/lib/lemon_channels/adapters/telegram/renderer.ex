@@ -13,7 +13,15 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}
   def dispatch(%DeliveryIntent{} = intent) do
     case intent.kind do
-      kind when kind in [:stream_snapshot, :stream_finalize, :tool_status_snapshot, :tool_status_finalize, :final_text, :watchdog_prompt] ->
+      kind
+      when kind in [
+             :stream_snapshot,
+             :stream_finalize,
+             :tool_status_snapshot,
+             :tool_status_finalize,
+             :final_text,
+             :watchdog_prompt
+           ] ->
         dispatch_text(intent)
 
       :file_batch ->
@@ -64,7 +72,15 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} ->
-            PresentationState.mark_sent(route, intent.run_id, surface, seq, text_hash, state.platform_message_id)
+            PresentationState.mark_sent(
+              route,
+              intent.run_id,
+              surface,
+              seq,
+              text_hash,
+              state.platform_message_id
+            )
+
             maybe_index_resume(intent, route, state.platform_message_id)
 
           {:error, :duplicate} ->
@@ -114,7 +130,9 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     end
   end
 
-  defp dispatch_files(%DeliveryIntent{route: %DeliveryRoute{} = route, attachments: attachments} = intent)
+  defp dispatch_files(
+         %DeliveryIntent{route: %DeliveryRoute{} = route, attachments: attachments} = intent
+       )
        when is_list(attachments) do
     files =
       attachments
@@ -273,7 +291,13 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       msg_id = parse_int(message_id)
 
       if is_integer(chat_id) and is_integer(msg_id) and resume_token_like?(resume) do
-        ResumeIndexStore.put_resume(route.account_id || "default", chat_id, thread_id, msg_id, resume)
+        ResumeIndexStore.put_resume(
+          route.account_id || "default",
+          chat_id,
+          thread_id,
+          msg_id,
+          resume
+        )
       end
     end
 
@@ -310,7 +334,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       if cfg.enabled do
         generated
         |> Enum.take(-cfg.max_files)
-        |> Enum.filter(&(file_size_within_limit?(&1.path, cfg.max_bytes)))
+        |> Enum.filter(&file_size_within_limit?(&1.path, cfg.max_bytes))
       else
         []
       end
@@ -390,9 +414,14 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     _ -> "#{resume.engine} resume #{resume.value}"
   end
 
-  defp resume_token_like?(%ResumeToken{engine: e, value: v}) when is_binary(e) and is_binary(v), do: true
+  defp resume_token_like?(%ResumeToken{engine: e, value: v}) when is_binary(e) and is_binary(v),
+    do: true
+
   defp resume_token_like?(%{engine: e, value: v}) when is_binary(e) and is_binary(v), do: true
-  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v), do: true
+
+  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v),
+    do: true
+
   defp resume_token_like?(_), do: false
 
   defp duplicate?(state, seq, text_hash) do
@@ -430,15 +459,31 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp parse_int(_), do: nil
 
-  @spec auto_send_generated_config() :: %{enabled: boolean(), max_files: pos_integer(), max_bytes: pos_integer()}
+  @spec auto_send_generated_config() :: %{
+          enabled: boolean(),
+          max_files: pos_integer(),
+          max_bytes: pos_integer()
+        }
   def auto_send_generated_config do
     telegram_cfg = GatewayConfig.get(:telegram, %{}) || %{}
     files_cfg = (telegram_cfg[:files] || telegram_cfg["files"] || %{}) |> normalize_map()
 
     %{
-      enabled: truthy?(files_cfg[:enabled] || files_cfg["enabled"]) and truthy?(files_cfg[:auto_send_generated_images] || files_cfg["auto_send_generated_images"]),
-      max_files: positive_int_or(files_cfg[:auto_send_generated_max_files] || files_cfg["auto_send_generated_max_files"], 3),
-      max_bytes: positive_int_or(files_cfg[:max_download_bytes] || files_cfg["max_download_bytes"], @default_max_download_bytes)
+      enabled:
+        truthy?(files_cfg[:enabled] || files_cfg["enabled"]) and
+          truthy?(
+            files_cfg[:auto_send_generated_images] || files_cfg["auto_send_generated_images"]
+          ),
+      max_files:
+        positive_int_or(
+          files_cfg[:auto_send_generated_max_files] || files_cfg["auto_send_generated_max_files"],
+          3
+        ),
+      max_bytes:
+        positive_int_or(
+          files_cfg[:max_download_bytes] || files_cfg["max_download_bytes"],
+          @default_max_download_bytes
+        )
     }
   rescue
     _ -> %{enabled: false, max_files: 3, max_bytes: @default_max_download_bytes}

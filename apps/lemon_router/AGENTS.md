@@ -147,6 +147,9 @@ hands the finalized `:answer` message over to the tool-status surface so the nex
 append under that assistant text instead of reusing an older standalone status message.
 `ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
 assistant delta starts, at which point the segment is finalized in place and reset.
+Task roots use dedicated status surfaces keyed by task id, so child actions with
+`detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
+or unrelated top-level tool calls create newer answer/status turns.
 
 ### Change compaction behavior
 

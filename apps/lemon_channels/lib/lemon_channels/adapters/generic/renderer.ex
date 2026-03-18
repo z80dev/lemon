@@ -9,7 +9,15 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}
   def dispatch(%DeliveryIntent{} = intent) do
     case intent.kind do
-      kind when kind in [:stream_snapshot, :stream_finalize, :tool_status_snapshot, :tool_status_finalize, :final_text, :watchdog_prompt] ->
+      kind
+      when kind in [
+             :stream_snapshot,
+             :stream_finalize,
+             :tool_status_snapshot,
+             :tool_status_finalize,
+             :final_text,
+             :watchdog_prompt
+           ] ->
         dispatch_text(intent)
 
       :file_batch ->
@@ -52,9 +60,21 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
           )
 
         case Outbox.enqueue(payload) do
-          {:ok, _ref} -> PresentationState.mark_sent(route, intent.run_id, surface, seq, text_hash, state.platform_message_id)
-          {:error, :duplicate} -> :ok
-          {:error, reason} -> {:error, reason}
+          {:ok, _ref} ->
+            PresentationState.mark_sent(
+              route,
+              intent.run_id,
+              surface,
+              seq,
+              text_hash,
+              state.platform_message_id
+            )
+
+          {:error, :duplicate} ->
+            :ok
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       supports_edit? and is_reference(state.pending_create_ref) ->
@@ -101,7 +121,9 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
     end
   end
 
-  defp dispatch_files(%DeliveryIntent{route: %DeliveryRoute{} = route, attachments: attachments} = intent)
+  defp dispatch_files(
+         %DeliveryIntent{route: %DeliveryRoute{} = route, attachments: attachments} = intent
+       )
        when is_list(attachments) do
     attachments
     |> Enum.with_index()
@@ -197,7 +219,9 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
     end
   end
 
-  defp maybe_put_notify_tag(meta, true), do: Map.put(meta || %{}, :notify_tag, PresentationState.notify_tag())
+  defp maybe_put_notify_tag(meta, true),
+    do: Map.put(meta || %{}, :notify_tag, PresentationState.notify_tag())
+
   defp maybe_put_notify_tag(meta, _), do: meta || %{}
 
   defp intent_meta(%DeliveryIntent{} = intent) do
@@ -216,6 +240,8 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
 
   defp pending_resume(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
-    meta[:resume] || meta["resume"] || get_in(intent.body || %{}, [:resume]) || get_in(intent.body || %{}, ["resume"])
+
+    meta[:resume] || meta["resume"] || get_in(intent.body || %{}, [:resume]) ||
+      get_in(intent.body || %{}, ["resume"])
   end
 end
