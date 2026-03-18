@@ -115,6 +115,8 @@ Each supported external AI engine has three modules:
 
 All runners implement the `AgentCore.CliRunners.JsonlRunner` behaviour via `use AgentCore.CliRunners.JsonlRunner`. Each schema module handles JSON event parsing for the specific engine format. Subagent modules wrap the runner with `AgentCore.SubagentSupervisor` integration.
 
+For Claude specifically, nested Task activity is tracked through `parent_tool_use_id` on assistant/user stream messages. The runner preserves that parent link in action `detail` so downstream UIs can render child tool calls under the parent Task action, and ignored Claude event types are surfaced through runner logging/introspection instead of disappearing silently.
+
 ## Key Concepts and Design Patterns
 
 ### Separation of Concerns: Loop vs. Agent

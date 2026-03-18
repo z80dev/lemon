@@ -134,12 +134,12 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
   describe "decode_event/1 - ignored types" do
     test "ignores stream_event type" do
       json = ~s|{"type":"stream_event","event":{}}|
-      assert {:ok, :ignored} = ClaudeSchema.decode_event(json)
+      assert {:ok, {:ignored, "stream_event"}} = ClaudeSchema.decode_event(json)
     end
 
     test "ignores control_request type" do
       json = ~s|{"type":"control_request"}|
-      assert {:ok, :ignored} = ClaudeSchema.decode_event(json)
+      assert {:ok, {:ignored, "control_request"}} = ClaudeSchema.decode_event(json)
     end
   end
 

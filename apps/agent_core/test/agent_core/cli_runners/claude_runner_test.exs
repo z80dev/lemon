@@ -75,6 +75,23 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       assert "sess_123" in args
     end
 
+    test "adds model flag when model override is set" do
+      state = RunnerState.new(%{}, "sonnet")
+      {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
+
+      assert "--model" in args
+      model_index = Enum.find_index(args, &(&1 == "--model"))
+      assert Enum.at(args, model_index + 1) == "sonnet"
+    end
+
+    test "strips claude engine prefix from model override" do
+      state = RunnerState.new(%{}, "claude:haiku")
+      {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
+
+      model_index = Enum.find_index(args, &(&1 == "--model"))
+      assert Enum.at(args, model_index + 1) == "haiku"
+    end
+
     test "adds skip-permissions flag when yolo enabled via config" do
       state = RunnerState.new(%{yolo: true})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
@@ -177,6 +194,16 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
   end
 
+  describe "init_state/4" do
+    test "captures model override from runner opts" do
+      tmp_dir = System.tmp_dir!()
+      state = ClaudeRunner.init_state("prompt", nil, tmp_dir, model: "claude:sonnet")
+
+      assert %RunnerState{} = state
+      assert state.model_override == "sonnet"
+    end
+  end
+
   # ============================================================================
   # translate_event/2 - System Messages
   # ============================================================================
@@ -230,6 +257,16 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       state = RunnerState.new()
 
       {events, new_state, opts} = ClaudeRunner.translate_event(:ignored, state)
+
+      assert events == []
+      assert new_state == state
+      assert opts == []
+    end
+
+    test "ignores typed ignored decoded events" do
+      state = RunnerState.new()
+
+      {events, new_state, opts} = ClaudeRunner.translate_event({:ignored, "stream_event"}, state)
 
       assert events == []
       assert new_state == state
@@ -493,6 +530,24 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :subagent
       assert action.title == "Task: Implement the feature with tests"
+    end
+
+    test "preserves parent_tool_use_id on nested tool actions" do
+      state = RunnerState.new()
+
+      event = %StreamAssistantMessage{
+        parent_tool_use_id: "task_1",
+        message: %AssistantMessageContent{
+          content: [
+            %ToolUseBlock{id: "nested_1", name: "Read", input: %{"file_path" => "lib/foo.ex"}}
+          ]
+        }
+      }
+
+      {events, _state, _opts} = ClaudeRunner.translate_event(event, state)
+
+      assert [%ActionEvent{action: action}] = events
+      assert action.detail.parent_tool_use_id == "task_1"
     end
 
     test "truncates long Task prompts in title" do
@@ -1144,7 +1199,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       {:ok, event} = ClaudeRunner.decode_line(json)
 
-      assert event == :ignored
+      assert event == {:ignored, "stream_event"}
     end
 
     test "returns error for invalid JSON" do
@@ -1604,6 +1659,37 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       assert tool_completed.ok == false
       assert tool_completed.action.detail.is_error == true
       assert state.pending_actions == %{}
+    end
+
+    test "preserves parent_tool_use_id on tool results" do
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "tool_err" => %{
+              id: "tool_err",
+              kind: :command,
+              title: "bad command",
+              detail: %{parent_tool_use_id: "task_1"}
+            }
+          }
+      }
+
+      tool_result_event = %StreamUserMessage{
+        parent_tool_use_id: "task_1",
+        message: %UserMessageContent{
+          content: [
+            %ToolResultBlock{
+              tool_use_id: "tool_err",
+              content: "command not found: badcmd",
+              is_error: true
+            }
+          ]
+        }
+      }
+
+      {[tool_completed], _state, _} = ClaudeRunner.translate_event(tool_result_event, state)
+
+      assert tool_completed.action.detail.parent_tool_use_id == "task_1"
     end
 
     test "handles permission warning in tool result" do

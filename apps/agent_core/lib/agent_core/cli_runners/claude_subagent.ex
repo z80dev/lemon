@@ -96,6 +96,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
   - `:prompt` - The initial prompt/task (required)
   - `:cwd` - Working directory (default: current directory)
   - `:timeout` - Session timeout in ms (default: `:infinity`)
+  - `:model` - Optional model override (passed to Claude CLI `--model`)
 
   ## Returns
 
@@ -115,11 +116,16 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     timeout = Keyword.get(opts, :timeout, :infinity)
     role_prompt = Keyword.get(opts, :role_prompt)
+    model = Keyword.get(opts, :model)
 
     # Prepend role prompt if provided
     full_prompt = if role_prompt, do: role_prompt <> "\n\n" <> prompt, else: prompt
 
-    case ClaudeRunner.start_link(prompt: full_prompt, cwd: cwd, timeout: timeout) do
+    runner_opts =
+      [prompt: full_prompt, cwd: cwd, timeout: timeout]
+      |> maybe_put(:model, model)
+
+    case ClaudeRunner.start_link(runner_opts) do
       {:ok, pid} ->
         stream = ClaudeRunner.stream(pid)
         {:ok, token_agent} = Agent.start_link(fn -> nil end)
@@ -148,8 +154,13 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     timeout = Keyword.get(opts, :timeout, :infinity)
+    model = Keyword.get(opts, :model)
 
-    case ClaudeRunner.start_link(prompt: prompt, resume: token, cwd: cwd, timeout: timeout) do
+    runner_opts =
+      [prompt: prompt, resume: token, cwd: cwd, timeout: timeout]
+      |> maybe_put(:model, model)
+
+    case ClaudeRunner.start_link(runner_opts) do
       {:ok, pid} ->
         stream = ClaudeRunner.stream(pid)
         {:ok, token_agent} = Agent.start_link(fn -> token end)
@@ -365,4 +376,6 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
 
   defp maybe_add(opts, _key, nil), do: opts
   defp maybe_add(opts, key, value), do: Keyword.put(opts, key, value)
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

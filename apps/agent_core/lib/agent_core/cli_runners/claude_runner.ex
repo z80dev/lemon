@@ -90,17 +90,19 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       :last_assistant_text,
       :pending_actions,
       :thinking_seq,
-      :claude_config
+      :claude_config,
+      :model_override
     ]
 
-    def new(claude_config \\ %{}) do
+    def new(claude_config \\ %{}, model_override \\ nil) do
       %__MODULE__{
         factory: AgentCore.CliRunners.Types.EventFactory.new("claude"),
         found_session: nil,
         last_assistant_text: nil,
         pending_actions: %{},
         thinking_seq: 0,
-        claude_config: claude_config
+        claude_config: claude_config,
+        model_override: model_override
       }
     end
   end
@@ -125,6 +127,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   end
 
   @impl true
+  def init_state(_prompt, _resume, cwd, opts) do
+    config = LemonConfig.load(cwd)
+    claude_config = get_in(config.agent, [:cli, :claude]) || %{}
+    model_override = normalize_claude_model(Keyword.get(opts, :model))
+    RunnerState.new(claude_config, model_override)
+  end
+
+  @impl true
   def build_command(prompt, resume, state) do
     base_args =
       [
@@ -135,6 +145,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       ]
       |> maybe_add_permissions(state)
       |> maybe_add_allowed_tools(state)
+      |> maybe_add_model(state)
 
     # Add resume flag if resuming
     args =
@@ -199,6 +210,21 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       :ignored ->
         {[], state, []}
 
+      {:ignored, type} ->
+        Logger.debug("ClaudeRunner ignored event type=#{inspect(type)}")
+
+        Introspection.record(
+          :engine_event_ignored,
+          %{
+            engine: @engine,
+            event_type: type
+          },
+          engine: @engine,
+          provenance: :inferred
+        )
+
+        {[], state, []}
+
       # System init message - extract session_id
       %StreamSystemMessage{subtype: "init", session_id: session_id} = event ->
         if session_id do
@@ -237,14 +263,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
         {[], state, []}
 
       # Assistant message - process content blocks
-      %StreamAssistantMessage{message: message} ->
+      %StreamAssistantMessage{message: message, parent_tool_use_id: parent_tool_use_id} ->
         {warning_events, state} = maybe_permission_warning(message.error, state)
-        {events, state} = process_assistant_content(message.content, state)
+        {events, state} = process_assistant_content(message.content, state, parent_tool_use_id)
         {warning_events ++ events, state, []}
 
       # User message (tool results) - complete pending actions
-      %StreamUserMessage{message: message} ->
-        {events, state} = process_user_content(message.content, state)
+      %StreamUserMessage{message: message, parent_tool_use_id: parent_tool_use_id} ->
+        {events, state} = process_user_content(message.content, state, parent_tool_use_id)
         {events, state, []}
 
       # Result message - session completion
@@ -384,23 +410,27 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   # Content Processing
   # ============================================================================
 
-  defp process_assistant_content(content, state) when is_list(content) do
+  defp process_assistant_content(content, state, parent_tool_use_id) when is_list(content) do
     Enum.reduce(content, {[], state}, fn block, {events_acc, state_acc} ->
-      {new_events, new_state} = process_content_block(block, state_acc)
+      {new_events, new_state} = process_content_block(block, state_acc, parent_tool_use_id)
       {events_acc ++ new_events, new_state}
     end)
   end
 
-  defp process_assistant_content(_, state), do: {[], state}
+  defp process_assistant_content(_, state, _parent_tool_use_id), do: {[], state}
 
-  defp process_content_block(%TextBlock{text: text}, state) do
+  defp process_content_block(%TextBlock{text: text}, state, _parent_tool_use_id) do
     # Accumulate text for final result
     last_text = state.last_assistant_text || ""
     state = %{state | last_assistant_text: last_text <> text}
     {[], state}
   end
 
-  defp process_content_block(%ThinkingBlock{thinking: thinking, signature: signature}, state) do
+  defp process_content_block(
+         %ThinkingBlock{thinking: thinking, signature: signature},
+         state,
+         _parent_tool_use_id
+       ) do
     action_id = "claude.thinking.#{state.thinking_seq}"
     state = %{state | thinking_seq: state.thinking_seq + 1}
 
@@ -422,12 +452,17 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     {[event], state}
   end
 
-  defp process_content_block(%ToolUseBlock{id: id, name: name, input: input}, state) do
+  defp process_content_block(
+         %ToolUseBlock{id: id, name: name, input: input},
+         state,
+         parent_tool_use_id
+       ) do
     {kind, title} = tool_kind_and_title(name, input)
 
     detail = %{
       name: name,
-      input: input
+      input: input,
+      parent_tool_use_id: parent_tool_use_id
     }
 
     {event, factory, pending_actions} =
@@ -445,20 +480,21 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     {[event], state}
   end
 
-  defp process_content_block(_, state), do: {[], state}
+  defp process_content_block(_, state, _parent_tool_use_id), do: {[], state}
 
-  defp process_user_content(content, state) when is_list(content) do
+  defp process_user_content(content, state, parent_tool_use_id) when is_list(content) do
     Enum.reduce(content, {[], state}, fn block, {events_acc, state_acc} ->
-      {new_events, new_state} = process_tool_result(block, state_acc)
+      {new_events, new_state} = process_tool_result(block, state_acc, parent_tool_use_id)
       {events_acc ++ new_events, new_state}
     end)
   end
 
-  defp process_user_content(_, state), do: {[], state}
+  defp process_user_content(_, state, _parent_tool_use_id), do: {[], state}
 
   defp process_tool_result(
          %ToolResultBlock{tool_use_id: tool_use_id, content: content, is_error: is_error},
-         state
+         state,
+         parent_tool_use_id
        ) do
     {warning_events, state} =
       if is_error do
@@ -473,7 +509,8 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     detail = %{
       tool_use_id: tool_use_id,
       result_preview: result_preview,
-      is_error: is_error
+      is_error: is_error,
+      parent_tool_use_id: parent_tool_use_id
     }
 
     {event, factory, pending_actions} =
@@ -489,7 +526,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     {[event | warning_events], state}
   end
 
-  defp process_tool_result(_, state), do: {[], state}
+  defp process_tool_result(_, state, _parent_tool_use_id), do: {[], state}
 
   # ============================================================================
   # Helpers
@@ -584,6 +621,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     end
   end
 
+  defp maybe_add_model(args, state) do
+    case claude_model(state) do
+      model when is_binary(model) and model != "" -> args ++ ["--model", model]
+      _ -> args
+    end
+  end
+
   defp normalize_allowed_tools(nil), do: []
   defp normalize_allowed_tools(list) when is_list(list), do: Enum.map(list, &to_string/1)
 
@@ -646,6 +690,33 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp normalize_env_overrides(env) when is_map(env), do: env
   defp normalize_env_overrides(env) when is_list(env), do: Map.new(env)
   defp normalize_env_overrides(_), do: %{}
+
+  defp claude_model(%RunnerState{model_override: model}) when is_binary(model) do
+    normalize_claude_model(model)
+  end
+
+  defp claude_model(_state), do: nil
+
+  defp normalize_claude_model(model) when is_binary(model) do
+    trimmed = String.trim(model)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      true ->
+        case String.split(trimmed, ~r/[:\/]/, parts: 2) do
+          [prefix, id] when prefix in ["claude", "anthropic"] and is_binary(id) ->
+            normalized = String.trim(id)
+            if normalized == "", do: nil, else: normalized
+
+          _ ->
+            trimmed
+        end
+    end
+  end
+
+  defp normalize_claude_model(_), do: nil
 
   defp get_claude_config(%RunnerState{claude_config: config}) when is_map(config), do: config
   defp get_claude_config(_state), do: %{}

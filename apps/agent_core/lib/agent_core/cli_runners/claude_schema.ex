@@ -33,6 +33,8 @@ defmodule AgentCore.CliRunners.ClaudeSchema do
 
   """
 
+  require Logger
+
   # ============================================================================
   # Content Block Types
   # ============================================================================
@@ -257,9 +259,10 @@ defmodule AgentCore.CliRunners.ClaudeSchema do
       "result" ->
         {:ok, decode_result_message(data)}
 
-      # Ignore other event types (stream_event, control_*, etc.)
+      # Preserve the ignored type so the runner can log/introspect it.
       _ ->
-        {:ok, :ignored}
+        Logger.debug("ClaudeSchema ignoring unsupported event type=#{inspect(type)}")
+        {:ok, {:ignored, type}}
     end
   end
 
