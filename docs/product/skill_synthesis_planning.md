@@ -113,6 +113,13 @@ Current reality:
 
 That breaks the learning loop.
 
+The implementation detail matters here. This should not mean calling
+`Pipeline.run/3` after every successful run. The current pipeline rescans recent
+memory windows, so a naive per-run trigger would repeatedly process overlapping
+documents and generate avoidable `:already_exists` churn. The plan should choose
+a concrete trigger model: a debounced background worker keyed by
+agent/session/workspace, or incremental processing keyed by new `doc_id`s.
+
 ### 2. No notion of confidence or promotion readiness
 
 A single successful run can produce a draft. That is useful for brainstorming, but weak for autonomous learning.
@@ -126,6 +133,10 @@ The current system does not ask:
 - is the generated draft likely to retrieve well?
 
 Without those checks, the system can produce drafts that are too specific, redundant, or low-value.
+
+This is not only a promotion problem. At least a minimal confidence gate should
+exist before automatic draft creation, otherwise automation mostly increases
+draft volume rather than learning quality.
 
 ### 3. Generated skills are structurally weak for retrieval
 
@@ -230,29 +241,50 @@ The current system is a draft synthesis pipeline, not yet a self-improving skill
 
 ## Planning Priorities
 
-### Priority 1: automate draft creation, not auto-promotion
+### Priority 1: add a runtime synthesis worker, not a naive per-run trigger
 
-The next step should be safe automation:
+The next step should be safe automation, but the execution model should be
+explicit:
 
-- trigger synthesis automatically after eligible successful runs or on a background job
+- enqueue synthesis after ingest or on a scheduled cadence
+- debounce or batch by agent/session/workspace
+- process new or coalesced documents, not the same recent window on every run
 - keep output in `skill_drafts/`
+- prefer project-local drafts by default for autonomous flows
 - do not auto-install by default
 
-This creates real learning throughput without introducing unsafe automatic behavior.
+This creates real learning throughput without introducing unsafe automatic
+behavior or unnecessary duplicate work.
 
-### Priority 2: add draft scoring and clustering
+### Priority 2: add minimum confidence gates before automatic draft creation
 
-Before autonomous promotion, add ranking signals such as:
+Before increasing automation, add cheap but meaningful quality gates such as:
 
 - repeated success count
 - cross-session recurrence
 - stable toolset
 - low similarity to existing installed skills
-- retrieval confidence
+- low similarity to existing drafts
+- optional exclusion of one-off `:partial` runs unless they recur
 
-This should decide which drafts are worth review or promotion.
+This should decide which candidates are worth drafting at all, not only which
+drafts are worth promotion.
 
-### Priority 3: improve generated skill shape
+### Priority 3: make skill repair first-class alongside draft synthesis
+
+New-skill synthesis and existing-skill repair are different operations.
+
+The plan should explicitly include:
+
+- a guarded patch flow for existing skills
+- project-local create/patch as the first autonomous lane
+- prompt/runtime nudges to save reusable workflows and patch stale skills
+- support for enriching a skill with references/templates/scripts/assets over time
+
+This is likely higher leverage than generating more new drafts, because skills
+already affect prompts once installed.
+
+### Priority 4: improve generated skill shape
 
 The generator should produce more retrieval-friendly and reusable skills:
 
@@ -265,17 +297,18 @@ The generator should produce more retrieval-friendly and reusable skills:
 
 The generated output should look more like a curated skill and less like a copied run summary.
 
-### Priority 4: measure downstream impact
+### Priority 5: measure downstream impact and support rollback
 
-Add instrumentation for:
+Add instrumentation with a concrete contract:
 
 - which skills were loaded for a run
+- whether a skill was synthesized, curated, or patched
 - whether a loaded synthesized skill correlated with success or failure
 - whether a newly promoted skill improved relevant future runs
+- whether a patched skill reduced repeat failures
+- enough counters to feed `LemonCore.RolloutGate.evaluate_synthesis_from_run/1`
 
 Without this, synthesis cannot graduate from content generation into actual learning.
-
-### Priority 5: add rollback and aging
 
 Self-authored skills should not be permanent by default.
 
@@ -288,26 +321,43 @@ Plan for:
 
 ## Suggested Roadmap
 
-### Phase 1: make the current draft system operational
+### Phase 0: align the current system with reality
 
-- Add automatic synthesis trigger.
-- Add pipeline telemetry and metrics.
-- Add end-to-end pipeline tests.
 - Fix docs to match the actual CLI and paths.
+- Add one end-to-end synthesis pipeline test.
+- Define the telemetry schema for pipeline runs and skill usage.
+- Keep the planning document aligned with the actual current implementation.
 
-### Phase 2: improve draft quality
+### Phase 1: make automated draft generation operational
+
+- Add a debounced runtime synthesis worker.
+- Prefer project-local draft generation for autonomous flows.
+- Add minimal confidence gates: recurrence, similarity suppression, stable toolset.
+- Keep output in `skill_drafts/`; do not auto-promote.
+- Feed rollout-gate metrics from actual pipeline results.
+
+### Phase 2: improve draft quality and review ergonomics
 
 - Add similarity checking against existing skills and drafts.
-- Add recurrence-based candidate ranking.
 - Generate better metadata and retrieval fields.
+- Add examples, distilled steps, and optional supporting files.
 - Add a review queue sorted by likely value.
 
-### Phase 3: controlled autonomy
+### Phase 3: add in-band skill maintenance
 
-- Allow optional auto-promotion for narrow, low-risk cases.
-- Prefer project-local promotion first.
-- Track downstream run outcomes for synthesized skills.
-- Add rollback when a promoted skill degrades outcomes.
+- Add a guarded patch flow for existing skills.
+- Add prompt/runtime nudges after difficult or iterative tasks.
+- Support project-local create/patch flows before any global autonomy.
+- Preserve provenance for synthesized and patched skills.
+
+### Phase 4: close the loop
+
+- Track loaded skills and correlate them with run outcomes.
+- Add aging, pruning, and rollback for poor-performing synthesized skills.
+- Allow narrow auto-promotion only after the measurement loop is credible.
+
+This sequence keeps safety high while avoiding the failure mode of automating a
+noisy draft generator before it has even basic confidence controls.
 
 ## Recommended Product Framing
 
@@ -326,10 +376,11 @@ The latter is the end state. The current system is much closer to adaptive draft
 
 ## Open Questions
 
-- Should synthesis trigger per successful run, per session, or on a background schedule?
+- What debounce or batching policy should the runtime synthesis worker use?
 - Should generated skills be global by default or project-local by default?
-- What evidence threshold is required before a draft is considered reusable?
+- What minimum evidence threshold should exist before a draft is created at all?
 - How should Lemon detect overlap with existing curated skills?
+- How should Lemon detect overlap with existing drafts?
 - Should autonomous promotion ever be allowed for global skills?
 - What telemetry proves a synthesized skill improved future runs?
 

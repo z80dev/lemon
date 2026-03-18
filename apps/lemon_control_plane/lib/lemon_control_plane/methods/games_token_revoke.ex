@@ -1,4 +1,19 @@
 defmodule LemonControlPlane.Methods.GamesTokenRevoke do
+  @moduledoc """
+  Handler for the `games.token.revoke` control plane method.
+
+  Revokes a previously-issued games token by its hash, immediately
+  invalidating it for all future requests. Requires the `:admin` scope.
+
+  ## Required params
+
+  - `tokenHash` — the hash of the token to revoke (as returned by `games.token.issue`)
+
+  ## Returns
+
+  - `revoked: true` on success
+  """
+
   @behaviour LemonControlPlane.Method
 
   @impl true

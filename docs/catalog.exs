@@ -96,6 +96,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/remote-cli-task-execution-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-18],
+    max_age_days: 60
+  },
+  %{
     path: "docs/subagent-parent-questions.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-13],
@@ -141,6 +147,30 @@
     path: "docs/skills.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/missions.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/missions_phase1_plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/lemon-cli-implementation-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/M7_02_quick_reference.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
     max_age_days: 90
   },
   %{
@@ -234,7 +264,7 @@
     max_age_days: 60
   },
   %{
-    path: "docs/product/skill_synthesis_planning.md",
+    path: "docs/product/skill_bundle_audit_plan.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-17],
     max_age_days: 45
@@ -243,6 +273,12 @@
     path: "docs/skills_v2.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/reference/skill-manifest-v2.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
     max_age_days: 60
   },
   %{
@@ -255,6 +291,12 @@
     path: "docs/release/versioning_and_channels.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/release/deployment_flows.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-17],
     max_age_days: 60
   },
   %{
@@ -292,11 +334,5 @@
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
     max_age_days: 60
-  },
-  %{
-    path: "docs/release/versioning_and_channels.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
-    max_age_days: 90
   }
 ]

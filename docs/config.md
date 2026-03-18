@@ -230,6 +230,7 @@ By default, existing environment variables are preserved. `.env` values only fil
 ## OpenAI Codex (ChatGPT OAuth)
 
 Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
+The canonical config key is `providers.openai-codex`; `providers.openai_codex` is also accepted for backward compatibility by native Lemon/CodingAgent runs.
 
 Primary setup paths:
 

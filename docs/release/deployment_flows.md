@@ -40,6 +40,12 @@ MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
 MIX_ENV=prod mix release lemon_runtime_full
+
+# Public games site
+MIX_ENV=prod mix release games_platform
+
+# Public sim broadcast site (dashboard + spectator UI)
+MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
 Releases are written to `_build/prod/rel/<profile>/`.
@@ -56,6 +62,8 @@ Releases are written to `_build/prod/rel/<profile>/`.
 # Stop
 ./_build/prod/rel/lemon_runtime_min/bin/lemon_runtime_min stop
 ```
+
+`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It is the one to use when you want to expose public `/watch/:sim_id` spectator pages while keeping the admin dashboard and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`.
 
 ### Environment variables
 
@@ -83,6 +91,8 @@ mix lemon.doctor --json
 |---|---|---|
 | `lemon_runtime_min` | gateway, router, channels, control-plane | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
+| `games_platform` | lemon_core, lemon_games, lemon_web | Public games web deployment |
+| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 
 ---
 

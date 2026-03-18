@@ -74,7 +74,7 @@ Check for manifest issues:
 mix lemon.skill check <skill-key>
 ```
 
-Runs the audit engine against the skill. Outputs pass/warn/block verdicts with reasons.
+Shows readiness, local drift, and upstream status for the installed skill.
 
 ---
 
@@ -135,9 +135,14 @@ The audit engine (`LemonSkills.Audit.Engine`) runs deterministic security checks
 - path traversal
 - symlink / escape patterns
 
-If configured, Lemon also runs `LemonSkills.Audit.LlmReviewer` to classify higher-level suspicious or malicious intent.
+Audits are bundle-aware. Lemon hashes `SKILL.md` plus supported files under `references/`,
+`templates/`, `scripts/`, and `assets/`, rejects symlinked bundle entries, stores detailed
+results in `skills.audit.json`, and automatically rescans when the bundle or audit fingerprint
+changes.
 
-Run `mix lemon.skill check <key>` to see the full audit report.
+If configured, Lemon also runs `LemonSkills.Audit.LlmReviewer` to classify higher-level suspicious or malicious intent across the bundle payload.
+
+Run `mix lemon.skill check <key>` to see readiness, drift, and the installed skill's current status.
 
 Install/update behavior:
 
@@ -152,6 +157,11 @@ config :lemon_skills, :audit_llm,
   enabled: true,
   model: "openai:gpt-4o-mini"
 ```
+
+Audit state files:
+
+- global: `~/.lemon/agent/skills.audit.json`
+- project: `<cwd>/.lemon/skills.audit.json`
 
 ---
 
@@ -191,8 +201,9 @@ mix lemon.skill draft delete <draft-key>
 ```
 
 > **Note:** Synthesized drafts require human review before promotion. The audit
-> engine runs automatically during generation — drafts with `:block` findings are
-> never written to disk.
+> engine runs automatically during generation. Drafts with `:block` findings are
+> deleted immediately, and drafts with `:warn` findings are kept but require
+> approval on promotion.
 
 See [`docs/user-guide/adaptive.md`](adaptive.md) for the full synthesis pipeline.
 
