@@ -14,6 +14,11 @@ defmodule LemonSkills.Audit.LlmReviewer do
   @type verdict :: :pass | :warn | :block
 
   @default_max_tokens 600
+  @policy_version 1
+
+  @doc "Version tag for cache invalidation when the LLM audit prompt changes."
+  @spec policy_version() :: pos_integer()
+  def policy_version, do: @policy_version
 
   @prompt """
   You are a security reviewer for AI agent skill bundles.

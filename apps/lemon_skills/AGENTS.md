@@ -21,8 +21,11 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection | Changing where skills are found on disk |
 | `lib/lemon_skills/status.ex` | Checks binary availability (`which`) and env var presence | Adding new status checks |
 | `lib/lemon_skills/installer.ex` | Install/update/uninstall with approval gating via `LemonCore.ExecApprovals` | Changing installation flow |
+| `lib/lemon_skills/bundle.ex` | Enumerates auditable files and computes deterministic bundle hashes | Changing which files affect audit identity or LLM audit payloads |
+| `lib/lemon_skills/audit/bundle_audit.ex` | Bundle-aware audit runner with cached `skills.audit.json` state | Changing rescan logic, verdict composition, or cache invalidation |
 | `lib/lemon_skills/audit/engine.ex` | Deterministic skill security audit; merges static checks with optional LLM review | Changing audit behavior or verdict handling |
 | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed audit reviewer for suspicious/malicious skill content | Changing LLM audit prompts, model resolution, or parsing |
+| `lib/lemon_skills/audit/state.ex` | Reads/writes persisted bundle audit state per scope | Changing audit cache storage or state schema |
 | `lib/lemon_skills/builtin_seeder.ex` | Copies `priv/builtin_skills/` to `~/.lemon/agent/skill/` on startup (idempotent) | Adding/modifying bundled skills |
 | `lib/lemon_skills/discovery.ex` | GitHub topic search + registry URL probing for online skill discovery | Changing online discovery sources |
 
@@ -132,9 +135,12 @@ Key config: `:require_approval` (default `true`), `:approval_timeout_ms` (defaul
 
 All non-builtin skills are audited during install/update. The audit path is:
 
-- deterministic scan in `LemonSkills.Audit.Engine`
-- optional LLM review in `LemonSkills.Audit.LlmReviewer`
+- `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`; symlinked bundle entries are rejected so audit never escapes the skill root
+- `LemonSkills.Audit.BundleAudit` checks `skills.audit.json` and reuses cached results only when the bundle hash and audit fingerprint still match
+- `LemonSkills.Audit.Engine` scans all auditable text files in the bundle
+- optional `LemonSkills.Audit.LlmReviewer` reviews a bundle payload built from the same file set
 - installer enforcement: `:block` rejects, `:warn` requires explicit approval
+- synthesized drafts persist the same audit metadata and warned drafts default to requiring approval on promotion
 
 LLM audit config lives under:
 
@@ -145,6 +151,13 @@ config :lemon_skills, :audit_llm,
 ```
 
 The model string may be either `provider:model-id` or a bare `model-id` that exists in `Ai.Models`.
+
+Detailed audit state is stored outside the lockfile:
+
+- global: `~/.lemon/agent/skills.audit.json`
+- project: `<cwd>/.lemon/skills.audit.json`
+
+`skills.lock.json` still carries the high-level provenance fields used by the registry (`content_hash`, `bundle_hash`, `audit_status`, etc.), but detailed cached findings live in the audit-state file.
 
 ### HTTP Client Injection
 
@@ -185,7 +198,9 @@ test/lemon_skills/
   ancestor_skills_test.exs       # End-to-end ancestor .agents/skills walking
   manifest_test.exs              # YAML/TOML parsing, validation, edge cases
   entry_test.exs                 # Entry struct creation and transformation
+  bundle_test.exs                # Bundle hashing and auditable file selection
   audit/engine_test.exs          # Static + LLM audit engine behavior
+  audit/bundle_audit_test.exs    # Bundle cache/state invalidation and supporting-file scans
   audit/llm_reviewer_test.exs    # LLM audit model resolution and JSON parsing
   audit/skill_lint_test.exs      # Bundle lint + audit integration
   status_test.exs                # Binary/config availability checking

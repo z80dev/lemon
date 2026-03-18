@@ -79,6 +79,7 @@ defmodule LemonSkills.EntryTest do
           source_id: "https://github.com/acme/skill",
           trust_level: :community,
           content_hash: "abc123",
+          bundle_hash: "bundle123",
           upstream_hash: "def456",
           installed_at: now,
           updated_at: now,
@@ -90,6 +91,7 @@ defmodule LemonSkills.EntryTest do
       assert entry.source_id == "https://github.com/acme/skill"
       assert entry.trust_level == :community
       assert entry.content_hash == "abc123"
+      assert entry.bundle_hash == "bundle123"
       assert entry.upstream_hash == "def456"
       assert entry.installed_at == now
       assert entry.updated_at == now
@@ -104,6 +106,7 @@ defmodule LemonSkills.EntryTest do
       assert entry.source_id == nil
       assert entry.trust_level == nil
       assert entry.content_hash == nil
+      assert entry.bundle_hash == nil
       assert entry.upstream_hash == nil
       assert entry.installed_at == nil
       assert entry.updated_at == nil
@@ -139,6 +142,7 @@ defmodule LemonSkills.EntryTest do
         "source_id" => "https://github.com/acme/skill",
         "trust_level" => "community",
         "content_hash" => "abc123",
+        "bundle_hash" => "bundle123",
         "upstream_hash" => "def456",
         "installed_at" => "2026-01-01T00:00:00Z",
         "updated_at" => "2026-02-01T00:00:00Z",
@@ -152,6 +156,7 @@ defmodule LemonSkills.EntryTest do
       assert updated.source_id == "https://github.com/acme/skill"
       assert updated.trust_level == :community
       assert updated.content_hash == "abc123"
+      assert updated.bundle_hash == "bundle123"
       assert updated.upstream_hash == "def456"
       assert %DateTime{year: 2026, month: 1} = updated.installed_at
       assert %DateTime{year: 2026, month: 2} = updated.updated_at
@@ -180,6 +185,7 @@ defmodule LemonSkills.EntryTest do
           source_id: "https://github.com/acme/skill",
           trust_level: :trusted,
           content_hash: "abc",
+          bundle_hash: "bundle-abc",
           upstream_hash: "def",
           installed_at: now,
           updated_at: now,
@@ -194,6 +200,7 @@ defmodule LemonSkills.EntryTest do
       assert record["source_id"] == "https://github.com/acme/skill"
       assert record["trust_level"] == "trusted"
       assert record["content_hash"] == "abc"
+      assert record["bundle_hash"] == "bundle-abc"
       assert record["upstream_hash"] == "def"
       assert record["installed_at"] == "2026-01-01T12:00:00Z"
       assert record["updated_at"] == "2026-01-01T12:00:00Z"
@@ -228,6 +235,22 @@ defmodule LemonSkills.EntryTest do
     test "returns nil when SKILL.md is missing", %{tmp_dir: tmp_dir} do
       entry = Entry.new(Path.join(tmp_dir, "no-file-skill"))
       assert Entry.compute_content_hash(entry) == nil
+    end
+  end
+
+  describe "compute_bundle_hash/1" do
+    test "returns SHA-256 hex of the auditable bundle", %{tmp_dir: tmp_dir} do
+      skill_dir = Path.join(tmp_dir, "bundle-skill")
+      File.mkdir_p!(Path.join(skill_dir, "references"))
+      File.write!(Path.join(skill_dir, "SKILL.md"), "# hash me\n")
+      File.write!(Path.join(skill_dir, "references/guide.md"), "hello\n")
+
+      entry = Entry.new(skill_dir)
+      hash = Entry.compute_bundle_hash(entry)
+
+      assert is_binary(hash)
+      assert String.length(hash) == 64
+      assert hash =~ ~r/^[0-9a-f]+$/
     end
   end
 

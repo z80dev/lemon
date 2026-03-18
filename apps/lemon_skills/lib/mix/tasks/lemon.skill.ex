@@ -238,7 +238,7 @@ defmodule Mix.Tasks.Lemon.Skill do
   # ============================================================================
 
   defp install_skill(source, opts) do
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     force = "--force" in opts
     cwd = if global, do: nil, else: get_cwd(opts)
 
@@ -304,29 +304,30 @@ defmodule Mix.Tasks.Lemon.Skill do
   end
 
   defp print_update_preflight(%Entry{} = entry) do
-    current_hash = Entry.compute_content_hash(entry)
+    current_hash = current_install_hash(entry)
 
     locally_modified =
-      is_binary(entry.content_hash) and is_binary(current_hash) and
-        current_hash != entry.content_hash
+      is_binary(stored_install_hash(entry)) and is_binary(current_hash) and
+        current_hash != stored_install_hash(entry)
 
     update_available =
-      is_binary(entry.upstream_hash) and is_binary(entry.content_hash) and
-        entry.upstream_hash != entry.content_hash
+      is_binary(entry.upstream_hash) and is_binary(stored_install_hash(entry)) and
+        entry.upstream_hash != stored_install_hash(entry)
 
     if locally_modified do
-      Mix.shell().info(
-        [:yellow, "⚠", :reset, " '#{entry.key}' has local modifications (content differs from install hash)"]
-      )
+      Mix.shell().info([
+        :yellow,
+        "⚠",
+        :reset,
+        " '#{entry.key}' has local modifications (content differs from install hash)"
+      ])
     end
 
     if update_available do
-      Mix.shell().info(
-        [:cyan, "↑", :reset, " '#{entry.key}' has an upstream update available"]
-      )
+      Mix.shell().info([:cyan, "↑", :reset, " '#{entry.key}' has an upstream update available"])
     end
 
-    if not locally_modified and not update_available and entry.content_hash do
+    if not locally_modified and not update_available and stored_install_hash(entry) do
       Mix.shell().info("  '#{entry.key}' appears up-to-date; forcing re-fetch.")
     end
   end
@@ -425,19 +426,20 @@ defmodule Mix.Tasks.Lemon.Skill do
     IO.puts("")
     IO.puts("--- Content Hashes ---")
     IO.puts("Install hash:  #{abbrev_hash(entry.content_hash)}")
+    IO.puts("Bundle hash:   #{abbrev_hash(entry.bundle_hash)}")
     IO.puts("Upstream hash: #{abbrev_hash(entry.upstream_hash)}")
 
-    current_hash = Entry.compute_content_hash(entry)
+    current_hash = current_install_hash(entry)
     IO.puts("Current hash:  #{abbrev_hash(current_hash)}")
 
     cond do
-      is_nil(entry.content_hash) ->
+      is_nil(stored_install_hash(entry)) ->
         IO.puts("Drift:         (no baseline — installed without provenance)")
 
-      current_hash != entry.content_hash ->
+      current_hash != stored_install_hash(entry) ->
         IO.puts("Drift:         ⚠  locally modified since install")
 
-      is_binary(entry.upstream_hash) and entry.upstream_hash != entry.content_hash ->
+      is_binary(entry.upstream_hash) and entry.upstream_hash != stored_install_hash(entry) ->
         IO.puts("Drift:         ↑  upstream update available")
 
       true ->
@@ -449,26 +451,32 @@ defmodule Mix.Tasks.Lemon.Skill do
       IO.puts("--- Requirements ---")
 
       if bins != [] do
-        status_list = Enum.map(bins, fn b ->
-          ok = b not in view.missing_bins
-          "#{if ok, do: "✓", else: "✗"} #{b}"
-        end)
+        status_list =
+          Enum.map(bins, fn b ->
+            ok = b not in view.missing_bins
+            "#{if ok, do: "✓", else: "✗"} #{b}"
+          end)
+
         IO.puts("Binaries:  #{Enum.join(status_list, ", ")}")
       end
 
       if env_vars != [] do
-        status_list = Enum.map(env_vars, fn v ->
-          ok = v not in view.missing_env_vars
-          "#{if ok, do: "✓", else: "✗"} #{v}"
-        end)
+        status_list =
+          Enum.map(env_vars, fn v ->
+            ok = v not in view.missing_env_vars
+            "#{if ok, do: "✓", else: "✗"} #{v}"
+          end)
+
         IO.puts("Env vars:  #{Enum.join(status_list, ", ")}")
       end
 
       if tools != [] do
-        status_list = Enum.map(tools, fn t ->
-          ok = t not in view.missing_tools
-          "#{if ok, do: "✓", else: "✗"} #{t}"
-        end)
+        status_list =
+          Enum.map(tools, fn t ->
+            ok = t not in view.missing_tools
+            "#{if ok, do: "✓", else: "✗"} #{t}"
+          end)
+
         IO.puts("Tools:     #{Enum.join(status_list, ", ")}")
       end
     end
@@ -476,6 +484,7 @@ defmodule Mix.Tasks.Lemon.Skill do
     if refs != [] do
       IO.puts("")
       IO.puts("--- References ---")
+
       Enum.each(refs, fn ref ->
         case ref do
           %{"path" => path} -> IO.puts("  #{path}")
@@ -498,15 +507,15 @@ defmodule Mix.Tasks.Lemon.Skill do
     case Registry.get(key, cwd: cwd) do
       {:ok, %Entry{} = entry} ->
         view = SkillView.from_entry(entry, cwd: cwd)
-        current_hash = Entry.compute_content_hash(entry)
+        current_hash = current_install_hash(entry)
 
         locally_modified =
-          is_binary(entry.content_hash) and is_binary(current_hash) and
-            current_hash != entry.content_hash
+          is_binary(stored_install_hash(entry)) and is_binary(current_hash) and
+            current_hash != stored_install_hash(entry)
 
         update_available =
-          is_binary(entry.upstream_hash) and is_binary(entry.content_hash) and
-            entry.upstream_hash != entry.content_hash
+          is_binary(entry.upstream_hash) and is_binary(stored_install_hash(entry)) and
+            entry.upstream_hash != stored_install_hash(entry)
 
         print_check_output(entry, view, %{
           locally_modified: locally_modified,
@@ -546,7 +555,7 @@ defmodule Mix.Tasks.Lemon.Skill do
 
     # Upstream check
     if checks.update_available do
-      IO.puts("Upstream:    ↑ update available (upstream hash differs from install hash)")
+      IO.puts("Upstream:    ↑ update available (upstream hash differs from installed baseline)")
     else
       IO.puts("Upstream:    ✓ up-to-date")
     end
@@ -648,7 +657,7 @@ defmodule Mix.Tasks.Lemon.Skill do
   # ============================================================================
 
   defp manage_drafts(["list" | opts]) do
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
 
     {:ok, drafts} = DraftStore.list(global: global, cwd: cwd)
@@ -657,7 +666,10 @@ defmodule Mix.Tasks.Lemon.Skill do
       Mix.shell().info("No skill drafts found.")
       Mix.shell().info("\nRun 'mix lemon.skill draft generate' to synthesize drafts.")
     else
-      Mix.shell().info("\n#{String.pad_trailing("KEY", 30)} #{String.pad_trailing("CREATED", 24)} STATUS")
+      Mix.shell().info(
+        "\n#{String.pad_trailing("KEY", 30)} #{String.pad_trailing("CREATED", 24)} STATUS"
+      )
+
       Mix.shell().info(String.duplicate("-", 70))
 
       Enum.each(drafts, fn draft ->
@@ -678,17 +690,21 @@ defmodule Mix.Tasks.Lemon.Skill do
   defp manage_drafts(["generate" | opts]) do
     agent_id = get_opt(opts, "--agent", System.get_env("LEMON_AGENT_ID") || "default")
     max_docs = get_int_opt(opts, "--max-docs", 50)
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
 
-    Mix.shell().info("Synthesizing skill drafts from agent '#{agent_id}' (last #{max_docs} runs)...")
+    Mix.shell().info(
+      "Synthesizing skill drafts from agent '#{agent_id}' (last #{max_docs} runs)..."
+    )
 
     case Pipeline.run(:agent, agent_id, max_docs: max_docs, global: global, cwd: cwd) do
       {:ok, %{generated: gen, skipped: skipped, total_candidates: total}} ->
-        Mix.shell().info(
-          [:green, "✓", :reset,
-           " #{length(gen)} draft(s) generated from #{total} candidate(s)"]
-        )
+        Mix.shell().info([
+          :green,
+          "✓",
+          :reset,
+          " #{length(gen)} draft(s) generated from #{total} candidate(s)"
+        ])
 
         if skipped != [] do
           Mix.shell().info("  Skipped #{length(skipped)}: #{inspect(Keyword.keys(skipped))}")
@@ -710,7 +726,7 @@ defmodule Mix.Tasks.Lemon.Skill do
   end
 
   defp manage_drafts(["review", key | opts]) do
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
 
     case DraftStore.get(key, global: global, cwd: cwd) do
@@ -734,7 +750,7 @@ defmodule Mix.Tasks.Lemon.Skill do
   end
 
   defp manage_drafts(["publish", key | opts]) do
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
     force = "--force" in opts
 
@@ -752,12 +768,13 @@ defmodule Mix.Tasks.Lemon.Skill do
   end
 
   defp manage_drafts(["delete", key | opts]) do
-    global = not ("--local" in opts)
+    global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
     force = "--force" in opts
 
     unless force do
       answer = Mix.shell().prompt("Delete draft '#{key}'? [y/N] ")
+
       unless String.downcase(String.trim(answer)) == "y" do
         Mix.shell().info("Cancelled.")
         :ok
@@ -838,6 +855,15 @@ defmodule Mix.Tasks.Lemon.Skill do
 
   defp abbrev_hash(nil), do: "n/a"
   defp abbrev_hash(hash), do: "#{String.slice(hash, 0, 12)}..."
+
+  defp stored_install_hash(%Entry{bundle_hash: hash}) when is_binary(hash), do: hash
+  defp stored_install_hash(%Entry{content_hash: hash}), do: hash
+
+  defp current_install_hash(%Entry{bundle_hash: hash} = entry) when is_binary(hash) do
+    Entry.compute_bundle_hash(entry)
+  end
+
+  defp current_install_hash(%Entry{} = entry), do: Entry.compute_content_hash(entry)
 
   defp get_description(%Entry{description: description})
        when is_binary(description) and description != "" do

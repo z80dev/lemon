@@ -202,6 +202,54 @@ defmodule LemonSkills.InstallerTest do
       assert lockfile_hash == expected_hash,
              "lockfile has upstream_hash #{inspect(lockfile_hash)}, want #{inspect(expected_hash)}"
     end
+
+    test "reinstalls when local content drifted even if upstream hash is unchanged", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      skill_name = "test-skill"
+      dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
+      File.mkdir_p!(dest_dir)
+      File.cp!(Path.join(skill_dir, "SKILL.md"), Path.join(dest_dir, "SKILL.md"))
+
+      installed_entry = LemonSkills.Entry.new(dest_dir)
+      installed_bundle_hash = LemonSkills.Entry.compute_bundle_hash(installed_entry)
+
+      entry =
+        LemonSkills.Entry.new(dest_dir,
+          source: :project,
+          source_id: skill_dir,
+          source_kind: :local,
+          trust_level: :trusted,
+          content_hash: LemonSkills.Entry.compute_content_hash(installed_entry),
+          bundle_hash: installed_bundle_hash,
+          upstream_hash: installed_bundle_hash,
+          audit_status: :pass
+        )
+
+      scope = {:project, tmp_dir}
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon"]))
+      :ok = LemonSkills.Lockfile.put(scope, LemonSkills.Entry.to_lockfile_record(entry))
+      :ok = LemonSkills.Registry.register(entry)
+
+      drifted_content = """
+      ---
+      name: drifted-skill
+      description: locally modified
+      ---
+
+      # Drifted Skill
+      """
+
+      File.write!(Path.join(dest_dir, "SKILL.md"), drifted_content)
+
+      assert {:ok, updated_entry} = Installer.update(skill_name, cwd: tmp_dir, approve: true)
+
+      assert File.read!(Path.join(dest_dir, "SKILL.md")) ==
+               File.read!(Path.join(skill_dir, "SKILL.md"))
+
+      assert updated_entry.bundle_hash == installed_bundle_hash
+    end
   end
 
   describe "uninstall/2" do
@@ -229,6 +277,53 @@ defmodule LemonSkills.InstallerTest do
       result = Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
 
       assert {:error, _} = result
+      refute File.exists?(Path.join([tmp_dir, ".lemon", "skill", "test-skill"]))
+    end
+
+    test "update restores the previous installed bundle when metadata persistence fails", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      skill_name = "test-skill"
+      dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
+      File.mkdir_p!(dest_dir)
+
+      old_content = """
+      ---
+      name: old-skill
+      description: previously installed
+      ---
+
+      # Old Skill
+      """
+
+      File.write!(Path.join(dest_dir, "SKILL.md"), old_content)
+
+      entry =
+        LemonSkills.Entry.new(dest_dir,
+          source: :project,
+          source_id: skill_dir,
+          source_kind: :local,
+          trust_level: :trusted,
+          content_hash: LemonSkills.Entry.compute_content_hash(LemonSkills.Entry.new(dest_dir)),
+          bundle_hash: LemonSkills.Entry.compute_bundle_hash(LemonSkills.Entry.new(dest_dir)),
+          upstream_hash: "stale-upstream-hash",
+          audit_status: :pass
+        )
+
+      scope = {:project, tmp_dir}
+      lemon_dir = Path.join([tmp_dir, ".lemon"])
+      File.mkdir_p!(lemon_dir)
+      :ok = LemonSkills.Lockfile.put(scope, LemonSkills.Entry.to_lockfile_record(entry))
+      :ok = LemonSkills.Registry.register(entry)
+
+      lockfile_path = Path.join(lemon_dir, "skills.lock.json")
+      File.chmod!(lockfile_path, 0o444)
+      on_exit(fn -> File.chmod(lockfile_path, 0o644) end)
+
+      assert {:error, _} = Installer.update(skill_name, cwd: tmp_dir, approve: true)
+
+      assert File.read!(Path.join(dest_dir, "SKILL.md")) == old_content
     end
   end
 
@@ -326,6 +421,84 @@ defmodule LemonSkills.InstallerTest do
 
       assert {:error, reason} = result
       assert reason =~ "Approval service unavailable" or reason =~ "approval"
+    end
+
+    test "warn-denied install does not leave the fetched skill in the install directory", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      Application.put_env(:lemon_skills, :require_approval, false)
+      Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+
+      install_path = Path.join([tmp_dir, ".lemon", "skill", "test-skill"])
+
+      result =
+        with_mock_config(tmp_dir, fn ->
+          Installer.install(skill_dir,
+            global: false,
+            cwd: tmp_dir,
+            approve: false,
+            session_key: "test-session",
+            agent_id: "test-agent",
+            run_id: "test-run"
+          )
+        end)
+
+      assert {:error, _reason} = result
+      refute File.exists?(install_path)
+    end
+
+    test "warn-denied update keeps the previously installed skill untouched", %{
+      skill_dir: skill_dir,
+      tmp_dir: tmp_dir
+    } do
+      Application.put_env(:lemon_skills, :require_approval, false)
+      Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+
+      skill_name = "test-skill"
+      dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
+      File.mkdir_p!(dest_dir)
+
+      old_content = """
+      ---
+      name: old-skill
+      description: previously installed
+      ---
+
+      # Old Skill
+      """
+
+      File.write!(Path.join(dest_dir, "SKILL.md"), old_content)
+
+      entry =
+        LemonSkills.Entry.new(dest_dir,
+          source: :project,
+          source_id: skill_dir,
+          source_kind: :local,
+          trust_level: :trusted,
+          content_hash: LemonSkills.Entry.compute_content_hash(LemonSkills.Entry.new(dest_dir)),
+          bundle_hash: LemonSkills.Entry.compute_bundle_hash(LemonSkills.Entry.new(dest_dir)),
+          upstream_hash: "stale-upstream-hash",
+          audit_status: :pass
+        )
+
+      scope = {:project, tmp_dir}
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon"]))
+      :ok = LemonSkills.Lockfile.put(scope, LemonSkills.Entry.to_lockfile_record(entry))
+      :ok = LemonSkills.Registry.register(entry)
+
+      assert {:error, _reason} =
+               Installer.update(skill_name,
+                 cwd: tmp_dir,
+                 approve: false,
+                 session_key: "test-session",
+                 agent_id: "test-agent",
+                 run_id: "test-run"
+               )
+
+      assert File.read!(Path.join(dest_dir, "SKILL.md")) == old_content
     end
 
     test "explicit approve bypasses post-audit warning approval", %{

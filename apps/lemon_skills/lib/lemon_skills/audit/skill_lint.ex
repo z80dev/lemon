@@ -45,6 +45,11 @@ defmodule LemonSkills.Audit.SkillLint do
           issues: [issue()],
           valid?: boolean()
         }
+  @version 2
+
+  @doc "Version tag for cache invalidation when lint rules change."
+  @spec version() :: pos_integer()
+  def version, do: @version
 
   # ──────────────────────────────────────────────────────────────────────────
   # Public API
@@ -92,12 +97,18 @@ defmodule LemonSkills.Audit.SkillLint do
   """
   @spec lint_skill(String.t()) :: lint_result()
   def lint_skill(skill_path) when is_binary(skill_path) do
+    lint_skill(skill_path, [])
+  end
+
+  @spec lint_skill(String.t(), keyword()) :: lint_result()
+  def lint_skill(skill_path, opts) when is_binary(skill_path) and is_list(opts) do
     key = Path.basename(skill_path)
     skill_file = Path.join(skill_path, "SKILL.md")
+    include_audit = Keyword.get(opts, :include_audit, true)
 
     issues =
       if File.exists?(skill_file) do
-        lint_skill_file(skill_path, skill_file)
+        lint_skill_file(skill_path, skill_file, include_audit)
       else
         [error(:missing_skill_file, "SKILL.md not found in skill directory")]
       end
@@ -114,7 +125,7 @@ defmodule LemonSkills.Audit.SkillLint do
   # Internal lint steps
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp lint_skill_file(skill_path, skill_file) do
+  defp lint_skill_file(skill_path, skill_file, include_audit) do
     case File.read(skill_file) do
       {:error, reason} ->
         [error(:skill_file_unreadable, "Could not read SKILL.md: #{reason}")]
@@ -130,7 +141,7 @@ defmodule LemonSkills.Audit.SkillLint do
             |> check_required_field(manifest, "description", :missing_description)
             |> check_references(skill_path, manifest)
             |> check_body(body)
-            |> check_audit(content)
+            |> maybe_check_audit(skill_path, content, include_audit)
         end
     end
   end
@@ -162,7 +173,12 @@ defmodule LemonSkills.Audit.SkillLint do
 
             cond do
               not PathBoundary.within?(expanded_skill, expanded) ->
-                [error(:reference_path_traversal, "Reference path escapes skill directory: #{rel_path}")]
+                [
+                  error(
+                    :reference_path_traversal,
+                    "Reference path escapes skill directory: #{rel_path}"
+                  )
+                ]
 
               not File.exists?(expanded) ->
                 [error(:reference_missing, "Referenced file does not exist: #{rel_path}")]
@@ -206,14 +222,22 @@ defmodule LemonSkills.Audit.SkillLint do
 
   defp check_body(issues, body) do
     if String.trim(body) == "" do
-      issues ++ [error(:empty_body, "SKILL.md body (after frontmatter) is empty — add usage instructions")]
+      issues ++
+        [
+          error(
+            :empty_body,
+            "SKILL.md body (after frontmatter) is empty — add usage instructions"
+          )
+        ]
     else
       issues
     end
   end
 
-  defp check_audit(issues, content) do
-    case AuditEngine.audit_content(content) do
+  defp maybe_check_audit(issues, _skill_path, _content, false), do: issues
+
+  defp maybe_check_audit(issues, skill_path, _content, true) do
+    case AuditEngine.audit_bundle(skill_path) do
       {:pass, _} ->
         issues
 

@@ -200,9 +200,11 @@ Project skills always rank above equivalently-scored global skills. Skills that 
 
 Every install/update for a non-builtin skill runs through the audit path before the skill is registered.
 
-1. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns.
-2. If configured, `LemonSkills.Audit.LlmReviewer` asks an LLM to classify the skill as `pass`, `warn`, or `block` and return structured findings.
-3. The installer enforces the verdict:
+1. `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
+2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.
+3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle.
+4. If configured, `LemonSkills.Audit.LlmReviewer` reviews a bundle payload and classifies the skill as `pass`, `warn`, or `block`.
+5. The installer enforces the verdict:
    - `:pass` continues
    - `:warn` requires explicit approval before the install/update completes
    - `:block` aborts the operation
@@ -216,6 +218,11 @@ config :lemon_skills, :audit_llm,
 ```
 
 The configured model can be either a bare model id such as `"gpt-4o-mini"` or a provider-qualified id such as `"openai:gpt-4o-mini"`.
+
+Detailed audit state is persisted separately from provenance lockfiles:
+
+- global: `~/.lemon/agent/skills.audit.json`
+- project: `<cwd>/.lemon/skills.audit.json`
 
 ## How Skills Are Executed (Consumed)
 

@@ -4,7 +4,9 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
   alias LemonSkills.Synthesis.DraftStore
 
   setup do
-    dir = System.tmp_dir!() |> Path.join("draft_store_test_#{:erlang.unique_integer([:positive])}")
+    dir =
+      System.tmp_dir!() |> Path.join("draft_store_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     {:ok, tmp: dir}
@@ -45,6 +47,30 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       dir = DraftStore.draft_dir(draft.key, opts(ctx))
       meta = Jason.decode!(File.read!(Path.join(dir, ".draft_meta.json")))
       assert meta["source_doc_id"] == "doc-abc123"
+    end
+
+    test "record_audit stores audit metadata in the draft meta file", ctx do
+      draft = sample_draft()
+      DraftStore.put(draft, opts(ctx))
+
+      :ok =
+        DraftStore.record_audit(
+          draft.key,
+          %{
+            "final_verdict" => "warn",
+            "combined_findings" => ["destructive_commands: rm -rf"],
+            "approval_required" => true,
+            "bundle_hash" => "bundle123",
+            "audit_fingerprint" => "fp123",
+            "scanned_at" => "2026-03-17T00:00:00Z"
+          },
+          opts(ctx)
+        )
+
+      {:ok, stored} = DraftStore.get(draft.key, opts(ctx))
+      assert stored.meta["audit_status"] == "warn"
+      assert stored.meta["approval_required"] == true
+      assert stored.meta["bundle_hash"] == "bundle123"
     end
 
     test "returns error if draft already exists and force is false", ctx do
@@ -92,6 +118,8 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       assert Map.has_key?(draft_info, :path)
       assert Map.has_key?(draft_info, :created_at)
       assert Map.has_key?(draft_info, :has_skill_file)
+      assert Map.has_key?(draft_info, :audit_status)
+      assert Map.has_key?(draft_info, :approval_required)
     end
 
     test "has_skill_file is true when SKILL.md present", ctx do

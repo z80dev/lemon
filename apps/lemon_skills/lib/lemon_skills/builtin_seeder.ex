@@ -110,6 +110,7 @@ defmodule LemonSkills.BuiltinSeeder do
               entry
               |> Entry.with_manifest(manifest)
               |> Map.put(:content_hash, Entry.compute_content_hash(entry))
+              |> Map.put(:bundle_hash, Entry.compute_bundle_hash(entry))
 
             {:error, _reason} ->
               entry

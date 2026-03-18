@@ -27,7 +27,7 @@ defmodule LemonSkills.Synthesis.Pipeline do
   require Logger
 
   alias LemonCore.MemoryStore
-  alias LemonSkills.Audit.Engine, as: AuditEngine
+  alias LemonSkills.Audit.BundleAudit
   alias LemonSkills.Synthesis.{CandidateSelector, DraftGenerator, DraftStore}
 
   @type scope :: :agent | :session | :workspace
@@ -95,10 +95,16 @@ defmodule LemonSkills.Synthesis.Pipeline do
 
   defp process_candidate(doc, opts) do
     key_hint = DraftGenerator.derive_key_hint(doc.prompt_summary)
+    scope = draft_scope(opts)
 
     with {:ok, draft} <- DraftGenerator.generate(doc),
-         :ok <- check_audit(draft),
-         :ok <- DraftStore.put(draft, opts) do
+         :ok <- DraftStore.put(draft, opts),
+         {:ok, audit} <-
+           BundleAudit.audit(DraftStore.draft_dir(draft.key, opts), scope, draft.key,
+             kind: :draft
+           ),
+         :ok <- DraftStore.record_audit(draft.key, audit, opts),
+         :ok <- check_audit(draft.key, audit, opts) do
       {:ok, draft.key}
     else
       {:error, :blocked_by_audit} ->
@@ -113,15 +119,26 @@ defmodule LemonSkills.Synthesis.Pipeline do
     end
   end
 
-  defp check_audit(%{content: content}) do
-    case AuditEngine.audit_content(content) do
-      {:block, findings} ->
-        Logger.info("[Synthesis] Draft blocked by audit: #{inspect(Enum.map(findings, & &1.rule))}")
+  defp check_audit(key, audit_record, opts) do
+    case BundleAudit.audit_status(audit_record) do
+      :block ->
+        Logger.info(
+          "[Synthesis] Draft blocked by audit: #{inspect(audit_record["combined_findings"] || [])}"
+        )
+
+        DraftStore.delete(key, opts)
         {:error, :blocked_by_audit}
 
-      {_verdict, _findings} ->
-        # pass or warn — warn is acceptable for drafts (human review required anyway)
+      _verdict ->
         :ok
+    end
+  end
+
+  defp draft_scope(opts) do
+    if Keyword.get(opts, :global, true) or is_nil(Keyword.get(opts, :cwd)) do
+      :global
+    else
+      {:project, Keyword.fetch!(opts, :cwd)}
     end
   end
 

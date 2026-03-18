@@ -23,6 +23,7 @@ defmodule LemonSkills.Entry do
   - `source_id` — original install identifier (URL, path, registry ref)
   - `trust_level` — one of `:builtin`, `:official`, `:trusted`, `:community`
   - `content_hash` — SHA-256 hex of the installed `SKILL.md` content
+  - `bundle_hash` — SHA-256 hex of the auditable bundle (`SKILL.md` + supported files)
   - `upstream_hash` — last known remote hash (used for update detection)
   - `installed_at` — `DateTime` of first install
   - `updated_at` — `DateTime` of last update
@@ -41,11 +42,12 @@ defmodule LemonSkills.Entry do
         source: :global,
         path: "/home/user/.lemon/agent/skill/k8s-rollout",
         enabled: true,
-        source_kind: :git,
-        source_id: "https://github.com/acme/k8s-rollout-skill",
-        trust_level: :community,
-        content_hash: "abc123...",
-        installed_at: ~U[2026-01-01 00:00:00Z]
+          source_kind: :git,
+          source_id: "https://github.com/acme/k8s-rollout-skill",
+          trust_level: :community,
+          content_hash: "abc123...",
+          bundle_hash: "def456...",
+          installed_at: ~U[2026-01-01 00:00:00Z]
       }
   """
 
@@ -69,6 +71,7 @@ defmodule LemonSkills.Entry do
           source_id: String.t() | nil,
           trust_level: trust_level() | nil,
           content_hash: String.t() | nil,
+          bundle_hash: String.t() | nil,
           upstream_hash: String.t() | nil,
           installed_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil,
@@ -89,6 +92,7 @@ defmodule LemonSkills.Entry do
     :source_id,
     :trust_level,
     :content_hash,
+    :bundle_hash,
     :upstream_hash,
     :installed_at,
     :updated_at,
@@ -130,6 +134,7 @@ defmodule LemonSkills.Entry do
       source_id: Keyword.get(opts, :source_id),
       trust_level: Keyword.get(opts, :trust_level),
       content_hash: Keyword.get(opts, :content_hash),
+      bundle_hash: Keyword.get(opts, :bundle_hash),
       upstream_hash: Keyword.get(opts, :upstream_hash),
       installed_at: Keyword.get(opts, :installed_at),
       updated_at: Keyword.get(opts, :updated_at),
@@ -202,6 +207,7 @@ defmodule LemonSkills.Entry do
         source_id: prov["source_id"],
         trust_level: parse_atom(prov["trust_level"]),
         content_hash: prov["content_hash"],
+        bundle_hash: prov["bundle_hash"],
         upstream_hash: prov["upstream_hash"],
         installed_at: parse_datetime(prov["installed_at"]),
         updated_at: parse_datetime(prov["updated_at"]),
@@ -245,6 +251,19 @@ defmodule LemonSkills.Entry do
   end
 
   @doc """
+  Compute the SHA-256 hex digest of the full auditable skill bundle.
+
+  Returns `nil` when the bundle cannot be read.
+  """
+  @spec compute_bundle_hash(t()) :: String.t() | nil
+  def compute_bundle_hash(%__MODULE__{} = entry) do
+    case LemonSkills.Bundle.compute_hash(entry.path) do
+      {:ok, hash} -> hash
+      _ -> nil
+    end
+  end
+
+  @doc """
   Return a map of provenance fields suitable for lockfile serialisation.
   """
   @spec to_lockfile_record(t()) :: map()
@@ -255,6 +274,7 @@ defmodule LemonSkills.Entry do
       "source_id" => entry.source_id,
       "trust_level" => to_string_or_nil(entry.trust_level),
       "content_hash" => entry.content_hash,
+      "bundle_hash" => entry.bundle_hash,
       "upstream_hash" => entry.upstream_hash,
       "installed_at" => datetime_to_iso(entry.installed_at),
       "updated_at" => datetime_to_iso(entry.updated_at),

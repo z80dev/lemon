@@ -28,6 +28,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
 
   alias LemonSkills.Config
   alias LemonSkills.Installer
+  alias LemonSkills.Audit.State
 
   @skill_filename "SKILL.md"
   @meta_filename ".draft_meta.json"
@@ -38,7 +39,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
           name: String.t(),
           created_at: String.t() | nil,
           source_doc_id: String.t() | nil,
-          has_skill_file: boolean()
+          has_skill_file: boolean(),
+          audit_status: String.t() | nil,
+          approval_required: boolean()
         }
 
   # ── Public API ──────────────────────────────────────────────────────────────
@@ -133,8 +136,12 @@ defmodule LemonSkills.Synthesis.DraftStore do
     dir = draft_dir(key, opts)
 
     case File.rm_rf(dir) do
-      {:ok, _} -> :ok
-      {:error, reason, _path} -> {:error, reason}
+      {:ok, _} ->
+        State.delete(scope(opts), :draft, key)
+        :ok
+
+      {:error, reason, _path} ->
+        {:error, reason}
     end
   end
 
@@ -159,15 +166,19 @@ defmodule LemonSkills.Synthesis.DraftStore do
     unless File.dir?(dir) do
       {:error, "draft '#{key}' not found"}
     else
+      meta = read_meta(dir)
+      approve_default = not truthy?(meta["approval_required"])
+
       install_opts =
         opts
-        |> Keyword.put(:approve, Keyword.get(opts, :approve, true))
+        |> Keyword.put(:approve, Keyword.get(opts, :approve, approve_default))
         |> Keyword.put(:force, Keyword.get(opts, :force, false))
 
       case Installer.install(dir, install_opts) do
         {:ok, entry} ->
           # Remove the draft after successful promotion
           File.rm_rf(dir)
+          State.delete(scope(opts), :draft, key)
           {:ok, entry}
 
         {:error, reason} ->
@@ -199,6 +210,32 @@ defmodule LemonSkills.Synthesis.DraftStore do
     end
   end
 
+  @doc """
+  Merge persisted audit data into the draft metadata file.
+  """
+  @spec record_audit(String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def record_audit(key, audit_record, opts \\ []) when is_binary(key) and is_map(audit_record) do
+    dir = draft_dir(key, opts)
+
+    if File.dir?(dir) do
+      meta =
+        dir
+        |> read_meta()
+        |> Map.merge(%{
+          "audit_status" => audit_record["final_verdict"],
+          "audit_findings" => audit_record["combined_findings"] || [],
+          "approval_required" => audit_record["approval_required"] || false,
+          "bundle_hash" => audit_record["bundle_hash"],
+          "audit_fingerprint" => audit_record["audit_fingerprint"],
+          "audited_at" => audit_record["scanned_at"]
+        })
+
+      write_meta(dir, meta)
+    else
+      {:error, :not_found}
+    end
+  end
+
   # ── Private helpers ─────────────────────────────────────────────────────────
 
   defp do_write_draft(dir, key, content, source_doc_id) do
@@ -211,13 +248,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
         "status" => "draft"
       }
 
-      case Jason.encode(meta, pretty: true) do
-        {:ok, json} ->
-          File.write(Path.join(dir, @meta_filename), json)
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      write_meta(dir, meta)
     end
   end
 
@@ -232,7 +263,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
       name: meta["name"] || key,
       created_at: meta["created_at"],
       source_doc_id: meta["source_doc_id"],
-      has_skill_file: has_skill_file
+      has_skill_file: has_skill_file,
+      audit_status: meta["audit_status"],
+      approval_required: truthy?(meta["approval_required"])
     }
   end
 
@@ -250,4 +283,24 @@ defmodule LemonSkills.Synthesis.DraftStore do
         %{}
     end
   end
+
+  defp write_meta(dir, meta) do
+    case Jason.encode(meta, pretty: true) do
+      {:ok, json} ->
+        File.write(Path.join(dir, @meta_filename), json)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp scope(opts) do
+    if Keyword.get(opts, :global, true) or is_nil(Keyword.get(opts, :cwd)) do
+      :global
+    else
+      {:project, Keyword.fetch!(opts, :cwd)}
+    end
+  end
+
+  defp truthy?(value), do: value in [true, "true", 1, "1"]
 end

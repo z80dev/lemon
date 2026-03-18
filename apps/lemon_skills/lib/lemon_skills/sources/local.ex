@@ -73,7 +73,7 @@ defmodule LemonSkills.Sources.Local do
   def upstream_hash(path, _opts) when is_binary(path) do
     entry = Entry.new(path)
 
-    case Entry.compute_content_hash(entry) do
+    case Entry.compute_bundle_hash(entry) do
       nil -> {:error, :file_unreadable}
       hash -> {:ok, hash}
     end

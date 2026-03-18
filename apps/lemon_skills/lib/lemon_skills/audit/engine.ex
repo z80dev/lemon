@@ -39,10 +39,16 @@ defmodule LemonSkills.Audit.Engine do
   """
 
   alias LemonSkills.Audit.Finding
+  alias LemonSkills.Bundle
   alias LemonSkills.Entry
   alias LemonSkills.Audit.LlmReviewer
 
   @type verdict :: :pass | :warn | :block
+  @version 2
+
+  @doc "Version tag for cache invalidation when deterministic audit rules change."
+  @spec version() :: pos_integer()
+  def version, do: @version
 
   # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -89,15 +95,37 @@ defmodule LemonSkills.Audit.Engine do
 
   @spec audit_entry(Entry.t(), keyword()) :: {verdict(), [Finding.t()]}
   def audit_entry(%Entry{} = entry, opts) when is_list(opts) do
-    case Entry.content(entry) do
-      {:ok, content} ->
-        audit_content(content, opts)
+    audit_bundle(entry.path, opts)
+  end
+
+  @doc """
+  Audit all auditable text files in a skill bundle.
+  """
+  @spec audit_bundle(String.t(), keyword()) :: {verdict(), [Finding.t()]}
+  def audit_bundle(skill_dir, opts \\ []) when is_binary(skill_dir) and is_list(opts) do
+    case Bundle.files(skill_dir) do
+      {:ok, files} ->
+        content =
+          files
+          |> Enum.filter(& &1.text?)
+          |> Enum.map_join("\n\n", fn file ->
+            case File.read(file.full_path) do
+              {:ok, body} -> "### #{file.path}\n\n#{body}"
+              {:error, _} -> ""
+            end
+          end)
+
+        if String.trim(content) == "" do
+          {:pass, []}
+        else
+          audit_content(content, opts)
+        end
 
       {:error, reason} ->
         finding =
           Finding.warn(
             "unreadable_content",
-            "Could not read SKILL.md for audit: #{inspect(reason)}. " <>
+            "Could not read bundle for audit: #{inspect(reason)}. " <>
               "Skill may be missing or permissions are incorrect."
           )
 
