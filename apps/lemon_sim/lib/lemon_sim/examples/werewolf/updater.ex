@@ -1536,7 +1536,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       end)
 
     tokens =
-      if seer_target and :rand.uniform() < 0.4 do
+      if not is_nil(seer_target) and :rand.uniform() < 0.4 do
         tokens ++
           [
             %{

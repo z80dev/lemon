@@ -25,6 +25,7 @@ defmodule LemonSim.Examples.Werewolf do
 
   alias LemonSim.Examples.Werewolf.{
     ActionSpace,
+    Lore,
     Performance,
     Roles,
     TranscriptLogger,
@@ -47,11 +48,28 @@ defmodule LemonSim.Examples.Werewolf do
     traits = Roles.assign_traits(player_names)
     backstory_connections = Roles.generate_connections(player_names)
 
-    # Add traits to player maps
+    # Add traits to player maps (before lore so LLM sees traits)
     players =
       Enum.into(players, %{}, fn {name, info} ->
         {name, Map.put(info, :traits, Map.get(traits, name, []))}
       end)
+
+    # Optional LLM character lore
+    character_profiles =
+      if Keyword.get(opts, :generate_lore?, false) do
+        case Keyword.fetch(opts, :lore_model) do
+          {:ok, model} ->
+            stream_opts = Keyword.get(opts, :lore_stream_options, %{})
+            case Lore.generate(players, backstory_connections, model, stream_opts) do
+              {:ok, profiles} -> profiles
+              {:error, _} -> %{}
+            end
+          :error ->
+            %{}
+        end
+      else
+        %{}
+      end
 
     # Start with wolf discussion if there are wolves
     living_wolves = Roles.living_with_role(players, "werewolf")
@@ -93,6 +111,7 @@ defmodule LemonSim.Examples.Werewolf do
       runoff_candidates: nil,
       # Personality & backstory
       backstory_connections: backstory_connections,
+      character_profiles: character_profiles,
       # Internal journals
       journals: %{},
       # Evidence tokens
@@ -268,6 +287,7 @@ defmodule LemonSim.Examples.Werewolf do
         - IMPORTANT: Your role is SECRET. Do not carelessly reveal it. Werewolves should pretend to be villagers.
         - PERSONALITY: Play your assigned personality traits. Let them influence how you speak and act.
         - CONNECTIONS: You have backstory relationships with some players. These may create trust or tension.
+        - CHARACTER PROFILE: If provided, embody your character's backstory, occupation, and personality in how you speak and act.
         - JOURNAL: Use the optional "thought" field in any tool to record private observations. These persist across days.
         - ITEMS: You may find items that provide tactical advantages. Use them wisely.
         - VILLAGE EVENTS: Random events may affect the village. Factor these into your strategy.
@@ -483,6 +503,10 @@ defmodule LemonSim.Examples.Werewolf do
       "your_items" =>
         Enum.map(my_items, fn item -> Map.get(item, :type) || Map.get(item, "type") end)
     }
+
+    character_profiles = get(world, :character_profiles, %{})
+    my_profile = Map.get(character_profiles, actor_id, %{})
+    base = if my_profile != %{}, do: Map.put(base, "character_profile", my_profile), else: base
 
     case actor_role do
       "werewolf" ->

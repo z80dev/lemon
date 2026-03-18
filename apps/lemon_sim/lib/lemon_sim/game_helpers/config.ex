@@ -44,7 +44,7 @@ defmodule LemonSim.GameHelpers.Config do
 
     cond do
       provider_name == "openai-codex" ->
-        case Ai.Auth.OpenAICodexOAuth.resolve_access_token() do
+        case resolve_openai_codex_api_key(provider_cfg) do
           token when is_binary(token) and token != "" ->
             token
 
@@ -157,6 +157,37 @@ defmodule LemonSim.GameHelpers.Config do
 
       {:error, _reason} ->
         secret_value
+    end
+  end
+
+  defp resolve_openai_codex_api_key(provider_cfg) when is_map(provider_cfg) do
+    direct_api_key = provider_cfg[:api_key]
+    auth_source = provider_cfg[:auth_source]
+
+    cond do
+      is_binary(direct_api_key) and direct_api_key != "" ->
+        direct_api_key
+
+      true ->
+        configured_secret_names =
+          case auth_source do
+            "oauth" -> [provider_cfg[:oauth_secret], provider_cfg[:api_key_secret]]
+            "api_key" -> [provider_cfg[:api_key_secret], provider_cfg[:oauth_secret]]
+            _ -> [provider_cfg[:oauth_secret], provider_cfg[:api_key_secret]]
+          end
+
+        configured_secret_names
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.find_value(fn secret_name ->
+          case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
+            {:ok, value, _source} when is_binary(value) and value != "" ->
+              resolve_secret_api_key(secret_name, value)
+
+            _ ->
+              nil
+          end
+        end)
+        |> Kernel.||(Ai.Auth.OpenAICodexOAuth.resolve_access_token())
     end
   end
 end

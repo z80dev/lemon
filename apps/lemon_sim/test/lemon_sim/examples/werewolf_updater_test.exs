@@ -90,6 +90,55 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
     assert next_state.world.active_actor_id == hd(voting_order)
   end
 
+  test "night resolution does not crash when a seer investigation target is present" do
+    players = sample_players()
+
+    state =
+      State.new(
+        sim_id: "werewolf-night-test",
+        world: %{
+          players: players,
+          phase: "night",
+          day_number: 1,
+          active_actor_id: "Esme",
+          turn_order: ["Esme"],
+          night_actions: %{
+            "Dane" => %{action: "investigate", target: "Cora"}
+          },
+          discussion_transcript: [],
+          votes: %{},
+          vote_history: [],
+          elimination_log: [],
+          seer_history: [],
+          night_history: [],
+          evidence_tokens: [],
+          wanderer_results: [],
+          village_event_history: [],
+          current_village_event: nil,
+          player_items: %{},
+          meeting_requests: %{},
+          meeting_pairs: [],
+          meeting_transcripts: [],
+          current_meeting_index: 0,
+          current_meeting_messages: [],
+          discussion_round: 0,
+          discussion_round_limit: 0,
+          past_transcripts: %{},
+          past_votes: %{},
+          pending_elimination: nil,
+          last_words: [],
+          status: "in_progress",
+          winner: nil
+        }
+      )
+
+    assert {:ok, next_state, prompt} =
+             Updater.apply_event(state, Events.sleep("Esme"), [])
+
+    assert next_state.world.night_actions == %{}
+    assert match?({:decide, _}, prompt) or prompt == :skip
+  end
+
   defp sample_players do
     %{
       "Alice" => %{role: "villager", status: "alive"},
