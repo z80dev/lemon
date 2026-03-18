@@ -1,4 +1,6 @@
 defmodule LemonSimUi.Endpoint do
+  @moduledoc "Phoenix endpoint for the LemonSim UI application."
+
   use Phoenix.Endpoint, otp_app: :lemon_sim_ui
 
   @session_options [

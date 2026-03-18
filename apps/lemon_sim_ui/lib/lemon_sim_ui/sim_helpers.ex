@@ -7,7 +7,10 @@ defmodule LemonSimUi.SimHelpers do
   alias LemonSim.State
 
   @spec infer_domain_type(State.t()) ::
-          :tic_tac_toe | :skirmish | :werewolf | :stock_market | :survivor | :space_station | :auction | :diplomacy | :dungeon_crawl | :unknown
+          :tic_tac_toe | :skirmish | :werewolf | :stock_market | :survivor | :space_station
+          | :auction | :diplomacy | :dungeon_crawl | :courtroom | :startup_incubator
+          | :intel_network | :legislature | :pandemic | :murder_mystery | :supply_chain
+          | :vending_bench | :unknown
   def infer_domain_type(%State{world: world}) do
     cond do
       Map.has_key?(world, :board) or Map.has_key?(world, "board") -> :tic_tac_toe
@@ -16,6 +19,14 @@ defmodule LemonSimUi.SimHelpers do
       Map.has_key?(world, :systems) or Map.has_key?(world, "systems") -> :space_station
       Map.has_key?(world, :tribes) or Map.has_key?(world, "tribes") -> :survivor
       Map.has_key?(world, :auction_schedule) or Map.has_key?(world, "auction_schedule") -> :auction
+      Map.has_key?(world, :case_file) or Map.has_key?(world, "case_file") -> :courtroom
+      Map.has_key?(world, :startups) or Map.has_key?(world, "startups") -> :startup_incubator
+      Map.has_key?(world, :intel_pool) or Map.has_key?(world, "intel_pool") -> :intel_network
+      Map.has_key?(world, :bills) or Map.has_key?(world, "bills") -> :legislature
+      Map.has_key?(world, :disease_params) or Map.has_key?(world, "disease_params") -> :pandemic
+      Map.has_key?(world, :crime_solution) or Map.has_key?(world, "crime_solution") -> :murder_mystery
+      Map.has_key?(world, :tiers) or Map.has_key?(world, "tiers") -> :supply_chain
+      Map.has_key?(world, :machine) or Map.has_key?(world, "machine") -> :vending_bench
       Map.has_key?(world, :territories) or Map.has_key?(world, "territories") -> :diplomacy
       Map.has_key?(world, :rooms) or Map.has_key?(world, "rooms") -> :dungeon_crawl
       Map.has_key?(world, :day_number) or Map.has_key?(world, "day_number") -> :werewolf
@@ -145,10 +156,110 @@ defmodule LemonSimUi.SimHelpers do
           _ -> "Room #{room}/5"
         end
 
+      :courtroom ->
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        status = MapHelpers.get_key(state.world, :status)
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Verdict: #{winner}"
+        else
+          "Phase: #{format_phase(phase)}#{if status != "in_progress", do: " (#{status})", else: ""}"
+        end
+
+      :startup_incubator ->
+        round = MapHelpers.get_key(state.world, :round) || 1
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Winner: #{winner}"
+        else
+          "Round #{round}/5 - #{format_phase(phase)}"
+        end
+
+      :intel_network ->
+        round = MapHelpers.get_key(state.world, :round) || 1
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Winner: #{winner}"
+        else
+          "Round #{round}/8 - #{format_phase(phase)}"
+        end
+
+      :legislature ->
+        session = MapHelpers.get_key(state.world, :session) || 1
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Winner: #{winner}"
+        else
+          "Session #{session}/3 - #{format_phase(phase)}"
+        end
+
+      :pandemic ->
+        round = MapHelpers.get_key(state.world, :round) || 1
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        status = MapHelpers.get_key(state.world, :status)
+
+        case status do
+          "won" -> "Pandemic Contained!"
+          "lost" -> "Pandemic Lost (Round #{round})"
+          _ -> "Round #{round}/12 - #{format_phase(phase)}"
+        end
+
+      :murder_mystery ->
+        round = MapHelpers.get_key(state.world, :round) || 1
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        winner = MapHelpers.get_key(state.world, :winner)
+
+        if winner do
+          "Solved: #{winner}"
+        else
+          "Round #{round}/5 - #{format_phase(phase)}"
+        end
+
+      :supply_chain ->
+        round = MapHelpers.get_key(state.world, :round) || 1
+        max_rounds = MapHelpers.get_key(state.world, :max_rounds) || 20
+        phase = MapHelpers.get_key(state.world, :phase) || "unknown"
+        status = MapHelpers.get_key(state.world, :status)
+
+        if status != "in_progress" do
+          "Complete (#{round} rounds)"
+        else
+          "Round #{round}/#{max_rounds} - #{format_phase(phase)}"
+        end
+
+      :vending_bench ->
+        day = MapHelpers.get_key(state.world, :day_number) || 1
+        max_days = MapHelpers.get_key(state.world, :max_days) || 30
+        balance = MapHelpers.get_key(state.world, :bank_balance) || 0.0
+        status = MapHelpers.get_key(state.world, :status)
+
+        case status do
+          "bankrupt" -> "Bankrupt (Day #{day})"
+          "complete" -> "Complete - $#{:erlang.float_to_binary(balance + 0.0, decimals: 2)}"
+          _ -> "Day #{day}/#{max_days} - $#{:erlang.float_to_binary(balance + 0.0, decimals: 2)}"
+        end
+
       :unknown ->
         "v#{state.version}"
     end
   end
+
+  defp format_phase(phase) when is_binary(phase) do
+    phase
+    |> String.replace("_", " ")
+    |> String.split(" ")
+    |> Enum.map(&String.capitalize/1)
+    |> Enum.join(" ")
+  end
+
+  defp format_phase(phase), do: to_string(phase)
 
   @spec format_ts(non_neg_integer() | nil) :: String.t()
   def format_ts(nil), do: "--"
@@ -183,6 +294,14 @@ defmodule LemonSimUi.SimHelpers do
   def domain_label(:auction), do: "Auction"
   def domain_label(:diplomacy), do: "Diplomacy"
   def domain_label(:dungeon_crawl), do: "Dungeon Crawl"
+  def domain_label(:courtroom), do: "Courtroom"
+  def domain_label(:startup_incubator), do: "Startup Incubator"
+  def domain_label(:intel_network), do: "Intel Network"
+  def domain_label(:legislature), do: "Legislature"
+  def domain_label(:pandemic), do: "Pandemic"
+  def domain_label(:murder_mystery), do: "Murder Mystery"
+  def domain_label(:supply_chain), do: "Supply Chain"
+  def domain_label(:vending_bench), do: "Vending Bench"
   def domain_label(_), do: "Unknown"
 
   @spec domain_badge_color(atom()) :: String.t()
@@ -195,5 +314,13 @@ defmodule LemonSimUi.SimHelpers do
   def domain_badge_color(:auction), do: "bg-yellow-900/60 text-yellow-300 border-yellow-500/30"
   def domain_badge_color(:diplomacy), do: "bg-rose-900/60 text-rose-300 border-rose-500/30"
   def domain_badge_color(:dungeon_crawl), do: "bg-purple-900/60 text-purple-300 border-purple-500/30"
+  def domain_badge_color(:courtroom), do: "bg-slate-900/60 text-slate-300 border-slate-500/30"
+  def domain_badge_color(:startup_incubator), do: "bg-lime-900/60 text-lime-300 border-lime-500/30"
+  def domain_badge_color(:intel_network), do: "bg-teal-900/60 text-teal-300 border-teal-500/30"
+  def domain_badge_color(:legislature), do: "bg-blue-900/60 text-blue-300 border-blue-500/30"
+  def domain_badge_color(:pandemic), do: "bg-red-900/60 text-red-300 border-red-500/30"
+  def domain_badge_color(:murder_mystery), do: "bg-zinc-900/60 text-zinc-300 border-zinc-500/30"
+  def domain_badge_color(:supply_chain), do: "bg-indigo-900/60 text-indigo-300 border-indigo-500/30"
+  def domain_badge_color(:vending_bench), do: "bg-green-900/60 text-green-300 border-green-500/30"
   def domain_badge_color(_), do: "bg-gray-800/60 text-gray-400 border-gray-600/30"
 end

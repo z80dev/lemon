@@ -10,7 +10,19 @@ defmodule LemonSimUi.SimManager do
 
   alias LemonCore.MapHelpers
   alias LemonSim.{Runner, Store}
-  alias LemonSim.Examples.{TicTacToe, Skirmish, StockMarket, Survivor, SpaceStation, Auction, Diplomacy, DungeonCrawl}
+
+  alias LemonSim.Examples.{
+    TicTacToe,
+    Skirmish,
+    StockMarket,
+    Survivor,
+    SpaceStation,
+    Auction,
+    Diplomacy,
+    DungeonCrawl,
+    VendingBench
+  }
+
   alias LemonSim.GameHelpers.Config, as: SimConfig
 
   @lobby_topic "sim:lobby"
@@ -69,6 +81,7 @@ defmodule LemonSimUi.SimManager do
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
         put_state_with_retry(initial_state, 3)
+        maybe_start_post_launch_tasks(domain, initial_state, run_opts)
         broadcast_lobby()
 
         task_ref = start_runner(initial_state, modules, run_opts, human_player)
@@ -196,15 +209,24 @@ defmodule LemonSimUi.SimManager do
 
   defp build_initial_state(:werewolf, sim_id, opts) do
     model_specs = Keyword.get(opts, :model_specs, [])
-    player_count = Keyword.get(opts, :player_count, 6)
-    player_ids = Enum.map(1..player_count, &"player_#{&1}")
 
-    initial_state = %{LemonSim.Examples.Werewolf.initial_state(opts) | sim_id: sim_id}
+    werewolf_opts =
+      opts
+      |> Keyword.put(:sim_id, sim_id)
+      |> Keyword.put(:generate_lore?, false)
+
+    initial_state = LemonSim.Examples.Werewolf.initial_state(werewolf_opts)
     modules = LemonSim.Examples.Werewolf.modules()
+
+    player_ids =
+      initial_state.world
+      |> MapHelpers.get_key(:players)
+      |> Kernel.||(%{})
+      |> Map.keys()
+      |> Enum.sort()
 
     config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
 
-    # Resolve model assignments if specs provided
     {initial_state, run_opts} =
       if model_specs != [] do
         model_assignments =
@@ -218,8 +240,6 @@ defmodule LemonSimUi.SimManager do
           end)
 
         state_with_models = attach_model_assignments(initial_state, model_assignments)
-
-        # Use first model assignment as the default model for opts initialization
         {default_model, default_key} = model_assignments |> Map.values() |> List.first()
 
         run_opts =
@@ -337,9 +357,40 @@ defmodule LemonSimUi.SimManager do
     e -> {:error, Exception.message(e)}
   end
 
+  defp build_initial_state(:vending_bench, sim_id, opts) do
+    max_days = Keyword.get(opts, :max_days, 30)
+
+    initial_state = %{VendingBench.initial_state(max_days: max_days) | sim_id: sim_id}
+    modules = VendingBench.modules()
+
+    {model, stream_options} = resolve_default_model_for_ui()
+
+    support_tool_matcher = fn tool ->
+      String.starts_with?(tool.name, "memory_") or
+        tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory review_recent_sales)
+    end
+
+    run_opts =
+      VendingBench.default_opts(model: model, stream_options: stream_options)
+      |> Keyword.put(:persist?, true)
+      |> Keyword.put(:on_before_step, nil)
+      |> Keyword.put(:on_after_step, &on_after_step/2)
+      |> Keyword.put(:support_tool_matcher, support_tool_matcher)
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
   defp build_initial_state(domain, _sim_id, _opts) do
     {:error, {:unknown_domain, domain}}
   end
+
+  defp maybe_start_post_launch_tasks(:werewolf, initial_state, run_opts) do
+    maybe_generate_werewolf_lore(initial_state, run_opts)
+  end
+
+  defp maybe_start_post_launch_tasks(_domain, _initial_state, _run_opts), do: :ok
 
   defp start_runner(initial_state, modules, run_opts, human_player) do
     manager_pid = self()
@@ -410,7 +461,11 @@ defmodule LemonSimUi.SimManager do
   defp do_ai_loop(state, _modules, _opts, _terminal?, _max_turns, _turn, retries)
        when retries >= @max_step_retries do
     require Logger
-    Logger.warning("[SimManager] Giving up after #{@max_step_retries} retries for #{state.sim_id}")
+
+    Logger.warning(
+      "[SimManager] Giving up after #{@max_step_retries} retries for #{state.sim_id}"
+    )
+
     Store.put_state(state)
     broadcast_update(state.sim_id)
   end
@@ -436,14 +491,22 @@ defmodule LemonSimUi.SimManager do
 
           {:error, reason} ->
             require Logger
-            Logger.warning("[SimManager] Step error for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{inspect(reason)}")
+
+            Logger.warning(
+              "[SimManager] Step error for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{inspect(reason)}"
+            )
+
             Process.sleep(2000 * (retries + 1))
             do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
         end
       catch
         kind, reason ->
           require Logger
-          Logger.error("[SimManager] Step crashed for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{kind} #{inspect(reason)}")
+
+          Logger.error(
+            "[SimManager] Step crashed for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{kind} #{inspect(reason)}"
+          )
+
           Process.sleep(2000 * (retries + 1))
           do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
       end
@@ -582,6 +645,7 @@ defmodule LemonSimUi.SimManager do
   defp generate_id(:stock_market), do: "stk_#{random_hex(4)}"
   defp generate_id(:survivor), do: "srv_#{random_hex(4)}"
   defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
+  defp generate_id(:vending_bench), do: "vb_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp random_hex(bytes) do
@@ -590,11 +654,15 @@ defmodule LemonSimUi.SimManager do
 
   defp put_state_with_retry(state, retries) when retries > 0 do
     case Store.put_state(state) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, :sqlite_busy} ->
         Process.sleep(100)
         put_state_with_retry(state, retries - 1)
-      {:error, reason} -> raise "Store.put_state failed: #{inspect(reason)}"
+
+      {:error, reason} ->
+        raise "Store.put_state failed: #{inspect(reason)}"
     end
   end
 
@@ -624,11 +692,20 @@ defmodule LemonSimUi.SimManager do
     {model, %{api_key: api_key}}
   end
 
-  defp parse_model_spec(spec) when is_binary(spec) do
+  def parse_model_spec(spec) when is_binary(spec) do
     case String.split(spec, ":", parts: 2) do
-      [provider, model_id] -> {String.to_existing_atom(provider), model_id}
+      [provider, model_id] -> {resolve_model_provider!(provider), model_id}
       [model_id] -> {:anthropic, model_id}
     end
+  end
+
+  defp resolve_model_provider!(provider_name) do
+    canonical_name = SimConfig.provider_name(provider_name)
+
+    Enum.find(Ai.Models.get_providers(), fn provider ->
+      SimConfig.provider_name(provider) == canonical_name
+    end) ||
+      raise ArgumentError, "unknown model provider: #{provider_name}"
   end
 
   defp resolve_model!(provider, model_id, config) do
@@ -697,5 +774,55 @@ defmodule LemonSimUi.SimManager do
       end)
 
     %{state | world: Map.put(state.world, :players, players)}
+  end
+
+  defp maybe_generate_werewolf_lore(initial_state, run_opts) do
+    players = MapHelpers.get_key(initial_state.world, :players) || %{}
+    backstory_connections = MapHelpers.get_key(initial_state.world, :backstory_connections) || []
+    existing_profiles = MapHelpers.get_key(initial_state.world, :character_profiles) || %{}
+    model = Keyword.get(run_opts, :model)
+    stream_options = Keyword.get(run_opts, :stream_options, %{})
+
+    if players != %{} and existing_profiles == %{} and model do
+      sim_id = initial_state.sim_id
+
+      Task.start(fn ->
+        case LemonSim.Examples.Werewolf.Lore.generate(
+               players,
+               backstory_connections,
+               model,
+               stream_options
+             ) do
+          {:ok, profiles} when map_size(profiles) > 0 ->
+            merge_werewolf_character_profiles(sim_id, profiles)
+
+          _ ->
+            :ok
+        end
+      end)
+    else
+      :ok
+    end
+  end
+
+  defp merge_werewolf_character_profiles(sim_id, profiles) do
+    case Store.get_state(sim_id) do
+      nil ->
+        :ok
+
+      state ->
+        existing_profiles = MapHelpers.get_key(state.world, :character_profiles) || %{}
+
+        if existing_profiles == %{} do
+          merged_profiles = Map.merge(existing_profiles, profiles)
+          updated_world = Map.put(state.world, :character_profiles, merged_profiles)
+          updated_state = %{state | world: updated_world}
+
+          put_state_with_retry(updated_state, 3)
+          broadcast_update(sim_id)
+        else
+          :ok
+        end
+    end
   end
 end

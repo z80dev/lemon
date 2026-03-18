@@ -5,6 +5,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
   attr :world, :map, required: true
   attr :interactive, :boolean, default: false
+  attr :spectator_mode, :boolean, default: false
 
   def render(assigns) do
     world = assigns.world
@@ -36,6 +37,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
     village_event_history = MapHelpers.get_key(world, :village_event_history) || []
     player_items = MapHelpers.get_key(world, :player_items) || %{}
     backstory_connections = MapHelpers.get_key(world, :backstory_connections) || []
+    character_profiles = MapHelpers.get_key(world, :character_profiles) || %{}
 
     sorted_players = Enum.sort_by(players, fn {id, _p} -> id end)
 
@@ -101,6 +103,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       |> assign(:village_event_history, village_event_history)
       |> assign(:player_items, player_items)
       |> assign(:backstory_connections, backstory_connections)
+      |> assign(:character_profiles, character_profiles)
 
     ~H"""
     <div class="relative font-sans w-full h-full flex flex-col overflow-hidden rounded-xl">
@@ -387,6 +390,8 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                 players={@players}
                 runoff_candidates={@runoff_candidates}
                 player_items={@player_items}
+                character_profiles={@character_profiles}
+                spectator_mode={@spectator_mode}
               />
             <% end %>
 
@@ -407,6 +412,8 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
                   phase={@phase}
                   players={@players}
                   player_items={@player_items}
+                  character_profiles={@character_profiles}
+                  spectator_mode={@spectator_mode}
                 />
               <% end %>
             </div>
@@ -1243,6 +1250,8 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
   attr :players, :map, required: true
   attr :runoff_candidates, :any, default: nil
   attr :player_items, :map, default: %{}
+  attr :character_profiles, :map, default: %{}
+  attr :spectator_mode, :boolean, default: false
 
   defp roster_card(assigns) do
     player = assigns.player
@@ -1259,6 +1268,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
     traits = get_val(player, :traits, [])
     items = Map.get(assigns.player_items, assigns.player_id, [])
+    profile = Map.get(assigns.character_profiles, assigns.player_id, %{})
 
     assigns =
       assigns
@@ -1270,13 +1280,14 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       |> assign(:vote_count, vote_count)
       |> assign(:traits, traits)
       |> assign(:items, items)
+      |> assign(:profile, profile)
 
     is_runoff = assigns[:runoff_candidates] && assigns.player_id in (assigns[:runoff_candidates] || [])
     assigns = assign(assigns, :is_runoff, is_runoff)
 
     ~H"""
     <div class={[
-      "flex items-center gap-1.5 px-1.5 py-1 rounded-md border transition-all duration-300 relative group/card",
+      "flex items-center gap-1.5 px-1.5 py-1 rounded-md border transition-all duration-300 relative group/card flex-wrap",
       if(@is_dead,
         do: "bg-black/20 border-white/3 opacity-50 ww-dead-card",
         else: "bg-white/3 border-white/5 hover:bg-white/5 hover:border-white/10"
@@ -1326,13 +1337,31 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
             </span>
           <% end %>
         </div>
-        <div :if={length(@items) > 0} class="flex gap-0.5 flex-wrap mt-0.5">
+        <div :if={is_list(@items) && length(@items) > 0} class="flex gap-0.5 flex-wrap mt-0.5">
           <%= for item <- @items do %>
             <span class="text-[7px] px-1 py-0 rounded bg-amber-950/40 text-amber-400/70 border border-amber-500/10 leading-tight" title={item}>
               {item_emoji(item)}
             </span>
           <% end %>
         </div>
+      </div>
+
+      <%!-- Character bio (spectator mode) --%>
+      <div :if={@spectator_mode && @profile != %{}} class="w-full mt-1.5 pt-1.5 border-t border-white/5">
+        <details class="group/bio">
+          <summary class="text-[8px] text-fuchsia-400/80 font-mono uppercase tracking-wider cursor-pointer hover:text-fuchsia-300 transition-colors flex items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-2.5 w-2.5 transform group-open/bio:rotate-90 transition-transform" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+            </svg>
+            {Map.get(@profile, "full_name", @name)} &mdash; {Map.get(@profile, "occupation", "")}
+          </summary>
+          <div class="mt-1 space-y-1 text-[8px] leading-relaxed">
+            <p :if={Map.get(@profile, "appearance")} class="text-slate-400 italic">{Map.get(@profile, "appearance")}</p>
+            <p :if={Map.get(@profile, "personality")} class="text-slate-300">{Map.get(@profile, "personality")}</p>
+            <p :if={Map.get(@profile, "backstory")} class="text-slate-400">{Map.get(@profile, "backstory")}</p>
+            <p :if={Map.get(@profile, "motivation")} class="text-amber-400/70 font-medium">Secret: {Map.get(@profile, "motivation")}</p>
+          </div>
+        </details>
       </div>
 
       <div :if={@active && !@is_dead} class="w-1 h-1 rounded-full bg-purple-400 animate-pulse shadow-[0_0_6px_rgba(168,85,247,0.8)] flex-shrink-0"></div>

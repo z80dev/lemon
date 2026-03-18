@@ -26,8 +26,7 @@ const csrfToken = document
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: Hooks,
-  longPollFallbackMs: 2500
+  hooks: Hooks
 })
 
 liveSocket.connect()

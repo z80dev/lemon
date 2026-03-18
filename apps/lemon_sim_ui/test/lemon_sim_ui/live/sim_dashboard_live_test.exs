@@ -6,8 +6,8 @@ defmodule LemonSimUi.SimDashboardLiveTest do
   test "mounts with no sims", %{conn: conn} do
     {:ok, view, html} = live(conn, "/")
     assert html =~ "LemonSim"
-    assert html =~ "No simulation selected"
-    assert render(view) =~ "0 simulations"
+    assert html =~ "SYSTEM STANDBY"
+    assert render(view) =~ "0 active"
   end
 
   test "shows sim list when sims exist", %{conn: conn} do
@@ -38,7 +38,7 @@ defmodule LemonSimUi.SimDashboardLiveTest do
     {:ok, view, _html} = live(conn, "/")
     html = render_patch(view, "/sims/test_ttt_2")
     assert html =~ "test_ttt_2"
-    assert html =~ "Event Log"
+    assert html =~ "telemetry packets"
 
     LemonSim.Store.delete_state("test_ttt_2")
   end

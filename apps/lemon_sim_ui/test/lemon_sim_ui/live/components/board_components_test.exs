@@ -12,6 +12,7 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
   alias LemonSimUi.Live.Components.DiplomacyBoard
   alias LemonSimUi.Live.Components.DungeonCrawlBoard
   alias LemonSimUi.Live.Components.SurvivorBoard
+  alias LemonSimUi.Live.Components.VendingBenchBoard
   alias LemonSimUi.Live.Components.EventLog
   alias LemonSimUi.Live.Components.PlanHistory
   alias LemonSimUi.Live.Components.MemoryViewer
@@ -65,6 +66,57 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
     end
   end
 
+  # ── VendingBenchBoard ─────────────────────────────────────────────
+
+  describe "VendingBenchBoard" do
+    test "renders the actual world schema fields for weather, season, sales, deliveries, and worker report" do
+      world = %{
+        status: "in_progress",
+        phase: "operator_turn",
+        day_number: 3,
+        time_minutes: 615,
+        max_days: 30,
+        bank_balance: 487.5,
+        cash_in_machine: 22.0,
+        daily_fee: 2.0,
+        machine: %{
+          slots: %{
+            "A1" => %{slot_type: "small", item_id: "sparkling_water", inventory: 4, price: 2.5},
+            "A2" => %{slot_type: "small", item_id: nil, inventory: 0, price: nil}
+          }
+        },
+        storage: %{inventory: %{"chips" => 8}},
+        catalog: %{
+          "sparkling_water" => %{display_name: "Sparkling Water"},
+          "chips" => %{display_name: "Chips"}
+        },
+        inbox: [
+          %{from: "freshco", subject: "Order Delivered", body: "Your order arrived."}
+        ],
+        pending_deliveries: [
+          %{supplier_id: "snackworld", item_id: "chips", quantity: 8, delivery_day: 4}
+        ],
+        recent_sales: [
+          %{slot_id: "A1", item_id: "sparkling_water", quantity: 2, revenue: 5.0, day: 3}
+        ],
+        physical_worker_last_report: %{summary: "Collected cash and topped off A1."},
+        physical_worker_run_count: 2,
+        weather: %{kind: "hot", demand_multiplier: 1.3},
+        season: %{name: "late_spring", demand_multiplier: 1.1}
+      }
+
+      html = render_component(&VendingBenchBoard.render/1, world: world)
+
+      assert html =~ "Late Spring"
+      assert html =~ "Hot"
+      assert html =~ "Collected cash and topped off A1."
+      assert html =~ "Sparkling Water"
+      assert html =~ "D4"
+      assert html =~ "A1"
+      assert html =~ "$5.00"
+    end
+  end
+
   # ── SkirmishBoard ──────────────────────────────────────────────────
 
   describe "SkirmishBoard" do
@@ -86,8 +138,26 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
     test "renders with units on the board" do
       world = %{
         units: %{
-          "red_1" => %{team: "red", class: "soldier", hp: 10, max_hp: 10, ap: 2, max_ap: 2, status: "alive", pos: %{x: 0, y: 0}},
-          "blue_1" => %{team: "blue", class: "scout", hp: 8, max_hp: 10, ap: 2, max_ap: 2, status: "alive", pos: %{x: 4, y: 4}}
+          "red_1" => %{
+            team: "red",
+            class: "soldier",
+            hp: 10,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            status: "alive",
+            pos: %{x: 0, y: 0}
+          },
+          "blue_1" => %{
+            team: "blue",
+            class: "scout",
+            hp: 8,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            status: "alive",
+            pos: %{x: 4, y: 4}
+          }
         },
         active_actor_id: "red_1",
         round: 2,
@@ -104,7 +174,16 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
     test "renders victory overlay when game is won" do
       world = %{
         units: %{
-          "red_1" => %{team: "red", class: "soldier", hp: 10, max_hp: 10, ap: 2, max_ap: 2, status: "alive", pos: %{x: 0, y: 0}}
+          "red_1" => %{
+            team: "red",
+            class: "soldier",
+            hp: 10,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            status: "alive",
+            pos: %{x: 0, y: 0}
+          }
         },
         active_actor_id: nil,
         round: 5,
@@ -208,6 +287,72 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
       assert is_binary(html)
     end
+
+    test "renders in spectator mode without crashing" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive", traits: ["brave"]},
+          "bob" => %{name: "Bob", role: "werewolf", status: "dead", traits: ["cunning"]}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        active_actor_id: "alice",
+        character_profiles: %{}
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: true)
+      assert is_binary(html)
+      assert html =~ "alice" or html =~ "Alice"
+    end
+
+    test "renders character bio in spectator mode when profiles exist" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive", traits: ["brave"]}
+        },
+        phase: "day_discussion",
+        day_number: 1,
+        status: "in_progress",
+        active_actor_id: "alice",
+        character_profiles: %{
+          "alice" => %{
+            "full_name" => "Alice Thornberry",
+            "occupation" => "herbalist",
+            "appearance" => "Tall with red hair",
+            "personality" => "Brave and outspoken",
+            "motivation" => "Protect the weak",
+            "backstory" => "Born in the village"
+          }
+        }
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: true)
+      assert html =~ "Alice Thornberry"
+      assert html =~ "herbalist"
+    end
+
+    test "does not show character bio when spectator_mode is false" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive", traits: []}
+        },
+        phase: "day_discussion",
+        day_number: 1,
+        status: "in_progress",
+        active_actor_id: "alice",
+        character_profiles: %{
+          "alice" => %{
+            "full_name" => "Alice Thornberry",
+            "occupation" => "herbalist"
+          }
+        }
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: false)
+      # Bio details should NOT appear in non-spectator mode
+      refute html =~ "Alice Thornberry"
+    end
   end
 
   # ── StockMarketBoard ───────────────────────────────────────────────
@@ -271,7 +416,14 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
     test "renders with players and station systems" do
       world = %{
         players: %{
-          "alice" => %{name: "Alice", role: "engineer", status: "alive", location: "engine_room", tasks_completed: 2, tasks_total: 5}
+          "alice" => %{
+            name: "Alice",
+            role: "engineer",
+            status: "alive",
+            location: "engine_room",
+            tasks_completed: 2,
+            tasks_total: 5
+          }
         },
         systems: %{
           "engine_room" => %{name: "Engine Room", health: 80, max_health: 100}
@@ -356,7 +508,9 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
           "goblin_1" => %{name: "Goblin", hp: 10, max_hp: 10, type: "goblin", status: "alive"}
         },
         current_room: 0,
-        rooms: [%{name: "Dark Cave", cleared: false, enemies: ["goblin_1"], traps: [], treasure: []}],
+        rooms: [
+          %{name: "Dark Cave", cleared: false, enemies: ["goblin_1"], traps: [], treasure: []}
+        ],
         round: 1,
         turn_order: ["warrior", "mage"],
         status: "in_progress",
@@ -485,7 +639,10 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
   describe "MemoryViewer" do
     test "renders with nonexistent sim_id (empty memory)" do
-      html = render_component(&MemoryViewer.render/1, sim_id: "nonexistent_sim_test_#{System.unique_integer()}")
+      html =
+        render_component(&MemoryViewer.render/1,
+          sim_id: "nonexistent_sim_test_#{System.unique_integer()}"
+        )
 
       assert html =~ "NO_MEMORY_BANKS_FOUND"
     end
