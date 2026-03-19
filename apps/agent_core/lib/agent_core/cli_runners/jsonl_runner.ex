@@ -282,12 +282,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @lock_table __MODULE__.SessionLocks
 
   defp ensure_lock_table do
-    case :ets.whereis(@lock_table) do
-      :undefined ->
-        :ets.new(@lock_table, [:named_table, :public, :set])
-
-      _ ->
-        :ok
+    try do
+      :ets.new(@lock_table, [:named_table, :public, :set])
+    rescue
+      ArgumentError -> :ok
+    catch
+      :error, :badarg -> :ok
     end
   end
 
