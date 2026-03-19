@@ -108,4 +108,65 @@ defmodule LemonSim.Examples.WerewolfVisibilityTest do
              }
            ]
   end
+
+  test "private meetings are only shown to their participants" do
+    discussion_log_builder = Werewolf.projector_opts()[:section_builders][:discussion_log]
+    recent_events_builder = Werewolf.projector_opts()[:section_builders][:recent_events]
+
+    world = %{
+      phase: "private_meeting",
+      day_number: 2,
+      current_meeting_index: 0,
+      meeting_pairs: [["Alice", "Bram"]],
+      meeting_transcripts: [
+        %{
+          day: 2,
+          pair: ["Alice", "Bram"],
+          messages: [
+            %{player: "Alice", message: "Let's compare reads."},
+            %{player: "Bram", message: "I trust Cora least."}
+          ]
+        }
+      ],
+      players: %{
+        "Alice" => %{role: "villager", status: "alive"},
+        "Bram" => %{role: "villager", status: "alive"},
+        "Cora" => %{role: "werewolf", status: "alive"}
+      }
+    }
+
+    outsider_frame = %{
+      world: Map.put(world, :active_actor_id, "Cora"),
+      recent_events: [
+        %{kind: "request_meeting", payload: %{"player_id" => "Alice", "target_id" => "Bram"}},
+        %{
+          kind: "meeting_message",
+          payload: %{"player_id" => "Alice", "message" => "Let's compare reads."}
+        }
+      ]
+    }
+
+    participant_frame = %{
+      world: Map.put(world, :active_actor_id, "Alice"),
+      recent_events: outsider_frame.recent_events
+    }
+
+    assert discussion_log_builder.(outsider_frame, [], []).content["meeting_transcripts"] == []
+    assert recent_events_builder.(outsider_frame, [], []).content == []
+
+    assert discussion_log_builder.(participant_frame, [], []).content["meeting_transcripts"] == [
+             %{
+               "pair" => ["Alice", "Bram"],
+               "messages" => [
+                 %{"player" => "Alice", "message" => "Let's compare reads."},
+                 %{"player" => "Bram", "message" => "I trust Cora least."}
+               ]
+             }
+           ]
+
+    assert Enum.map(recent_events_builder.(participant_frame, [], []).content, & &1.kind) == [
+             "request_meeting",
+             "meeting_message"
+           ]
+  end
 end

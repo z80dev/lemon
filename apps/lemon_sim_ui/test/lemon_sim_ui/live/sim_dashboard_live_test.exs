@@ -42,4 +42,20 @@ defmodule LemonSimUi.SimDashboardLiveTest do
 
     LemonSim.Store.delete_state("test_ttt_2")
   end
+
+  test "werewolf launch form exposes z.ai glm-5 in model assignments", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+
+    view
+    |> element("aside button[phx-click=\"toggle_new_sim_form\"]")
+    |> render_click()
+
+    html =
+      view
+      |> form("#new-sim-form", %{"domain" => "werewolf"})
+      |> render_change()
+
+    assert html =~ "Z.ai GLM-5"
+    assert html =~ ~s(value="zai:glm-5")
+  end
 end

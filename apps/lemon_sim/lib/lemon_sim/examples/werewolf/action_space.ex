@@ -18,6 +18,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       {:ok, []}
     else
       phase = get(world, :phase, "night")
+      day_number = get(world, :day_number, 1)
       actor_id = get(world, :active_actor_id, nil)
       players = get(world, :players, %{})
       actor = Map.get(players, actor_id)
@@ -31,7 +32,16 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
         else
           role = get(actor, :role, "villager")
           runoff_candidates = get(world, :runoff_candidates)
-          base_tools = tools_for_phase_and_role(phase, role, actor_id, players, runoff_candidates)
+
+          base_tools =
+            tools_for_phase_and_role(
+              phase,
+              role,
+              actor_id,
+              players,
+              runoff_candidates,
+              day_number
+            )
 
           # Add item tools based on player's inventory
           player_items = get(world, :player_items, %{})
@@ -45,7 +55,14 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   end
 
   # Wolf discussion phase
-  defp tools_for_phase_and_role("wolf_discussion", "werewolf", actor_id, players, _runoff) do
+  defp tools_for_phase_and_role(
+         "wolf_discussion",
+         "werewolf",
+         actor_id,
+         players,
+         _runoff,
+         _day_number
+       ) do
     living_non_wolves =
       players
       |> Roles.living_players()
@@ -55,12 +72,19 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     [wolf_chat_tool(actor_id, living_non_wolves, players)]
   end
 
-  defp tools_for_phase_and_role("wolf_discussion", _role, actor_id, _players, _runoff) do
+  defp tools_for_phase_and_role(
+         "wolf_discussion",
+         _role,
+         actor_id,
+         _players,
+         _runoff,
+         _day_number
+       ) do
     [sleep_tool(actor_id)]
   end
 
   # Night phase
-  defp tools_for_phase_and_role("night", "werewolf", actor_id, players, _runoff) do
+  defp tools_for_phase_and_role("night", "werewolf", actor_id, players, _runoff, _day_number) do
     living_non_wolves =
       players
       |> Roles.living_players()
@@ -70,17 +94,21 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     [choose_victim_tool(actor_id, living_non_wolves, players)]
   end
 
-  defp tools_for_phase_and_role("night", "seer", actor_id, players, _runoff) do
+  defp tools_for_phase_and_role("night", "seer", actor_id, players, _runoff, day_number) do
     living_others =
       players
       |> Roles.living_players()
       |> Enum.reject(fn {id, _p} -> id == actor_id end)
       |> Enum.map(fn {id, _p} -> id end)
 
-    [investigate_player_tool(actor_id, living_others, players)]
+    if day_number <= 1 do
+      [sleep_tool(actor_id)]
+    else
+      [investigate_player_tool(actor_id, living_others, players)]
+    end
   end
 
-  defp tools_for_phase_and_role("night", "doctor", actor_id, players, _runoff) do
+  defp tools_for_phase_and_role("night", "doctor", actor_id, players, _runoff, _day_number) do
     living =
       players
       |> Roles.living_players()
@@ -89,12 +117,19 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     [protect_player_tool(actor_id, living, players)]
   end
 
-  defp tools_for_phase_and_role("night", _villager, actor_id, _players, _runoff) do
+  defp tools_for_phase_and_role("night", _villager, actor_id, _players, _runoff, _day_number) do
     [sleep_tool(actor_id), wander_tool(actor_id)]
   end
 
   # Meeting selection
-  defp tools_for_phase_and_role("meeting_selection", _role, actor_id, players, _runoff) do
+  defp tools_for_phase_and_role(
+         "meeting_selection",
+         _role,
+         actor_id,
+         players,
+         _runoff,
+         _day_number
+       ) do
     living_others =
       players
       |> Roles.living_players()
@@ -105,12 +140,19 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   end
 
   # Private meeting
-  defp tools_for_phase_and_role("private_meeting", _role, actor_id, _players, _runoff) do
+  defp tools_for_phase_and_role(
+         "private_meeting",
+         _role,
+         actor_id,
+         _players,
+         _runoff,
+         _day_number
+       ) do
     [meeting_message_tool(actor_id)]
   end
 
   # Day discussion (with accusation tool)
-  defp tools_for_phase_and_role("day_discussion", _role, actor_id, players, _runoff) do
+  defp tools_for_phase_and_role("day_discussion", _role, actor_id, players, _runoff, _day_number) do
     living_others =
       players
       |> Roles.living_players()
@@ -121,15 +163,24 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       LemonSim.GameHelpers.Tools.statement_tool(actor_id,
         description:
           "Make a public statement during the day discussion. All players will see what you say. " <>
-            "You may accuse others, defend yourself, share information, bluff, or stay vague. " <>
-            "Be strategic based on your role."
+            "Advance the game by naming a concrete suspect or town lean, asking a targeted question, " <>
+            "defending against a push, or saying who you would vote right now. " <>
+            "Do not spend your whole turn only saying it's too early or that more talk is needed. " <>
+            "Public discussion is capped, so make this turn count."
       ),
       accusation_tool(actor_id, living_others)
     ]
   end
 
   # Runoff discussion (with accusation tool)
-  defp tools_for_phase_and_role("runoff_discussion", _role, actor_id, players, _runoff) do
+  defp tools_for_phase_and_role(
+         "runoff_discussion",
+         _role,
+         actor_id,
+         players,
+         _runoff,
+         _day_number
+       ) do
     living_others =
       players
       |> Roles.living_players()
@@ -140,14 +191,15 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       LemonSim.GameHelpers.Tools.statement_tool(actor_id,
         description:
           "Make a public statement during the runoff discussion. The top vote-getters are defending themselves. " <>
-            "All players will see what you say."
+            "All players will see what you say. Push toward a final choice by backing one finalist, " <>
+            "challenging a finalist, or stating exactly why your vote is landing where it is."
       ),
       accusation_tool(actor_id, living_others)
     ]
   end
 
   # Day voting
-  defp tools_for_phase_and_role("day_voting", _role, actor_id, players, _runoff) do
+  defp tools_for_phase_and_role("day_voting", _role, actor_id, players, _runoff, _day_number) do
     living_others =
       players
       |> Roles.living_players()
@@ -157,24 +209,35 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     [
       LemonSim.GameHelpers.Tools.vote_tool(actor_id, living_others,
         description:
-          "Vote to eliminate a player or skip. Valid targets: #{Enum.join(living_others, ", ")}, or \"skip\" to abstain."
+          "Vote to eliminate the player who is currently your best suspect. " <>
+            "Voting is mandatory once discussion ends. Valid targets: #{Enum.join(living_others, ", ")}.",
+        include_skip: false
       )
     ]
   end
 
   # Runoff voting (only runoff candidates as targets)
-  defp tools_for_phase_and_role("runoff_voting", _role, actor_id, _players, runoff_candidates) do
+  defp tools_for_phase_and_role(
+         "runoff_voting",
+         _role,
+         actor_id,
+         _players,
+         runoff_candidates,
+         _day_number
+       ) do
     targets = (runoff_candidates || []) |> Enum.reject(&(&1 == actor_id))
 
     [
       LemonSim.GameHelpers.Tools.vote_tool(actor_id, targets,
         description:
-          "RUNOFF VOTE: Choose between the final candidates. Valid targets: #{Enum.join(targets, ", ")}, or \"skip\" to abstain."
+          "RUNOFF VOTE: Choose between the final candidates. This is the forced final choice, so pick one. " <>
+            "Valid targets: #{Enum.join(targets, ", ")}.",
+        include_skip: false
       )
     ]
   end
 
-  defp tools_for_phase_and_role(_phase, _role, _actor_id, _players, _runoff) do
+  defp tools_for_phase_and_role(_phase, _role, _actor_id, _players, _runoff, _day_number) do
     []
   end
 
@@ -209,7 +272,9 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     %AgentTool{
       name: "choose_victim",
       description:
-        "Choose a player to kill tonight. You are a werewolf. Valid targets: #{targets_desc}",
+        "Choose a player to kill tonight. You are a werewolf. " <>
+          "Prioritize players who are trusted, likely to be power roles, or capable of unifying the village. " <>
+          "Valid targets: #{targets_desc}",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -308,7 +373,8 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   defp sleep_tool(actor_id) do
     %AgentTool{
       name: "sleep",
-      description: "Sleep through the night safely at home. You won't learn anything but you're safe.",
+      description:
+        "Sleep through the night safely at home. You won't learn anything but you're safe.",
       parameters: %{
         "type" => "object",
         "properties" => %{},
@@ -397,7 +463,8 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       name: "wolf_chat",
       description:
         "Discuss strategy with your wolf pack before the hunt. " <>
-          "Coordinate who to target tonight. Potential victims: #{victims_desc}. " <>
+          "Coordinate who to target tonight and what each wolf's public stance should be tomorrow. " <>
+          "Potential victims: #{victims_desc}. " <>
           "Only other werewolves can see this message.",
       parameters: %{
         "type" => "object",
@@ -434,7 +501,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       description:
         "Formally accuse another player of being a werewolf. " <>
           "This is a dramatic public accusation — the accused will be forced to respond immediately. " <>
-          "Valid targets: #{targets_desc}. Use this when you have strong suspicion.",
+          "Valid targets: #{targets_desc}. Use this when you have strong suspicion and want to force the table out of vague meta talk.",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -613,7 +680,9 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You light the lantern and peer into the darkness...")],
+           content: [
+             AgentCore.text_content("You light the lantern and peer into the darkness...")
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -660,6 +729,10 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       end
     end
 
-    %{tool | parameters: Map.put(tool.parameters, "properties", new_props), execute: wrapped_execute}
+    %{
+      tool
+      | parameters: Map.put(tool.parameters, "properties", new_props),
+        execute: wrapped_execute
+    }
   end
 end

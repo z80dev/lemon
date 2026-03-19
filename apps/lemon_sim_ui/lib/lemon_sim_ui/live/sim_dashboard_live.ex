@@ -16,7 +16,7 @@ defmodule LemonSimUi.SimDashboardLive do
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.{SimHelpers, SimManager}
+  alias LemonSimUi.{SimHelpers, SimManager, WerewolfPlayback}
   alias LemonSim.{Store, Bus}
   alias LemonSim.Examples.Skirmish
 
@@ -58,6 +58,8 @@ defmodule LemonSimUi.SimDashboardLive do
        running: running,
        selected_sim: nil,
        subscribed_sim_id: nil,
+       playback: nil,
+       playback_timer_ref: nil,
        domain_type: nil,
        show_new_sim_form: false,
        new_sim_domain: "tic_tac_toe",
@@ -91,6 +93,8 @@ defmodule LemonSimUi.SimDashboardLive do
          assign(socket,
            selected_sim: state,
            subscribed_sim_id: sim_id,
+           playback: if(domain_type == :werewolf, do: WerewolfPlayback.new(state), else: nil),
+           playback_timer_ref: nil,
            domain_type: domain_type,
            page_title: "#{sim_id} - LemonSim"
          )}
@@ -106,6 +110,8 @@ defmodule LemonSimUi.SimDashboardLive do
      assign(socket,
        selected_sim: nil,
        subscribed_sim_id: nil,
+       playback: nil,
+       playback_timer_ref: nil,
        domain_type: nil,
        page_title: "LemonSim"
      )}
@@ -196,7 +202,19 @@ defmodule LemonSimUi.SimDashboardLive do
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
-        domain when domain in [:auction, :diplomacy, :courtroom, :startup_incubator, :intel_network, :legislature, :pandemic, :murder_mystery, :supply_chain, :vending_bench] ->
+        domain
+        when domain in [
+               :auction,
+               :diplomacy,
+               :courtroom,
+               :startup_incubator,
+               :intel_network,
+               :legislature,
+               :pandemic,
+               :murder_mystery,
+               :supply_chain,
+               :vending_bench
+             ] ->
           player_count = parse_int(params["player_count"], default_player_count(domain))
 
           [
@@ -335,14 +353,24 @@ defmodule LemonSimUi.SimDashboardLive do
   end
 
   @impl true
-  def handle_info(%LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: sim_id}}, socket) do
+  def handle_info(
+        %LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: sim_id}} = event,
+        socket
+      ) do
     if socket.assigns[:selected_sim] && socket.assigns.selected_sim.sim_id == sim_id do
-      case Store.get_state(sim_id) do
+      case payload_state(event) || Store.get_state(sim_id) do
         nil ->
           {:noreply, socket}
 
         updated ->
-          {:noreply, assign(socket, selected_sim: updated)}
+          socket =
+            if socket.assigns.domain_type == :werewolf do
+              queue_werewolf_selected_sim(socket, updated)
+            else
+              assign(socket, selected_sim: updated)
+            end
+
+          {:noreply, socket}
       end
     else
       {:noreply, socket}
@@ -351,6 +379,26 @@ defmodule LemonSimUi.SimDashboardLive do
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
     {:noreply, assign(socket, sims: build_sim_list(), running: SimManager.list_running())}
+  end
+
+  def handle_info({:werewolf_playback_tick, ref}, socket) do
+    if socket.assigns[:playback_timer_ref] == ref and socket.assigns[:playback] do
+      {playback, _hold_ms} =
+        WerewolfPlayback.advance(socket.assigns.playback, System.monotonic_time(:millisecond))
+
+      socket =
+        socket
+        |> assign(
+          selected_sim: playback.display_state,
+          playback: playback,
+          playback_timer_ref: nil
+        )
+        |> maybe_schedule_werewolf_playback()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -843,6 +891,56 @@ defmodule LemonSimUi.SimDashboardLive do
   defp maybe_put_sim_id(opts, ""), do: opts
   defp maybe_put_sim_id(opts, sim_id), do: Keyword.put(opts, :sim_id, sim_id)
 
+  defp queue_werewolf_selected_sim(socket, updated_state) do
+    playback =
+      socket.assigns.playback
+      |> Kernel.||(WerewolfPlayback.new(socket.assigns.selected_sim))
+      |> WerewolfPlayback.enqueue(updated_state)
+
+    socket
+    |> assign(playback: playback)
+    |> maybe_schedule_werewolf_playback()
+  end
+
+  defp maybe_schedule_werewolf_playback(socket) do
+    cond do
+      is_nil(socket.assigns[:playback]) ->
+        socket
+
+      socket.assigns[:playback_timer_ref] != nil ->
+        socket
+
+      true ->
+        case WerewolfPlayback.next_delay_ms(
+               socket.assigns.playback,
+               System.monotonic_time(:millisecond)
+             ) do
+          nil ->
+            socket
+
+          delay_ms ->
+            ref = make_ref()
+            Process.send_after(self(), {:werewolf_playback_tick, ref}, delay_ms)
+            assign(socket, playback_timer_ref: ref)
+        end
+    end
+  end
+
+  defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do
+    case Map.get(payload, :state, Map.get(payload, "state")) do
+      %LemonSim.State{} = state ->
+        state
+
+      %{} = state_map ->
+        LemonSim.State.new(state_map)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp payload_state(_event), do: nil
+
   # -- Game-specific form helpers --
 
   defp player_count_label("werewolf"), do: "Number of Players (5-8)"
@@ -920,24 +1018,14 @@ defmodule LemonSimUi.SimDashboardLive do
       {"GPT-5.1 Codex Mini", "openai-codex:gpt-5.1-codex-mini"},
       {"GPT-5.3 Codex Spark", "openai-codex:gpt-5.3-codex-spark"},
       {"GPT-5.3 Codex", "openai-codex:gpt-5.3-codex"},
+      {"GPT-5.4", "openai-codex:gpt-5.4"},
       {"Kimi K2P5", "kimi:k2p5"},
+      {"Z.ai GLM-5", "zai:glm-5"},
       {"DeepSeek V3", "deepseek:deepseek-chat"}
     ]
   end
 
-  # Rotate defaults so games get model variety
-  @default_models [
-    "google_gemini_cli:gemini-3-flash-preview",
-    "google_gemini_cli:gemini-3-pro-preview",
-    "anthropic:claude-sonnet-4-20250514",
-    "openai-codex:gpt-5.3-codex-spark",
-    "google_gemini_cli:gemini-2.5-flash",
-    "google_gemini_cli:gemini-2.5-pro",
-    "anthropic:claude-haiku-4-5-20251001",
-    "deepseek:deepseek-chat"
-  ]
+  @default_model "openai-codex:gpt-5.3-codex-spark"
 
-  defp default_model_for_seat(seat) do
-    Enum.at(@default_models, rem(seat - 1, length(@default_models)))
-  end
+  defp default_model_for_seat(_seat), do: @default_model
 end

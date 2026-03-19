@@ -23,6 +23,7 @@ lib/
     router.ex                              Private admin routes, public `/watch/:sim_id`, and `/api/admin/*`
     sim_manager.ex                         GenServer: owns all running sim tasks
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
+    werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
     telemetry.ex                           Phoenix telemetry setup
     gettext.ex                             Gettext backend
     components/
@@ -70,6 +71,7 @@ test/
 | `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; `start_sim/2`, `stop_sim/1`, `list_running/0`, `submit_human_move/2` |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/` and `/sims/:sim_id`; handles sim launch and admin/detail flows |
 | `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable werewolf watcher for `/watch/:sim_id`; subscribes to sim + lobby updates |
+| `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
 | `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public load-balancer/smoke-test health check |
 | `lib/lemon_sim_ui/plugs/require_access_token.ex` | `LemonSimUi.Plugs.RequireAccessToken` | Optional access-token gate for dashboard + admin API |
@@ -134,7 +136,8 @@ Edit `available_model_options/0` and `@default_models` in `SimDashboardLive`. Th
 - Do not add simulation logic here. Game rules, event shapes, and world state mutations belong in `lemon_sim`.
 - Board components must remain stateless function components. Do not convert them to LiveComponents unless there is a strong rendering-isolation reason.
 - `SimManager` is the single owner of all runner task PIDs. Do not start runner tasks outside of it.
-- Spectator-only embellishments for Werewolf belong in `SpectatorLive` or `WerewolfBoard`; they must stay read-only and public-safe.
+- Werewolf board context is not viewer-gated anymore. The dashboard and the public watcher should show the same non-admin story panels, including wolf chat history, private meetings, journals, and character bios.
+- Buffered Werewolf watch pacing belongs in `lemon_sim_ui`, not `lemon_sim`. Use exact broadcast snapshots plus UI-side dwell heuristics for readability, but keep simulation rules and state transitions in `lemon_sim`.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.
 - Keep `/` and `/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/watch/:sim_id` and `/healthz` are intentionally public.
 - `MemoryViewer` reads files synchronously at render time (no caching). Keep it bounded to small memory namespaces; it already limits to 20 files and 4096 bytes per file.

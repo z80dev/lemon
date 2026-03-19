@@ -288,7 +288,7 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert is_binary(html)
     end
 
-    test "renders in spectator mode without crashing" do
+    test "renders with lore without crashing" do
       world = %{
         players: %{
           "alice" => %{name: "Alice", role: "villager", status: "alive", traits: ["brave"]},
@@ -301,12 +301,12 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         character_profiles: %{}
       }
 
-      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: true)
+      html = render_component(&WerewolfBoard.render/1, world: world)
       assert is_binary(html)
       assert html =~ "alice" or html =~ "Alice"
     end
 
-    test "renders character bio in spectator mode when profiles exist" do
+    test "renders character bio when profiles exist" do
       world = %{
         players: %{
           "alice" => %{name: "Alice", role: "villager", status: "alive", traits: ["brave"]}
@@ -327,12 +327,12 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         }
       }
 
-      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: true)
+      html = render_component(&WerewolfBoard.render/1, world: world)
       assert html =~ "Alice Thornberry"
       assert html =~ "herbalist"
     end
 
-    test "does not show character bio when spectator_mode is false" do
+    test "renders character bio regardless of viewer" do
       world = %{
         players: %{
           "alice" => %{name: "Alice", role: "villager", status: "alive", traits: []}
@@ -349,9 +349,157 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         }
       }
 
-      html = render_component(&WerewolfBoard.render/1, world: world, spectator_mode: false)
-      # Bio details should NOT appear in non-spectator mode
-      refute html =~ "Alice Thornberry"
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Alice Thornberry"
+      assert html =~ "herbalist"
+    end
+
+    test "renders agent journals without spectator gating" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        journals: %{
+          "alice" => [
+            %{day: 1, thought: "Bob's timeline keeps changing."}
+          ]
+        },
+        backstory_connections: [
+          %{type: "friendship", description: "Alice and Bob grew up together."}
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Agent Journals"
+      assert html =~ "Bob&#39;s timeline keeps changing."
+      assert html =~ "Alice and Bob grew up together."
+    end
+
+    test "keeps the current village discussion visible after voting moves to last words" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "last_words_vote",
+        day_number: 2,
+        status: "in_progress",
+        discussion_transcript: [
+          %{player: "alice", statement: "Bob's story changed twice this morning."}
+        ],
+        pending_elimination: %{player_id: "bob", role: "werewolf"}
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Day 2 Discussion"
+      assert html =~ "Bob&#39;s story changed twice this morning."
+    end
+
+    test "shows archived wolf chat alongside public day discussion" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        active_actor_id: "alice",
+        discussion_transcript: [
+          %{player: "alice", statement: "Bob keeps steering every vote."}
+        ],
+        wolf_chat_transcript: [
+          %{player: "bob", message: "Keep the pressure on Alice."}
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Day 2 Discussion"
+      assert html =~ "Bob keeps steering every vote."
+      assert html =~ "Wolf Pack Chat"
+      assert html =~ "Keep the pressure on Alice."
+    end
+
+    test "shows wolf chat while wolf discussion is active" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "wolf_discussion",
+        day_number: 2,
+        status: "in_progress",
+        active_actor_id: "bob",
+        wolf_chat_transcript: [
+          %{player: "bob", message: "Keep the pressure on Alice."}
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Wolf Pack Chat"
+      assert html =~ "Keep the pressure on Alice."
+    end
+
+    test "shows private meeting transcripts" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        meeting_transcripts: [
+          %{
+            player_a: "alice",
+            player_b: "bob",
+            messages: [
+              %{player: "alice", message: "If you are good, explain the night kill."},
+              %{player: "bob", message: "I was with Mara, not near the square."}
+            ]
+          }
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Private Meetings"
+      assert html =~ "If you are good, explain the night kill."
+      assert html =~ "I was with Mara, not near the square."
+    end
+
+    test "renders accusation bubbles with accuser, target, and reason" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        discussion_transcript: [
+          %{
+            player: "alice",
+            type: "accusation",
+            target: "bob",
+            reason: "His alibi changed twice."
+          }
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Accuses Bob"
+      assert html =~ "Alice accuses Bob. Reason: His alibi changed twice."
     end
   end
 

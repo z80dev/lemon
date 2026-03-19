@@ -9,6 +9,10 @@ defmodule LemonSim.Examples.Werewolf.Updater do
   alias LemonSim.{Event, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles}
 
+  @wander_sighting_chance 0.05
+  @evidence_chance_high 0.10
+  @evidence_chance_low 0.05
+
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
@@ -99,6 +103,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
          :ok <- ensure_role(players, player_id, "seer"),
+         :ok <- ensure_seer_can_investigate(state.world),
          :ok <- ensure_living(players, target_id),
          :ok <- ensure_different(player_id, target_id) do
       target_role = get(Map.get(players, target_id, %{}), :role, "unknown")
@@ -231,7 +236,12 @@ defmodule LemonSim.Examples.Werewolf.Updater do
 
       next_state =
         state
-        |> State.put_world(world_updates(state.world, %{discussion_transcript: new_transcript}))
+        |> State.put_world(
+          world_updates(state.world, %{
+            discussion_transcript: new_transcript,
+            discussion_turn_count: discussion_turn_count(state.world) + 1
+          })
+        )
         |> State.append_event(event)
 
       advance_day_discussion_turn(next_state)
@@ -301,40 +311,48 @@ defmodule LemonSim.Examples.Werewolf.Updater do
     players = get(state.world, :players, %{})
     phase = get(state.world, :phase)
 
-    case next_in_order(turn_order, active_actor_id) do
-      nil ->
-        if discussion_round < discussion_round_limit do
-          next_round = discussion_round + 1
-          next_order = Roles.discussion_turn_order(players, day_number, next_round)
-          next_actor = List.first(next_order)
+    if discussion_turn_limit_reached?(state.world) do
+      if phase == "runoff_discussion" do
+        transition_to_runoff_voting(state)
+      else
+        transition_to_voting(state)
+      end
+    else
+      case next_in_order(turn_order, active_actor_id) do
+        nil ->
+          if discussion_round < discussion_round_limit do
+            next_round = discussion_round + 1
+            next_order = Roles.discussion_turn_order(players, day_number, next_round)
+            next_actor = List.first(next_order)
 
+            next_state =
+              State.put_world(
+                state,
+                world_updates(state.world, %{
+                  discussion_round: next_round,
+                  turn_order: next_order,
+                  active_actor_id: next_actor
+                })
+              )
+
+            {:ok, next_state, {:decide, "#{next_actor} discussion round #{next_round}"}}
+          else
+            if phase == "runoff_discussion" do
+              transition_to_runoff_voting(state)
+            else
+              transition_to_voting(state)
+            end
+          end
+
+        next_actor ->
           next_state =
             State.put_world(
               state,
-              world_updates(state.world, %{
-                discussion_round: next_round,
-                turn_order: next_order,
-                active_actor_id: next_actor
-              })
+              world_updates(state.world, %{active_actor_id: next_actor})
             )
 
-          {:ok, next_state, {:decide, "#{next_actor} discussion round #{next_round}"}}
-        else
-          if phase == "runoff_discussion" do
-            transition_to_runoff_voting(state)
-          else
-            transition_to_voting(state)
-          end
-        end
-
-      next_actor ->
-        next_state =
-          State.put_world(
-            state,
-            world_updates(state.world, %{active_actor_id: next_actor})
-          )
-
-        {:ok, next_state, {:decide, "#{next_actor} discussion turn"}}
+          {:ok, next_state, {:decide, "#{next_actor} discussion turn"}}
+      end
     end
   end
 
@@ -446,30 +464,22 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       new_entry = %{
         player: player_id,
         statement: reason,
+        reason: reason,
         type: "accusation",
         target: target_id
       }
 
       new_transcript = transcript ++ [new_entry]
 
-      # Insert target into turn_order after current position for forced response
       turn_order = get(state.world, :turn_order, [])
-      current_idx = Enum.find_index(turn_order, &(&1 == player_id)) || 0
-      insert_pos = current_idx + 1
-
-      # Only insert if target is not already the next speaker
-      new_turn_order =
-        if Enum.at(turn_order, insert_pos) == target_id do
-          turn_order
-        else
-          List.insert_at(turn_order, insert_pos, target_id)
-        end
+      new_turn_order = prioritize_accusation_response(turn_order, player_id, target_id)
 
       next_state =
         state
         |> State.put_world(
           world_updates(state.world, %{
             discussion_transcript: new_transcript,
+            discussion_turn_count: discussion_turn_count(state.world) + 1,
             turn_order: new_turn_order
           })
         )
@@ -573,7 +583,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
             active_actor_id: nil,
             turn_order: [],
             discussion_round: 0,
-            discussion_round_limit: 0
+            discussion_round_limit: 0,
+            discussion_turn_count: 0,
+            discussion_turn_limit: 0
           })
         )
         |> State.append_events(elimination_events ++ game_over_events)
@@ -750,7 +762,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       night_actions
       |> Enum.filter(fn {_id, action} -> get(action, :action) == "wander" end)
       |> Enum.map(fn {wanderer_id, _action} ->
-        saw_something = not is_nil(victim_id) and not saved? and :rand.uniform() < 0.6
+        saw_something =
+          not is_nil(victim_id) and not saved? and :rand.uniform() < @wander_sighting_chance
 
         if saw_something do
           %{
@@ -791,7 +804,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       night_history ++
         build_night_history(day_number, players, night_actions, victim_id, protected_id, saved?)
 
-    # If someone was killed and not saved, give them last words
+    # If someone was killed and not saved, give them last words unless their role is excluded.
     if not is_nil(victim_id) and not saved? do
       victim_role = get(Map.get(players, victim_id, %{}), :role, "unknown")
 
@@ -848,7 +861,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
               active_actor_id: nil,
               turn_order: [],
               discussion_round: 0,
-              discussion_round_limit: 0
+              discussion_round_limit: 0,
+              discussion_turn_count: 0,
+              discussion_turn_limit: 0
             })
           )
           |> State.append_events(
@@ -857,8 +872,35 @@ defmodule LemonSim.Examples.Werewolf.Updater do
 
         {:ok, next_state, :skip}
       else
-        # Give victim last words before completing elimination
-        next_state =
+        if allows_last_words?(victim_role) do
+          # Give victim last words before completing elimination
+          next_state =
+            state
+            |> State.put_world(
+              world_updates(state.world, %{
+                night_actions: %{},
+                night_history: new_night_history,
+                evidence_tokens: all_evidence,
+                wanderer_results: all_wanderer_results,
+                player_items: updated_player_items,
+                phase: "last_words_night",
+                active_actor_id: victim_id,
+                turn_order: [victim_id],
+                pending_elimination: %{
+                  player_id: victim_id,
+                  role: victim_role,
+                  reason: "killed by werewolves"
+                }
+              })
+            )
+            |> State.append_events(
+              resolution_events ++
+                extra_events ++
+                [Events.phase_changed("last_words_night", day_number)]
+            )
+
+          {:ok, next_state, {:decide, "#{victim_id} last words"}}
+        else
           state
           |> State.put_world(
             world_updates(state.world, %{
@@ -868,8 +910,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
               wanderer_results: all_wanderer_results,
               player_items: updated_player_items,
               phase: "last_words_night",
-              active_actor_id: victim_id,
-              turn_order: [victim_id],
+              active_actor_id: nil,
+              turn_order: [],
               pending_elimination: %{
                 player_id: victim_id,
                 role: victim_role,
@@ -877,13 +919,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
               }
             })
           )
-          |> State.append_events(
-            resolution_events ++
-              extra_events ++
-              [Events.phase_changed("last_words_night", day_number)]
-          )
-
-        {:ok, next_state, {:decide, "#{victim_id} last words"}}
+          |> State.append_events(resolution_events ++ extra_events)
+          |> complete_elimination()
+        end
       end
     else
       # No kill or saved — generate village event and items, then meetings
@@ -982,15 +1020,38 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       not is_nil(eliminated_id) ->
         victim_role = get(Map.get(players, eliminated_id, %{}), :role, "unknown")
 
-        next_state =
+        if allows_last_words?(victim_role) do
+          next_state =
+            state
+            |> State.put_world(
+              world_updates(state.world, %{
+                votes: %{},
+                vote_history: new_vote_history,
+                phase: "last_words_vote",
+                active_actor_id: eliminated_id,
+                turn_order: [eliminated_id],
+                pending_elimination: %{
+                  player_id: eliminated_id,
+                  role: victim_role,
+                  reason: "voted out by the village"
+                }
+              })
+            )
+            |> State.append_events(
+              vote_events ++
+                [Events.phase_changed("last_words_vote", day_number)]
+            )
+
+          {:ok, next_state, {:decide, "#{eliminated_id} last words"}}
+        else
           state
           |> State.put_world(
             world_updates(state.world, %{
               votes: %{},
               vote_history: new_vote_history,
               phase: "last_words_vote",
-              active_actor_id: eliminated_id,
-              turn_order: [eliminated_id],
+              active_actor_id: nil,
+              turn_order: [],
               pending_elimination: %{
                 player_id: eliminated_id,
                 role: victim_role,
@@ -998,12 +1059,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
               }
             })
           )
-          |> State.append_events(
-            vote_events ++
-              [Events.phase_changed("last_words_vote", day_number)]
-          )
-
-        {:ok, next_state, {:decide, "#{eliminated_id} last words"}}
+          |> State.append_events(vote_events)
+          |> complete_elimination()
+        end
 
       # No majority and this is first vote (no runoff yet) — try runoff
       is_nil(runoff_candidates) ->
@@ -1059,6 +1117,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           discussion_transcript: [],
           discussion_round: 1,
           discussion_round_limit: 1,
+          discussion_turn_count: 0,
+          discussion_turn_limit: discussion_turn_limit(discussion_order, 1),
           turn_order: discussion_order,
           active_actor_id: first_speaker
         })
@@ -1085,6 +1145,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           votes: %{},
           discussion_round: 0,
           discussion_round_limit: 0,
+          discussion_turn_count: 0,
+          discussion_turn_limit: 0,
           turn_order: voting_order,
           active_actor_id: first_voter
         })
@@ -1110,6 +1172,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           votes: %{},
           discussion_round: 0,
           discussion_round_limit: 0,
+          discussion_turn_count: 0,
+          discussion_turn_limit: 0,
           turn_order: voting_order,
           active_actor_id: first_voter
         })
@@ -1165,6 +1229,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           elimination_log: elimination_log,
           discussion_round: 0,
           discussion_round_limit: 0,
+          discussion_turn_count: 0,
+          discussion_turn_limit: 0,
           past_transcripts: new_past_transcripts,
           past_votes: new_past_votes,
           wolf_chat_transcript: [],
@@ -1173,11 +1239,11 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           current_village_event: nil
         })
       )
-      |> State.append_events(
-        preceding_events ++ [Events.phase_changed(phase_label, next_day)]
-      )
+      |> State.append_events(preceding_events ++ [Events.phase_changed(phase_label, next_day)])
 
-    {:ok, next_state, {:decide, "#{first_actor} #{if initial_phase == "wolf_discussion", do: "wolf chat", else: "night action"}"}}
+    {:ok, next_state,
+     {:decide,
+      "#{first_actor} #{if initial_phase == "wolf_discussion", do: "wolf chat", else: "night action"}"}}
   end
 
   # -- Win condition checks --
@@ -1200,6 +1266,13 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       true ->
         {"in_progress", nil, []}
     end
+  end
+
+  defp allows_last_words?("seer"), do: false
+  defp allows_last_words?(_role), do: true
+
+  defp ensure_seer_can_investigate(world) do
+    if get(world, :day_number, 1) > 1, do: :ok, else: {:error, :investigation_not_ready}
   end
 
   # -- Helpers --
@@ -1320,7 +1393,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
     requests = get(state.world, :meeting_requests, %{})
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
-    living_ids = players |> Roles.living_players() |> Enum.map(fn {id, _} -> id end) |> Enum.sort()
+
+    living_ids =
+      players |> Roles.living_players() |> Enum.map(fn {id, _} -> id end) |> Enum.sort()
 
     pairs = build_meeting_pairs(requests, living_ids)
 
@@ -1449,8 +1524,9 @@ defmodule LemonSim.Examples.Werewolf.Updater do
   defp transition_to_day_discussion_from_meetings(%State{} = state) do
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
-    discussion_round_limit = Roles.discussion_round_limit(players)
+    discussion_round_limit = Roles.discussion_round_limit(players, day_number)
     discussion_order = Roles.discussion_turn_order(players, day_number, 1)
+    discussion_turn_limit = discussion_turn_limit(discussion_order, discussion_round_limit)
     first_speaker = List.first(discussion_order)
 
     next_state =
@@ -1461,6 +1537,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           discussion_transcript: [],
           discussion_round: 1,
           discussion_round_limit: discussion_round_limit,
+          discussion_turn_count: 0,
+          discussion_turn_limit: discussion_turn_limit,
           votes: %{},
           turn_order: discussion_order,
           active_actor_id: first_speaker,
@@ -1476,7 +1554,10 @@ defmodule LemonSim.Examples.Werewolf.Updater do
   defp transition_to_meetings_or_discussion(%State{} = state) do
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
-    living_ids = players |> Roles.living_players() |> Enum.map(fn {id, _} -> id end) |> Enum.sort()
+
+    living_ids =
+      players |> Roles.living_players() |> Enum.map(fn {id, _} -> id end) |> Enum.sort()
+
     first_player = List.first(living_ids)
 
     next_state =
@@ -1502,7 +1583,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
     tokens = []
 
     tokens =
-      if not is_nil(victim_id) and not saved? do
+      if not is_nil(victim_id) and not saved? and :rand.uniform() < @evidence_chance_high do
         tokens ++
           [
             %{
@@ -1516,7 +1597,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       end
 
     tokens =
-      if not is_nil(protected_id) and :rand.uniform() < 0.5 do
+      if not is_nil(protected_id) and :rand.uniform() < @evidence_chance_low do
         tokens ++
           [
             %{
@@ -1536,7 +1617,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       end)
 
     tokens =
-      if not is_nil(seer_target) and :rand.uniform() < 0.4 do
+      if not is_nil(seer_target) and :rand.uniform() < @evidence_chance_low do
         tokens ++
           [
             %{
@@ -1550,13 +1631,12 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       end
 
     tokens =
-      if :rand.uniform() < 0.3 do
+      if :rand.uniform() < @evidence_chance_low do
         tokens ++
           [
             %{
               type: "torn_cloth",
-              clue:
-                "A torn piece of dark cloth was caught on a fence near the square.",
+              clue: "A torn piece of dark cloth was caught on a fence near the square.",
               related_to: nil
             }
           ]
@@ -1564,7 +1644,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
         tokens
       end
 
-    if is_nil(victim_id) or saved? do
+    if (is_nil(victim_id) or saved?) and :rand.uniform() < @evidence_chance_high do
       tokens ++
         [
           %{
@@ -1586,10 +1666,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       events = [
         {"stranger_arrives",
          "A mysterious stranger was seen passing through the village at dawn. No one recognizes them."},
-        {"supply_raid",
-         "The village storehouse was raided overnight! Supplies are missing."},
-        {"blizzard",
-         "A fierce blizzard is rolling in. The village must make decisions quickly."},
+        {"supply_raid", "The village storehouse was raided overnight! Supplies are missing."},
+        {"blizzard", "A fierce blizzard is rolling in. The village must make decisions quickly."},
         {"festival",
          "Today is the village harvest festival! Spirits are high and people are willing to talk."},
         {"omen",
@@ -1634,14 +1712,11 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       lucky_player = Enum.random(living)
 
       item_pool = [
-        {"lantern",
-         "You found an old lantern! Use it at night to see clearly."},
-        {"lock",
-         "You found a sturdy lock! Use it to secure your door tonight."},
+        {"lantern", "You found an old lantern! Use it at night to see clearly."},
+        {"lock", "You found a sturdy lock! Use it to secure your door tonight."},
         {"anonymous_letter",
          "You found blank parchment and a disguised seal! Send an anonymous message."},
-        {"wolfsbane",
-         "You found a bundle of wolfsbane! If wolves attack you, you'll survive."}
+        {"wolfsbane", "You found a bundle of wolfsbane! If wolves attack you, you'll survive."}
       ]
 
       {item_type, description} = Enum.random(item_pool)
@@ -1709,7 +1784,8 @@ defmodule LemonSim.Examples.Werewolf.Updater do
         |> State.put_world(
           world_updates(state.world, %{
             discussion_transcript: new_transcript,
-            player_items: new_player_items
+            player_items: new_player_items,
+            discussion_turn_count: discussion_turn_count(state.world) + 1
           })
         )
         |> State.append_event(event)
@@ -1721,6 +1797,52 @@ defmodule LemonSim.Examples.Werewolf.Updater do
 
       {:error, reason} ->
         reject_action(state, event, "Anonymous", reason)
+    end
+  end
+
+  defp discussion_turn_count(world) do
+    get(world, :discussion_turn_count, length(get(world, :discussion_transcript, [])))
+  end
+
+  defp discussion_turn_limit_reached?(world) do
+    turn_order = get(world, :turn_order, [])
+    round_limit = get(world, :discussion_round_limit, 0)
+
+    turn_limit =
+      get(world, :discussion_turn_limit, discussion_turn_limit(turn_order, round_limit))
+
+    turn_limit > 0 and discussion_turn_count(world) >= turn_limit
+  end
+
+  defp discussion_turn_limit(turn_order, round_limit) do
+    length(turn_order) * max(round_limit, 0)
+  end
+
+  # Accusations can pull one future speaker forward, but they must not rewind the
+  # round back to someone who already spoke or create duplicate turns.
+  defp prioritize_accusation_response(turn_order, current_player_id, target_id) do
+    case Enum.find_index(turn_order, &(&1 == current_player_id)) do
+      nil ->
+        turn_order
+
+      current_idx ->
+        next_idx = current_idx + 1
+
+        case Enum.find_index(turn_order, &(&1 == target_id)) do
+          nil ->
+            turn_order
+
+          target_idx when target_idx <= current_idx ->
+            turn_order
+
+          target_idx when target_idx == next_idx ->
+            turn_order
+
+          target_idx ->
+            turn_order
+            |> List.delete_at(target_idx)
+            |> List.insert_at(next_idx, target_id)
+        end
     end
   end
 

@@ -109,12 +109,18 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   end
 
   @doc """
-  Returns how many discussion rounds to run before voting.
+  Returns how many public discussion rounds to run before voting.
+
+  Larger tables get an extra public round so both teams have enough time to
+  react to emerging claims, pressure, and vote momentum.
   """
   @spec discussion_round_limit(%{String.t() => map()}) :: pos_integer()
   def discussion_round_limit(players) do
     if length(living_players(players)) >= 5, do: 2, else: 1
   end
+
+  @spec discussion_round_limit(%{String.t() => map()}, pos_integer()) :: pos_integer()
+  def discussion_round_limit(players, _day_number), do: discussion_round_limit(players)
 
   # -- Personality Traits --
 
@@ -156,8 +162,10 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   @connection_types ~w(siblings rivals old_friends debt mentor_student secret_keepers)
 
   @connection_templates %{
-    "siblings" => " are siblings who grew up together in the village. They share a deep familial bond.",
-    "rivals" => " have been bitter rivals since a land dispute tore their families apart years ago.",
+    "siblings" =>
+      " are siblings who grew up together in the village. They share a deep familial bond.",
+    "rivals" =>
+      " have been bitter rivals since a land dispute tore their families apart years ago.",
     "old_friends" =>
       " are old friends who have known each other since childhood. They trust each other deeply.",
     "debt" => ": the first owes the second a significant debt from a failed business deal.",

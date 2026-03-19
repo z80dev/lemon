@@ -60,10 +60,12 @@ defmodule LemonSim.Examples.Werewolf do
         case Keyword.fetch(opts, :lore_model) do
           {:ok, model} ->
             stream_opts = Keyword.get(opts, :lore_stream_options, %{})
+
             case Lore.generate(players, backstory_connections, model, stream_opts) do
               {:ok, profiles} -> profiles
               {:error, _} -> %{}
             end
+
           :error ->
             %{}
         end
@@ -97,6 +99,8 @@ defmodule LemonSim.Examples.Werewolf do
       night_history: [],
       discussion_round: 0,
       discussion_round_limit: 0,
+      discussion_turn_count: 0,
+      discussion_turn_limit: 0,
       status: "in_progress",
       winner: nil,
       # Day history for past days
@@ -193,6 +197,7 @@ defmodule LemonSim.Examples.Werewolf do
           }
         end,
         discussion_log: fn frame, _tools, _opts ->
+          actor_id = get(frame.world, :active_actor_id)
           transcript = get(frame.world, :discussion_transcript, [])
           elimination_log = get(frame.world, :elimination_log, [])
           last_words = get(frame.world, :last_words, [])
@@ -238,6 +243,7 @@ defmodule LemonSim.Examples.Werewolf do
               "meeting_transcripts" =>
                 meeting_transcripts
                 |> Enum.filter(fn t -> get(t, :day) == get(frame.world, :day_number) end)
+                |> Enum.filter(fn t -> actor_id in get(t, :pair, []) end)
                 |> Enum.map(fn t ->
                   %{
                     "pair" => get(t, :pair, []),
@@ -260,7 +266,7 @@ defmodule LemonSim.Examples.Werewolf do
           filtered =
             frame.recent_events
             |> Enum.take(-15)
-            |> Enum.filter(&event_visible?(&1, actor_id, actor_role))
+            |> Enum.filter(&event_visible?(&1, actor_id, actor_role, frame.world))
             |> Enum.map(&sanitize_event(&1, actor_id, actor_role, players))
 
           %{
@@ -277,14 +283,18 @@ defmodule LemonSim.Examples.Werewolf do
         - You are one of several players in a Werewolf/Mafia game.
         - Use exactly one tool call per turn.
         - During WOLF DISCUSSION: Werewolves privately discuss who to target before night actions.
-        - During NIGHT: Use your role's night action (werewolves kill, seer investigates, doctor protects, villagers sleep or wander).
+        - During NIGHT: Use your role's night action (werewolves kill, seer investigates starting on Night 2, doctor protects, villagers sleep or wander).
         - During MEETING SELECTION: Choose a player for a private 1-on-1 meeting.
         - During PRIVATE MEETING: Exchange private messages with your meeting partner.
-        - During DAY DISCUSSION: Make a strategic statement or formally accuse another player.
-        - During DAY VOTING: Vote to eliminate a suspicious player, or skip if unsure.
-        - During RUNOFF DISCUSSION/VOTING: When no majority, top candidates face a runoff vote.
-        - During LAST WORDS: An eliminated player gives their final statement before dying.
+        - During DAY DISCUSSION: Make a statement that advances the board. Give a concrete suspect or town lean, ask a targeted question, defend against a push, or say who you'd vote if forced right now.
+        - PUBLIC DISCUSSION HAS A HARD TURN CAP: use your turn to move the board forward because the village will be forced into voting once the cap is reached.
+        - DAY 1 IS STILL A REAL ELIMINATION DAY: do not spend your whole turn only saying it's too early or that more discussion is needed.
+        - During DAY VOTING: You must vote for a player. No abstentions.
+        - During RUNOFF DISCUSSION/VOTING: When no majority, top candidates face a forced final choice. Use runoff discussion to argue for one finalist, then cast a decisive runoff vote.
+        - During LAST WORDS: Most eliminated players give a final statement before dying, but the Seer does not.
         - IMPORTANT: Your role is SECRET. Do not carelessly reveal it. Werewolves should pretend to be villagers.
+        - WEREWOLF STRATEGY: Do not publicly mirror your partner. Create distinct reads, pressure from different angles, and distance if a partner is already under real heat.
+        - WEREWOLF KILLS: Prefer trusted voices, likely power roles, or players who can organize the table against you.
         - PERSONALITY: Play your assigned personality traits. Let them influence how you speak and act.
         - CONNECTIONS: You have backstory relationships with some players. These may create trust or tension.
         - CHARACTER PROFILE: If provided, embody your character's backstory, occupation, and personality in how you speak and act.
@@ -386,7 +396,9 @@ defmodule LemonSim.Examples.Werewolf do
         Map.merge(
           %{
             discussion_round: get(world, :discussion_round, 1),
-            discussion_round_limit: get(world, :discussion_round_limit, 1)
+            discussion_round_limit: get(world, :discussion_round_limit, 1),
+            discussion_turn_count: get(world, :discussion_turn_count, 0),
+            discussion_turn_limit: get(world, :discussion_turn_limit, 0)
           },
           if(last,
             do: %{statement: get(last, :statement), speaker: get(last, :player)},
@@ -457,6 +469,10 @@ defmodule LemonSim.Examples.Werewolf do
       "day_number" => get(world, :day_number),
       "discussion_round" => get(world, :discussion_round),
       "discussion_round_limit" => get(world, :discussion_round_limit),
+      "discussion_turn_count" => get(world, :discussion_turn_count, 0),
+      "discussion_turn_limit" => get(world, :discussion_turn_limit, 0),
+      "discussion_turns_remaining" =>
+        max(0, get(world, :discussion_turn_limit, 0) - get(world, :discussion_turn_count, 0)),
       "you" => actor_id,
       "active_player" => get(world, :active_actor_id),
       "players" => player_summary,
@@ -522,8 +538,10 @@ defmodule LemonSim.Examples.Werewolf do
           "description" =>
             "You are a WEREWOLF. Your partners are: #{Enum.join(partner_ids, ", ")}. " <>
               "During wolf discussion, coordinate with your pack before night actions. " <>
-              "At night, choose a villager to kill. During the day, pretend to be a villager " <>
-              "and deflect suspicion away from yourself and your partners."
+              "At night, choose a villager to kill. During the day, pretend to be a villager, " <>
+              "avoid obviously echoing your partner, create distinct suspicions, and push the " <>
+              "table toward believable misreads. Prioritize killing trusted voices, power-role " <>
+              "suspects, or anyone likely to organize the village."
         })
 
       "seer" ->
@@ -538,9 +556,9 @@ defmodule LemonSim.Examples.Werewolf do
               }
             end),
           "description" =>
-            "You are the SEER. Each night you can investigate one player to learn their role. " <>
+            "You are the SEER. Starting on Night 2, you can investigate one player to learn their role. " <>
               "Use your knowledge wisely during discussions, but be careful not to make yourself " <>
-              "an obvious target for the werewolves."
+              "an obvious target for the werewolves. If you are eliminated, you do not get last words."
         })
 
       "doctor" ->
@@ -577,10 +595,11 @@ defmodule LemonSim.Examples.Werewolf do
   @secret_night_events ~w(choose_victim investigate_player protect_player sleep night_wander use_item)
   @seer_only_events ~w(investigation_result)
 
-  defp event_visible?(event, _actor_id, _actor_role) when not is_map(event), do: false
+  defp event_visible?(event, _actor_id, _actor_role, _world) when not is_map(event), do: false
 
-  defp event_visible?(event, actor_id, actor_role) do
+  defp event_visible?(event, actor_id, actor_role, world) do
     kind = event_kind(event)
+    payload = event_payload(event)
 
     cond do
       # Night action events: only the actor who performed them sees them
@@ -594,6 +613,14 @@ defmodule LemonSim.Examples.Werewolf do
       # Wolf chat: werewolves only
       kind == "wolf_chat" ->
         actor_role == "werewolf"
+
+      # Meeting requests are only visible to the requester and invitee.
+      kind == "request_meeting" ->
+        actor_id in [get(payload, :player_id), get(payload, :target_id)]
+
+      # Private meeting messages stay within the current pair.
+      kind == "meeting_message" ->
+        actor_id in active_meeting_pair(world)
 
       # Action rejections: only the rejected player
       kind == "action_rejected" ->
@@ -619,8 +646,8 @@ defmodule LemonSim.Examples.Werewolf do
       kind == "item_used" ->
         event_player_id(event) == actor_id
 
-      # Last words, accusations, meetings, evidence, village events, anonymous messages are public
-      kind in ~w(make_last_words make_accusation request_meeting meeting_message evidence_found village_event anonymous_message) ->
+      # Last words, accusations, evidence, village events, anonymous messages are public
+      kind in ~w(make_last_words make_accusation evidence_found village_event anonymous_message) ->
         true
 
       # Everything else is public (phase_changed, night_resolved, player_eliminated,
@@ -628,6 +655,14 @@ defmodule LemonSim.Examples.Werewolf do
       true ->
         true
     end
+  end
+
+  defp active_meeting_pair(world) do
+    Enum.at(
+      get(world, :meeting_pairs, []),
+      get(world, :current_meeting_index, 0),
+      []
+    )
   end
 
   defp sanitize_event(event, _actor_id, _actor_role, _players) when not is_map(event), do: event

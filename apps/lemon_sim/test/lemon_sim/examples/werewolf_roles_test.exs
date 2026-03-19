@@ -11,4 +11,18 @@ defmodule LemonSim.Examples.WerewolfRolesTest do
     assert Enum.count(roles, &(&1 == :doctor)) == 1
     assert Enum.count(roles, &(&1 == :villager)) == 2
   end
+
+  test "day 1 discussion uses the same multi-round limit as later days" do
+    players = %{
+      "Alice" => %{role: "villager", status: "alive"},
+      "Bram" => %{role: "doctor", status: "alive"},
+      "Cora" => %{role: "werewolf", status: "alive"},
+      "Dane" => %{role: "seer", status: "alive"},
+      "Esme" => %{role: "villager", status: "alive"},
+      "Felix" => %{role: "villager", status: "alive"}
+    }
+
+    assert Roles.discussion_round_limit(players, 1) == 2
+    assert Roles.discussion_round_limit(players, 2) == 2
+  end
 end

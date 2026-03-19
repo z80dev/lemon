@@ -18,7 +18,7 @@ lemon_sim_ui
   |-- LemonSimUi.Endpoint           Bandit-backed Phoenix endpoint
 ```
 
-`SimManager` owns all running simulation tasks under a `DynamicSupervisor`. It drives `LemonSim.Runner.step/3` in a loop, writes state to `LemonSim.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling.
+`SimManager` owns all running simulation tasks under a `DynamicSupervisor`. It drives `LemonSim.Runner.step/3` in a loop, writes state to `LemonSim.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling. For Werewolf specifically, those push updates now carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
 
 The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/live/longpoll` transport, and the browser client connects without enabling a long-poll fallback.
 
@@ -28,6 +28,8 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `LemonSim.Bus` topic for the currently viewed sim — for per-step world updates
 
 The dashboard routes (`/` and `/sims/:sim_id`) are handled by `SimDashboardLive` using `live_action` (`:index` and `:show`). Public werewolf spectator viewing is served separately at `/watch/:sim_id` by `SpectatorLive`.
+
+On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
 Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/`, `/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The spectator route (`/watch/:sim_id`) and `/healthz` remain public.
 
@@ -68,6 +70,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
 | `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Lobby + sim detail LiveView; handles sim launch and admin/detail events |
 | `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable werewolf watcher with no admin controls |
+| `LemonSimUi.WerewolfPlayback` | `lib/lemon_sim_ui/werewolf_playback.ex` | Buffers exact Werewolf snapshots and applies dwell heuristics so live viewing stays legible |
 | `LemonSimUi.AdminSimController` | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | Protected JSON API for starting and stopping sims remotely |
 | `LemonSimUi.HealthController` | `lib/lemon_sim_ui/controllers/health_controller.ex` | Public health check used by load balancers and smoke tests |
 | `LemonSimUi.SimHelpers` | `lib/lemon_sim_ui/sim_helpers.ex` | Domain type inference, status labels, badge colors, world summaries |

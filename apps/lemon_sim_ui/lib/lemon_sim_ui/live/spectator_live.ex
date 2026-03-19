@@ -9,7 +9,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.SimHelpers
+  alias LemonSimUi.{SimHelpers, WerewolfPlayback}
   alias LemonSim.{Store, Bus}
 
   alias LemonSimUi.Live.Components.{
@@ -31,6 +31,8 @@ defmodule LemonSimUi.SpectatorLive do
            state: nil,
            domain_type: nil,
            supported: false,
+           playback: nil,
+           playback_timer_ref: nil,
            running: false,
            page_title: "Not Found"
          )}
@@ -52,6 +54,8 @@ defmodule LemonSimUi.SpectatorLive do
            state: state,
            domain_type: domain_type,
            supported: supported,
+           playback: if(supported, do: WerewolfPlayback.new(state), else: nil),
+           playback_timer_ref: nil,
            running: running,
            page_title: "Watch: #{sim_id}"
          )}
@@ -59,15 +63,24 @@ defmodule LemonSimUi.SpectatorLive do
   end
 
   @impl true
-  def handle_info(%LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: sim_id}}, socket) do
+  def handle_info(
+        %LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: sim_id}} = event,
+        socket
+      ) do
     if socket.assigns[:state] && socket.assigns.sim_id == sim_id do
-      case Store.get_state(sim_id) do
+      case payload_state(event) || Store.get_state(sim_id) do
         nil ->
           {:noreply, socket}
 
         updated ->
           running = sim_id in LemonSimUi.SimManager.list_running()
-          {:noreply, assign(socket, state: updated, running: running)}
+
+          socket =
+            socket
+            |> assign(running: running)
+            |> queue_werewolf_state(updated)
+
+          {:noreply, socket}
       end
     else
       {:noreply, socket}
@@ -77,6 +90,26 @@ defmodule LemonSimUi.SpectatorLive do
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
     running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
     {:noreply, assign(socket, running: running)}
+  end
+
+  def handle_info({:werewolf_playback_tick, ref}, socket) do
+    if socket.assigns[:playback_timer_ref] == ref and socket.assigns[:playback] do
+      {playback, _hold_ms} =
+        WerewolfPlayback.advance(socket.assigns.playback, System.monotonic_time(:millisecond))
+
+      socket =
+        socket
+        |> assign(
+          state: playback.display_state,
+          playback: playback,
+          playback_timer_ref: nil
+        )
+        |> maybe_schedule_playback()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -217,7 +250,6 @@ defmodule LemonSimUi.SpectatorLive do
           <WerewolfBoard.render
             world={@state.world}
             interactive={false}
-            spectator_mode={true}
           />
         </div>
 
@@ -301,4 +333,58 @@ defmodule LemonSimUi.SpectatorLive do
 
   defp status_badge("dead", _role), do: "bg-red-900/40 text-red-400 border-red-500/30"
   defp status_badge(_, _), do: "bg-emerald-900/40 text-emerald-400 border-emerald-500/30"
+
+  defp queue_werewolf_state(socket, updated_state) do
+    if socket.assigns.supported do
+      playback =
+        socket.assigns.playback
+        |> Kernel.||(WerewolfPlayback.new(socket.assigns.state))
+        |> WerewolfPlayback.enqueue(updated_state)
+
+      socket
+      |> assign(playback: playback)
+      |> maybe_schedule_playback()
+    else
+      assign(socket, state: updated_state)
+    end
+  end
+
+  defp maybe_schedule_playback(socket) do
+    cond do
+      is_nil(socket.assigns[:playback]) ->
+        socket
+
+      socket.assigns[:playback_timer_ref] != nil ->
+        socket
+
+      true ->
+        case WerewolfPlayback.next_delay_ms(
+               socket.assigns.playback,
+               System.monotonic_time(:millisecond)
+             ) do
+          nil ->
+            socket
+
+          delay_ms ->
+            ref = make_ref()
+            Process.send_after(self(), {:werewolf_playback_tick, ref}, delay_ms)
+            assign(socket, playback_timer_ref: ref)
+        end
+    end
+  end
+
+  defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do
+    case Map.get(payload, :state, Map.get(payload, "state")) do
+      %LemonSim.State{} = state ->
+        state
+
+      %{} = state_map ->
+        LemonSim.State.new(state_map)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp payload_state(_event), do: nil
 end

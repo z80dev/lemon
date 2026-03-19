@@ -9,7 +9,7 @@ defmodule LemonSimUi.SimManager do
   use GenServer
 
   alias LemonCore.MapHelpers
-  alias LemonSim.{Runner, Store}
+  alias LemonSim.{Runner, State, Store}
 
   alias LemonSim.Examples.{
     TicTacToe,
@@ -24,6 +24,7 @@ defmodule LemonSimUi.SimManager do
   }
 
   alias LemonSim.GameHelpers.Config, as: SimConfig
+  alias LemonSimUi.ProjectRoot
 
   @lobby_topic "sim:lobby"
 
@@ -225,7 +226,7 @@ defmodule LemonSimUi.SimManager do
       |> Map.keys()
       |> Enum.sort()
 
-    config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+    config = load_project_config()
 
     {initial_state, run_opts} =
       if model_specs != [] do
@@ -449,7 +450,7 @@ defmodule LemonSimUi.SimManager do
   defp do_ai_loop(state, _modules, _opts, _terminal?, max_turns, turn)
        when turn >= max_turns do
     Store.put_state(state)
-    broadcast_update(state.sim_id)
+    broadcast_update(state)
   end
 
   defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn) do
@@ -467,13 +468,13 @@ defmodule LemonSimUi.SimManager do
     )
 
     Store.put_state(state)
-    broadcast_update(state.sim_id)
+    broadcast_update(state)
   end
 
   defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries) do
     if terminal?.(state) do
       Store.put_state(state)
-      broadcast_update(state.sim_id)
+      broadcast_update(state)
     else
       # Call on_before_step if provided (used by multi-model to switch the active model)
       case Keyword.get(opts, :on_before_step) do
@@ -485,7 +486,7 @@ defmodule LemonSimUi.SimManager do
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
             Store.put_state(result.state)
-            broadcast_update(result.state.sim_id)
+            broadcast_update(result.state)
             Process.sleep(500)
             do_ai_loop(result.state, modules, opts, terminal?, max_turns, turn + 1, 0)
 
@@ -522,17 +523,17 @@ defmodule LemonSimUi.SimManager do
   defp do_interactive_loop(state, _modules, _opts, _terminal?, max_turns, turn, _human_team)
        when turn >= max_turns do
     Store.put_state(state)
-    broadcast_update(state.sim_id)
+    broadcast_update(state)
   end
 
   defp do_interactive_loop(state, modules, opts, terminal?, max_turns, turn, human_team) do
     if terminal?.(state) do
       Store.put_state(state)
-      broadcast_update(state.sim_id)
+      broadcast_update(state)
     else
       if is_human_turn?(state, human_team) do
         # Wait for human move
-        broadcast_update(state.sim_id)
+        broadcast_update(state)
 
         receive do
           {:human_move, event} ->
@@ -541,7 +542,7 @@ defmodule LemonSimUi.SimManager do
             case Runner.ingest_events(state, [event], updater, opts) do
               {:ok, next_state, _signal} ->
                 Store.put_state(next_state)
-                broadcast_update(next_state.sim_id)
+                broadcast_update(next_state)
 
                 do_interactive_loop(
                   next_state,
@@ -569,7 +570,7 @@ defmodule LemonSimUi.SimManager do
           300_000 ->
             # 5 minute timeout
             Store.put_state(state)
-            broadcast_update(state.sim_id)
+            broadcast_update(state)
         end
       else
         # Call on_before_step for multi-model switching
@@ -581,7 +582,7 @@ defmodule LemonSimUi.SimManager do
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
             Store.put_state(result.state)
-            broadcast_update(result.state.sim_id)
+            broadcast_update(result.state)
             Process.sleep(500)
 
             do_interactive_loop(
@@ -596,7 +597,7 @@ defmodule LemonSimUi.SimManager do
 
           {:error, _reason} ->
             Store.put_state(state)
-            broadcast_update(state.sim_id)
+            broadcast_update(state)
         end
       end
     end
@@ -624,12 +625,17 @@ defmodule LemonSimUi.SimManager do
 
   defp on_after_step(_turn, %{state: next_state}) do
     Store.put_state(next_state)
-    broadcast_update(next_state.sim_id)
+    broadcast_update(next_state)
   end
 
   defp on_after_step(_turn, _result), do: :ok
 
-  defp broadcast_update(sim_id) do
+  defp broadcast_update(%State{} = state) do
+    LemonSim.Bus.broadcast_world_update(state.sim_id, %{state: state})
+    broadcast_lobby()
+  end
+
+  defp broadcast_update(sim_id) when is_binary(sim_id) do
     LemonSim.Bus.broadcast_world_update(sim_id, %{})
     broadcast_lobby()
   end
@@ -673,7 +679,7 @@ defmodule LemonSimUi.SimManager do
   # Resolves a default model + API key for non-multi-model sims started from the UI.
   # Tries Lemon config first, falls back to first available Gemini model.
   defp resolve_default_model_for_ui do
-    config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+    config = load_project_config()
 
     model =
       try do
@@ -724,7 +730,7 @@ defmodule LemonSimUi.SimManager do
     player_ids = Enum.map(1..player_count, &"player_#{&1}")
 
     if model_specs != [] do
-      config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
+      config = load_project_config()
 
       model_assignments =
         player_ids
@@ -815,14 +821,17 @@ defmodule LemonSimUi.SimManager do
 
         if existing_profiles == %{} do
           merged_profiles = Map.merge(existing_profiles, profiles)
-          updated_world = Map.put(state.world, :character_profiles, merged_profiles)
-          updated_state = %{state | world: updated_world}
+          updated_state = State.put_world(state, %{character_profiles: merged_profiles})
 
           put_state_with_retry(updated_state, 3)
-          broadcast_update(sim_id)
+          broadcast_update(updated_state)
         else
           :ok
         end
     end
+  end
+
+  defp load_project_config do
+    LemonCore.Config.Modular.load(project_dir: ProjectRoot.resolve(__DIR__))
   end
 end
