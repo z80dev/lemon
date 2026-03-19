@@ -237,7 +237,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
             state.run_id,
             ok?,
             meta: meta,
-            surface: surface
+            surface: surface,
+            start?: false
           )
         end)
 

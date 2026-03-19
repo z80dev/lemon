@@ -96,6 +96,8 @@ Channels decides:
 - reply markup
 - media batching
 - Telegram resume indexing by platform message id
+- repeated watchdog/tool-status snapshots stay visible by advancing semantic sequence numbers when
+  the router intentionally re-prompts or re-snapshots the same surface
 
 ## Testing
 

@@ -154,16 +154,20 @@ Async task followups (`task action=poll`) are also rebound onto the original tas
 `task_id` when upstream runners preserve that metadata in action `detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
+Repeated embedded-only `current_action` updates for the same parent/title reuse the same child row
+until the embedded title changes, so repeated task polls do not duplicate inner status lines.
 Projected child events may also carry explicit `surface` / `root_action_id` metadata; prefer that
 binding when present instead of relying only on previously seen parent actions in the run process.
 Task-scoped status coalescers are reaped after they go idle with no running task actions, so
 per-task router processes do not accumulate indefinitely; later updates recreate the surface if
-needed.
+needed, but parent run finalization must not recreate a task surface that has already reaped.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize
 `:run_completed`, but only after a short completion grace window so a real late `:run_completed`
 from the bus can win over the synthetic fallback.
+Watchdog keepalive prompts increment their semantic sequence on each idle cycle so repeated prompts
+remain visible through channel renderer and outbox dedupe.
 
 ### Change compaction behavior
 

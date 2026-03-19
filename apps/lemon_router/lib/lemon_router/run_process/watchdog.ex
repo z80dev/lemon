@@ -93,7 +93,9 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
   @spec maybe_request_watchdog_confirmation(map()) :: {:ok, map()} | :error
   def maybe_request_watchdog_confirmation(state) do
-    with {:ok, intent} <- watchdog_confirmation_intent(state),
+    prompt_seq = next_watchdog_prompt_seq(state)
+
+    with {:ok, intent} <- watchdog_confirmation_intent(state, prompt_seq),
          :ok <- dispatcher().dispatch(intent) do
       timeout_ms =
         state.run_watchdog_confirm_timeout_ms || @default_run_idle_watchdog_confirm_timeout_ms
@@ -105,7 +107,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
           "session_key=#{inspect(state.session_key)} confirm_timeout_ms=#{timeout_ms}"
       )
 
-      {:ok, put_in_watchdog_confirmation(state, ref)}
+      {:ok, put_in_watchdog_confirmation(state, ref, prompt_seq)}
     else
       _ ->
         :error
@@ -123,13 +125,19 @@ defmodule LemonRouter.RunProcess.Watchdog do
         "session_key=#{inspect(state.session_key)} idle_timeout_ms=#{timeout_ms}"
     )
 
-    emit_synthetic_run_completion(state, {:run_idle_watchdog_timeout, timeout_ms}, timeout_ms)
+    emit_synthetic_run_completion(
+      state,
+      {:run_idle_watchdog_timeout, timeout_ms},
+      timeout_ms,
+      :run_watchdog_timeout
+    )
+
     clear_watchdog_confirmation(state)
   end
 
   @spec fail_run_for_user_cancel(map()) :: map()
   def fail_run_for_user_cancel(state) do
-    emit_synthetic_run_completion(state, :user_requested, nil)
+    emit_synthetic_run_completion(state, :user_requested, nil, :user_requested)
     clear_watchdog_confirmation(state)
   end
 
@@ -157,7 +165,8 @@ defmodule LemonRouter.RunProcess.Watchdog do
     :ok
   end
 
-  defp watchdog_confirmation_intent(state) do
+  defp watchdog_confirmation_intent(state, prompt_seq)
+       when is_integer(prompt_seq) and prompt_seq > 0 do
     parsed = ChannelContext.parse_session_key(state.session_key)
 
     with "telegram" <- parsed.channel_id,
@@ -180,12 +189,12 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
       {:ok,
        %DeliveryIntent{
-         intent_id: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}",
+         intent_id: "#{state.run_id}:watchdog:prompt:#{idle_timeout_ms}:#{prompt_seq}",
          run_id: state.run_id,
          session_key: state.session_key,
          route: route,
          kind: :watchdog_prompt,
-         body: %{text: text, seq: 0},
+         body: %{text: text, seq: prompt_seq},
          controls: %{allow_cancel?: true, watchdog_prompt?: true},
          meta: %{surface: :status, user_msg_id: nil}
        }}
@@ -196,7 +205,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
     _ -> :error
   end
 
-  defp emit_synthetic_run_completion(state, error, duration_ms) do
+  defp emit_synthetic_run_completion(state, error, duration_ms, cancel_reason) do
     cond do
       state.completed ->
         state
@@ -206,7 +215,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
       true ->
         try do
-          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_watchdog_timeout)
+          runtime().cancel_by_run_id(state.run_id, cancel_reason)
         rescue
           _ -> :ok
         end
@@ -234,14 +243,23 @@ defmodule LemonRouter.RunProcess.Watchdog do
     end
   end
 
-  defp put_in_watchdog_confirmation(state, ref) do
+  defp put_in_watchdog_confirmation(state, ref, prompt_seq) do
     state
     |> cancel_run_watchdog_confirmation()
     |> Map.put(:run_watchdog_confirmation_ref, ref)
     |> Map.put(:run_watchdog_awaiting_confirmation?, true)
+    |> Map.put(:run_watchdog_prompt_seq, prompt_seq)
   end
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
+  end
+
+  defp runtime do
+    Application.get_env(:lemon_router, :watchdog_runtime, LemonGateway.Runtime)
+  end
+
+  defp next_watchdog_prompt_seq(state) do
+    (Map.get(state, :run_watchdog_prompt_seq, 0) || 0) + 1
   end
 end

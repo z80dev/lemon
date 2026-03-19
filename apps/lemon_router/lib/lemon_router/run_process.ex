@@ -144,6 +144,7 @@ defmodule LemonRouter.RunProcess do
       run_watchdog_ref: nil,
       run_watchdog_confirmation_ref: nil,
       run_watchdog_awaiting_confirmation?: false,
+      run_watchdog_prompt_seq: 0,
       submit_to_gateway?: submit_to_gateway?,
       gateway_scheduler: gateway_scheduler,
       run_orchestrator: run_orchestrator,

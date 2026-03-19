@@ -122,6 +122,19 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule WatchdogRuntimeStub do
+    @moduledoc false
+
+    def cancel_by_run_id(run_id, reason) do
+      case :persistent_term.get({__MODULE__, :notify_pid}, nil) do
+        pid when is_pid(pid) -> send(pid, {:watchdog_runtime_cancel, run_id, reason})
+        _ -> :ok
+      end
+
+      :ok
+    end
+  end
+
   setup do
     # Ensure PubSub is running for LemonCore.Bus.
     if is_nil(Process.whereis(LemonCore.PubSub)) do
@@ -303,6 +316,9 @@ defmodule LemonRouter.RunProcessTest do
       end
     end
   end
+
+  defp payload_text(%{text: text}) when is_binary(text), do: text
+  defp payload_text(text) when is_binary(text), do: text
 
   describe "abort/2" do
     test "abort by non-existent run_id returns :ok" do
@@ -1168,6 +1184,193 @@ defmodule LemonRouter.RunProcessTest do
 
       assert eventually(fn -> not Process.alive?(pid) end)
     end
+
+    test "two idle watchdog cycles on the same telegram run produce two visible prompts" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ = :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "778"
+        })
+
+      job = make_test_job(run_id)
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 40,
+                 run_watchdog_confirm_timeout_ms: 250
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: first_kind,
+                        content: first_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     1_500
+
+      assert first_kind in [:text, :edit]
+      assert payload_text(first_content) =~ "Keep waiting?"
+
+      RunProcess.keep_alive(run_id, :continue)
+
+      assert eventually(
+               fn ->
+                 st = :sys.get_state(pid)
+                 st.run_watchdog_awaiting_confirmation? == false
+               end,
+               1_000
+             )
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: second_kind,
+                        content: second_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     1_500
+
+      assert second_kind in [:text, :edit]
+      assert payload_text(second_content) =~ "Keep waiting?"
+
+      st = :sys.get_state(pid)
+      assert st.run_watchdog_prompt_seq == 2
+
+      RunProcess.keep_alive(run_id, :cancel)
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: :user_requested}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "watchdog user cancel preserves :user_requested runtime cancel reason" do
+      previous_runtime = Application.get_env(:lemon_router, :watchdog_runtime)
+      Application.put_env(:lemon_router, :watchdog_runtime, __MODULE__.WatchdogRuntimeStub)
+      :persistent_term.put({__MODULE__.WatchdogRuntimeStub, :notify_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({__MODULE__.WatchdogRuntimeStub, :notify_pid})
+
+        if is_nil(previous_runtime) do
+          Application.delete_env(:lemon_router, :watchdog_runtime)
+        else
+          Application.put_env(:lemon_router, :watchdog_runtime, previous_runtime)
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "779"
+        })
+
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 40,
+                 run_watchdog_confirm_timeout_ms: 120
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      assert eventually(
+               fn ->
+                 st = :sys.get_state(pid)
+                 st.run_watchdog_awaiting_confirmation? == true
+               end,
+               1_000
+             )
+
+      RunProcess.keep_alive(run_id, :cancel)
+
+      assert_receive {:watchdog_runtime_cancel, ^run_id, :user_requested}, 1_500
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: :user_requested}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
   end
 
   describe "zero-answer assistant retries" do
@@ -1583,6 +1786,103 @@ defmodule LemonRouter.RunProcessTest do
       refute String.contains?(task_child_text, separate)
 
       GenServer.stop(pid)
+    end
+
+    test "parent completion does not recreate a reaped task surface" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      task_surface = {:status_task, "task_reaped_before_parent_done"}
+
+      task_started =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "task_reaped_before_parent_done",
+              kind: "subagent",
+              title: "task(codex): inspect repo",
+              detail: %{name: "task"}
+            },
+            phase: :started
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      task_completed =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "task_reaped_before_parent_done",
+              kind: "subagent",
+              title: "task(codex): inspect repo",
+              detail: %{name: "task"}
+            },
+            phase: :completed,
+            ok: true
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_started)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_completed)
+
+      assert eventually(fn ->
+               Registry.lookup(
+                 LemonRouter.ToolStatusRegistry,
+                 {session_key, "telegram", task_surface}
+               ) != []
+             end)
+
+      LemonRouter.ToolStatusCoalescer.flush(session_key, "telegram", surface: task_surface)
+
+      [{task_pid, _}] =
+        Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", task_surface})
+
+      task_state = :sys.get_state(task_pid)
+      assert is_reference(task_state.reap_token)
+
+      task_ref = Process.monitor(task_pid)
+      send(task_pid, {:reap_if_idle, task_state.reap_token})
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :normal}, 500
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "done"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      assert [] ==
+               Registry.lookup(
+                 LemonRouter.ToolStatusRegistry,
+                 {session_key, "telegram", task_surface}
+               )
     end
 
     test "async task poll actions stay attached to the original task surface by task_id" do

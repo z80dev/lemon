@@ -511,6 +511,75 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     refute Enum.any?(state.order, &(&1 == "task_poll_live_1"))
   end
 
+  test "repeated embedded-only current_action updates reuse the same child row" do
+    session_key = "agent:embedded:telegram:bot:dm:657b"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_codex_root_repeat_embedded",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    poll_started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_poll_repeat_1",
+        kind: "subagent",
+        title: "task: ",
+        detail: %{
+          name: "task",
+          args: %{"action" => "poll", "task_id" => "task-store-repeat"},
+          parent_tool_use_id: "task_codex_root_repeat_embedded",
+          result_meta: %{
+            task_id: "task-store-repeat",
+            engine: "codex",
+            current_action: %{title: "Read: AGENTS.md", kind: "tool", phase: "started"}
+          }
+        }
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    poll_completed =
+      put_in(poll_started.action.detail.result_meta.current_action.phase, "completed")
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started)
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_started)
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_completed)
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+
+    matching_children =
+      state.actions
+      |> Map.values()
+      |> Enum.filter(fn action ->
+        action[:detail][:parent_tool_use_id] == "task_codex_root_repeat_embedded" and
+          action[:title] == "Read: AGENTS.md"
+      end)
+
+    assert length(matching_children) == 1
+    assert hd(matching_children).phase == :completed
+    refute Enum.any?(state.order, &(&1 == "task_poll_repeat_1"))
+  end
+
   test "distinct projected child actions with the same title remain distinct" do
     session_key = "agent:embedded:telegram:bot:dm:658"
     channel_id = "telegram"

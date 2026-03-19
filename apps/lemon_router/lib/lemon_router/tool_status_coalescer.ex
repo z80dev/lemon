@@ -8,7 +8,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   Channel-specific presentation is handled by `LemonChannels.Dispatcher`.
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
 
   require Logger
 
@@ -230,8 +230,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def finalize_run(session_key, channel_id, run_id, ok?, opts) when is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
     surface = Keyword.get(opts, :surface, :status)
+    start? = Keyword.get(opts, :start?, true)
 
-    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
+    case get_or_start_coalescer(session_key, channel_id, surface, meta, start?) do
       {:ok, pid} ->
         try do
           GenServer.call(pid, {:finalize_run, run_id, ok?, meta}, 2_000)
@@ -239,6 +240,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
           :exit, _ -> :ok
         end
 
+        :ok
+
+      :skip ->
         :ok
 
       _ ->
@@ -249,6 +253,20 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def finalize_run(_session_key, _channel_id, _run_id, _ok?, _opts), do: :ok
 
   defp get_or_start_coalescer(session_key, channel_id, surface, meta) do
+    get_or_start_coalescer(session_key, channel_id, surface, meta, true)
+  end
+
+  defp get_or_start_coalescer(session_key, channel_id, surface, _meta, false) do
+    case Registry.lookup(
+           LemonRouter.ToolStatusRegistry,
+           registry_key(session_key, channel_id, surface)
+         ) do
+      [{pid, _}] -> {:ok, pid}
+      [] -> :skip
+    end
+  end
+
+  defp get_or_start_coalescer(session_key, channel_id, surface, meta, true) do
     key = registry_key(session_key, channel_id, surface)
 
     case Registry.lookup(LemonRouter.ToolStatusRegistry, key) do
