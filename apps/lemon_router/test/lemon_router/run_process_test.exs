@@ -339,6 +339,62 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe "run_started without gateway binding" do
+    test "late run_completed beats synthetic missing-gateway failure" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      :ok =
+        LemonCore.Bus.broadcast(
+          LemonCore.Bus.run_topic(run_id),
+          LemonCore.Event.new(
+            :run_started,
+            %{run_id: run_id},
+            %{run_id: run_id, session_key: session_key}
+          )
+        )
+
+      Process.sleep(300)
+
+      :ok =
+        LemonCore.Bus.broadcast(
+          LemonCore.Bus.run_topic(run_id),
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{ok: true, answer: "done"},
+              duration_ms: 123
+            },
+            %{run_id: run_id, session_key: session_key}
+          )
+        )
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: true, answer: "done"}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key}
+                     },
+                     1_500
+
+      refute_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{error: :gateway_run_missing_after_start}}
+                     },
+                     1_700
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
     test "started run without a gateway pid synthesizes completion and exits" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
@@ -366,10 +422,12 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{completed: %{ok: false, error: :gateway_run_missing_after_start}},
+                       payload: %{
+                         completed: %{ok: false, error: :gateway_run_missing_after_start}
+                       },
                        meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
                      },
-                     1_500
+                     2_500
 
       assert eventually(fn -> not Process.alive?(pid) end)
     end
@@ -535,7 +593,11 @@ defmodule LemonRouter.RunProcessTest do
               id: "taskproj:child_run_1:read_1",
               kind: "tool",
               title: "Read: AGENTS.md",
-              detail: %{parent_tool_use_id: "task_root_projected", child_run_id: "child_run_1", task_id: "task-store-1"}
+              detail: %{
+                parent_tool_use_id: "task_root_projected",
+                child_run_id: "child_run_1",
+                task_id: "task-store-1"
+              }
             },
             phase: :completed,
             ok: true,
@@ -548,7 +610,10 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), projected_child)
 
       assert eventually(fn ->
-               case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", task_surface}) do
+               case Registry.lookup(
+                      LemonRouter.ToolStatusRegistry,
+                      {session_key, "telegram", task_surface}
+                    ) do
                  [{status_pid, _}] ->
                    state = :sys.get_state(status_pid)
 
@@ -565,7 +630,11 @@ defmodule LemonRouter.RunProcessTest do
       LemonRouter.ToolStatusCoalescer.flush(session_key, "telegram", surface: task_surface)
 
       assert_receive {:delivered,
-                      %LemonChannels.OutboundPayload{kind: kind, content: content, meta: %{run_id: ^run_id}}},
+                      %LemonChannels.OutboundPayload{
+                        kind: kind,
+                        content: content,
+                        meta: %{run_id: ^run_id}
+                      }},
                      1_500
 
       assert kind in [:text, :edit]
@@ -580,7 +649,8 @@ defmodule LemonRouter.RunProcessTest do
       assert String.contains?(task_text, "Read: AGENTS.md")
 
       refute eventually(fn ->
-               Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", :status}) != []
+               Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", :status}) !=
+                 []
              end)
 
       GenServer.stop(pid)

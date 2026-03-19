@@ -29,6 +29,7 @@ defmodule LemonRouter.RunProcess do
   @gateway_submit_retry_max_ms 2_000
   @abort_completion_grace_ms 150
   @gateway_bind_grace_ms 200
+  @gateway_missing_completion_grace_ms 1_500
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -506,8 +507,37 @@ defmodule LemonRouter.RunProcess do
 
       true ->
         Logger.warning(
-          "RunProcess finalizing started run without gateway pid run_id=#{inspect(state.run_id)} " <>
+          "RunProcess started without gateway pid; awaiting completion grace run_id=#{inspect(state.run_id)} " <>
             "session_key=#{inspect(state.session_key)}"
+        )
+
+        Process.send_after(
+          self(),
+          :finalize_missing_gateway_after_start,
+          @gateway_missing_completion_grace_ms
+        )
+
+        {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info(:finalize_missing_gateway_after_start, state) do
+    cond do
+      state.completed ->
+        {:noreply, state}
+
+      not is_nil(state.gateway_run_pid) ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess finalizing started run without gateway pid after completion grace " <>
+            "run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
         )
 
         event =
