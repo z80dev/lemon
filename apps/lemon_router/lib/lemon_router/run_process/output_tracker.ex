@@ -276,6 +276,26 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     end
   end
 
+  @spec prepare_projected_tool_status_action(map(), LemonCore.Event.t()) ::
+          {map(), term(), boolean()}
+  def prepare_projected_tool_status_action(state, %LemonCore.Event{
+        payload: action_ev,
+        meta: event_meta
+      }) do
+    action = Map.get(action_ev, :action) || %{}
+
+    case projected_task_surface_binding(action, event_meta) do
+      {surface, root_action_id} ->
+        {state, capture_current_turn?} =
+          bind_task_surface_from_projection(state, action, surface, root_action_id)
+
+        {state, surface, capture_current_turn?}
+
+      nil ->
+        prepare_tool_status_action(state, action_ev)
+    end
+  end
+
   @spec ingest_action_to_tool_status_coalescer(map(), map(), term()) :: :ok
   def ingest_action_to_tool_status_coalescer(state, action_ev, surface) do
     case ChannelContext.channel_id(state.session_key) do
@@ -427,6 +447,10 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   defp task_surface(task_id), do: {:status_task, task_id}
 
+  defp valid_surface?(:status), do: true
+  defp valid_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
+  defp valid_surface?(_), do: false
+
   defp task_root_action?(action) when is_map(action) do
     detail = Map.get(action, :detail) || %{}
     kind = Map.get(action, :kind)
@@ -449,6 +473,79 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp action_parent_tool_use_id(_action), do: nil
+
+  defp projected_task_surface_binding(action, event_meta) when is_map(action) do
+    explicit_surface =
+      [
+        fetch(event_meta, :surface),
+        fetch(Map.get(action, :detail) || %{}, :surface)
+      ]
+      |> Enum.find(&valid_surface?/1)
+
+    root_action_id =
+      [
+        fetch(event_meta, :root_action_id),
+        fetch(Map.get(action, :detail) || %{}, :root_action_id),
+        action_parent_tool_use_id(action)
+      ]
+      |> Enum.find(&(is_binary(&1) and &1 != ""))
+
+    cond do
+      valid_surface?(explicit_surface) ->
+        {explicit_surface, root_action_id || surface_root_action_id(explicit_surface)}
+
+      is_binary(root_action_id) and root_action_id != "" ->
+        {task_surface(root_action_id), root_action_id}
+
+      true ->
+        nil
+    end
+  end
+
+  defp projected_task_surface_binding(_, _), do: nil
+
+  defp surface_root_action_id({:status_task, task_id}) when is_binary(task_id) and task_id != "",
+    do: task_id
+
+  defp surface_root_action_id(_), do: nil
+
+  defp bind_task_surface_from_projection(state, action, surface, root_action_id)
+       when is_map(action) do
+    capture_current_turn? =
+      case root_action_id do
+        id when is_binary(id) and id != "" ->
+          not Map.has_key?(Map.get(state, :task_status_surfaces, %{}), id)
+
+        _ ->
+          false
+      end
+
+    state =
+      case root_action_id do
+        id when is_binary(id) and id != "" ->
+          task_surfaces = Map.get(state, :task_status_surfaces, %{})
+          Map.put(state, :task_status_surfaces, Map.put(task_surfaces, id, surface))
+
+        _ ->
+          state
+      end
+
+    default_root_action_id =
+      cond do
+        is_binary(root_action_id) and root_action_id != "" -> root_action_id
+        is_binary(Map.get(action, :id)) and Map.get(action, :id) != "" -> Map.get(action, :id)
+        true -> nil
+      end
+
+    state =
+      if default_root_action_id do
+        track_task_refs(state, action, surface, default_root_action_id)
+      else
+        state
+      end
+
+    {state, capture_current_turn?}
+  end
 
   defp track_task_refs(state, action, surface, default_root_action_id) do
     task_ids = action_task_ids(action)

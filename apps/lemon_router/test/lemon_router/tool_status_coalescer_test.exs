@@ -451,7 +451,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       level: nil
     }
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
 
     assert :ok =
              ToolStatusCoalescer.ingest_projected_child_action(
@@ -462,10 +465,16 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                projected
              )
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_completed, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_completed,
+               surface: surface
+             )
+
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
 
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+    [{pid, _}] =
+      Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+
     state = :sys.get_state(pid)
 
     matching_children =
@@ -581,7 +590,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
                       kind: :edit,
-                      content: %{message_id: "1001", text: text}
+                      content: %{message_id: "1001", text: text},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
@@ -595,7 +605,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :edit,
                       content: %{message_id: "1001", text: final_text},
-                      meta: %{reply_markup: %{"inline_keyboard" => []}}
+                      meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
                     }},
                    1_000
 
@@ -644,7 +654,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
                       kind: :edit,
-                      content: %{message_id: "1001", text: text}
+                      content: %{message_id: "1001", text: text},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
@@ -735,7 +746,11 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         id: "taskproj:child_1:read_1",
         kind: "tool",
         title: "Read: AGENTS.md",
-        detail: %{parent_tool_use_id: "task_root", child_run_id: "child_1", task_id: "task-store-1"}
+        detail: %{
+          parent_tool_use_id: "task_root",
+          child_run_id: "child_1",
+          task_id: "task-store-1"
+        }
       },
       phase: :completed,
       ok: true,
@@ -743,7 +758,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       level: nil
     }
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
 
     assert :ok =
              ToolStatusCoalescer.ingest_projected_child_action(
@@ -756,11 +774,63 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
 
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+    [{pid, _}] =
+      Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+
     state = :sys.get_state(pid)
 
     assert String.contains?(state.last_text, "task(codex): inspect repo")
     assert String.contains?(state.last_text, "Read: AGENTS.md")
+  end
+
+  test "task-scoped coalescers reap themselves after finalize_run" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:7801"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    surface = {:status_task, "task_reap_1"}
+
+    assert {:ok, pid} =
+             DynamicSupervisor.start_child(
+               Elixir.LemonRouter.ToolStatusSupervisor,
+               {ToolStatusCoalescer,
+                session_key: session_key,
+                channel_id: channel_id,
+                surface: surface,
+                task_reap_ms: 25}
+             )
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_reap_1",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
+
+    assert :ok =
+             ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
+               surface: surface
+             )
+
+    state = :sys.get_state(pid)
+    assert is_reference(state.reap_timer)
+    assert is_reference(state.reap_token)
+
+    ref = Process.monitor(pid)
+    send(pid, {:reap_if_idle, state.reap_token})
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
   end
 
   test "finalize_run does not create status output when there are no tool actions" do

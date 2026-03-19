@@ -19,6 +19,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   @default_idle_ms 400
   @default_max_latency_ms 1200
+  @default_task_reap_ms 60_000
 
   @max_actions 40
 
@@ -34,6 +35,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :last_kind,
     :first_event_ts,
     :flush_timer,
+    :reap_timer,
+    :reap_token,
     :config,
     :meta,
     :seq,
@@ -90,8 +93,19 @@ defmodule LemonRouter.ToolStatusCoalescer do
   explicit that the event originated from a bridged child run rather than the
   parent run's native engine event stream.
   """
-  def ingest_projected_child_action(session_key, channel_id, parent_run_id, surface, projected_event, opts \\ []) do
-    ingest_action(session_key, channel_id, parent_run_id, projected_event,
+  def ingest_projected_child_action(
+        session_key,
+        channel_id,
+        parent_run_id,
+        surface,
+        projected_event,
+        opts \\ []
+      ) do
+    ingest_action(
+      session_key,
+      channel_id,
+      parent_run_id,
+      projected_event,
       Keyword.merge(opts, surface: surface)
     )
   end
@@ -125,12 +139,17 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     existing_child_run_id = existing_detail[:child_run_id] || existing_detail["child_run_id"]
     incoming_child_run_id = incoming_detail[:child_run_id] || incoming_detail["child_run_id"]
-    existing_parent = existing_detail[:parent_tool_use_id] || existing_detail["parent_tool_use_id"]
-    incoming_parent = incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
+
+    existing_parent =
+      existing_detail[:parent_tool_use_id] || existing_detail["parent_tool_use_id"]
+
+    incoming_parent =
+      incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
 
     is_binary(existing_child_run_id) and is_binary(incoming_child_run_id) and
       existing_child_run_id == incoming_child_run_id and existing_parent == incoming_parent and
-      normalize_embedded_kind(to_string(existing[:kind])) == normalize_embedded_kind(to_string(incoming[:kind])) and
+      normalize_embedded_kind(to_string(existing[:kind])) ==
+        normalize_embedded_kind(to_string(incoming[:kind])) and
       normalize_title(existing[:title]) == normalize_title(incoming[:title])
   end
 
@@ -249,7 +268,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     config = %{
       idle_ms: Keyword.get(opts, :idle_ms, @default_idle_ms),
-      max_latency_ms: Keyword.get(opts, :max_latency_ms, @default_max_latency_ms)
+      max_latency_ms: Keyword.get(opts, :max_latency_ms, @default_max_latency_ms),
+      task_reap_ms: Keyword.get(opts, :task_reap_ms, @default_task_reap_ms)
     }
 
     state = %__MODULE__{
@@ -264,6 +284,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
       last_kind: nil,
       first_event_ts: nil,
       flush_timer: nil,
+      reap_timer: nil,
+      reap_token: nil,
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
       seq: 0,
@@ -278,6 +300,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   @impl true
   def handle_cast({:action, run_id, action_event, meta}, state) do
     now = System.system_time(:millisecond)
+    state = cancel_task_reap(state)
 
     state =
       if state.run_id != run_id do
@@ -293,6 +316,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
             last_kind: nil,
             first_event_ts: nil,
             flush_timer: nil,
+            reap_timer: nil,
+            reap_token: nil,
             seq: 0,
             finalized: false,
             meta: compact_meta(meta),
@@ -347,6 +372,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   @impl true
   def handle_call({:anchor_segment, run_id, prefix_text, meta}, _from, state) do
+    state = cancel_task_reap(state)
+
     state =
       cond do
         state.run_id == nil ->
@@ -365,6 +392,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
               last_kind: nil,
               first_event_ts: nil,
               flush_timer: nil,
+              reap_timer: nil,
+              reap_token: nil,
               finalized: false,
               meta: compact_meta(meta),
               run_started_at: nil,
@@ -385,6 +414,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   def handle_call({:commit_segment, run_id, meta}, _from, state) do
+    state = cancel_task_reap(state)
+
     state =
       if state.run_id == run_id do
         state
@@ -400,6 +431,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   @impl true
   def handle_call({:finalize_run, run_id, ok?, meta}, _from, state) do
+    state = cancel_task_reap(state)
+
     state =
       cond do
         state.run_id == nil ->
@@ -414,6 +447,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
               last_kind: nil,
               first_event_ts: nil,
               flush_timer: nil,
+              reap_timer: nil,
+              reap_token: nil,
               seq: 0,
               finalized: false,
               run_started_at: nil,
@@ -433,6 +468,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
               last_kind: nil,
               first_event_ts: nil,
               flush_timer: nil,
+              reap_timer: nil,
+              reap_token: nil,
               seq: 0,
               finalized: false,
               meta: compact_meta(meta),
@@ -449,6 +486,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       |> Map.put(:finalized, true)
       |> finalize_running_actions(ok?)
       |> do_flush()
+      |> maybe_schedule_task_reap()
 
     {:reply, :ok, state}
   end
@@ -457,6 +495,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
     {:noreply, state}
+  end
+
+  def handle_info({:reap_if_idle, token}, %{reap_token: token} = state) do
+    state = %{state | reap_timer: nil, reap_token: nil}
+
+    if task_surface?(state.surface) and state.finalized == true do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -544,6 +592,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp reset_segment(%__MODULE__{} = state) do
+    state = cancel_task_reap(state)
     cancel_timer(state.flush_timer)
 
     %{
@@ -555,10 +604,43 @@ defmodule LemonRouter.ToolStatusCoalescer do
         last_kind: nil,
         first_event_ts: nil,
         flush_timer: nil,
+        reap_timer: nil,
+        reap_token: nil,
         finalized: false,
         engine: nil
     }
   end
+
+  defp maybe_schedule_task_reap(%__MODULE__{} = state) do
+    task_reap_ms = state.config[:task_reap_ms]
+
+    cond do
+      not task_surface?(state.surface) ->
+        state
+
+      state.finalized != true ->
+        state
+
+      not is_integer(task_reap_ms) or task_reap_ms <= 0 ->
+        state
+
+      true ->
+        state = cancel_task_reap(state)
+        token = make_ref()
+        timer = Process.send_after(self(), {:reap_if_idle, token}, task_reap_ms)
+        %{state | reap_timer: timer, reap_token: token}
+    end
+  end
+
+  defp cancel_task_reap(%__MODULE__{reap_timer: nil} = state), do: %{state | reap_token: nil}
+
+  defp cancel_task_reap(%__MODULE__{reap_timer: timer} = state) do
+    cancel_timer(timer)
+    %{state | reap_timer: nil, reap_token: nil}
+  end
+
+  defp task_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
+  defp task_surface?(_), do: false
 
   defp emit_output(state, kind, text) do
     case build_intent(state, kind, text) do

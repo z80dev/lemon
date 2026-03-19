@@ -154,6 +154,8 @@ Async task followups (`task action=poll`) are also rebound onto the original tas
 `task_id` when upstream runners preserve that metadata in action `detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
+Task-scoped status coalescers are reaped after finalization so per-task router processes do not
+accumulate indefinitely; later updates recreate the surface if needed.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize

@@ -350,17 +350,33 @@ defmodule LemonRouter.RunProcess do
     {:noreply, state}
   end
 
-  def handle_info(%LemonCore.Event{type: :task_projected_child_action, payload: action_ev}, state) do
+  def handle_info(
+        %LemonCore.Event{type: :task_projected_child_action, payload: action_ev} = event,
+        state
+      ) do
     state = Watchdog.touch_run_watchdog(state)
 
-    {state, tool_status_surface, _capture_current_turn?} =
-      OutputTracker.prepare_tool_status_action(state, action_ev)
+    {state, tool_status_surface, capture_current_turn?} =
+      OutputTracker.prepare_projected_tool_status_action(state, event)
+
+    state =
+      if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
+        OutputTracker.handoff_stream_turn_to_tool_status(state, tool_status_surface)
+        %{state | saw_delta: false}
+      else
+        state
+      end
+
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
 
     OutputTracker.ingest_projected_child_action_to_tool_status_coalescer(
       state,
       action_ev,
       tool_status_surface
     )
+
+    state = OutputTracker.maybe_track_generated_images(state, action_ev)
+    state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
 
     {:noreply, state}
   end
