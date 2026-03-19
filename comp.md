@@ -2,20 +2,20 @@
 
 ## TL;DR
 
-- **Claude's pick:** `kimi k2.5` for best overall "for dummies" explanation, with `gpt-5.3-codex-spark` as the most technically precise runner-up.
-- **Codex's pick:** `gpt-5.3-codex-spark` for best overall response because it matched the actual repo implementation most closely, with `gpt-5-mini` second and `kimi k2.5` third.
+- **Claude's pick:** `kimi:kimi-k2.5` for best overall "for dummies" explanation, with `codex:gpt-5.3-codex-spark` as the most technically precise runner-up.
+- **Codex's pick:** `codex:gpt-5.3-codex-spark` for best overall response because it matched the actual repo implementation most closely, with `github_copilot:gpt-5-mini` second and `kimi:kimi-k2.5` third.
 - **Shortest summary:** Claude weighted beginner-friendliness highest and chose Kimi. Codex weighted repo-grounded correctness highest and chose Spark.
 
 Comparing 3 options in the "cheap/fast/small" model niche
 
-- `gpt-5.3-codex-spark` (via Codex GUI) (Pricing not public)
-- `gpt-5-mini` (via Copilot Chat on Github) (input: $0.25/1m, output: $2.00/1m)
-- `kimi k2.5` (via Kimi Code) (input: $0.60/1m, output: $3.00/1m)
-- `GLM 5` (via OpenRouter, see note) (input: $0.57/1m, output: $3.01/1m)
-- `gemini-3-flash-preview`(via Gemini CLI) (input: $0.50/1m, output: $3.00/1m)
-- `gemini-2.5-flash-lite` (via Gemini CLI) (input: $0.10/1m, output: $0.40/1m)
-- `grok-code-fast-1` (via Copilot Chat on Github) (input: $0.20/1m, output: $1.50/1m)
-- `minimax-m2.5` (via OpenRouter, see note) (input: $0.30/1m, output: $1.20/1m)
+- `codex:gpt-5.3-codex-spark` (via Codex GUI) (Pricing not public)
+- `github_copilot:gpt-5-mini` (via Copilot Chat on Github) (input: $0.25/1m, output: $2.00/1m)
+- `kimi:kimi-k2.5` (via Kimi Code) (input: $0.60/1m, output: $3.00/1m)
+- `openrouter:glm-5` (via OpenRouter, see note) (input: $0.57/1m, output: $3.01/1m)
+- `google:gemini-3-flash-preview`(via Gemini CLI) (input: $0.50/1m, output: $3.00/1m)
+- `google:gemini-2.5-flash-lite` (via Gemini CLI) (input: $0.10/1m, output: $0.40/1m)
+- `github_copilot:grok-code-fast-1` (via Copilot Chat on Github) (input: $0.20/1m, output: $1.50/1m)
+- `openrouter:minimax-m2.5` (via OpenRouter, see note) (input: $0.30/1m, output: $1.20/1m)
 
 **note**: OpenRouter pricing/providers is weird. I want to redo openrouter tests with more reliable providers. I've heard stuff like some providers on there serve quantized models without disclosing, things like that.
 
@@ -446,7 +446,7 @@ Lemon isn't directly talking to XMTP itself -- that's handled by a "bridge" to k
 
 If you want to enable it, check the config for `enable_xmtp: true` and set up your wallet details. For more code details, the search results are limited -- see [all XMTP-related files in GitHub](https://github.com/z80dev/lemon/search?q=xmtp&type=code) for the full list!
 
-### MiniMax M2.5
+### openrouter:minimax-m2.5
 
 #### XMTP in Lemon - For Dummies Explanation
 
@@ -552,7 +552,7 @@ The inline flow diagram (`Wallet → XMTP Network → Node.js Bridge → ...`) i
 
 **Dings:** Far too sparse. Three bullet points for the entire architecture. No mention of mock mode, health checks, deduplication, wallet address trick, bootstrap script, or message normalization. This reads like a quick Slack reply, not a complete explanation.
 
-### 8. Gemini 2.5 Flash Lite — 4.0/10
+### 8. google:gemini-2.5-flash-lite — 4.0/10
 
 Tries the hardest to be accessible with the "office building" extended metaphor, but at the cost of actually explaining the implementation. Describes XMTP as "super-secure private messaging like Signal or WhatsApp" — not wrong but misses the Web3/wallet identity angle entirely. Focuses too much on the Gateway vs Channels distinction and not enough on how the bridge/port/transport actually work.
 
@@ -577,9 +577,9 @@ Tries the hardest to be accessible with the "office building" extended metaphor,
 
 ## Final Take
 
-**Kimi K2.5 wins** because it's the only response that truly delivers on both halves of the prompt — it explains the implementation accurately *and* makes it accessible to non-experts. The ASCII architecture diagram, capability table, and wallet address trick are all standout elements. GPT 5.3 Spark would win on pure technical merit, but the prompt asked for "for dummies" and it reads more like a staff engineer's design doc.
+**kimi:kimi-k2.5 wins** because it's the only response that truly delivers on both halves of the prompt — it explains the implementation accurately *and* makes it accessible to non-experts. The ASCII architecture diagram, capability table, and wallet address trick are all standout elements. codex:gpt-5.3-codex-spark would win on pure technical merit, but the prompt asked for "for dummies" and it reads more like a staff engineer's design doc.
 
-The price-to-quality ratio is also interesting: Kimi K2.5 ($0.60/$3.00) beats models both cheaper and more expensive than it. Gemini 2.5 Flash Lite ($0.10/$0.40) shows that the cheapest option genuinely sacrificed depth. GPT 5 Mini ($0.25/$2.00) and Grok Code Fast 1 ($0.20/$1.50) punch above their price point.
+The price-to-quality ratio is also interesting: kimi:kimi-k2.5 ($0.60/$3.00) beats models both cheaper and more expensive than it. google:gemini-2.5-flash-lite ($0.10/$0.40) shows that the cheapest option genuinely sacrificed depth. github_copilot:gpt-5-mini ($0.25/$2.00) and github_copilot:grok-code-fast-1 ($0.20/$1.50) punch above their price point.
 
 ### Codex's Judgement
 
