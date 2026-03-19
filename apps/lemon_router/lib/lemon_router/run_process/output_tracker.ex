@@ -253,6 +253,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   @spec prepare_tool_status_action(map(), map()) :: {map(), term(), boolean()}
   def prepare_tool_status_action(state, action_ev) do
+    state = prune_stale_task_surfaces(state)
     task_surfaces = Map.get(state, :task_status_surfaces, %{})
     task_refs = Map.get(state, :task_status_refs, %{})
     action = Map.get(action_ev, :action) || %{}
@@ -265,7 +266,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         {state, Map.fetch!(task_surfaces, parent_id), false}
 
       mapped_ref != nil ->
-        {state, mapped_ref.surface, false}
+        {state, mapped_ref.surface, not task_surface_alive?(state, mapped_ref.surface)}
 
       is_binary(action_id) and Map.has_key?(task_surfaces, action_id) ->
         surface = Map.fetch!(task_surfaces, action_id)
@@ -292,6 +293,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         payload: action_ev,
         meta: event_meta
       }) do
+    state = prune_stale_task_surfaces(state)
     action = Map.get(action_ev, :action) || %{}
 
     case projected_task_surface_binding(action, event_meta) do
@@ -328,6 +330,58 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   rescue
     _ -> :ok
   end
+
+  @spec maybe_track_task_surface_monitor(map(), term()) :: map()
+  def maybe_track_task_surface_monitor(state, surface) do
+    cond do
+      not task_surface?(surface) ->
+        state
+
+      true ->
+        case lookup_task_surface_pid(state, surface) do
+          {:ok, pid} -> track_task_surface_monitor(state, surface, pid)
+          :error -> state
+        end
+    end
+  rescue
+    _ -> state
+  end
+
+  @spec cleanup_task_surface_monitor(map(), reference(), pid()) :: {:ok, map()} | :unknown
+  def cleanup_task_surface_monitor(state, ref, pid)
+      when is_reference(ref) and is_pid(pid) do
+    monitor_refs = Map.get(state, :task_status_surface_monitor_refs, %{})
+
+    case Map.pop(monitor_refs, ref) do
+      {nil, _} ->
+        :unknown
+
+      {surface, monitor_refs} ->
+        monitors = Map.get(state, :task_status_surface_monitors, %{})
+
+        monitors =
+          case Map.get(monitors, surface) do
+            %{pid: ^pid, ref: ^ref} -> Map.delete(monitors, surface)
+            _ -> monitors
+          end
+
+        task_surfaces =
+          state
+          |> Map.get(:task_status_surfaces, %{})
+          |> Enum.reject(fn {_root_action_id, mapped_surface} -> mapped_surface == surface end)
+          |> Map.new()
+
+        {:ok,
+         state
+         |> Map.put(:task_status_surface_monitor_refs, monitor_refs)
+         |> Map.put(:task_status_surface_monitors, monitors)
+         |> Map.put(:task_status_surfaces, task_surfaces)}
+    end
+  rescue
+    _ -> :unknown
+  end
+
+  def cleanup_task_surface_monitor(_state, _ref, _pid), do: :unknown
 
   @spec flush_coalescer(map()) :: :ok
   def flush_coalescer(state) do
@@ -456,6 +510,9 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp task_surface(task_id), do: {:status_task, task_id}
+
+  defp task_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
+  defp task_surface?(_), do: false
 
   defp valid_surface?(:status), do: true
   defp valid_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
@@ -600,6 +657,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     result_meta = Map.get(detail, :result_meta) || %{}
 
     []
+    |> maybe_prepend_task_id(Map.get(detail, :task_id) || Map.get(detail, "task_id"))
+    |> maybe_prepend_task_ids(Map.get(detail, :task_ids) || Map.get(detail, "task_ids"))
     |> maybe_prepend_task_id(Map.get(result_meta, :task_id) || Map.get(result_meta, "task_id"))
     |> maybe_prepend_task_ids(Map.get(result_meta, :task_ids) || Map.get(result_meta, "task_ids"))
     |> maybe_prepend_task_id(Map.get(args, :task_id) || Map.get(args, "task_id"))
@@ -702,6 +761,75 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
       true ->
         Map.put(detail, :parent_tool_use_id, root_action_id)
+    end
+  end
+
+  defp prune_stale_task_surfaces(state) do
+    task_surfaces = Map.get(state, :task_status_surfaces, %{})
+
+    stale_root_action_ids =
+      task_surfaces
+      |> Enum.filter(fn {_root_action_id, surface} ->
+        task_surface?(surface) and not task_surface_alive?(state, surface)
+      end)
+      |> Enum.map(fn {root_action_id, _surface} -> root_action_id end)
+
+    if stale_root_action_ids == [] do
+      state
+    else
+      Map.put(state, :task_status_surfaces, Map.drop(task_surfaces, stale_root_action_ids))
+    end
+  rescue
+    _ -> state
+  end
+
+  defp task_surface_alive?(state, surface) do
+    case lookup_task_surface_pid(state, surface) do
+      {:ok, _pid} -> true
+      :error -> false
+    end
+  end
+
+  defp lookup_task_surface_pid(state, surface) do
+    with true <- task_surface?(surface),
+         {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
+         [{pid, _}] <-
+           Registry.lookup(
+             LemonRouter.ToolStatusRegistry,
+             {state.session_key, channel_id, surface}
+           ),
+         true <- is_pid(pid) and Process.alive?(pid) do
+      {:ok, pid}
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp track_task_surface_monitor(state, surface, pid) when is_pid(pid) do
+    monitors = Map.get(state, :task_status_surface_monitors, %{})
+    monitor_refs = Map.get(state, :task_status_surface_monitor_refs, %{})
+
+    case Map.get(monitors, surface) do
+      %{pid: ^pid, ref: ref} when is_reference(ref) ->
+        state
+
+      %{ref: ref} when is_reference(ref) ->
+        Process.demonitor(ref, [:flush])
+        monitor_refs = Map.delete(monitor_refs, ref)
+        ref = Process.monitor(pid)
+
+        state
+        |> Map.put(:task_status_surface_monitors, Map.put(monitors, surface, %{pid: pid, ref: ref}))
+        |> Map.put(:task_status_surface_monitor_refs, Map.put(monitor_refs, ref, surface))
+
+      _ ->
+        ref = Process.monitor(pid)
+
+        state
+        |> Map.put(:task_status_surface_monitors, Map.put(monitors, surface, %{pid: pid, ref: ref}))
+        |> Map.put(:task_status_surface_monitor_refs, Map.put(monitor_refs, ref, surface))
     end
   end
 

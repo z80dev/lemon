@@ -151,7 +151,8 @@ Task roots use dedicated status surfaces keyed by task id, so child actions with
 `detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
 or unrelated top-level tool calls create newer answer/status turns.
 Async task followups (`task action=poll`) are also rebound onto the original task surface by
-`task_id` when upstream runners preserve that metadata in action `detail.result_meta`, so
+`task_id` when upstream runners preserve that metadata in action `detail`, `detail.args`, or
+`detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
 Repeated embedded-only `current_action` updates for the same parent/title reuse the same child row
@@ -160,7 +161,8 @@ Projected child events may also carry explicit `surface` / `root_action_id` meta
 binding when present instead of relying only on previously seen parent actions in the run process.
 Task-scoped status coalescers are reaped after they go idle with no running task actions, so
 per-task router processes do not accumulate indefinitely; later updates recreate the surface if
-needed, but parent run finalization must not recreate a task surface that has already reaped.
+needed, but parent run finalization must not recreate a task surface that has already reaped, and
+the run process now drops stale task-surface bindings as soon as that task coalescer exits.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize

@@ -1867,6 +1867,11 @@ defmodule LemonRouter.RunProcessTest do
       send(task_pid, {:reap_if_idle, task_state.reap_token})
       assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :normal}, 500
 
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.task_status_surfaces == %{}
+             end)
+
       completed_event =
         LemonCore.Event.new(
           :run_completed,
@@ -1883,6 +1888,154 @@ defmodule LemonRouter.RunProcessTest do
                  LemonRouter.ToolStatusRegistry,
                  {session_key, "telegram", task_surface}
                )
+    end
+
+    test "async task poll actions bind by detail.task_id" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ = :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      job =
+        make_test_job(run_id, %{
+          progress_msg_id: 111,
+          user_msg_id: 222
+        })
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      task_surface = {:status_task, "task_root_detail"}
+
+      task_started =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "task_root_detail",
+              kind: "subagent",
+              title: "task(codex): review fix",
+              detail: %{name: "task"}
+            },
+            phase: :started
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      task_completed =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "task_root_detail",
+              kind: "subagent",
+              title: "task(codex): review fix",
+              detail: %{
+                name: "task",
+                result: "Task queued: review fix (task-store-detail-1)",
+                result_meta: %{status: "queued", run_id: "child_run_detail_1"},
+                task_id: "task-store-detail-1"
+              }
+            },
+            phase: :completed,
+            ok: true
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      poll_completed =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "task_poll_detail_1",
+              kind: "subagent",
+              title: "task: poll review",
+              detail: %{
+                name: "task",
+                args: %{"action" => "poll"},
+                task_id: "task-store-detail-1",
+                result_meta: %{
+                  status: "running",
+                  engine: "codex",
+                  current_action: %{title: "Read: AGENTS.md", kind: "tool", phase: "completed"}
+                }
+              }
+            },
+            phase: :completed,
+            ok: true
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_started)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_completed)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), poll_completed)
+
+      assert eventually(fn ->
+               case Registry.lookup(
+                      LemonRouter.ToolStatusRegistry,
+                      {session_key, "telegram", task_surface}
+                    ) do
+                 [{status_pid, _}] ->
+                   Enum.any?(Map.values(:sys.get_state(status_pid).actions), fn action ->
+                     action[:detail][:parent_tool_use_id] == "task_root_detail" and
+                       action[:title] == "Read: AGENTS.md"
+                   end)
+
+                 _ ->
+                   false
+               end
+             end)
+
+      GenServer.stop(pid)
     end
 
     test "async task poll actions stay attached to the original task surface by task_id" do

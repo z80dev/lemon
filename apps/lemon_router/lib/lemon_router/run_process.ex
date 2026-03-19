@@ -160,6 +160,8 @@ defmodule LemonRouter.RunProcess do
       requested_send_files: [],
       task_status_surfaces: %{},
       task_status_refs: %{},
+      task_status_surface_monitors: %{},
+      task_status_surface_monitor_refs: %{},
       synthetic_completion_sent?: false
     }
 
@@ -346,6 +348,7 @@ defmodule LemonRouter.RunProcess do
     # Also ingest into ToolStatusCoalescer for channel delivery
     OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev, tool_status_surface)
 
+    state = OutputTracker.maybe_track_task_surface_monitor(state, tool_status_surface)
     state = OutputTracker.maybe_track_generated_images(state, action_ev)
     state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
 
@@ -377,6 +380,7 @@ defmodule LemonRouter.RunProcess do
       tool_status_surface
     )
 
+    state = OutputTracker.maybe_track_task_surface_monitor(state, tool_status_surface)
     state = OutputTracker.maybe_track_generated_images(state, action_ev)
     state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
 
@@ -436,6 +440,13 @@ defmodule LemonRouter.RunProcess do
     delay_ms = gateway_down_grace_ms(reason)
     Process.send_after(self(), {:gateway_run_down, reason}, delay_ms)
     {:noreply, %{state | gateway_run_ref: nil, gateway_run_pid: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    case OutputTracker.cleanup_task_surface_monitor(state, ref, pid) do
+      {:ok, state} -> {:noreply, state}
+      :unknown -> {:noreply, state}
+    end
   end
 
   def handle_info({:gateway_run_down, reason}, state) do
