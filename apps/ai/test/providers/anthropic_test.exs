@@ -3,9 +3,33 @@ defmodule Ai.Providers.AnthropicTest do
   Unit tests for Anthropic provider parsing and error handling.
   These tests do not require API keys.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Ai.Providers.Anthropic
+  alias Ai.EventStream
+  alias Ai.Types.{Context, Model, StreamOptions, UserMessage}
+
+  setup do
+    previous_defaults = Req.default_options()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+
+    on_exit(fn ->
+      Req.default_options(previous_defaults)
+      Req.Test.set_req_test_to_private(%{})
+    end)
+
+    :ok
+  end
+
+  defp sse_body(events) do
+    events
+    |> Enum.map(fn
+      :done -> "event: message_stop\ndata: {}\n\n"
+      event -> "data: " <> Jason.encode!(event) <> "\n\n"
+    end)
+    |> Enum.join()
+  end
 
   # ============================================================================
   # SSE Parsing Tests
@@ -266,6 +290,96 @@ defmodule Ai.Providers.AnthropicTest do
       }
 
       assert system_block["cache_control"]["type"] == "ephemeral"
+    end
+  end
+
+  # ============================================================================
+  # Copilot Header Tests
+  # ============================================================================
+
+  describe "copilot headers" do
+    test "uses Bearer auth and adds copilot headers for :github_copilot provider" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        api: :anthropic_messages,
+        provider: :github_copilot,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 128_000,
+        max_tokens: 32_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      # Copilot uses Bearer auth, not x-api-key
+      assert headers_map["authorization"] == "Bearer test-key"
+      refute Map.has_key?(headers_map, "x-api-key")
+
+      # Copilot-specific headers
+      assert headers_map["editor-version"] == "vscode/1.107.0"
+      assert headers_map["editor-plugin-version"] == "copilot-chat/0.35.0"
+      assert headers_map["user-agent"] == "GitHubCopilotChat/0.35.0"
+      assert headers_map["copilot-integration-id"] == "vscode-chat"
+
+      # Standard Anthropic headers still present
+      assert headers_map["anthropic-version"] == "2023-06-01"
+      assert headers_map["content-type"] == "application/json"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "uses x-api-key auth for non-copilot providers" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 128_000,
+        max_tokens: 32_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      # Standard Anthropic uses x-api-key
+      assert headers_map["x-api-key"] == "test-key"
+      refute Map.has_key?(headers_map, "authorization")
+
+      # No copilot headers
+      refute Map.has_key?(headers_map, "editor-version")
+      refute Map.has_key?(headers_map, "copilot-integration-id")
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
     end
   end
 end

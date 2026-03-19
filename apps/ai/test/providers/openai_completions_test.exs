@@ -5,6 +5,7 @@ defmodule Ai.Providers.OpenAICompletionsTest do
   alias Ai.Providers.OpenAICompletions
 
   alias Ai.Types.{
+    AssistantMessage,
     Context,
     ImageContent,
     Model,
@@ -121,6 +122,103 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert headers_map["x-opt-header"] == "opt-value"
 
     assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
+  describe "copilot headers" do
+    test "adds copilot headers for :github_copilot provider" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        api: :openai_completions,
+        provider: :github_copilot,
+        base_url: "https://example.test"
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      assert headers_map["editor-version"] == "vscode/1.107.0"
+      assert headers_map["editor-plugin-version"] == "copilot-chat/0.35.0"
+      assert headers_map["user-agent"] == "GitHubCopilotChat/0.35.0"
+      assert headers_map["copilot-integration-id"] == "vscode-chat"
+      assert headers_map["x-initiator"] == "user"
+      assert headers_map["openai-intent"] == "conversation-edits"
+      refute headers_map["copilot-vision-request"]
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "sets x-initiator to agent when last message is not from user" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        api: :openai_completions,
+        provider: :github_copilot,
+        base_url: "https://example.test"
+      }
+
+      # Last message is assistant -> should be "agent"
+      context = Context.new(messages: [
+        %UserMessage{content: "Hi"},
+        %AssistantMessage{content: [%TextContent{text: "Hello!"}]}
+      ])
+
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      assert headers_map["x-initiator"] == "agent"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "adds copilot-vision-request header when messages contain images" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        api: :openai_completions,
+        provider: :github_copilot,
+        base_url: "https://example.test"
+      }
+
+      image = %ImageContent{data: "AA==", mime_type: "image/png"}
+      context = Context.new(messages: [%UserMessage{content: [image]}])
+
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      assert headers_map["copilot-vision-request"] == "true"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
   end
 
   test "request body snapshot includes tools and generation params" do
