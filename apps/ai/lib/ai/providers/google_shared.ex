@@ -343,12 +343,26 @@ defmodule Ai.Providers.GoogleShared do
         %{
           "name" => tool.name,
           "description" => tool.description,
-          "parameters" => tool.parameters
+          "parameters" => strip_additional_properties(tool.parameters)
         }
       end)
 
     [%{"functionDeclarations" => declarations}]
   end
+
+  # Gemini rejects `additionalProperties` in function parameter schemas.
+  # Strip it recursively so tools defined for other providers work unchanged.
+  defp strip_additional_properties(schema) when is_map(schema) do
+    schema
+    |> Map.drop(["additionalProperties"])
+    |> Map.new(fn {k, v} -> {k, strip_additional_properties(v)} end)
+  end
+
+  defp strip_additional_properties(list) when is_list(list) do
+    Enum.map(list, &strip_additional_properties/1)
+  end
+
+  defp strip_additional_properties(other), do: other
 
   @doc """
   Map tool choice to Gemini FunctionCallingConfigMode string.
