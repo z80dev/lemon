@@ -47,6 +47,7 @@ Inbound transport
 | `lib/lemon_router/conversation_key.ex` | canonical conversation-key selection |
 | `lib/lemon_router/resume_resolver.ex` | structured resume resolution before gateway submission |
 | `lib/lemon_router/run_process.ex` | active-run lifecycle shell |
+| `lib/lemon_router/async_task_surface.ex` | router-owned async task surface lifecycle scaffold for the redesign |
 | `lib/lemon_router/run_process/compaction_trigger.ex` | overflow detection and pending-compaction marking |
 | `lib/lemon_router/stream_coalescer.ex` | semantic answer coalescing |
 | `lib/lemon_router/tool_status_coalescer.ex` | semantic tool-status coalescing |
@@ -147,7 +148,7 @@ hands the finalized `:answer` message over to the tool-status surface so the nex
 append under that assistant text instead of reusing an older standalone status message.
 `ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
 assistant delta starts, at which point the segment is finalized in place and reset.
-Task roots use dedicated status surfaces keyed by task id, so child actions with
+Task roots use dedicated status surfaces keyed by the task-root surface id, so child actions with
 `detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
 or unrelated top-level tool calls create newer answer/status turns.
 Async task followups (`task action=poll`) are also rebound onto the original task surface by
@@ -155,6 +156,24 @@ Async task followups (`task action=poll`) are also rebound onto the original tas
 `detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
+The redesign also has a router-owned `AsyncTaskSurface` process per surface/root key with
+`pending_root -> bound -> live -> terminal_grace -> reaped` lifecycle semantics.
+`RunProcess.OutputTracker` now seeds and reuses that router-owned identity from task-root start
+events and task poll rebinding, but the existing LiveBridge / projected-child tool-status path
+remains the active rendering behavior until later migration steps wire them together.
+Explicit projected-child `surface` / `root_action_id` metadata must seed that reusable identity too,
+and terminal task poll/result statuses drive `AsyncTaskSurface` to `:terminal_grace`; only a later
+task-surface coalescer reap should advance an already-terminal surface to `:reaped`.
+When an async task surface transitions to `:reaped`, it replies once with the terminal snapshot,
+then drops its public registration before stopping so an immediate `ensure_started(surface_id)`
+creates a fresh `:pending_root` surface instead of surfacing the stale pid; invalid surface
+metadata now returns an explicit `{:invalid_metadata, ...}` error instead
+of crashing the GenServer.
+`AsyncTaskSurfaceSupervisor.ensure_started/2` must also treat
+`DynamicSupervisor.start_child(...)= {:error, {:already_started, pid}}` as provisional during
+that unregister-before-exit window: only a pid that is still registered for the surface and not
+marked `:reaped` in the registry-owned public state is usable; stale reaping pids must be awaited
+and retried until a fresh surface wins, but temporarily busy live surfaces must still be reused.
 Repeated embedded-only `current_action` updates for the same parent/title reuse the same child row
 until the embedded title changes, so repeated task polls do not duplicate inner status lines.
 Projected child events may also carry explicit `surface` / `root_action_id` metadata; prefer that

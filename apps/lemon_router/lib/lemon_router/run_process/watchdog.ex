@@ -125,20 +125,20 @@ defmodule LemonRouter.RunProcess.Watchdog do
         "session_key=#{inspect(state.session_key)} idle_timeout_ms=#{timeout_ms}"
     )
 
-    emit_synthetic_run_completion(
-      state,
+    state
+    |> emit_synthetic_run_completion(
       {:run_idle_watchdog_timeout, timeout_ms},
       timeout_ms,
       :run_watchdog_timeout
     )
-
-    clear_watchdog_confirmation(state)
+    |> clear_watchdog_confirmation()
   end
 
   @spec fail_run_for_user_cancel(map()) :: map()
   def fail_run_for_user_cancel(state) do
-    emit_synthetic_run_completion(state, :user_requested, nil, :user_requested)
-    clear_watchdog_confirmation(state)
+    state
+    |> emit_synthetic_run_completion(:user_requested, nil, :user_requested)
+    |> clear_watchdog_confirmation()
   end
 
   @spec clear_watchdog_confirmation(map()) :: map()

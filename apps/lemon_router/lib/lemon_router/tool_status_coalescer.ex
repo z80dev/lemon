@@ -14,6 +14,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   alias LemonChannels.Dispatcher
   alias LemonCore.DeliveryIntent
+  alias LemonRouter.AsyncTaskSurface
   alias LemonRouter.ChannelContext
   alias LemonRouter.DeliveryRouteResolver
 
@@ -27,6 +28,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :session_key,
     :channel_id,
     :surface,
+    :surface_binding,
     :run_id,
     :actions,
     :order,
@@ -48,7 +50,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def start_link(opts) do
     session_key = Keyword.fetch!(opts, :session_key)
     channel_id = Keyword.fetch!(opts, :channel_id)
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, _surface_binding} = surface_opts(opts)
     name = via_tuple(session_key, channel_id, surface)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
@@ -67,16 +69,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
   """
   def ingest_action(session_key, channel_id, run_id, action_event, opts \\ []) do
     meta = Keyword.get(opts, :meta, %{})
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, surface_binding} = surface_opts(opts)
 
     case normalize_action_event(action_event) do
       {:skip, _reason} ->
         :ok
 
       {:ok, _id, _action_data} ->
-        case get_or_start_coalescer(session_key, channel_id, surface, meta) do
+        case get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta) do
           {:ok, pid} ->
-            GenServer.cast(pid, {:action, run_id, action_event, meta})
+            GenServer.cast(pid, {:action, run_id, action_event, meta, surface_binding})
 
           {:error, reason} ->
             Logger.warning("Failed to start tool status coalescer: #{inspect(reason)}")
@@ -114,7 +116,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   Force flush the tool status message for a session/channel.
   """
   def flush(session_key, channel_id, opts \\ []) do
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, _surface_binding} = surface_opts(opts)
 
     case Registry.lookup(
            LemonRouter.ToolStatusRegistry,
@@ -174,12 +176,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def anchor_segment(session_key, channel_id, run_id, prefix_text, opts)
       when is_binary(run_id) and is_binary(prefix_text) do
     meta = Keyword.get(opts, :meta, %{})
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, surface_binding} = surface_opts(opts)
 
-    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
+    case get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta) do
       {:ok, pid} ->
         try do
-          GenServer.call(pid, {:anchor_segment, run_id, prefix_text, meta}, 2_000)
+          GenServer.call(
+            pid,
+            {:anchor_segment, run_id, prefix_text, meta, surface_binding},
+            2_000
+          )
         catch
           :exit, _ -> :ok
         end
@@ -200,7 +206,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   def commit_segment(session_key, channel_id, run_id, opts) when is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, _surface_binding} = surface_opts(opts)
 
     case Registry.lookup(
            LemonRouter.ToolStatusRegistry,
@@ -208,7 +214,11 @@ defmodule LemonRouter.ToolStatusCoalescer do
          ) do
       [{pid, _}] ->
         try do
-          GenServer.call(pid, {:commit_segment, run_id, meta}, 2_000)
+          GenServer.call(
+            pid,
+            {:commit_segment, run_id, meta, Keyword.get(opts, :surface_binding)},
+            2_000
+          )
         catch
           :exit, _ -> :ok
         end
@@ -229,13 +239,13 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   def finalize_run(session_key, channel_id, run_id, ok?, opts) when is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, surface_binding} = surface_opts(opts)
     start? = Keyword.get(opts, :start?, true)
 
-    case get_or_start_coalescer(session_key, channel_id, surface, meta, start?) do
+    case get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta, start?) do
       {:ok, pid} ->
         try do
-          GenServer.call(pid, {:finalize_run, run_id, ok?, meta}, 2_000)
+          GenServer.call(pid, {:finalize_run, run_id, ok?, meta, surface_binding}, 2_000)
         catch
           :exit, _ -> :ok
         end
@@ -252,11 +262,11 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   def finalize_run(_session_key, _channel_id, _run_id, _ok?, _opts), do: :ok
 
-  defp get_or_start_coalescer(session_key, channel_id, surface, meta) do
-    get_or_start_coalescer(session_key, channel_id, surface, meta, true)
+  defp get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta) do
+    get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta, true)
   end
 
-  defp get_or_start_coalescer(session_key, channel_id, surface, _meta, false) do
+  defp get_or_start_coalescer(session_key, channel_id, surface, _surface_binding, _meta, false) do
     case Registry.lookup(
            LemonRouter.ToolStatusRegistry,
            registry_key(session_key, channel_id, surface)
@@ -266,7 +276,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp get_or_start_coalescer(session_key, channel_id, surface, meta, true) do
+  defp get_or_start_coalescer(session_key, channel_id, surface, surface_binding, meta, true) do
     key = registry_key(session_key, channel_id, surface)
 
     case Registry.lookup(LemonRouter.ToolStatusRegistry, key) do
@@ -276,7 +286,11 @@ defmodule LemonRouter.ToolStatusCoalescer do
       [] ->
         spec =
           {__MODULE__,
-           session_key: session_key, channel_id: channel_id, surface: surface, meta: meta}
+           session_key: session_key,
+           channel_id: channel_id,
+           surface: surface,
+           surface_binding: surface_binding,
+           meta: meta}
 
         case DynamicSupervisor.start_child(LemonRouter.ToolStatusSupervisor, spec) do
           {:ok, pid} -> {:ok, pid}
@@ -290,7 +304,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def init(opts) do
     session_key = Keyword.fetch!(opts, :session_key)
     channel_id = Keyword.fetch!(opts, :channel_id)
-    surface = Keyword.get(opts, :surface, :status)
+    {surface, surface_binding} = surface_opts(opts)
 
     config = %{
       idle_ms: Keyword.get(opts, :idle_ms, @default_idle_ms),
@@ -302,6 +316,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       session_key: session_key,
       channel_id: channel_id,
       surface: surface,
+      surface_binding: surface_binding,
       run_id: nil,
       actions: %{},
       order: [],
@@ -324,9 +339,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @impl true
-  def handle_cast({:action, run_id, action_event, meta}, state) do
+  def handle_cast({:action, run_id, action_event, meta, surface_binding}, state) do
     now = System.system_time(:millisecond)
-    state = cancel_task_reap(state)
+    state = state |> cancel_task_reap() |> maybe_put_surface_binding(surface_binding)
 
     state =
       if state.run_id != run_id do
@@ -397,8 +412,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @impl true
-  def handle_call({:anchor_segment, run_id, prefix_text, meta}, _from, state) do
-    state = cancel_task_reap(state)
+  def handle_call({:anchor_segment, run_id, prefix_text, meta, surface_binding}, _from, state) do
+    state = state |> cancel_task_reap() |> maybe_put_surface_binding(surface_binding)
 
     state =
       cond do
@@ -439,8 +454,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:commit_segment, run_id, meta}, _from, state) do
-    state = cancel_task_reap(state)
+  def handle_call({:commit_segment, run_id, meta, surface_binding}, _from, state) do
+    state = state |> cancel_task_reap() |> maybe_put_surface_binding(surface_binding)
 
     state =
       if state.run_id == run_id do
@@ -456,65 +471,47 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @impl true
-  def handle_call({:finalize_run, run_id, ok?, meta}, _from, state) do
-    state = cancel_task_reap(state)
+  def handle_call({:finalize_run, run_id, ok?, meta, surface_binding}, _from, state) do
+    if is_binary(state.run_id) and state.run_id != run_id do
+      {:reply, :ok, state}
+    else
+      state = state |> cancel_task_reap() |> maybe_put_surface_binding(surface_binding)
 
-    state =
-      cond do
-        state.run_id == nil ->
-          %{
-            state
-            | run_id: run_id,
-              meta: compact_meta(meta),
-              actions: %{},
-              order: [],
-              prefix_text: nil,
-              last_text: nil,
-              last_kind: nil,
-              first_event_ts: nil,
-              flush_timer: nil,
-              reap_timer: nil,
-              reap_token: nil,
-              seq: 0,
-              finalized: false,
-              run_started_at: nil,
-              engine: nil
-          }
+      state =
+        cond do
+          state.run_id == nil ->
+            %{
+              state
+              | run_id: run_id,
+                meta: compact_meta(meta),
+                actions: %{},
+                order: [],
+                prefix_text: nil,
+                last_text: nil,
+                last_kind: nil,
+                first_event_ts: nil,
+                flush_timer: nil,
+                reap_timer: nil,
+                reap_token: nil,
+                seq: 0,
+                finalized: false,
+                run_started_at: nil,
+                engine: nil
+            }
 
-        state.run_id != run_id ->
-          cancel_timer(state.flush_timer)
+          true ->
+            %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+        end
 
-          %{
-            state
-            | run_id: run_id,
-              actions: %{},
-              order: [],
-              prefix_text: nil,
-              last_text: nil,
-              last_kind: nil,
-              first_event_ts: nil,
-              flush_timer: nil,
-              reap_timer: nil,
-              reap_token: nil,
-              seq: 0,
-              finalized: false,
-              meta: compact_meta(meta),
-              run_started_at: nil,
-              engine: nil
-          }
+      state =
+        state
+        |> Map.put(:finalized, true)
+        |> finalize_running_actions(ok?)
+        |> do_flush()
+        |> maybe_schedule_task_reap()
 
-        true ->
-          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
-      end
-
-    state =
-      state
-      |> Map.put(:finalized, true)
-      |> finalize_running_actions(ok?)
-      |> do_flush()
-      |> maybe_schedule_task_reap()
-
-    {:reply, :ok, state}
+      {:reply, :ok, state}
+    end
   end
 
   @impl true
@@ -527,6 +524,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     state = %{state | reap_timer: nil, reap_token: nil}
 
     if task_surface_reapable?(state) do
+      maybe_reap_terminal_surface_binding(state)
       {:stop, :normal, state}
     else
       {:noreply, state}
@@ -538,6 +536,21 @@ defmodule LemonRouter.ToolStatusCoalescer do
   # ---- Internal ----
 
   defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
+
+  defp surface_opts(opts) do
+    surface_binding = Keyword.get(opts, :surface_binding)
+    surface = binding_surface(surface_binding) || Keyword.get(opts, :surface, :status)
+    {surface, surface_binding}
+  end
+
+  defp binding_surface(%{surface: surface}), do: surface
+  defp binding_surface(_), do: nil
+
+  defp maybe_put_surface_binding(%__MODULE__{} = state, %{surface: _} = surface_binding) do
+    %{state | surface_binding: surface_binding}
+  end
+
+  defp maybe_put_surface_binding(%__MODULE__{} = state, _surface_binding), do: state
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, Dispatcher)
@@ -674,6 +687,19 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp task_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
   defp task_surface?(_), do: false
+
+  defp maybe_reap_terminal_surface_binding(%__MODULE__{surface_binding: nil}), do: :ok
+
+  defp maybe_reap_terminal_surface_binding(%__MODULE__{surface_binding: surface_binding}) do
+    with %{surface_id: surface_id} <- surface_binding,
+         true <- is_binary(surface_id) and surface_id != "",
+         {:ok, %{status: :terminal_grace}} <- AsyncTaskSurface.get(surface_id),
+         {:ok, _snapshot} <- AsyncTaskSurface.transition(surface_id, :reaped) do
+      :ok
+    else
+      _ -> :ok
+    end
+  end
 
   defp emit_output(state, kind, text) do
     case build_intent(state, kind, text) do

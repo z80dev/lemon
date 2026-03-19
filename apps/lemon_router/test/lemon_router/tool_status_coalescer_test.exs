@@ -4,6 +4,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
   alias LemonCore.DeliveryIntent
   alias LemonCore.DeliveryRoute
+  alias LemonRouter.AsyncTaskSurface
   alias Elixir.LemonRouter.StreamCoalescer
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
@@ -86,6 +87,18 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         DynamicSupervisor.start_link(
           strategy: :one_for_one,
           name: Elixir.LemonRouter.ToolStatusSupervisor
+        )
+    end
+
+    if is_nil(Process.whereis(LemonRouter.AsyncTaskSurfaceRegistry)) do
+      {:ok, _} = Registry.start_link(keys: :unique, name: LemonRouter.AsyncTaskSurfaceRegistry)
+    end
+
+    if is_nil(Process.whereis(LemonRouter.AsyncTaskSurfaceSupervisor)) do
+      {:ok, _} =
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: LemonRouter.AsyncTaskSurfaceSupervisor
         )
     end
 
@@ -1111,6 +1124,201 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     send(pid, {:reap_if_idle, state.reap_token})
 
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+  end
+
+  test "task-scoped coalescers accept router-owned surface bindings directly" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:7803"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    surface_binding = %{
+      surface_id: "task_binding_1",
+      surface: {:status_task, "task_binding_1"},
+      root_action_id: "task_binding_1"
+    }
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_binding_1",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface_binding: surface_binding
+             )
+
+    [{pid, _}] =
+      Registry.lookup(
+        Elixir.LemonRouter.ToolStatusRegistry,
+        {session_key, channel_id, {:status_task, "task_binding_1"}}
+      )
+
+    state = :sys.get_state(pid)
+    assert state.surface == {:status_task, "task_binding_1"}
+    assert state.surface_binding == surface_binding
+
+    assert :ok =
+             ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
+               surface_binding: surface_binding
+             )
+
+    state = :sys.get_state(pid)
+    assert is_reference(state.reap_timer)
+    assert is_reference(state.reap_token)
+
+    ref = Process.monitor(pid)
+    send(pid, {:reap_if_idle, state.reap_token})
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+  end
+
+  test "late finalize for an older run does not wipe a reused task-scoped coalescer" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:7803b"
+    channel_id = "telegram"
+    original_run_id = "run_#{System.unique_integer([:positive])}"
+    newer_run_id = "run_#{System.unique_integer([:positive])}"
+
+    surface_binding = %{
+      surface_id: "task_binding_reused_1",
+      surface: {:status_task, "task_binding_reused_1"},
+      root_action_id: "task_binding_reused_1"
+    }
+
+    original_completed = %{
+      engine: "lemon",
+      action: %{
+        id: "task_binding_reused_1",
+        kind: "subagent",
+        title: "task(codex): first run",
+        detail: %{name: "task"}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    newer_started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_poll_reused_1",
+        kind: "tool",
+        title: "Read: summary.md",
+        detail: %{parent_tool_use_id: "task_binding_reused_1"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(
+               session_key,
+               channel_id,
+               original_run_id,
+               original_completed, surface_binding: surface_binding)
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(
+               session_key,
+               channel_id,
+               newer_run_id,
+               newer_started, surface_binding: surface_binding)
+
+    [{pid, _}] =
+      Registry.lookup(
+        Elixir.LemonRouter.ToolStatusRegistry,
+        {session_key, channel_id, {:status_task, "task_binding_reused_1"}}
+      )
+
+    assert :ok =
+             ToolStatusCoalescer.finalize_run(session_key, channel_id, original_run_id, true,
+               surface_binding: surface_binding
+             )
+
+    state = :sys.get_state(pid)
+
+    assert state.run_id == newer_run_id
+    assert state.finalized == false
+    assert state.order == ["task_poll_reused_1"]
+    assert state.actions["task_poll_reused_1"].phase == :started
+    assert state.reap_timer == nil
+    assert state.reap_token == nil
+  end
+
+  test "task-scoped coalescer reap transitions a terminal router-owned async task surface" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:7804"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    surface_binding = %{
+      surface_id: "task_binding_terminal_1",
+      surface: {:status_task, "task_binding_terminal_1"},
+      root_action_id: "task_binding_terminal_1"
+    }
+
+    assert {:ok, surface_pid} =
+             AsyncTaskSurface.ensure_started(surface_binding.surface_id,
+               metadata: Map.merge(surface_binding, %{parent_run_id: run_id})
+             )
+
+    assert {:ok, %{status: :bound}} =
+             AsyncTaskSurface.transition(surface_pid, :bound, %{
+               metadata: Map.merge(surface_binding, %{parent_run_id: run_id})
+             })
+
+    assert {:ok, %{status: :live}} = AsyncTaskSurface.transition(surface_pid, :live)
+
+    assert {:ok, %{status: :terminal_grace}} =
+             AsyncTaskSurface.transition(surface_pid, :terminal_grace)
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_binding_terminal_1",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface_binding: surface_binding
+             )
+
+    [{pid, _}] =
+      Registry.lookup(
+        Elixir.LemonRouter.ToolStatusRegistry,
+        {session_key, channel_id, {:status_task, "task_binding_terminal_1"}}
+      )
+
+    assert :ok =
+             ToolStatusCoalescer.flush(session_key, channel_id, surface_binding: surface_binding)
+
+    state = :sys.get_state(pid)
+    assert is_reference(state.reap_token)
+
+    ref = Process.monitor(pid)
+    send(pid, {:reap_if_idle, state.reap_token})
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    assert AsyncTaskSurface.whereis(surface_binding.surface_id) == nil
+    assert {:error, :not_found} = AsyncTaskSurface.get(surface_binding.surface_id)
   end
 
   test "finalize_run does not create status output when there are no tool actions" do

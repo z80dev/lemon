@@ -12,6 +12,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   require Logger
 
   alias LemonCore.{DeliveryIntent, DeliveryRoute, SessionKey}
+  alias LemonRouter.AsyncTaskSurface
   alias LemonRouter.ChannelContext
   alias LemonRouter.RunProcess.CompactionTrigger
 
@@ -65,7 +66,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
           state.run_id,
           surface,
           action_ev,
-          meta: coalescer_meta(state)
+          meta: coalescer_meta(state),
+          surface_binding: surface_binding_for_surface(state, surface)
         )
 
       _ ->
@@ -101,6 +103,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
         meta = coalescer_meta(state)
+        surface_binding = surface_binding_for_surface(state, surface)
 
         case LemonRouter.StreamCoalescer.handoff_turn(
                state.session_key,
@@ -115,7 +118,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
               state.run_id,
               text,
               meta: meta,
-              surface: surface
+              surface: surface,
+              surface_binding: surface_binding
             )
 
           :noop ->
@@ -138,7 +142,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
           channel_id,
           state.run_id,
           meta: coalescer_meta(state),
-          surface: surface
+          surface: surface,
+          surface_binding: surface_binding_for_surface(state, surface)
         )
 
       _ ->
@@ -238,6 +243,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
             ok?,
             meta: meta,
             surface: surface,
+            surface_binding: surface_binding_for_surface(state, surface),
             start?: false
           )
         end)
@@ -254,31 +260,75 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   @spec prepare_tool_status_action(map(), map()) :: {map(), term(), boolean()}
   def prepare_tool_status_action(state, action_ev) do
     state = prune_stale_task_surfaces(state)
-    task_surfaces = Map.get(state, :task_status_surfaces, %{})
+    task_surfaces = task_surface_bindings(state)
     task_refs = Map.get(state, :task_status_refs, %{})
     action = Map.get(action_ev, :action) || %{}
     action_id = Map.get(action, :id)
     parent_id = action_parent_tool_use_id(action)
     mapped_ref = mapped_task_ref(task_refs, action)
+    persisted_ref = lookup_persisted_task_ref(action)
+    persisted_root_ref = lookup_persisted_root_ref(parent_id)
+
+    existing_root_ref =
+      task_surface_binding(task_surfaces, action_id) || lookup_persisted_root_ref(action_id)
 
     cond do
-      is_binary(parent_id) and Map.has_key?(task_surfaces, parent_id) ->
-        {state, Map.fetch!(task_surfaces, parent_id), false}
-
-      mapped_ref != nil ->
-        {state, mapped_ref.surface, not task_surface_alive?(state, mapped_ref.surface)}
-
-      is_binary(action_id) and Map.has_key?(task_surfaces, action_id) ->
-        surface = Map.fetch!(task_surfaces, action_id)
-        {track_task_refs(state, action, surface, action_id), surface, false}
-
-      task_root_action?(action) and is_binary(action_id) and action_id != "" ->
-        surface = task_surface(action_id)
+      is_map(task_surface_binding(task_surfaces, parent_id)) ->
+        identity = task_surface_binding(task_surfaces, parent_id)
 
         state =
           state
-          |> Map.put(:task_status_surfaces, Map.put(task_surfaces, action_id, surface))
-          |> track_task_refs(action, surface, action_id)
+          |> track_task_refs(action, identity)
+          |> ensure_task_root_surface(action_ev, identity)
+
+        {state, identity.surface, not tool_status_surface_alive?(state, identity.surface)}
+
+      persisted_root_ref != nil ->
+        state =
+          state
+          |> put_task_surface_binding(persisted_root_ref)
+          |> track_task_refs(action, persisted_root_ref)
+          |> ensure_task_root_surface(action_ev, persisted_root_ref)
+
+        {state, persisted_root_ref.surface,
+         not tool_status_surface_alive?(state, persisted_root_ref.surface)}
+
+      mapped_ref != nil ->
+        state =
+          state
+          |> put_task_surface_binding(mapped_ref)
+          |> ensure_task_root_surface(action_ev, mapped_ref)
+
+        {state, mapped_ref.surface, not task_surface_alive?(state, mapped_ref.surface)}
+
+      persisted_ref != nil ->
+        state =
+          state
+          |> put_task_surface_binding(persisted_ref)
+          |> track_task_refs(action, persisted_ref)
+          |> ensure_task_root_surface(action_ev, persisted_ref)
+
+        {state, persisted_ref.surface, not task_surface_alive?(state, persisted_ref.surface)}
+
+      existing_root_ref != nil ->
+        state =
+          state
+          |> put_task_surface_binding(existing_root_ref)
+          |> track_task_refs(action, existing_root_ref)
+          |> ensure_task_root_surface(action_ev, existing_root_ref)
+
+        {state, existing_root_ref.surface,
+         not tool_status_surface_alive?(state, existing_root_ref.surface)}
+
+      task_root_action?(action) and is_binary(action_id) and action_id != "" ->
+        surface = task_surface(action_id)
+        identity = task_surface_identity(surface, action_id)
+
+        state =
+          state
+          |> put_task_surface_binding(identity)
+          |> track_task_refs(action, identity)
+          |> ensure_task_root_surface(action_ev, identity)
 
         {state, surface, true}
 
@@ -295,11 +345,31 @@ defmodule LemonRouter.RunProcess.OutputTracker do
       }) do
     state = prune_stale_task_surfaces(state)
     action = Map.get(action_ev, :action) || %{}
+    task_surfaces = task_surface_bindings(state)
 
     case projected_task_surface_binding(action, event_meta) do
       {surface, root_action_id} ->
-        {state, capture_current_turn?} =
-          bind_task_surface_from_projection(state, action, surface, root_action_id)
+        projected_identity = projected_task_surface_identity(surface, root_action_id, action)
+
+        identity =
+          choose_projected_task_surface_identity(
+            task_surface_binding(task_surfaces, root_action_id),
+            lookup_persisted_root_ref(root_action_id),
+            projected_identity
+          )
+
+        state =
+          if is_map(identity) do
+            state
+            |> put_task_surface_binding(identity)
+            |> track_task_refs(action, identity)
+            |> ensure_task_root_surface(action_ev, identity)
+          else
+            state
+          end
+
+        surface = if is_map(identity), do: identity.surface, else: surface
+        capture_current_turn? = not tool_status_surface_alive?(state, surface)
 
         {state, surface, capture_current_turn?}
 
@@ -321,7 +391,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
           state.run_id,
           action_ev,
           meta: meta,
-          surface: surface
+          surface: surface,
+          surface_binding: surface_binding_for_surface(state, surface)
         )
 
       _ ->
@@ -338,7 +409,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         state
 
       true ->
-        case lookup_task_surface_pid(state, surface) do
+        case lookup_tool_status_surface_pid(state, surface) do
           {:ok, pid} -> track_task_surface_monitor(state, surface, pid)
           :error -> state
         end
@@ -368,7 +439,9 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         task_surfaces =
           state
           |> Map.get(:task_status_surfaces, %{})
-          |> Enum.reject(fn {_root_action_id, mapped_surface} -> mapped_surface == surface end)
+          |> Enum.reject(fn {_root_action_id, identity} ->
+            binding_surface(identity) == surface
+          end)
           |> Map.new()
 
         {:ok,
@@ -390,7 +463,12 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
 
         Enum.each(tool_status_surfaces(state), fn surface ->
-          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
+          LemonRouter.ToolStatusCoalescer.flush(
+            state.session_key,
+            channel_id,
+            surface: surface,
+            surface_binding: surface_binding_for_surface(state, surface)
+          )
         end)
 
       _ ->
@@ -405,7 +483,12 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
         Enum.each(tool_status_surfaces(state), fn surface ->
-          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
+          LemonRouter.ToolStatusCoalescer.flush(
+            state.session_key,
+            channel_id,
+            surface: surface,
+            surface_binding: surface_binding_for_surface(state, surface)
+          )
         end)
 
       _ ->
@@ -505,9 +588,29 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   defp coalescer_meta(_), do: %{}
 
   defp tool_status_surfaces(state) do
-    [:status | Map.values(Map.get(state, :task_status_surfaces, %{}))]
+    [:status | Enum.map(Map.values(task_surface_bindings(state)), &binding_surface/1)]
     |> Enum.uniq()
   end
+
+  defp task_surface_bindings(state), do: Map.get(state, :task_status_surfaces, %{})
+
+  defp task_surface_binding(bindings, root_action_id)
+       when is_map(bindings) and is_binary(root_action_id) and root_action_id != "" do
+    case Map.get(bindings, root_action_id) do
+      %{surface: _surface} = identity -> identity
+      _ -> nil
+    end
+  end
+
+  defp task_surface_binding(_, _), do: nil
+
+  defp put_task_surface_binding(state, %{root_action_id: root_action_id} = identity)
+       when is_binary(root_action_id) and root_action_id != "" do
+    bindings = task_surface_bindings(state)
+    Map.put(state, :task_status_surfaces, Map.put(bindings, root_action_id, identity))
+  end
+
+  defp put_task_surface_binding(state, _identity), do: state
 
   defp task_surface(task_id), do: {:status_task, task_id}
 
@@ -576,45 +679,13 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
   defp surface_root_action_id(_), do: nil
 
-  defp bind_task_surface_from_projection(state, action, surface, root_action_id)
-       when is_map(action) do
-    capture_current_turn? =
-      case root_action_id do
-        id when is_binary(id) and id != "" ->
-          not Map.has_key?(Map.get(state, :task_status_surfaces, %{}), id)
+  defp surface_id_from_surface({:status_task, task_id})
+       when is_binary(task_id) and task_id != "",
+       do: task_id
 
-        _ ->
-          false
-      end
+  defp surface_id_from_surface(_), do: nil
 
-    state =
-      case root_action_id do
-        id when is_binary(id) and id != "" ->
-          task_surfaces = Map.get(state, :task_status_surfaces, %{})
-          Map.put(state, :task_status_surfaces, Map.put(task_surfaces, id, surface))
-
-        _ ->
-          state
-      end
-
-    default_root_action_id =
-      cond do
-        is_binary(root_action_id) and root_action_id != "" -> root_action_id
-        is_binary(Map.get(action, :id)) and Map.get(action, :id) != "" -> Map.get(action, :id)
-        true -> nil
-      end
-
-    state =
-      if default_root_action_id do
-        track_task_refs(state, action, surface, default_root_action_id)
-      else
-        state
-      end
-
-    {state, capture_current_turn?}
-  end
-
-  defp track_task_refs(state, action, surface, default_root_action_id) do
+  defp track_task_refs(state, action, identity) when is_map(identity) do
     task_ids = action_task_ids(action)
 
     if task_ids == [] do
@@ -624,13 +695,13 @@ defmodule LemonRouter.RunProcess.OutputTracker do
 
       updated_refs =
         Enum.reduce(task_ids, existing_refs, fn task_id, acc ->
-          root_action_id =
-            case Map.get(acc, task_id) do
-              %{root_action_id: existing} when is_binary(existing) and existing != "" -> existing
-              _ -> default_root_action_id
-            end
+          ref = Map.get(acc, task_id, %{})
 
-          Map.put(acc, task_id, %{surface: surface, root_action_id: root_action_id})
+          Map.put(acc, task_id, %{
+            surface_id: existing_identity_value(ref, :surface_id, identity.surface_id),
+            surface: existing_identity_value(ref, :surface, identity.surface),
+            root_action_id: existing_identity_value(ref, :root_action_id, identity.root_action_id)
+          })
         end)
 
       Map.put(state, :task_status_refs, updated_refs)
@@ -650,6 +721,251 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp mapped_task_ref(_, _), do: nil
+
+  defp ensure_task_root_surface(state, action_ev, identity)
+       when is_map(action_ev) and is_map(identity) do
+    metadata = task_surface_metadata(state, identity, action_ev)
+
+    with true <- valid_surface?(identity.surface),
+         true <- is_binary(identity.surface_id) and identity.surface_id != "",
+         true <- is_binary(identity.root_action_id) and identity.root_action_id != "",
+         {:ok, pid} <- AsyncTaskSurface.ensure_started(identity.surface_id, metadata: metadata) do
+      transition_task_surface(pid, desired_task_surface_status(action_ev), metadata, action_ev)
+    else
+      _ -> :ok
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp desired_task_surface_status(action_ev) when is_map(action_ev) do
+    action = Map.get(action_ev, :action) || %{}
+    phase = fetch(action_ev, :phase)
+
+    cond do
+      task_surface_terminal?(action_ev) -> :terminal_grace
+      task_root_action?(action) and phase in [:started, "started"] -> :bound
+      true -> :live
+    end
+  end
+
+  defp transition_task_surface(pid, target_status, metadata, action_ev)
+       when is_pid(pid) and target_status in [:bound, :live, :terminal_grace] and is_map(metadata) do
+    attrs = task_surface_transition_attrs(target_status, metadata, action_ev)
+
+    case AsyncTaskSurface.get(pid) do
+      {:ok, %{status: :pending_root}} ->
+        transition_pending_task_surface(pid, target_status, attrs)
+
+      {:ok, %{status: :bound}} ->
+        maybe_transition_task_surface_forward(pid, target_status, attrs)
+
+      {:ok, %{status: :live}} ->
+        maybe_transition_task_surface_forward(pid, target_status, attrs)
+
+      {:ok, %{status: :terminal_grace}} ->
+        :ok
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp transition_pending_task_surface(pid, :terminal_grace, attrs) do
+    case AsyncTaskSurface.transition(pid, :terminal_grace, attrs) do
+      {:ok, _snapshot} -> :ok
+      _ -> :ok
+    end
+  end
+
+  defp transition_pending_task_surface(pid, target_status, attrs) do
+    with {:ok, _snapshot} <- AsyncTaskSurface.transition(pid, :bound, %{metadata: attrs.metadata}) do
+      maybe_transition_task_surface_forward(pid, target_status, attrs)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_transition_task_surface_forward(_pid, :bound, _attrs), do: :ok
+
+  defp maybe_transition_task_surface_forward(pid, :live, attrs) do
+    case AsyncTaskSurface.transition(pid, :live, %{metadata: attrs.metadata}) do
+      {:ok, _snapshot} -> :ok
+      _ -> :ok
+    end
+  end
+
+  defp maybe_transition_task_surface_forward(pid, :terminal_grace, attrs) do
+    case AsyncTaskSurface.transition(pid, :terminal_grace, attrs) do
+      {:ok, _snapshot} -> :ok
+      _ -> :ok
+    end
+  end
+
+  defp task_surface_identity(surface, root_action_id)
+       when is_binary(root_action_id) and root_action_id != "" do
+    %{
+      surface_id: surface_id_from_surface(surface) || root_action_id,
+      surface: surface,
+      root_action_id: root_action_id
+    }
+  end
+
+  defp task_surface_metadata(state, identity, action_ev)
+       when is_map(identity) and is_map(action_ev) do
+    action = Map.get(action_ev, :action) || %{}
+
+    task_ids =
+      (Map.get(identity, :task_ids, []) ++ action_task_ids(action))
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    %{
+      surface_id: identity.surface_id,
+      surface: identity.surface,
+      root_action_id: identity.root_action_id,
+      parent_run_id: state.run_id,
+      session_key: state.session_key,
+      task_id: List.first(task_ids),
+      task_ids: task_ids
+    }
+  end
+
+  defp existing_identity_value(existing, key, fallback) when is_map(existing) do
+    case Map.get(existing, key) do
+      value when not is_nil(value) -> value
+      _ -> fallback
+    end
+  end
+
+  defp existing_identity_value(_existing, _key, fallback), do: fallback
+
+  defp projected_task_surface_identity(surface, root_action_id, action)
+       when is_map(action) and is_binary(root_action_id) and root_action_id != "" do
+    if task_surface?(surface) do
+      task_surface_identity(surface, root_action_id)
+      |> Map.put(:task_ids, action_task_ids(action))
+    end
+  end
+
+  defp projected_task_surface_identity(_surface, _root_action_id, _action), do: nil
+
+  defp choose_projected_task_surface_identity(
+         existing_identity,
+         persisted_identity,
+         projected_identity
+       ) do
+    cond do
+      authoritative_projected_task_surface_identity?(projected_identity) ->
+        projected_identity
+
+      is_map(existing_identity) ->
+        existing_identity
+
+      is_map(persisted_identity) ->
+        persisted_identity
+
+      true ->
+        projected_identity
+    end
+  end
+
+  defp authoritative_projected_task_surface_identity?(%{
+         surface: surface,
+         surface_id: surface_id,
+         root_action_id: root_action_id
+       })
+       when is_binary(surface_id) and surface_id != "" and is_binary(root_action_id) and
+              root_action_id != "" do
+    surface_id != root_action_id or surface != task_surface(root_action_id)
+  end
+
+  defp authoritative_projected_task_surface_identity?(_identity), do: false
+
+  defp lookup_persisted_root_ref(root_action_id)
+       when is_binary(root_action_id) and root_action_id != "" do
+    case AsyncTaskSurface.lookup_identity_by_root_action_id(root_action_id) do
+      {:ok, identity} ->
+        identity
+
+      :error ->
+        case AsyncTaskSurface.lookup_identity(root_action_id) do
+          {:ok, identity} -> identity
+          :error -> nil
+        end
+    end
+  end
+
+  defp lookup_persisted_root_ref(_root_action_id), do: nil
+
+  defp lookup_persisted_task_ref(action) when is_map(action) do
+    action
+    |> action_task_ids()
+    |> Enum.find_value(fn task_id ->
+      case AsyncTaskSurface.lookup_identity_by_task_id(task_id) do
+        {:ok, identity} -> Map.put(identity, :task_ids, [task_id])
+        :error -> nil
+      end
+    end)
+  end
+
+  defp lookup_persisted_task_ref(_action), do: nil
+
+  defp task_surface_terminal?(action_ev) when is_map(action_ev) do
+    action = Map.get(action_ev, :action) || %{}
+    detail = Map.get(action, :detail) || %{}
+    result_meta = Map.get(detail, :result_meta) || %{}
+
+    terminal_task_status?(
+      fetch(result_meta, :status) || fetch(detail, :status) || Map.get(action_ev, :status)
+    )
+  end
+
+  defp task_surface_terminal?(_action_ev), do: false
+
+  defp terminal_task_status?(status) when status in [:completed, :failed, :error, :cancelled],
+    do: true
+
+  defp terminal_task_status?(status)
+       when status in ["completed", "failed", "error", "cancelled", "canceled"],
+       do: true
+
+  defp terminal_task_status?(_status), do: false
+
+  defp task_surface_transition_attrs(:terminal_grace, metadata, action_ev)
+       when is_map(metadata) do
+    terminal_status =
+      action_ev
+      |> task_surface_terminal_status()
+      |> to_string()
+
+    attrs = %{metadata: metadata}
+
+    if terminal_status == "completed" do
+      Map.put(attrs, :result, %{status: terminal_status})
+    else
+      Map.put(attrs, :error, terminal_status)
+    end
+  end
+
+  defp task_surface_transition_attrs(_target_status, metadata, _action_ev)
+       when is_map(metadata) do
+    %{metadata: metadata}
+  end
+
+  defp task_surface_terminal_status(action_ev) when is_map(action_ev) do
+    action = Map.get(action_ev, :action) || %{}
+    detail = Map.get(action, :detail) || %{}
+    result_meta = Map.get(detail, :result_meta) || %{}
+
+    fetch(result_meta, :status) || fetch(detail, :status) || Map.get(action_ev, :status)
+  end
+
+  defp task_surface_terminal_status(_action_ev), do: nil
 
   defp action_task_ids(action) when is_map(action) do
     detail = Map.get(action, :detail) || %{}
@@ -765,14 +1081,15 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp prune_stale_task_surfaces(state) do
-    task_surfaces = Map.get(state, :task_status_surfaces, %{})
+    task_surfaces = task_surface_bindings(state)
 
     stale_root_action_ids =
       task_surfaces
-      |> Enum.filter(fn {_root_action_id, surface} ->
+      |> Enum.filter(fn {_root_action_id, identity} ->
+        surface = binding_surface(identity)
         task_surface?(surface) and not task_surface_alive?(state, surface)
       end)
-      |> Enum.map(fn {root_action_id, _surface} -> root_action_id end)
+      |> Enum.map(fn {root_action_id, _identity} -> root_action_id end)
 
     if stale_root_action_ids == [] do
       state
@@ -784,15 +1101,21 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp task_surface_alive?(state, surface) do
-    case lookup_task_surface_pid(state, surface) do
+    case lookup_tool_status_surface_pid(state, surface) do
       {:ok, _pid} -> true
       :error -> false
     end
   end
 
-  defp lookup_task_surface_pid(state, surface) do
-    with true <- task_surface?(surface),
-         {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
+  defp tool_status_surface_alive?(state, surface) do
+    case lookup_tool_status_surface_pid(state, surface) do
+      {:ok, _pid} -> true
+      :error -> false
+    end
+  end
+
+  defp lookup_tool_status_surface_pid(state, surface) do
+    with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
          [{pid, _}] <-
            Registry.lookup(
              LemonRouter.ToolStatusRegistry,
@@ -806,6 +1129,16 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   rescue
     _ -> :error
   end
+
+  defp surface_binding_for_surface(state, surface) do
+    state
+    |> task_surface_bindings()
+    |> Map.values()
+    |> Enum.find(fn identity -> binding_surface(identity) == surface end)
+  end
+
+  defp binding_surface(%{surface: surface}), do: surface
+  defp binding_surface(surface), do: surface
 
   defp track_task_surface_monitor(state, surface, pid) when is_pid(pid) do
     monitors = Map.get(state, :task_status_surface_monitors, %{})
@@ -821,14 +1154,20 @@ defmodule LemonRouter.RunProcess.OutputTracker do
         ref = Process.monitor(pid)
 
         state
-        |> Map.put(:task_status_surface_monitors, Map.put(monitors, surface, %{pid: pid, ref: ref}))
+        |> Map.put(
+          :task_status_surface_monitors,
+          Map.put(monitors, surface, %{pid: pid, ref: ref})
+        )
         |> Map.put(:task_status_surface_monitor_refs, Map.put(monitor_refs, ref, surface))
 
       _ ->
         ref = Process.monitor(pid)
 
         state
-        |> Map.put(:task_status_surface_monitors, Map.put(monitors, surface, %{pid: pid, ref: ref}))
+        |> Map.put(
+          :task_status_surface_monitors,
+          Map.put(monitors, surface, %{pid: pid, ref: ref})
+        )
         |> Map.put(:task_status_surface_monitor_refs, Map.put(monitor_refs, ref, surface))
     end
   end
