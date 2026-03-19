@@ -346,6 +346,8 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
   defp provider_env_vars("github_copilot"), do: ["GITHUB_COPILOT_API_KEY"]
   defp provider_env_vars("google_gemini_cli"), do: ["GOOGLE_GEMINI_CLI_API_KEY"]
+  defp provider_env_vars("zai"), do: ["ZAI_API_KEY"]
+  defp provider_env_vars("minimax"), do: ["MINIMAX_API_KEY"]
 
   defp provider_env_vars("google"),
     do: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]

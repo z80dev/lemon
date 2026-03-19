@@ -160,7 +160,7 @@ Environment variables override file values. Common overrides:
 
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
 - `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`)
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
@@ -270,6 +270,8 @@ mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
 mix lemon.onboard gemini
+mix lemon.onboard zai
+mix lemon.onboard minimax
 
 # Provider-specific aliases still work
 mix lemon.onboard.antigravity
@@ -318,6 +320,12 @@ mix lemon.onboard.copilot --enterprise-domain company.ghe.com
 mix lemon.onboard.copilot --skip-enable-models
 mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
+
+# Z.AI
+mix lemon.onboard zai --token <token> --set-default --model glm-5
+
+# MiniMax
+mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 ```
 
 Anthropic provider auth is API key based. Store your key in secrets:

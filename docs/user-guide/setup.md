@@ -116,6 +116,13 @@ api_key_secret = "llm_anthropic_api_key"
 [providers.openai]
 api_key_secret = "llm_openai_api_key"
 
+# Other API-key onboarding targets include:
+# [providers.zai]
+# api_key_secret = "llm_zai_api_key"
+#
+# [providers.minimax]
+# api_key_secret = "llm_minimax_api_key"
+
 # Runtime defaults
 [defaults]
 provider = "anthropic"

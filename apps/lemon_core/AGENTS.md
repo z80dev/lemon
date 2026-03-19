@@ -113,7 +113,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 - `[defaults]` - Default provider, model, thinking level, engine
 - `[runtime]` - Runtime behavior (compaction, retry, shell, tools, cli, extensions, theme, budget_defaults)
 - `[profiles.<id>]` - Per-agent profiles with tool policies
-- `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, kimi, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
+- `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
 - `[gateway]` - Max concurrent runs, engine bindings, transport settings (Telegram, Discord, XMTP, SMS, Voice), projects. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
 - `[tui]` - Theme, debug mode
 - `[logging]` - File logging, level, rotation
@@ -145,6 +145,8 @@ Config provides defaults; runtime state provides the current effective value. Cu
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
 | `OPENAI_CODEX_API_KEY` | `providers.openai-codex.api_key` (used when `providers.openai-codex.auth_source = "api_key"`) |
+| `ZAI_API_KEY` | `providers.zai.api_key` |
+| `MINIMAX_API_KEY` | `providers.minimax.api_key` |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
 | `GOOGLE_GEMINI_CLI_API_KEY` | `providers.google_gemini_cli.api_key` (JSON credential payload: `{"token","projectId"}`) |
 | `LEMON_GEMINI_PROJECT_ID` | Runtime override for `providers.google_gemini_cli.project_id` |
@@ -450,6 +452,8 @@ mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
 mix lemon.onboard gemini
+mix lemon.onboard zai
+mix lemon.onboard minimax
 mix lemon.onboard.antigravity
 mix lemon.onboard.gemini
 mix lemon.onboard.codex
@@ -461,6 +465,8 @@ mix lemon.onboard.gemini --project-id your-gcp-project
 mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
 mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
+mix lemon.onboard zai --token <token> --set-default --model glm-5
+mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 
 # Copilot-specific options
 mix lemon.onboard.copilot --enterprise-domain company.ghe.com

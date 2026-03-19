@@ -113,6 +113,21 @@ defmodule LemonCore.Onboarding.Providers do
       auth_source_by_mode: %{api_key: "api_key"}
     },
     %Provider{
+      id: "minimax",
+      display_name: "MiniMax",
+      description: "MiniMax API key for M2 models",
+      provider_table: "providers.minimax",
+      default_secret_name: "llm_minimax_api_key",
+      api_key_secret_provider: "onboarding_minimax",
+      auth_modes: [:api_key],
+      default_auth_mode: :api_key,
+      preferred_models: ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"],
+      aliases: ["mini-max", "minimax-m2"],
+      api_key_prompt: "Enter your MiniMax API key: ",
+      api_key_choice_label: "Paste API key",
+      auth_source_by_mode: %{api_key: "api_key"}
+    },
+    %Provider{
       id: "google_gemini_cli",
       display_name: "Google Gemini CLI",
       description: "Google OAuth for Gemini CLI / Code Assist",

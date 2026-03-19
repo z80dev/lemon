@@ -174,6 +174,20 @@ defmodule Ai.ModelsNewProvidersTest do
       assert model.name == "MiniMax M2.5"
     end
 
+    test "MiniMax-M2.7 is available" do
+      model = Models.get_model(:minimax, "MiniMax-M2.7")
+      assert model != nil
+      assert model.name == "MiniMax-M2.7"
+      assert model.context_window == 204_800
+    end
+
+    test "MiniMax-M2.7-highspeed is available" do
+      model = Models.get_model(:minimax, "MiniMax-M2.7-highspeed")
+      assert model != nil
+      assert model.name == "MiniMax-M2.7-highspeed"
+      assert model.context_window == 204_800
+    end
+
     test "all MiniMax models can be listed" do
       models = Models.get_models(:minimax)
       assert length(models) >= 3
@@ -182,6 +196,8 @@ defmodule Ai.ModelsNewProvidersTest do
       assert "minimax-m2" in ids
       assert "minimax-m2.1" in ids
       assert "minimax-m2.5" in ids
+      assert "MiniMax-M2.7" in ids
+      assert "MiniMax-M2.7-highspeed" in ids
     end
   end
 

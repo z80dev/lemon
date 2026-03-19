@@ -19,7 +19,9 @@ defmodule LemonCore.Config.ProvidersTest do
         "OPENAI_BASE_URL",
         "OPENAI_CODEX_API_KEY",
         "OPENCODE_API_KEY",
-        "OPENCODE_BASE_URL"
+        "OPENCODE_BASE_URL",
+        "MINIMAX_API_KEY",
+        "MINIMAX_BASE_URL"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -163,6 +165,25 @@ defmodule LemonCore.Config.ProvidersTest do
 
       assert config.providers["opencode"][:api_key] == "sk-opencode-env"
       assert config.providers["opencode"][:base_url] == "https://opencode.ai/zen/v1"
+    end
+
+    test "minimax uses MINIMAX_API_KEY env var" do
+      System.put_env("MINIMAX_API_KEY", "sk-minimax-env")
+      System.put_env("MINIMAX_BASE_URL", "https://api.minimaxi.chat/v1")
+
+      settings = %{
+        "providers" => %{
+          "minimax" => %{
+            "api_key" => "sk-minimax-config",
+            "base_url" => "https://config.minimax.local/v1"
+          }
+        }
+      }
+
+      config = Providers.resolve(settings)
+
+      assert config.providers["minimax"][:api_key] == "sk-minimax-env"
+      assert config.providers["minimax"][:base_url] == "https://api.minimaxi.chat/v1"
     end
 
     test "openai and openai-codex share OPENAI_BASE_URL" do

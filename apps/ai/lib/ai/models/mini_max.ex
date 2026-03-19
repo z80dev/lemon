@@ -112,6 +112,40 @@ defmodule Ai.Models.MiniMax do
       },
       context_window: 204_800,
       max_tokens: 131_072
+    },
+    "MiniMax-M2.7" => %Model{
+      id: "MiniMax-M2.7",
+      name: "MiniMax-M2.7",
+      api: :anthropic_messages,
+      provider: :minimax,
+      base_url: "https://api.minimax.io/anthropic",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{
+        input: 0.3,
+        output: 1.2,
+        cache_read: 0.06,
+        cache_write: 0.375
+      },
+      context_window: 204_800,
+      max_tokens: 131_072
+    },
+    "MiniMax-M2.7-highspeed" => %Model{
+      id: "MiniMax-M2.7-highspeed",
+      name: "MiniMax-M2.7-highspeed",
+      api: :anthropic_messages,
+      provider: :minimax,
+      base_url: "https://api.minimax.io/anthropic",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{
+        input: 0.6,
+        output: 2.4,
+        cache_read: 0.06,
+        cache_write: 0.375
+      },
+      context_window: 204_800,
+      max_tokens: 131_072
     }
   }
 
