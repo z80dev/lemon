@@ -138,9 +138,15 @@ class LemonApp:
                     if isinstance(data, dict) and data.get("role") == "assistant":
                         blocks = data.get("content", [])
                         text_parts = []
+                        thinking_parts = []
                         for b in (blocks if isinstance(blocks, list) else []):
                             if b.get("type") == "text":
                                 text_parts.append(b.get("text", ""))
+                            elif b.get("type") == "thinking":
+                                thinking_parts.append(b.get("thinking", ""))
+                        if thinking_parts and self._store.state.show_thinking:
+                            from lemon_cli.display.panels import render_thinking_panel
+                            self.print("\n" + render_thinking_panel("\n".join(thinking_parts), expanded=True))
                         if text_parts:
                             self.print("\n" + "\n".join(text_parts))
             case "tool_execution_start":

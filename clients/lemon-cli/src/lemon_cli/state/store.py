@@ -99,6 +99,7 @@ class AppState:
     compact_mode: bool = False
     bell_enabled: bool = True
     show_timestamps: bool = False
+    show_thinking: bool = False
     notification_history: list[dict] = field(default_factory=list)
     title: str | None = None
     status: dict[str, str | None] = field(default_factory=dict)
@@ -115,8 +116,21 @@ class AppState:
 
 
 class StateStore:
-    def __init__(self, cwd: str = ""):
-        self._state = AppState(cwd=cwd)
+    def __init__(
+        self,
+        cwd: str = "",
+        compact_mode: bool = False,
+        bell_enabled: bool = True,
+        show_timestamps: bool = False,
+        show_thinking: bool = False,
+    ):
+        self._state = AppState(
+            cwd=cwd,
+            compact_mode=compact_mode,
+            bell_enabled=bell_enabled,
+            show_timestamps=show_timestamps,
+            show_thinking=show_thinking,
+        )
         self._listeners: list[Callable[[AppState], None]] = []
         self._message_id_counter = 0
 
@@ -218,4 +232,8 @@ class StateStore:
 
     def toggle_compact_mode(self):
         self._state.compact_mode = not self._state.compact_mode
+        self._notify()
+
+    def toggle_thinking_visibility(self):
+        self._state.show_thinking = not self._state.show_thinking
         self._notify()

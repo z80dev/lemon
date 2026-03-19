@@ -3,6 +3,14 @@
 Port of clients/lemon-tui/src/config.ts.
 Loads ~/.lemon/config.toml and ./.lemon/config.toml, deep-merges them,
 then resolves final values using env vars and CLI args.
+
+Relevant `[tui]` keys for the Python client:
+- `theme`
+- `debug`
+- `compact`
+- `timestamps`
+- `bell`
+- `thinking` (show assistant reasoning blocks when available)
 """
 from __future__ import annotations
 
@@ -49,6 +57,7 @@ class TUIConfig:
     bell: bool = True
     compact: bool = False
     timestamps: bool = False
+    thinking: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "TUIConfig":
@@ -58,6 +67,7 @@ class TUIConfig:
             bell=bool(data.get("bell", True)),
             compact=bool(data.get("compact", False)),
             timestamps=bool(data.get("timestamps", False)),
+            thinking=bool(data.get("thinking", False)),
         )
 
 
@@ -115,6 +125,10 @@ class ResolvedConfig:
     cwd: str
     theme: str
     debug: bool
+    compact: bool
+    bell: bool
+    timestamps: bool
+    show_thinking: bool
     system_prompt: str | None
     session_file: str | None
     lemon_path: str | None
@@ -268,6 +282,11 @@ def resolve_config(
     cli_debug = getattr(cli_args, "debug", False) if cli_args else False
     debug = cli_debug or config.tui.debug or bool(os.environ.get("LEMON_DEBUG"))
 
+    compact = config.tui.compact
+    bell = config.tui.bell
+    timestamps = config.tui.timestamps
+    show_thinking = config.tui.thinking
+
     # System prompt
     system_prompt = getattr(cli_args, "system_prompt", None) if cli_args else None
     if system_prompt is None:
@@ -332,6 +351,10 @@ def resolve_config(
         cwd=resolved_cwd,
         theme=theme,
         debug=debug,
+        compact=compact,
+        bell=bell,
+        timestamps=timestamps,
+        show_thinking=show_thinking,
         system_prompt=system_prompt,
         session_file=session_file,
         lemon_path=lemon_path,

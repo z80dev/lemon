@@ -112,4 +112,5 @@ def cmd_config(app, args):
     cprint(f"  Provider: {config.agent.default_provider}")
     cprint(f"  Model: {config.agent.default_model}")
     cprint(f"  Theme: {config.tui.theme}")
+    cprint(f"  Thinking: {'on' if config.tui.thinking else 'off'}")
     return True

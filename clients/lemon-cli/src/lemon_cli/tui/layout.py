@@ -27,6 +27,26 @@ def append_output(text: str):
     buf.set_document(Document(new_text, len(new_text)), bypass_readonly=True)
 
 
+def render_activity_line(state, spinner, terminal_width: int = 80) -> str:
+    """Render the live activity line shown while the agent is busy."""
+    spinner_text = spinner.render() if spinner else " ..."
+
+    streaming = state.streaming_message
+    thinking = streaming.thinking_content if streaming else ""
+    if not state.show_thinking or not thinking:
+        return spinner_text
+
+    preview = " ".join(thinking.split())
+    if not preview:
+        return spinner_text
+
+    max_len = max(16, terminal_width - 6)
+    if len(preview) > max_len:
+        preview = preview[: max_len - 3] + "..."
+
+    return f" 💭 {preview}"
+
+
 def build_layout(store, spinner, input_area: TextArea | None = None) -> Layout:
     """Build the HSplit layout and return a Layout object."""
 
@@ -42,9 +62,10 @@ def build_layout(store, spinner, input_area: TextArea | None = None) -> Layout:
         return ANSI(text)
 
     def render_spinner():
-        if spinner:
-            return ANSI(spinner.render())
-        return ANSI(" ...")
+        import shutil
+
+        width = shutil.get_terminal_size().columns
+        return ANSI(render_activity_line(store.state, spinner, terminal_width=width))
 
     def render_overlay():
         request = (store.state.pending_ui_requests[0]

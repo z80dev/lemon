@@ -68,7 +68,13 @@ def main():
 
     # Create state store
     from lemon_cli.state.store import StateStore
-    store = StateStore(cwd=config.cwd)
+    store = StateStore(
+        cwd=config.cwd,
+        compact_mode=config.compact,
+        bell_enabled=config.bell,
+        show_timestamps=config.timestamps,
+        show_thinking=config.show_thinking,
+    )
 
     # Create and run app
     from lemon_cli.tui.app import LemonApp

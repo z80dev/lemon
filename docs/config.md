@@ -88,6 +88,10 @@ max_tool_invoke_depth = 4
 [tui]
 theme = "lemon"
 debug = false
+compact = false
+timestamps = false
+bell = true
+thinking = false
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -162,6 +166,10 @@ Environment variables override file values. Common overrides:
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
+
+`[tui].thinking` controls whether assistant reasoning/thinking blocks are shown in the
+Python CLI. It is loaded at startup and can be toggled for the current process with
+`/thinking`.
 
 ## Feature Flags
 

@@ -35,6 +35,9 @@ def render_status_bar(state: AppState, terminal_width: int = 80) -> str:
     if state.compact_mode:
         parts.append(f"{ansi256(theme.accent)}[compact]\033[0m")
 
+    if state.show_thinking:
+        parts.append(f"{ansi256(theme.accent)}[thinking]\033[0m")
+
     # Token usage (if wide enough)
     usage = state.cumulative_usage
     if usage.total_tokens > 0 and terminal_width >= 76:

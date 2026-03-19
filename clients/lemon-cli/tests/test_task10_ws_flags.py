@@ -104,3 +104,17 @@ def test_all_ws_flags_together():
     assert result.ws_role == "r"
     assert result.ws_scopes == ["s1", "s2"]
     assert result.ws_client_id == "c"
+
+
+def test_tui_thinking_flag_is_loaded_from_config():
+    """[tui].thinking must control initial reasoning visibility."""
+    from lemon_cli.config import resolve_config, LemonConfig, TUIConfig
+
+    cfg = LemonConfig()
+    cfg.tui = TUIConfig(thinking=True)
+    args = _make_namespace()
+
+    with patch("lemon_cli.config.load_config", return_value=cfg):
+        result = resolve_config(cli_args=args)
+
+    assert result.show_thinking is True

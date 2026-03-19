@@ -60,5 +60,7 @@ def cmd_compact(app, args):
 
 def cmd_thinking(app, args):
     """Toggle thinking panel visibility."""
-    app.print("  Thinking display toggled")
+    app._store.toggle_thinking_visibility()
+    mode = "on" if app._store.state.show_thinking else "off"
+    app.print(f"  Thinking display: {mode}")
     return True
