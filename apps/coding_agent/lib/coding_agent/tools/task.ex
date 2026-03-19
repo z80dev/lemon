@@ -128,22 +128,22 @@ defmodule CodingAgent.Tools.Task do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
+  def execute(tool_call_id, params, signal, on_update, cwd, opts) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
       case Params.normalize_action(Map.get(params, "action")) do
         "poll" -> Result.do_poll(params)
         "join" -> Result.do_join(params)
-        _ -> do_execute(params, signal, on_update, cwd, opts)
+        _ -> do_execute(tool_call_id, params, signal, on_update, cwd, opts)
       end
     end
   end
 
-  defp do_execute(params, signal, on_update, cwd, opts) do
+  defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
     with {:ok, validated} <- Params.validate_run_params(params, cwd),
          :ok <- Params.check_budget_and_policy(validated, opts) do
-      Execution.run(validated, signal, on_update, cwd, opts)
+      Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end
   end
 

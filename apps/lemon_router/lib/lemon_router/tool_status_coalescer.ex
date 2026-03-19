@@ -84,6 +84,19 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   @doc """
+  Ingest a projected child action into a parent-owned task surface.
+
+  This is a narrow wrapper over normal action ingestion so callers can be
+  explicit that the event originated from a bridged child run rather than the
+  parent run's native engine event stream.
+  """
+  def ingest_projected_child_action(session_key, channel_id, parent_run_id, surface, projected_event, opts \\ []) do
+    ingest_action(session_key, channel_id, parent_run_id, projected_event,
+      Keyword.merge(opts, surface: surface)
+    )
+  end
+
+  @doc """
   Force flush the tool status message for a session/channel.
   """
   def flush(session_key, channel_id, opts \\ []) do
@@ -97,6 +110,34 @@ defmodule LemonRouter.ToolStatusCoalescer do
       _ -> :ok
     end
   end
+
+  defp equivalent_action_id(actions, data) when is_map(actions) and is_map(data) do
+    Enum.find_value(actions, fn {existing_id, existing_data} ->
+      if equivalent_action?(existing_data, data), do: existing_id, else: nil
+    end)
+  end
+
+  defp equivalent_action_id(_, _), do: nil
+
+  defp equivalent_action?(existing, incoming) when is_map(existing) and is_map(incoming) do
+    existing_detail = existing[:detail] || %{}
+    incoming_detail = incoming[:detail] || %{}
+
+    existing_child_run_id = existing_detail[:child_run_id] || existing_detail["child_run_id"]
+    incoming_child_run_id = incoming_detail[:child_run_id] || incoming_detail["child_run_id"]
+    existing_parent = existing_detail[:parent_tool_use_id] || existing_detail["parent_tool_use_id"]
+    incoming_parent = incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
+
+    is_binary(existing_child_run_id) and is_binary(incoming_child_run_id) and
+      existing_child_run_id == incoming_child_run_id and existing_parent == incoming_parent and
+      normalize_embedded_kind(to_string(existing[:kind])) == normalize_embedded_kind(to_string(incoming[:kind])) and
+      normalize_title(existing[:title]) == normalize_title(incoming[:title])
+  end
+
+  defp equivalent_action?(_, _), do: false
+
+  defp normalize_title(title) when is_binary(title), do: String.trim(title)
+  defp normalize_title(title), do: title |> to_string() |> String.trim()
 
   @doc """
   Attach subsequent tool status updates to the latest assistant text chunk.
@@ -573,11 +614,45 @@ defmodule LemonRouter.ToolStatusCoalescer do
     if trimmed == "" do
       text
     else
-      trimmed <> "\n\n" <> text
+      combine_prefix_and_status(trimmed, text)
     end
   end
 
   defp maybe_prefix_text(text, _state), do: text
+
+  # Keep the current tool-status snapshot visible even when the handed-off
+  # assistant prefix is long. Telegram truncation preserves the start of a
+  # message, so without budgeting the prefix separately we can hide the tool
+  # lines entirely.
+  defp combine_prefix_and_status(prefix, text) when is_binary(prefix) and is_binary(text) do
+    separator = "\n\n"
+    max_len = telegram_max_length()
+    combined = prefix <> separator <> text
+
+    cond do
+      String.length(combined) <= max_len ->
+        combined
+
+      String.length(text) + String.length(separator) >= max_len ->
+        text
+
+      true ->
+        available_for_prefix = max_len - String.length(text) - String.length(separator) - 1
+
+        if available_for_prefix <= 0 do
+          text
+        else
+          prefix_tail = String.slice(prefix, -available_for_prefix, available_for_prefix)
+          "…" <> prefix_tail <> separator <> text
+        end
+    end
+  end
+
+  defp telegram_max_length do
+    LemonChannels.Telegram.Truncate.max_length()
+  rescue
+    _ -> 4096
+  end
 
   defp any_running_action?(%__MODULE__{} = state) do
     actions = state.actions || %{}
@@ -656,17 +731,34 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp normalize_action_event(_), do: {:skip, :unknown}
 
   defp expand_embedded_actions(action_data) when is_map(action_data) do
-    case embedded_child_action(action_data) do
-      nil -> [action_data]
-      child -> [action_data, child]
+    case {skip_parent_action?(action_data), embedded_child_action(action_data)} do
+      {true, nil} -> []
+      {true, child} -> [child]
+      {false, nil} -> [action_data]
+      {false, child} -> [action_data, child]
     end
   end
 
   defp expand_embedded_actions(action_data), do: [action_data]
 
-  defp embedded_child_action(action_data) when is_map(action_data) do
-    parent_id = action_data[:id]
+  defp skip_parent_action?(action_data) when is_map(action_data) do
     detail = action_data[:detail] || %{}
+    args = Map.get(detail, :args) || Map.get(detail, "args") || %{}
+    name = Map.get(detail, :name) || Map.get(detail, "name")
+    action_name = Map.get(args, :action) || Map.get(args, "action")
+
+    action_data[:kind] in ["subagent", :subagent] and name == "task" and
+      action_name in ["poll", "join"]
+  end
+
+  defp skip_parent_action?(_), do: false
+
+  defp embedded_child_action(action_data) when is_map(action_data) do
+    detail = action_data[:detail] || %{}
+
+    parent_id =
+      Map.get(detail, :parent_tool_use_id) || Map.get(detail, "parent_tool_use_id") ||
+        action_data[:id]
 
     with true <- is_binary(parent_id) and parent_id != "",
          %{title: title, kind: kind, phase: phase} <- current_action(detail),
@@ -682,7 +774,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
         message: nil,
         level: nil,
         detail:
-          embedded_action_detail(detail)
+          (embedded_action_detail(detail) || %{})
           |> Map.put_new(:parent_tool_use_id, parent_id)
       }
     else
@@ -693,6 +785,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp embedded_child_action(_), do: nil
 
   defp current_action(detail) when is_map(detail) do
+    current_action_from_partial_result(detail) || current_action_from_result_meta(detail)
+  end
+
+  defp current_action(_), do: nil
+
+  defp current_action_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
 
     with true <- is_map(partial_result),
@@ -712,9 +810,36 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp current_action(_), do: nil
+  defp current_action_from_partial_result(_), do: nil
+
+  defp current_action_from_result_meta(detail) when is_map(detail) do
+    result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
+
+    with true <- is_map(result_meta),
+         current when is_map(current) <-
+           Map.get(result_meta, :current_action) || Map.get(result_meta, "current_action"),
+         title when is_binary(title) and title != "" <-
+           Map.get(current, :title) || Map.get(current, "title"),
+         kind when is_binary(kind) and kind != "" <-
+           Map.get(current, :kind) || Map.get(current, "kind"),
+         phase when is_binary(phase) and phase != "" <-
+           Map.get(current, :phase) || Map.get(current, "phase") do
+      %{title: title, kind: kind, phase: phase}
+    else
+      _ -> nil
+    end
+  end
+
+  defp current_action_from_result_meta(_), do: nil
 
   defp embedded_action_detail(detail) when is_map(detail) do
+    embedded_action_detail_from_partial_result(detail) ||
+      embedded_action_detail_from_result_meta(detail)
+  end
+
+  defp embedded_action_detail(_), do: %{}
+
+  defp embedded_action_detail_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
 
     with true <- is_map(partial_result),
@@ -724,13 +849,33 @@ defmodule LemonRouter.ToolStatusCoalescer do
            Map.get(details, :action_detail) || Map.get(details, "action_detail") do
       action_detail
     else
-      _ -> %{}
+      _ -> nil
     end
   end
 
-  defp embedded_action_detail(_), do: %{}
+  defp embedded_action_detail_from_partial_result(_), do: nil
+
+  defp embedded_action_detail_from_result_meta(detail) when is_map(detail) do
+    result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
+
+    with true <- is_map(result_meta),
+         action_detail when is_map(action_detail) <-
+           Map.get(result_meta, :action_detail) || Map.get(result_meta, "action_detail") do
+      action_detail
+    else
+      _ -> nil
+    end
+  end
+
+  defp embedded_action_detail_from_result_meta(_), do: nil
 
   defp embedded_engine(detail) when is_map(detail) do
+    embedded_engine_from_partial_result(detail) || embedded_engine_from_result_meta(detail)
+  end
+
+  defp embedded_engine(_), do: nil
+
+  defp embedded_engine_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
 
     with true <- is_map(partial_result),
@@ -744,7 +889,21 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp embedded_engine(_), do: nil
+  defp embedded_engine_from_partial_result(_), do: nil
+
+  defp embedded_engine_from_result_meta(detail) when is_map(detail) do
+    result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
+
+    with true <- is_map(result_meta),
+         engine when is_binary(engine) and engine != "" <-
+           Map.get(result_meta, :engine) || Map.get(result_meta, "engine") do
+      engine
+    else
+      _ -> nil
+    end
+  end
+
+  defp embedded_engine_from_result_meta(_), do: nil
 
   defp embedded_child_id(parent_id, kind, title)
        when is_binary(parent_id) and is_binary(kind) and is_binary(title) do
@@ -796,6 +955,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp embedded_ok(_), do: nil
 
   defp upsert_action(actions, order, id, data) do
+    id = equivalent_action_id(actions, data) || id
     actions = Map.put(actions, id, data)
     order = if id in order, do: order, else: order ++ [id]
 

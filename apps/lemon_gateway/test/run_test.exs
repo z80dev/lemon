@@ -180,6 +180,36 @@ defmodule LemonGateway.RunTest do
     def cancel(_ctx), do: :ok
   end
 
+  defmodule RaisingEngine do
+    @behaviour Elixir.LemonGateway.Engine
+
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
+
+    @impl true
+    def id, do: "raising"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "raising resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{}, _opts, _sink_pid) do
+      raise "boom during start_run"
+    end
+
+    @impl true
+    def cancel(_ctx), do: :ok
+  end
+
   # An engine that supports steering
   defmodule SteerableTestEngine do
     @behaviour Elixir.LemonGateway.Engine
@@ -397,6 +427,7 @@ defmodule LemonGateway.RunTest do
       Elixir.LemonGateway.RunTest.TestEngine,
       ControllableEngine,
       FailingEngine,
+      RaisingEngine,
       SteerableTestEngine,
       SteerFailEngine,
       Elixir.LemonGateway.RunTest.StreamingEngine,
@@ -543,6 +574,20 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Process should stop after error
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+    end
+
+    test "handles engine start_run exception" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "raising", meta: %{notify_pid: self()})
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid,
+                      %{__event__: :completed, ok: false,
+                        error: "engine_start_exception: boom during start_run"}},
+                     2000
+
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 

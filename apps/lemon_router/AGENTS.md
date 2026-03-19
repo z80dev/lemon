@@ -150,6 +150,12 @@ assistant delta starts, at which point the segment is finalized in place and res
 Task roots use dedicated status surfaces keyed by task id, so child actions with
 `detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
 or unrelated top-level tool calls create newer answer/status turns.
+Async task followups (`task action=poll`) are also rebound onto the original task surface by
+`task_id` when upstream runners preserve that metadata in action `detail.result_meta`, so
+background Codex/Claude task progress stays attached to the originating `task(...)` line instead
+of creating blank standalone `task:` status entries.
+Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
+`SessionCoordinator` will retain the session as busy forever.
 
 ### Change compaction behavior
 

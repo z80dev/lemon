@@ -4,13 +4,14 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.RunGraph
   alias CodingAgent.Session
+  alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Async, Followup, Runner}
 
-  @spec run(map(), reference() | nil, (term() -> :ok) | nil, String.t(), keyword()) ::
+  @spec run(String.t() | nil, map(), reference() | nil, (term() -> :ok) | nil, String.t(), keyword()) ::
           term()
-  def run(validated, signal, on_update, cwd, opts) do
-    execution = build_execution_context(validated, cwd, opts)
+  def run(tool_call_id, validated, signal, on_update, cwd, opts) do
+    execution = build_execution_context(tool_call_id, validated, cwd, opts)
     run_fun = build_run_fun(execution, signal, on_update, opts)
 
     if execution.async? do
@@ -33,7 +34,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     end
   end
 
-  defp build_execution_context(validated, cwd, opts) do
+  defp build_execution_context(tool_call_id, validated, cwd, opts) do
     description = validated.description
     prompt = validated.prompt
     role_id = validated.role_id
@@ -44,6 +45,8 @@ defmodule CodingAgent.Tools.Task.Execution do
     parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
     coordinator = Keyword.get(opts, :coordinator)
     parent_run_id = Keyword.get(opts, :parent_run_id)
+    root_action_id = Keyword.get(opts, :root_action_id) || tool_call_id
+    surface = Keyword.get(opts, :surface) || default_surface(root_action_id)
 
     run_id =
       if async? do
@@ -74,12 +77,16 @@ defmodule CodingAgent.Tools.Task.Execution do
       parent_run_id: parent_run_id,
       session_key: parent_session_key,
       agent_id: parent_agent_id,
+      root_action_id: root_action_id,
+      surface: surface,
       description: description,
       engine: validated.engine || "internal",
       role: role_id,
       queue_mode: validated.queue_mode,
       meta: validated.meta
     }
+
+    maybe_create_progress_binding(task_id, run_id, lifecycle_context)
 
     if run_id do
       BudgetEnforcer.on_run_start(run_id, opts)
@@ -207,4 +214,31 @@ defmodule CodingAgent.Tools.Task.Execution do
   defp generate_child_scope_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
+
+  defp maybe_create_progress_binding(task_id, run_id, lifecycle_context) do
+    with true <- is_binary(task_id) and task_id != "",
+         true <- is_binary(run_id) and run_id != "",
+         true <- is_binary(lifecycle_context[:parent_run_id]) and lifecycle_context[:parent_run_id] != "",
+         true <- is_binary(lifecycle_context[:session_key]) and lifecycle_context[:session_key] != "",
+         true <- is_binary(lifecycle_context[:agent_id]) and lifecycle_context[:agent_id] != "",
+         true <- is_binary(lifecycle_context[:root_action_id]) and lifecycle_context[:root_action_id] != "",
+         surface when not is_nil(surface) <- lifecycle_context[:surface] do
+      TaskProgressBindingStore.new_binding(%{
+        task_id: task_id,
+        child_run_id: run_id,
+        parent_run_id: lifecycle_context[:parent_run_id],
+        parent_session_key: lifecycle_context[:session_key],
+        parent_agent_id: lifecycle_context[:agent_id],
+        root_action_id: lifecycle_context[:root_action_id],
+        surface: surface
+      })
+    else
+      _ -> :ok
+    end
+  end
+
+  defp default_surface(root_action_id) when is_binary(root_action_id) and root_action_id != "",
+    do: {:status_task, root_action_id}
+
+  defp default_surface(_), do: nil
 end

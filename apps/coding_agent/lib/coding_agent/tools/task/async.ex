@@ -9,12 +9,14 @@ defmodule CodingAgent.Tools.Task.Async do
   alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.Followup
+  alias CodingAgent.Tools.Task.{Followup, LiveBridge}
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.Introspection
 
   @spec run_async(String.t() | nil, String.t() | nil, (-> term()), map(), map()) :: :ok
   def run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
+    _ = maybe_start_live_bridge(run_id)
+
     Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
       Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
       result = safe_run(task_id, run_id, run_fun, lifecycle_context)
@@ -332,4 +334,7 @@ defmodule CodingAgent.Tools.Task.Async do
       _pid -> Parallel.Semaphore.release(CodingAgent.TaskSemaphore)
     end
   end
+
+  defp maybe_start_live_bridge(run_id) when is_binary(run_id), do: LiveBridge.start_for_child_run(run_id)
+  defp maybe_start_live_bridge(_), do: :ok
 end

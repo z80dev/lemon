@@ -84,6 +84,20 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
         notify? = supports_edit?
         notify_ref = if notify?, do: make_ref(), else: nil
 
+        # Register the pending ref BEFORE enqueueing to prevent the delivery
+        # notification from arriving before the ref is tracked.
+        if notify? do
+          PresentationState.register_pending_create(
+            route,
+            intent.run_id,
+            surface,
+            notify_ref,
+            seq,
+            text_hash,
+            pending_resume(intent)
+          )
+        end
+
         payload =
           OutboundPayload.text(
             route.channel_id,
@@ -99,15 +113,7 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} when notify? ->
-            PresentationState.register_pending_create(
-              route,
-              intent.run_id,
-              surface,
-              notify_ref,
-              seq,
-              text_hash,
-              pending_resume(intent)
-            )
+            :ok
 
           {:ok, _ref} ->
             PresentationState.mark_sent(route, intent.run_id, surface, seq, text_hash)

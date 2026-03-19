@@ -532,9 +532,11 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     %{state | accumulated_text: state.accumulated_text <> delta}
   end
 
-  defp translate_and_emit({:message_update, _msg, event}, state) when is_tuple(event) do
-    # Extract text from AI stream event tuples (e.g. {:text_delta, idx, text, partial})
-    case extract_delta_text(event) do
+  defp translate_and_emit({:message_update, msg, event}, state) when is_tuple(event) do
+    # Extract streamed text either from the event tuple itself (preferred) or,
+    # for non-text tuples like tool-call events, from the visible assistant
+    # message if it has grown since the last emitted text.
+    case text_delta_from_message_update(msg, event, state.accumulated_text) do
       text when is_binary(text) and text != "" ->
         state = emit_delta(state, text)
         %{state | accumulated_text: state.accumulated_text <> text}
@@ -622,11 +624,59 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp emit_delta(state, _text), do: state
 
+  @doc false
+  def text_delta_from_message_update(msg, event, accumulated_text \\ "") do
+    case extract_delta_text(event) do
+      text when is_binary(text) and text != "" ->
+        text
+
+      _ ->
+        visible_text_delta(msg, accumulated_text)
+    end
+  end
+
   # Extract text content from AI stream event tuples.
   # Events come as {:text_delta, idx, text, partial_msg} or similar shapes.
   defp extract_delta_text({:text_delta, _idx, text, _partial}) when is_binary(text), do: text
   defp extract_delta_text({:text_delta, _idx, text}) when is_binary(text), do: text
   defp extract_delta_text(_), do: nil
+
+  defp visible_text_delta(msg, accumulated_text) do
+    text =
+      case safe_get_visible_text(msg) do
+        visible when is_binary(visible) -> visible
+        _ -> ""
+      end
+
+    cond do
+      text == "" ->
+        nil
+
+      accumulated_text == "" ->
+        text
+
+      String.starts_with?(text, accumulated_text) ->
+        case String.slice(text, byte_size(accumulated_text)..-1//1) do
+          "" -> nil
+          suffix -> suffix
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp safe_get_visible_text(msg) do
+    case Ai.get_text(msg) do
+      text when is_binary(text) and text != "" ->
+        text
+
+      _ ->
+        Ai.get_thinking(msg)
+    end
+  rescue
+    _ -> ""
+  end
 
   # ============================================================================
   # Completion Helpers
@@ -869,14 +919,95 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp extract_tool_result_meta(details) when is_map(details) do
     auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")
+    task_meta = extract_task_tool_result_meta(details)
 
-    case normalize_auto_send_files(auto_send_files) do
-      [] -> nil
-      files -> %{auto_send_files: files}
-    end
+    meta =
+      case normalize_auto_send_files(auto_send_files) do
+        [] -> task_meta || %{}
+        files -> Map.put(task_meta || %{}, :auto_send_files, files)
+      end
+
+    if map_size(meta) == 0, do: nil, else: meta
   end
 
   defp extract_tool_result_meta(_), do: nil
+
+  defp extract_task_tool_result_meta(details) when is_map(details) do
+    meta =
+      %{}
+      |> maybe_put_meta(:task_id, Map.get(details, :task_id) || Map.get(details, "task_id"))
+      |> maybe_put_meta(:task_ids, Map.get(details, :task_ids) || Map.get(details, "task_ids"))
+      |> maybe_put_meta(:status, Map.get(details, :status) || Map.get(details, "status"))
+      |> maybe_put_meta(:engine, Map.get(details, :engine) || Map.get(details, "engine"))
+      |> maybe_put_meta(:run_id, Map.get(details, :run_id) || Map.get(details, "run_id"))
+      |> maybe_put_meta(:current_action, latest_task_current_action(details))
+      |> maybe_put_meta(:action_detail, latest_task_action_detail(details))
+
+    if map_size(meta) == 0, do: nil, else: meta
+  end
+
+  defp extract_task_tool_result_meta(_), do: nil
+
+  defp latest_task_current_action(details) when is_map(details) do
+    direct = Map.get(details, :current_action) || Map.get(details, "current_action")
+
+    cond do
+      is_map(direct) ->
+        direct
+
+      true ->
+        details
+        |> task_result_events()
+        |> Enum.reverse()
+        |> Enum.find_value(fn event ->
+          event_details =
+            cond do
+              is_struct(event) -> Map.get(Map.from_struct(event), :details)
+              is_map(event) -> Map.get(event, :details) || Map.get(event, "details")
+              true -> nil
+            end
+
+          if is_map(event_details) do
+            Map.get(event_details, :current_action) || Map.get(event_details, "current_action")
+          end
+        end)
+    end
+  end
+
+  defp latest_task_current_action(_), do: nil
+
+  defp latest_task_action_detail(details) when is_map(details) do
+    details
+    |> task_result_events()
+    |> Enum.reverse()
+    |> Enum.find_value(fn event ->
+      event_details =
+        cond do
+          is_struct(event) -> Map.get(Map.from_struct(event), :details)
+          is_map(event) -> Map.get(event, :details) || Map.get(event, "details")
+          true -> nil
+        end
+
+      if is_map(event_details) do
+        Map.get(event_details, :action_detail) || Map.get(event_details, "action_detail")
+      end
+    end)
+  end
+
+  defp latest_task_action_detail(_), do: nil
+
+  defp task_result_events(details) when is_map(details) do
+    events = Map.get(details, :events) || Map.get(details, "events")
+    if is_list(events), do: events, else: []
+  end
+
+  defp task_result_events(_), do: []
+
+  defp maybe_put_meta(meta, _key, nil), do: meta
+
+  defp maybe_put_meta(meta, key, value) when is_map(meta) do
+    Map.put(meta, key, value)
+  end
 
   defp normalize_auto_send_files(files) when is_list(files) do
     files

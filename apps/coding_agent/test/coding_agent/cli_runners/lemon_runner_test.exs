@@ -331,6 +331,90 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
   end
 
+  describe "text delta extraction from message updates" do
+    alias Ai.Types.{AssistantMessage, TextContent, ThinkingContent, ToolCall}
+
+    test "uses explicit text_delta tuple when present" do
+      msg = %AssistantMessage{content: [%TextContent{text: "hello"}]}
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:text_delta, 0, "hello", msg},
+               ""
+             ) == "hello"
+    end
+
+    test "falls back to newly visible message text for tool-call events" do
+      msg = %AssistantMessage{
+        content: [
+          %TextContent{text: "Let me read the key files:"},
+          %ToolCall{id: "call_1", name: "read", arguments: %{path: "foo.ex"}}
+        ]
+      }
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:tool_call_start, 1, msg},
+               ""
+             ) == "Let me read the key files:"
+    end
+
+    test "falls back to thinking when no visible text exists yet" do
+      msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:tool_call_start, 0, msg},
+               ""
+             ) == "I should inspect the provider first."
+    end
+
+    test "emits raw thinking deltas to the user" do
+      msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:thinking_delta, 0, "I should inspect the provider first.", msg},
+               ""
+             ) == "I should inspect the provider first."
+    end
+
+    test "prefers visible text over thinking when both are present" do
+      msg = %AssistantMessage{
+        content: [
+          %ThinkingContent{thinking: "I should inspect the provider first."},
+          %TextContent{text: "Let me inspect the provider first."}
+        ]
+      }
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:tool_call_start, 1, msg},
+               ""
+             ) == "Let me inspect the provider first."
+    end
+
+    test "emits only the unseen suffix when message already contains prior streamed text" do
+      msg = %AssistantMessage{content: [%TextContent{text: "Hello world"}]}
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:tool_call_delta, 1, "", msg},
+               "Hello "
+             ) == "world"
+    end
+
+    test "does not emit duplicate text when visible text has not grown" do
+      msg = %AssistantMessage{content: [%TextContent{text: "Hello"}]}
+
+      assert LemonRunner.text_delta_from_message_update(
+               msg,
+               {:tool_call_start, 1, msg},
+               "Hello"
+             ) == nil
+    end
+  end
+
   # ============================================================================
   # Tool Kind Mapping Tests (mirrors translate_and_emit logic)
   # ============================================================================

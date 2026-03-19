@@ -1,22 +1,225 @@
 defmodule LemonChannels.Telegram.Truncate do
   @moduledoc """
-  Truncation logic for Telegram messages that preserves resume lines.
+  Truncation and splitting logic for Telegram messages.
 
   Telegram has a message length limit of 4096 characters. When a message
-  exceeds this limit, we need to truncate it while preserving any resume
-  lines (e.g., "lemon resume abc123") at the end of the message so users
-  can continue their session.
+  exceeds this limit, we split it into multiple messages with smart
+  break-point selection.
 
-  ## Algorithm
+  ## Splitting Algorithm
 
-  1. Split text into lines
-  2. Identify resume lines at the end using engine.is_resume_line/1
-  3. Calculate space needed for resume lines
-  4. Truncate the remaining content to fit within the limit
-  5. Add an ellipsis marker if truncation occurred
+  1. If text fits in one message, return it as-is
+  2. If we need to split:
+     - Find the first newline (`\\n`) within 80% of the limit
+     - If no newline, find a word boundary (space) within the last 5% of the limit
+     - If no word boundary, hard-split at 99% of the limit
+  3. Preserve resume lines on the **last** chunk
+
+  ## Legacy Truncation
+
+  `truncate_for_telegram/1,2` still exists for backward-compatibility and
+  simple truncation use-cases (e.g. status messages). New outbound text
+  flows should prefer `split_messages/1,2`.
   """
 
   @telegram_max_length 4096
+
+  # Split thresholds as percentages of max_length
+  @newline_target_pct 0.80
+  @word_search_start_pct 0.95
+  @hard_split_pct 0.99
+
+  @doc """
+  Split text into one or more chunks that each fit within Telegram's message limit.
+
+  Uses smart break-point selection: prefers newlines within 80% of the limit,
+  falls back to word boundaries, and finally hard-splits.
+
+  Resume lines are preserved on the last chunk.
+
+  ## Returns
+
+  A non-empty list of strings, each with `String.length/1 <= 4096`.
+  """
+  @spec split_messages(String.t()) :: [String.t()]
+  def split_messages(text) when is_binary(text) do
+    split_messages(text, nil)
+  end
+
+  def split_messages(text), do: [to_string(text)]
+
+  @spec split_messages(String.t(), module() | nil) :: [String.t()]
+  def split_messages(text, engine_module) when is_binary(text) do
+    if String.length(text) <= @telegram_max_length do
+      [text]
+    else
+      do_split(text, engine_module)
+    end
+  end
+
+  def split_messages(text, _engine_module), do: [to_string(text)]
+
+  defp do_split(text, engine_module) do
+    # Extract resume lines — they go on the last chunk only
+    {content, resume_lines} = extract_resume(text, engine_module)
+    resume_text = Enum.join(resume_lines, "\n")
+
+    chunks = split_content_loop(content, [])
+    # Trim trailing empty chunks that can arise from trailing newlines
+    chunks = trim_trailing_empty(chunks)
+
+    # Append resume lines to the last chunk
+    chunks = append_resume_to_last(chunks, resume_text)
+
+    # Safety: if any chunk still exceeds the limit (resume lines too long),
+    # fall back to hard truncation per chunk
+    Enum.map(chunks, &hard_truncate/1)
+  end
+
+  # Extract resume lines from the end of text, returning {remaining_content, resume_lines}
+  defp extract_resume(text, engine_module) do
+    lines = String.split(text, "\n")
+    {content_lines, resume_lines} = split_trailing_resume_lines(lines, engine_module)
+
+    case resume_lines do
+      [] ->
+        case extract_trailing_resume_line(text) do
+          nil ->
+            {text, []}
+
+          resume_line ->
+            content = text |> String.replace_suffix(resume_line, "") |> String.trim_trailing("\n")
+
+            {content, [resume_line]}
+        end
+
+      _ ->
+        {Enum.join(content_lines, "\n"), resume_lines}
+    end
+  end
+
+  defp split_content_loop("", acc), do: Enum.reverse(acc)
+
+  defp split_content_loop(remaining, acc) do
+    if String.length(remaining) <= @telegram_max_length do
+      Enum.reverse([remaining | acc])
+    else
+      limit = @telegram_max_length
+
+      # Strategy 1: find a newline within 80% of the limit
+      newline_target = trunc(limit * @newline_target_pct)
+
+      case find_break_before(remaining, newline_target, "\n") do
+        pos when is_integer(pos) and pos > 0 ->
+          {chunk, rest} = String.split_at(remaining, pos + 1)
+          split_content_loop(rest, [String.trim_trailing(chunk) | acc])
+
+        nil ->
+          # Strategy 2: find a space within the last 5% (95%-100% of limit)
+          word_search_start = trunc(limit * @word_search_start_pct)
+
+          case find_break_before(remaining, limit, " ", word_search_start) do
+            pos when is_integer(pos) and pos > 0 ->
+              {chunk, rest} = String.split_at(remaining, pos + 1)
+              split_content_loop(rest, [chunk | acc])
+
+            nil ->
+              # Strategy 3: hard split at 99% of limit
+              hard_pos = trunc(limit * @hard_split_pct)
+              hard_pos = min(hard_pos, String.length(remaining))
+              {chunk, rest} = String.split_at(remaining, hard_pos)
+              split_content_loop(rest, [chunk | acc])
+          end
+      end
+    end
+  end
+
+  # Find the last occurrence of `separator` in text[0..max_pos], scanning backward.
+  # Returns the **grapheme** position of the separator, or nil.
+  #
+  # NOTE: `:binary.matches/2` returns byte offsets, so we convert to grapheme
+  # offsets to be safe with multibyte characters (emoji, CJK, etc.).
+  defp find_break_before(text, max_pos, separator) do
+    find_break_before(text, max_pos, separator, 0)
+  end
+
+  defp find_break_before(text, max_pos, separator, min_pos) do
+    # Take prefix up to max_pos (grapheme-safe via String.slice)
+    prefix = String.slice(text, 0, min(max_pos, String.length(text)))
+
+    # Use :binary.matches to find the last occurrence (byte offsets)
+    case :binary.matches(prefix, separator) do
+      [] ->
+        nil
+
+      matches ->
+        # matches are sorted ascending by byte offset; take the last one
+        {byte_pos, _len} = List.last(matches)
+
+        # Convert byte offset to grapheme index
+        # grapheme_index = number of graphemes before byte_pos
+        grapheme_pos = count_graphemes_before(prefix, byte_pos)
+
+        if grapheme_pos >= min_pos, do: grapheme_pos, else: nil
+    end
+  end
+
+  # Count the number of graphemes in binary before the given byte offset.
+  # This is the grapheme index corresponding to that byte position.
+  defp count_graphemes_before(binary, byte_pos) do
+    prefix = binary_part(binary, 0, byte_pos)
+    String.length(prefix)
+  end
+
+  defp trim_trailing_empty(chunks) do
+    chunks
+    |> Enum.reverse()
+    |> Enum.drop_while(fn chunk -> chunk == "" end)
+    |> Enum.reverse()
+    |> case do
+      [] -> [""]
+      non_empty -> non_empty
+    end
+  end
+
+  defp append_resume_to_last([], _resume_text), do: []
+  defp append_resume_to_last(chunks, ""), do: chunks
+
+  defp append_resume_to_last(chunks, resume_text) do
+    {init, [last]} = Enum.split(chunks, -1)
+
+    # If last chunk + resume exceeds limit, hard-truncate the content
+    combined = last <> "\n" <> resume_text
+
+    if String.length(combined) <= @telegram_max_length do
+      init ++ [combined]
+    else
+      # Truncate content to make room for resume
+      available = @telegram_max_length - String.length(resume_text) - 1
+
+      truncated_last =
+        if available > 0 do
+          String.slice(last, 0, available)
+        else
+          ""
+        end
+
+      init ++ [truncated_last <> "\n" <> resume_text]
+    end
+  end
+
+  defp hard_truncate(text) do
+    if String.length(text) <= @telegram_max_length do
+      text
+    else
+      String.slice(text, 0, @telegram_max_length)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Legacy truncation API (preserved for backward-compat)
+  # ---------------------------------------------------------------------------
+
   @ellipsis "..."
 
   @doc """

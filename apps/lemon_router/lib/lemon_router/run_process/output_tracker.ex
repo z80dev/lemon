@@ -48,6 +48,26 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> :ok
   end
 
+  @spec ingest_projected_child_action_to_tool_status_coalescer(map(), map(), term()) :: :ok
+  def ingest_projected_child_action_to_tool_status_coalescer(state, action_ev, surface) do
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        LemonRouter.ToolStatusCoalescer.ingest_projected_child_action(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          surface,
+          action_ev,
+          meta: coalescer_meta(state)
+        )
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   # ---- Turn commit ----
 
   @spec commit_stream_turn(map()) :: :ok
@@ -224,22 +244,32 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   @spec prepare_tool_status_action(map(), map()) :: {map(), term(), boolean()}
   def prepare_tool_status_action(state, action_ev) do
     task_surfaces = Map.get(state, :task_status_surfaces, %{})
+    task_refs = Map.get(state, :task_status_refs, %{})
     action = Map.get(action_ev, :action) || %{}
     action_id = Map.get(action, :id)
     parent_id = action_parent_tool_use_id(action)
+    mapped_ref = mapped_task_ref(task_refs, action)
 
     cond do
       is_binary(parent_id) and Map.has_key?(task_surfaces, parent_id) ->
         {state, Map.fetch!(task_surfaces, parent_id), false}
 
+      mapped_ref != nil ->
+        {state, mapped_ref.surface, false}
+
       is_binary(action_id) and Map.has_key?(task_surfaces, action_id) ->
-        {state, Map.fetch!(task_surfaces, action_id), false}
+        surface = Map.fetch!(task_surfaces, action_id)
+        {track_task_refs(state, action, surface, action_id), surface, false}
 
       task_root_action?(action) and is_binary(action_id) and action_id != "" ->
         surface = task_surface(action_id)
 
-        {Map.put(state, :task_status_surfaces, Map.put(task_surfaces, action_id, surface)),
-         surface, true}
+        state =
+          state
+          |> Map.put(:task_status_surfaces, Map.put(task_surfaces, action_id, surface))
+          |> track_task_refs(action, surface, action_id)
+
+        {state, surface, true}
 
       true ->
         {state, :status, true}
@@ -251,6 +281,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
         meta = coalescer_meta(state)
+        action_ev = attach_task_parent(action_ev, state)
 
         LemonRouter.ToolStatusCoalescer.ingest_action(
           state.session_key,
@@ -399,8 +430,11 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   defp task_root_action?(action) when is_map(action) do
     detail = Map.get(action, :detail) || %{}
     kind = Map.get(action, :kind)
+    args = Map.get(detail, :args) || %{}
+    action_name = Map.get(args, "action") || Map.get(args, :action)
 
     is_map(detail) and (detail[:name] == "task" or detail["name"] == "task") and
+      action_name not in ["poll", "join", :poll, :join] and
       kind in ["subagent", :subagent]
   end
 
@@ -415,6 +449,103 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp action_parent_tool_use_id(_action), do: nil
+
+  defp track_task_refs(state, action, surface, default_root_action_id) do
+    task_ids = action_task_ids(action)
+
+    if task_ids == [] do
+      state
+    else
+      existing_refs = Map.get(state, :task_status_refs, %{})
+
+      updated_refs =
+        Enum.reduce(task_ids, existing_refs, fn task_id, acc ->
+          root_action_id =
+            case Map.get(acc, task_id) do
+              %{root_action_id: existing} when is_binary(existing) and existing != "" -> existing
+              _ -> default_root_action_id
+            end
+
+          Map.put(acc, task_id, %{surface: surface, root_action_id: root_action_id})
+        end)
+
+      Map.put(state, :task_status_refs, updated_refs)
+    end
+  end
+
+  defp mapped_task_ref(task_refs, action) when is_map(task_refs) do
+    action
+    |> action_task_ids()
+    |> Enum.map(&Map.get(task_refs, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> case do
+      [ref] -> ref
+      _ -> nil
+    end
+  end
+
+  defp mapped_task_ref(_, _), do: nil
+
+  defp action_task_ids(action) when is_map(action) do
+    detail = Map.get(action, :detail) || %{}
+    args = Map.get(detail, :args) || %{}
+    result_meta = Map.get(detail, :result_meta) || %{}
+
+    []
+    |> maybe_prepend_task_id(Map.get(result_meta, :task_id) || Map.get(result_meta, "task_id"))
+    |> maybe_prepend_task_ids(Map.get(result_meta, :task_ids) || Map.get(result_meta, "task_ids"))
+    |> maybe_prepend_task_id(Map.get(args, :task_id) || Map.get(args, "task_id"))
+    |> maybe_prepend_task_ids(Map.get(args, :task_ids) || Map.get(args, "task_ids"))
+    |> Enum.uniq()
+  end
+
+  defp action_task_ids(_), do: []
+
+  defp maybe_prepend_task_id(list, task_id)
+       when is_list(list) and is_binary(task_id) and task_id != "",
+       do: [task_id | list]
+
+  defp maybe_prepend_task_id(list, _), do: list
+
+  defp maybe_prepend_task_ids(list, task_ids) when is_list(list) and is_list(task_ids) do
+    task_ids
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Kernel.++(list)
+  end
+
+  defp maybe_prepend_task_ids(list, _), do: list
+
+  defp attach_task_parent(action_ev, state) when is_map(action_ev) do
+    task_refs = Map.get(state, :task_status_refs, %{})
+    action = Map.get(action_ev, :action) || %{}
+
+    cond do
+      action_parent_tool_use_id(action) ->
+        action_ev
+
+      true ->
+        case mapped_task_ref(task_refs, action) do
+          %{root_action_id: root_action_id}
+          when is_binary(root_action_id) and root_action_id != "" ->
+            if root_action_id != Map.get(action, :id) do
+              detail = Map.get(action, :detail) || %{}
+
+              action =
+                Map.put(action, :detail, Map.put(detail, :parent_tool_use_id, root_action_id))
+
+              Map.put(action_ev, :action, action)
+            else
+              action_ev
+            end
+
+          _ ->
+            action_ev
+        end
+    end
+  end
+
+  defp attach_task_parent(action_ev, _), do: action_ev
 
   defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
        when is_binary(cwd) and cwd != "",

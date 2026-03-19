@@ -13,7 +13,15 @@ defmodule LemonChannels.PresentationState do
   alias LemonChannels.Telegram.ResumeIndexStore
   alias LemonCore.DeliveryRoute
 
+  require Logger
+
   @notify_tag :presentation_delivery
+
+  # How long a pending_create_ref is allowed to exist before being
+  # considered stale and eligible for garbage collection (30 seconds).
+  # A stale ref means the delivery notification was lost (e.g., due to a
+  # PresentationState crash or an Outbox retry that exhausted attempts).
+  @pending_create_ttl_ms 30_000
 
   @type surface :: term()
   @type entry :: %{
@@ -22,6 +30,7 @@ defmodule LemonChannels.PresentationState do
           surface: surface(),
           platform_message_id: integer() | binary() | nil,
           pending_create_ref: reference() | nil,
+          pending_create_at: integer() | nil,
           last_seq: non_neg_integer(),
           last_text_hash: integer() | nil,
           deferred_text: binary() | nil,
@@ -140,7 +149,7 @@ defmodule LemonChannels.PresentationState do
 
   @impl true
   def handle_call({:get, key, route, run_id, surface}, _from, state) do
-    entry = Map.get(state.entries, key, new_entry(route, run_id, surface))
+    {entry, state} = get_with_stale_gc(key, route, run_id, surface, state)
     {:reply, entry, state}
   end
 
@@ -155,6 +164,7 @@ defmodule LemonChannels.PresentationState do
       |> Map.get(key, new_entry(route, run_id, surface))
       |> Map.merge(%{
         pending_create_ref: ref,
+        pending_create_at: System.monotonic_time(:millisecond),
         last_seq: seq,
         last_text_hash: text_hash,
         pending_resume: pending_resume
@@ -200,6 +210,7 @@ defmodule LemonChannels.PresentationState do
         platform_message_id:
           message_id || Map.get(state.entries[key] || %{}, :platform_message_id),
         pending_create_ref: nil,
+        pending_create_at: nil,
         deferred_text: nil,
         deferred_seq: nil,
         deferred_hash: nil,
@@ -257,6 +268,13 @@ defmodule LemonChannels.PresentationState do
     state =
       case key do
         nil ->
+          # Ref not tracked — this can happen legitimately when the Outbox
+          # chunked a payload and subsequent chunks still carry the old ref.
+          # Log at debug to aid diagnosis without noise.
+          Logger.debug(
+            "PresentationState received notification for unknown ref (may be Outbox chunk artifact)"
+          )
+
           %{state | refs: refs}
 
         key ->
@@ -269,10 +287,20 @@ defmodule LemonChannels.PresentationState do
 
             _ ->
               message_id = extract_message_id(result)
-              entry = %{entry | pending_create_ref: nil}
+
+              entry = %{
+                entry
+                | pending_create_ref: nil,
+                  pending_create_at: nil
+              }
 
               entry =
                 if is_nil(message_id) do
+                  Logger.debug(
+                    "PresentationState: delivery succeeded but message_id not extractable " <>
+                      "from result=#{inspect(result)}, run_id=#{entry.run_id}"
+                  )
+
                   entry
                 else
                   maybe_index_pending_resume(entry, message_id)
@@ -365,6 +393,7 @@ defmodule LemonChannels.PresentationState do
       surface: surface,
       platform_message_id: nil,
       pending_create_ref: nil,
+      pending_create_at: nil,
       last_seq: 0,
       last_text_hash: nil,
       deferred_text: nil,
@@ -381,6 +410,43 @@ defmodule LemonChannels.PresentationState do
 
   defp put_ref(state, ref, key) do
     %{state | refs: Map.put(state.refs, ref, key)}
+  end
+
+  # Get an entry, evicting a stale pending_create_ref if it has exceeded the TTL.
+  # A stale ref means the Outbox delivery notification was lost (crash, retry
+  # exhaustion, etc.) and the entry is stuck deferring all future updates.
+  defp get_with_stale_gc(key, route, run_id, surface, state) do
+    case Map.get(state.entries, key) do
+      nil ->
+        {new_entry(route, run_id, surface), state}
+
+      %{pending_create_ref: ref, pending_create_at: at} = entry
+      when is_reference(ref) and is_integer(at) ->
+        now = System.monotonic_time(:millisecond)
+
+        if now - at > @pending_create_ttl_ms do
+          Logger.warning(
+            "PresentationState evicting stale pending_create_ref " <>
+              "(#{now - at}ms old) for run_id=#{entry.run_id}, surface=#{surface}. " <>
+              "Delivery notification was lost; next flush will CREATE a new message."
+          )
+
+          cleaned = %{
+            entry
+            | pending_create_ref: nil,
+              pending_create_at: nil
+          }
+
+          # Also remove from refs map
+          refs = Map.delete(state.refs, ref)
+          {cleaned, %{state | entries: Map.put(state.entries, key, cleaned), refs: refs}}
+        else
+          {entry, state}
+        end
+
+      entry ->
+        {entry, state}
+    end
   end
 
   defp peer(%DeliveryRoute{} = route) do

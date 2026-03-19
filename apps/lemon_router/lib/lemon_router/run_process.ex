@@ -27,6 +27,7 @@ defmodule LemonRouter.RunProcess do
 
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
+  @abort_completion_grace_ms 150
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -154,7 +155,8 @@ defmodule LemonRouter.RunProcess do
           match_conversation_key(execution_request),
       generated_image_paths: [],
       requested_send_files: [],
-      task_status_surfaces: %{}
+      task_status_surfaces: %{},
+      task_status_refs: %{}
     }
 
     Logger.debug(
@@ -342,6 +344,21 @@ defmodule LemonRouter.RunProcess do
     {:noreply, state}
   end
 
+  def handle_info(%LemonCore.Event{type: :task_projected_child_action, payload: action_ev}, state) do
+    state = Watchdog.touch_run_watchdog(state)
+
+    {state, tool_status_surface, _capture_current_turn?} =
+      OutputTracker.prepare_tool_status_action(state, action_ev)
+
+    OutputTracker.ingest_projected_child_action_to_tool_status_coalescer(
+      state,
+      action_ev,
+      tool_status_surface
+    )
+
+    {:noreply, state}
+  end
+
   def handle_info(%LemonCore.Event{} = event, state) do
     state = Watchdog.touch_run_watchdog(state)
 
@@ -431,6 +448,46 @@ defmodule LemonRouter.RunProcess do
     _ -> {:noreply, state}
   end
 
+  def handle_info({:finalize_aborted_run, reason}, state) do
+    cond do
+      state.completed or not state.aborted ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess finalizing aborted run without gateway pid run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
+        )
+
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{
+                ok: false,
+                error: reason,
+                answer: ""
+              },
+              duration_ms: nil
+            },
+            %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              synthetic: true
+            }
+          )
+
+        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -445,6 +502,10 @@ defmodule LemonRouter.RunProcess do
       # Best-effort cancel of the gateway run. This does not currently remove
       # queued jobs for the same session_key; it only cancels the in-flight run.
       LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+
+      if is_nil(state.gateway_run_pid) do
+        Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
+      end
 
       {:noreply, %{state | aborted: true}}
     end
@@ -557,6 +618,17 @@ defmodule LemonRouter.RunProcess do
   defp gateway_down_grace_ms(:shutdown), do: 200
   defp gateway_down_grace_ms({:shutdown, _}), do: 200
   defp gateway_down_grace_ms(_), do: 20
+
+  defp gateway_run_pid(run_id) when is_binary(run_id) do
+    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
+      [{pid, _}] when is_pid(pid) -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp gateway_run_pid(_), do: nil
 
   # ---------------------------------------------------------------------------
   # Utility helpers

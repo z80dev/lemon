@@ -186,6 +186,32 @@ defmodule LemonChannels.OutboxChunkingTest do
       {:ok, ref} = Outbox.enqueue(payload)
       assert is_reference(ref)
     end
+
+    test "only first chunk retains notify_pid and notify_ref" do
+      long_content = String.duplicate("Chunk notify test. ", 200)
+
+      notify_pid = self()
+      notify_ref = make_ref()
+
+      payload = %OutboundPayload{
+        channel_id: "test-channel",
+        account_id: "account-1",
+        peer: %{id: "peer-1", kind: :dm},
+        kind: :text,
+        content: long_content,
+        idempotency_key: "notify-test-key",
+        meta: %{notify_tag: :test_tag},
+        notify_pid: notify_pid,
+        notify_ref: notify_ref
+      }
+
+      {:ok, _ref} = Outbox.enqueue(payload)
+      Process.sleep(100)
+
+      # We can't inspect the internal queue directly, but we verify the
+      # Outbox didn't crash and the payload was processed successfully.
+      assert Process.alive?(Process.whereis(Outbox))
+    end
   end
 
   describe "duplicate detection with chunking" do

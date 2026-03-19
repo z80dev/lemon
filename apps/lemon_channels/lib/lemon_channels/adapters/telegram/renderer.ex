@@ -36,13 +36,13 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     with {:ok, text} <- extract_text(intent),
          surface <- surface_for(intent),
          seq <- extract_seq(intent),
-         normalized <- normalize_text(intent, text),
+         chunks <- normalize_text(intent, text),
          state <- PresentationState.get(route, intent.run_id, surface),
-         text_hash = text_hash({normalized, status_reply_markup(intent)}) do
+         text_hash = text_hash({chunks, status_reply_markup(intent)}) do
       if duplicate?(state, seq, text_hash) do
         :ok
       else
-        case send_text(intent, route, state, surface, seq, text_hash, normalized) do
+        case send_text_chunks(intent, route, state, surface, seq, text_hash, chunks) do
           :ok ->
             maybe_dispatch_auto_send_files(intent)
 
@@ -53,9 +53,45 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     end
   end
 
+  # Send the first chunk through the normal edit/create flow, then send
+  # any additional chunks as separate new messages.
+  defp send_text_chunks(intent, route, state, surface, seq, text_hash, [single]) do
+    send_text(intent, route, state, surface, seq, text_hash, single)
+  end
+
+  defp send_text_chunks(intent, route, state, surface, _seq, text_hash, [first | rest]) do
+    reply_markup = status_reply_markup(intent)
+    meta = intent_meta(intent, reply_markup)
+
+    # When a message create is pending, we must defer ALL chunks together
+    # to avoid follow-ups arriving before the first chunk is created.
+    if is_reference(state.pending_create_ref) do
+      full_text = Enum.join([first | rest], "\n")
+      seq = extract_seq(intent)
+      PresentationState.defer_text(route, intent.run_id, surface, full_text, seq, text_hash, meta)
+      :ok
+    else
+      # Send the first chunk via the normal edit/create flow
+      case send_text_single(intent, route, state, surface, text_hash, first, meta) do
+        :ok ->
+          # Send remaining chunks as follow-up messages (no reply_to, no status markup)
+          send_followup_chunks(intent, route, rest, meta)
+
+        other ->
+          other
+      end
+    end
+  end
+
+  # Backward-compat: single-chunk path (same as original send_text)
   defp send_text(intent, route, state, surface, seq, text_hash, text) do
     reply_markup = status_reply_markup(intent)
     meta = intent_meta(intent, reply_markup)
+    send_text_single(intent, route, state, surface, text_hash, text, meta)
+  end
+
+  defp send_text_single(intent, route, state, surface, text_hash, text, meta) do
+    seq = extract_seq(intent)
 
     cond do
       present_message_id?(state.platform_message_id) ->
@@ -82,6 +118,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
             )
 
             maybe_index_resume(intent, route, state.platform_message_id)
+            :ok
 
           {:error, :duplicate} ->
             :ok
@@ -92,9 +129,23 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
       is_reference(state.pending_create_ref) ->
         PresentationState.defer_text(route, intent.run_id, surface, text, seq, text_hash, meta)
+        :ok
 
       true ->
         notify_ref = make_ref()
+
+        # Register the pending ref BEFORE enqueueing so that the delivery
+        # notification (which may arrive quickly) finds the ref in
+        # PresentationState instead of being silently dropped.
+        PresentationState.register_pending_create(
+          route,
+          intent.run_id,
+          surface,
+          notify_ref,
+          seq,
+          text_hash,
+          pending_resume(intent)
+        )
 
         payload =
           OutboundPayload.text(
@@ -111,15 +162,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} ->
-            PresentationState.register_pending_create(
-              route,
-              intent.run_id,
-              surface,
-              notify_ref,
-              seq,
-              text_hash,
-              pending_resume(intent)
-            )
+            :ok
 
           {:error, :duplicate} ->
             :ok
@@ -128,6 +171,24 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
             {:error, reason}
         end
     end
+  end
+
+  # Send follow-up chunks as new text messages (no reply_to, no status markup)
+  defp send_followup_chunks(_intent, _route, [], _meta), do: :ok
+
+  defp send_followup_chunks(intent, route, [chunk | rest], meta) do
+    payload =
+      OutboundPayload.text(
+        "telegram",
+        route.account_id,
+        peer(route),
+        chunk,
+        idempotency_key: "#{intent.intent_id}:chunk:#{:erlang.unique_integer([:positive])}",
+        meta: Map.drop(meta, [:reply_markup, :controls, :notify_tag])
+      )
+
+    _ = Outbox.enqueue(payload)
+    send_followup_chunks(intent, route, rest, meta)
   end
 
   defp dispatch_files(
@@ -186,15 +247,15 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
         text
       end
 
-    Truncate.truncate_for_telegram(text)
+    Truncate.split_messages(text)
   rescue
-    _ -> text
+    _ -> [text]
   end
 
   defp normalize_text(_intent, text) do
-    Truncate.truncate_for_telegram(text)
+    Truncate.split_messages(text)
   rescue
-    _ -> text
+    _ -> [text]
   end
 
   defp extract_text(%DeliveryIntent{body: body}) when is_map(body) do

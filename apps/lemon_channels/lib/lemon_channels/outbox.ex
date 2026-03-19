@@ -311,6 +311,43 @@ defmodule LemonChannels.Outbox do
       chunks
       |> Enum.with_index()
       |> Enum.map(fn {chunk_content, index} ->
+        # Only the first chunk carries the notify ref so PresentationState
+        # receives exactly one delivery notification per logical message.
+        # Subsequent chunks are follow-ups whose message_ids aren't tracked
+        # for edits.
+        {notify_pid, notify_ref} =
+          if index == 0 do
+            {payload.notify_pid, payload.notify_ref}
+          else
+            {nil, nil}
+          end
+
+        chunk_payload = %OutboundPayload{
+          payload
+          | content: chunk_content,
+            # Only use idempotency key for first chunk
+            idempotency_key: if(index == 0, do: payload.idempotency_key, else: nil),
+            # Only first chunk notifies PresentationState
+            notify_pid: notify_pid,
+            notify_ref: notify_ref,
+            # Add chunk metadata
+            meta:
+              Map.merge(payload.meta || %{}, %{
+                chunk_index: index,
+                chunk_count: length(chunks),
+                is_continuation: index > 0
+              })
+        }
+
+        # For continuation chunks, remove reply_to to avoid threading issues
+        if index > 0 do
+          %{chunk_payload | reply_to: nil}
+        else
+          chunk_payload
+        end
+      end)
+      |> Enum.with_index()
+      |> Enum.map(fn {chunk_content, index} ->
         chunk_payload = %OutboundPayload{
           payload
           | content: chunk_content,

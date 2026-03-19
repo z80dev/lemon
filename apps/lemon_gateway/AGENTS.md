@@ -410,6 +410,8 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `chat_state_test.exs` | ChatState struct operations |
 | `command_registry_test.exs` | Command registration and validation |
 | `cancel_flow_test.exs` | End-to-end cancel flow |
+
+`LemonGateway.Run` must convert `engine.start_run/3` crashes into normal error completions so slots, locks, and router observers are always released. Do not let engine startup exceptions kill the run process before `:run_completed` is emitted.
 | `queue_mode_test.exs` | Router/gateway boundary coverage for legacy queue-mode adapters that still normalize into `ExecutionRequest` |
 | `run_transport_agnostic_test.exs` | Run process transport-agnostic behavior |
 | `cli_adapter_test.exs` | CliAdapter shared logic |

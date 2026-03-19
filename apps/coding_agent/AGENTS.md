@@ -167,6 +167,10 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 - `CodingAgent.Tools.Task.Result` for poll/join/result shaping
 
 Child sessions launched through `CodingAgent.Tools.Task` can now receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`).
+`CodingAgent.CliRunners.LemonRunner` also preserves task-tool result metadata such as async
+`task_id`, task status, engine, and latest `current_action` inside action `detail.result_meta`
+so router/channel layers can keep later `task action=poll` updates attached to the original
+external task status surface.
 
 ### Long-Running Harness Primitives
 

@@ -54,6 +54,7 @@ defmodule LemonGateway.Run do
     "超出最大长度",
     "上下文窗口已满"
   ]
+  @engine_start_error_banner_bytes 1_024
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -270,7 +271,7 @@ defmodule LemonGateway.Run do
         origin: get_in(state.job.meta || %{}, [:origin])
       })
 
-      case engine.start_run(state.job, opts, self()) do
+      case safe_start_engine_run(engine, state.job, opts, self()) do
         {:ok, run_ref, cancel_ctx} ->
           Logger.debug(
             "Gateway run engine started run_id=#{inspect(state.run_id)} run_ref=#{inspect(run_ref)} " <>
@@ -312,6 +313,35 @@ defmodule LemonGateway.Run do
           {:stop, :normal, state}
       end
     end
+  end
+
+  defp safe_start_engine_run(engine, %Job{} = job, opts, sink_pid) do
+    engine.start_run(job, opts, sink_pid)
+  rescue
+    error ->
+      Logger.error(
+        "Gateway run engine start raised engine=#{inspect(engine && engine.id())} " <>
+          "session_key=#{inspect(job.session_key)} error=" <>
+          truncate_for_log(Exception.format_banner(:error, error), @engine_start_error_banner_bytes)
+      )
+
+      {:error, "engine_start_exception: " <> Exception.message(error)}
+  catch
+    :exit, reason ->
+      Logger.error(
+        "Gateway run engine start exited engine=#{inspect(engine && engine.id())} " <>
+          "session_key=#{inspect(job.session_key)} reason=#{inspect(reason)}"
+      )
+
+      {:error, "engine_start_exit: " <> inspect(reason)}
+
+    kind, reason ->
+      Logger.error(
+        "Gateway run engine start threw engine=#{inspect(engine && engine.id())} " <>
+          "session_key=#{inspect(job.session_key)} kind=#{inspect(kind)} reason=#{inspect(reason)}"
+      )
+
+      {:error, "engine_start_throw: " <> inspect({kind, reason})}
   end
 
   defp resolve_engine(engine_id) when is_binary(engine_id) do

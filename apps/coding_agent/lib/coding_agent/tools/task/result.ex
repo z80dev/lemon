@@ -137,6 +137,9 @@ defmodule CodingAgent.Tools.Task.Result do
 
   defp build_poll_result(task_id, record, events) do
     status = Map.get(record, :status, :unknown)
+    current_action = latest_event_current_action(events)
+    action_detail = latest_event_action_detail(events, Map.get(record, :run_id))
+    engine = latest_event_engine(events) || Map.get(record, :engine)
 
     {content, details} =
       case status do
@@ -189,6 +192,10 @@ defmodule CodingAgent.Tools.Task.Result do
         run_id -> Map.put(details, :run_id, run_id)
       end
 
+    details = if is_map(current_action), do: Map.put(details, :current_action, current_action), else: details
+    details = if is_map(action_detail), do: Map.put(details, :action_detail, action_detail), else: details
+    details = if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
+
     %AgentToolResult{content: content, details: details}
   end
 
@@ -201,6 +208,60 @@ defmodule CodingAgent.Tools.Task.Result do
       _ -> nil
     end)
   end
+
+  defp latest_event_current_action(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{details: details} when is_map(details) ->
+        Map.get(details, :current_action) || Map.get(details, "current_action")
+
+      %{details: details} when is_map(details) ->
+        Map.get(details, :current_action) || Map.get(details, "current_action")
+
+      _ -> nil
+    end)
+  end
+
+  defp latest_event_action_detail(events, child_run_id) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{details: details} when is_map(details) ->
+        details |> extract_action_detail() |> maybe_put_child_run_id(child_run_id)
+
+      %{details: details} when is_map(details) ->
+        details |> extract_action_detail() |> maybe_put_child_run_id(child_run_id)
+
+      _ -> nil
+    end)
+  end
+
+  defp latest_event_engine(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{details: details} when is_map(details) ->
+        Map.get(details, :engine) || Map.get(details, "engine")
+
+      %{details: details} when is_map(details) ->
+        Map.get(details, :engine) || Map.get(details, "engine")
+
+      _ -> nil
+    end)
+  end
+
+  defp extract_action_detail(details) when is_map(details) do
+    action_detail = Map.get(details, :action_detail) || Map.get(details, "action_detail")
+    if is_map(action_detail), do: action_detail, else: nil
+  end
+
+  defp maybe_put_child_run_id(action_detail, child_run_id)
+       when is_map(action_detail) and is_binary(child_run_id) do
+    Map.put_new(action_detail, :child_run_id, child_run_id)
+  end
+
+  defp maybe_put_child_run_id(action_detail, _child_run_id), do: action_detail
 
   defp resolve_run_ids(task_ids) do
     run_ids =

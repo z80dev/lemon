@@ -64,6 +64,17 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
       true ->
         notify_ref = make_ref()
 
+        # Register the pending ref BEFORE enqueueing to prevent the delivery
+        # notification from arriving before the ref is tracked.
+        PresentationState.register_pending_create(
+          route,
+          intent.run_id,
+          surface,
+          notify_ref,
+          seq,
+          text_hash
+        )
+
         payload =
           OutboundPayload.text(
             "whatsapp",
@@ -79,14 +90,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} ->
-            PresentationState.register_pending_create(
-              route,
-              intent.run_id,
-              surface,
-              notify_ref,
-              seq,
-              text_hash
-            )
+            :ok
 
           {:error, :duplicate} ->
             :ok
