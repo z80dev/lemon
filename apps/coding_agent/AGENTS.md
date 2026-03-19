@@ -156,6 +156,7 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | `CodingAgent.ProcessStore` | ETS store for background process state |
 | `CodingAgent.TaskStore` | ETS+DETS store for async task tool runs |
 | `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
+| `CodingAgent.TaskProgressBindingStore` | ETS-backed parent-task surface bindings for async child runs; lazily restores `TaskProgressBindingServer` if the child is missing at runtime |
 
 `CodingAgent.Tools.Task` now emits lifecycle events (`:task_started`, `:task_completed`, `:task_error`, `:task_timeout`, `:task_aborted`) to both `LemonCore.Bus` (`run:*` topics) and `LemonCore.Introspection`, with run/parent/session/agent lineage metadata for monitoring UIs.
 Its public entry module stays `CodingAgent.Tools.Task`, but the internals are now split across:

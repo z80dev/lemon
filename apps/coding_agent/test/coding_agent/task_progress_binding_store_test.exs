@@ -36,9 +36,37 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
       assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id("task-old")
       assert {:ok, binding} = TaskProgressBindingStore.get_by_task_id("task-new")
       assert binding.child_run_id == "child-stable"
-      assert Enum.count(TaskProgressBindingStore.list_all(), &(&1.child_run_id == "child-stable")) == 1
-    end
 
+      assert Enum.count(TaskProgressBindingStore.list_all(), &(&1.child_run_id == "child-stable")) ==
+               1
+    end
+  end
+
+  describe "server recovery" do
+    test "restarts the binding server when the child is missing from the supervisor" do
+      original_pid = Process.whereis(CodingAgent.TaskProgressBindingServer)
+      assert is_pid(original_pid)
+
+      assert :ok =
+               Supervisor.terminate_child(
+                 CodingAgent.Supervisor,
+                 CodingAgent.TaskProgressBindingServer
+               )
+
+      assert :ok =
+               Supervisor.delete_child(
+                 CodingAgent.Supervisor,
+                 CodingAgent.TaskProgressBindingServer
+               )
+
+      assert Process.whereis(CodingAgent.TaskProgressBindingServer) == nil
+
+      assert [] = TaskProgressBindingStore.list_all()
+
+      restarted_pid = Process.whereis(CodingAgent.TaskProgressBindingServer)
+      assert is_pid(restarted_pid)
+      refute restarted_pid == original_pid
+    end
   end
 
   defp binding_attrs(overrides \\ %{}) do
@@ -105,9 +133,11 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
     test "raises for missing required fields" do
       attrs = binding_attrs() |> Map.delete(:root_action_id)
 
-      assert_raise ArgumentError, ~r/missing required task progress binding field :root_action_id/, fn ->
-        TaskProgressBindingStore.new_binding(attrs)
-      end
+      assert_raise ArgumentError,
+                   ~r/missing required task progress binding field :root_action_id/,
+                   fn ->
+                     TaskProgressBindingStore.new_binding(attrs)
+                   end
     end
 
     test "raises for invalid required field types" do
@@ -150,7 +180,9 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
 
       assert :ok = TaskProgressBindingStore.delete_by_child_run_id(attrs.child_run_id)
       assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(attrs.task_id)
-      assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id(attrs.child_run_id)
+
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_child_run_id(attrs.child_run_id)
     end
   end
 
@@ -173,57 +205,72 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
 
   describe "cleanup_expired/1" do
     test "removes stale bindings by ttl and keeps fresh ones" do
-      old_binding = binding_attrs(%{
-        task_id: "task-old",
-        child_run_id: "child-old",
-        inserted_at_ms: System.system_time(:millisecond) - 20_000,
-        status: :completed,
-        completed_at_ms: System.system_time(:millisecond) - 10_000
-      })
+      old_binding =
+        binding_attrs(%{
+          task_id: "task-old",
+          child_run_id: "child-old",
+          inserted_at_ms: System.system_time(:millisecond) - 20_000,
+          status: :completed,
+          completed_at_ms: System.system_time(:millisecond) - 10_000
+        })
 
-      fresh_binding = binding_attrs(%{
-        task_id: "task-fresh",
-        child_run_id: "child-fresh",
-        inserted_at_ms: System.system_time(:millisecond)
-      })
+      fresh_binding =
+        binding_attrs(%{
+          task_id: "task-fresh",
+          child_run_id: "child-fresh",
+          inserted_at_ms: System.system_time(:millisecond)
+        })
 
       :ok = TaskProgressBindingStore.new_binding(old_binding)
       :ok = TaskProgressBindingStore.new_binding(fresh_binding)
 
       assert {:ok, 1} = TaskProgressBindingStore.cleanup_expired(5)
-      assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id(old_binding.child_run_id)
+
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_child_run_id(old_binding.child_run_id)
+
       assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(old_binding.task_id)
-      assert {:ok, _binding} = TaskProgressBindingStore.get_by_child_run_id(fresh_binding.child_run_id)
+
+      assert {:ok, _binding} =
+               TaskProgressBindingStore.get_by_child_run_id(fresh_binding.child_run_id)
     end
 
     test "does not remove old running bindings" do
-      running_binding = binding_attrs(%{
-        task_id: "task-running",
-        child_run_id: "child-running",
-        inserted_at_ms: System.system_time(:millisecond) - 60_000,
-        status: :running
-      })
+      running_binding =
+        binding_attrs(%{
+          task_id: "task-running",
+          child_run_id: "child-running",
+          inserted_at_ms: System.system_time(:millisecond) - 60_000,
+          status: :running
+        })
 
       :ok = TaskProgressBindingStore.new_binding(running_binding)
 
       assert {:ok, 0} = TaskProgressBindingStore.cleanup_expired(5)
-      assert {:ok, binding} = TaskProgressBindingStore.get_by_child_run_id(running_binding.child_run_id)
+
+      assert {:ok, binding} =
+               TaskProgressBindingStore.get_by_child_run_id(running_binding.child_run_id)
+
       assert binding.status == :running
     end
 
     test "completed bindings age out from completion time, not insertion time" do
-      binding = binding_attrs(%{
-        task_id: "task-complete-age",
-        child_run_id: "child-complete-age",
-        inserted_at_ms: System.system_time(:millisecond) - 60_000,
-        status: :running
-      })
+      binding =
+        binding_attrs(%{
+          task_id: "task-complete-age",
+          child_run_id: "child-complete-age",
+          inserted_at_ms: System.system_time(:millisecond) - 60_000,
+          status: :running
+        })
 
       :ok = TaskProgressBindingStore.new_binding(binding)
       :ok = TaskProgressBindingStore.mark_completed(binding.child_run_id)
 
       assert {:ok, 0} = TaskProgressBindingStore.cleanup_expired(5)
-      assert {:ok, completed_binding} = TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
+
+      assert {:ok, completed_binding} =
+               TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
+
       assert completed_binding.status == :completed
 
       old_completed_binding =
@@ -232,7 +279,9 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
       :ok = TaskProgressBindingStore.new_binding(old_completed_binding)
 
       assert {:ok, 1} = TaskProgressBindingStore.cleanup_expired(5)
-      assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
+
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
     end
   end
 
@@ -255,11 +304,18 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
 
       new_pid = wait_for_restarted_binding_server(old_pid)
       assert is_pid(new_pid)
-      assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id(attrs.child_run_id)
 
-      replacement = binding_attrs(%{task_id: "task-after-restart", child_run_id: "child-after-restart"})
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_child_run_id(attrs.child_run_id)
+
+      replacement =
+        binding_attrs(%{task_id: "task-after-restart", child_run_id: "child-after-restart"})
+
       assert :ok = TaskProgressBindingStore.new_binding(replacement)
-      assert {:ok, binding} = TaskProgressBindingStore.get_by_child_run_id(replacement.child_run_id)
+
+      assert {:ok, binding} =
+               TaskProgressBindingStore.get_by_child_run_id(replacement.child_run_id)
+
       assert binding.task_id == replacement.task_id
     end
   end

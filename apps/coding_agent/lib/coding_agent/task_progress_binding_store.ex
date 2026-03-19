@@ -41,7 +41,11 @@ defmodule CodingAgent.TaskProgressBindingStore do
   @spec get_by_child_run_id(String.t()) :: {:ok, map()} | {:error, :not_found}
   def get_by_child_run_id(child_run_id) when is_binary(child_run_id) do
     ensure_tables()
-    TaskProgressBindingServer.get_by_child_run_id(CodingAgent.TaskProgressBindingServer, child_run_id)
+
+    TaskProgressBindingServer.get_by_child_run_id(
+      CodingAgent.TaskProgressBindingServer,
+      child_run_id
+    )
   end
 
   @spec mark_completed(String.t()) :: :ok
@@ -70,7 +74,55 @@ defmodule CodingAgent.TaskProgressBindingStore do
   end
 
   defp ensure_tables do
+    ensure_server_started()
     TaskProgressBindingServer.ensure_tables(CodingAgent.TaskProgressBindingServer)
+  end
+
+  defp ensure_server_started do
+    case Process.whereis(CodingAgent.TaskProgressBindingServer) do
+      pid when is_pid(pid) ->
+        :ok
+
+      nil ->
+        case Process.whereis(CodingAgent.Supervisor) do
+          pid when is_pid(pid) ->
+            case restart_server() do
+              :ok ->
+                :ok
+
+              {:error, :not_found} ->
+                start_server()
+
+              {:error, reason} ->
+                raise "failed to restore task progress binding server: #{inspect(reason)}"
+            end
+
+          nil ->
+            raise "coding agent supervisor is not running"
+        end
+    end
+  end
+
+  defp restart_server do
+    case Supervisor.restart_child(CodingAgent.Supervisor, CodingAgent.TaskProgressBindingServer) do
+      {:ok, _pid} -> :ok
+      {:ok, _pid, _info} -> :ok
+      {:error, :running} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp start_server do
+    case Supervisor.start_child(
+           CodingAgent.Supervisor,
+           {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer}
+         ) do
+      {:ok, _pid} -> :ok
+      {:ok, _pid, _info} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, :already_present} -> restart_server()
+      {:error, reason} -> raise "failed to start task progress binding server: #{inspect(reason)}"
+    end
   end
 
   defp ensure_required_fields!(attrs) do
@@ -120,5 +172,4 @@ defmodule CodingAgent.TaskProgressBindingStore do
   defp valid_surface?(:status), do: true
   defp valid_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
   defp valid_surface?(_), do: false
-
 end
