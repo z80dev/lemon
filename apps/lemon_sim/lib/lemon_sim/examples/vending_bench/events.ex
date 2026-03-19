@@ -80,11 +80,15 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
-  def physical_worker_finished(summary, tool_calls) do
-    Event.new("physical_worker_finished", %{
-      "summary" => summary,
-      "tool_calls" => tool_calls
-    })
+  def physical_worker_finished(summary, tool_calls, extra_payload \\ %{}) do
+    payload =
+      %{
+        "summary" => summary,
+        "tool_calls" => tool_calls
+      }
+      |> Map.merge(Map.new(extra_payload))
+
+    Event.new("physical_worker_finished", payload)
   end
 
   # -- System events --

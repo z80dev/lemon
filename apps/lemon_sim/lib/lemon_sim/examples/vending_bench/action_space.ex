@@ -374,18 +374,22 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
           case worker_runner.(world, worker_opts) do
             {:ok, result} ->
               request_event = Events.physical_worker_run_requested(instructions)
-              all_events = [request_event | result.events]
+
+              worker_report = %{
+                "summary" => result.summary,
+                "tool_calls" => result.tool_calls,
+                "memory_namespace" => "#{state.sim_id}/physical_worker",
+                "turn_count" => Map.get(result, :turn_count)
+              }
+
+              all_events = [request_event | attach_worker_report(result.events, worker_report)]
 
               {:ok,
                %AgentToolResult{
                  content: [AgentCore.text_content("Worker visit complete: #{result.summary}")],
                  details: %{
                    "events" => all_events,
-                   "worker_report" => %{
-                     "summary" => result.summary,
-                     "tool_calls" => result.tool_calls,
-                     "memory_namespace" => "#{state.sim_id}/physical_worker"
-                   }
+                   "worker_report" => worker_report
                  },
                  trust: :trusted
                }}
@@ -453,6 +457,35 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
     hours = div(minutes, 60)
     mins = rem(minutes, 60)
     "#{hours}:#{String.pad_leading(to_string(mins), 2, "0")}"
+  end
+
+  defp attach_worker_report(events, worker_report) do
+    Enum.map(events, fn event ->
+      case event do
+        %{kind: "physical_worker_finished", payload: payload} ->
+          Events.physical_worker_finished(
+            Map.get(payload, "summary", Map.get(payload, :summary, worker_report["summary"])),
+            worker_report["tool_calls"],
+            %{
+              "memory_namespace" => worker_report["memory_namespace"],
+              "turn_count" => worker_report["turn_count"]
+            }
+          )
+
+        %{"kind" => "physical_worker_finished", "payload" => payload} ->
+          Events.physical_worker_finished(
+            Map.get(payload, "summary", Map.get(payload, :summary, worker_report["summary"])),
+            worker_report["tool_calls"],
+            %{
+              "memory_namespace" => worker_report["memory_namespace"],
+              "turn_count" => worker_report["turn_count"]
+            }
+          )
+
+        other ->
+          other
+      end
+    end)
   end
 
   defp get(map, key, default) when is_map(map) and is_atom(key),

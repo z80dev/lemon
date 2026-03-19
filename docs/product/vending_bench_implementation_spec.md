@@ -362,6 +362,11 @@ Expected result details shape:
 }
 ```
 
+The authoritative `physical_worker_finished` event should carry the same report
+fields needed for persistence, so `physical_worker_last_report` /
+`physical_worker_history` in world state keep the worker summary plus audit
+metadata instead of dropping it after tool execution.
+
 ## 11. `physical_worker.ex`
 
 This module should own the nested-agent runtime wrapper.

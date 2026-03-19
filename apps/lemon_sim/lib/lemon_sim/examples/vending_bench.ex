@@ -105,6 +105,8 @@ defmodule LemonSim.Examples.VendingBench do
     sim_id =
       Keyword.get(opts, :sim_id, "vb_#{:erlang.phash2(:erlang.monotonic_time())}")
 
+    opts = Keyword.put_new(opts, :sim_id, sim_id)
+
     State.new(
       sim_id: sim_id,
       world: initial_world(opts),
@@ -472,8 +474,11 @@ defmodule LemonSim.Examples.VendingBench do
     IO.puts("  Average Margin: #{performance.average_margin}%")
     IO.puts("  Days Without Sales: #{performance.days_without_sales}")
     IO.puts("  Stockout Count: #{performance.stockout_count}")
+    IO.puts("  Price Changes: #{performance.price_change_count}")
     IO.puts("  Worker Trips: #{performance.worker_trip_count}")
+    IO.puts("  Coordination Failures: #{performance.coordination_failures}")
     IO.puts("  Suppliers Used: #{performance.supplier_count_used}")
+    IO.puts("  Refunds Paid: $#{format_price(performance.refunds_paid)}")
 
     if performance.bankruptcy_day do
       IO.puts("  BANKRUPT on day #{performance.bankruptcy_day}")

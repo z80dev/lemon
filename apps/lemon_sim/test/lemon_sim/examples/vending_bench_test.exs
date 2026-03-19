@@ -7,6 +7,13 @@ defmodule LemonSim.Examples.VendingBenchTest do
   alias LemonSim.Examples.VendingBench.ActionSpace
   alias LemonSim.Examples.VendingBench.PhysicalWorker
 
+  test "initial_state propagates the sim id into memory namespaces" do
+    state = VendingBench.initial_state()
+
+    assert state.world.operator_memory_namespace == "#{state.sim_id}/operator"
+    assert state.world.physical_worker_memory_namespace == "#{state.sim_id}/physical_worker"
+  end
+
   test "support-tool events are preserved alongside the terminal action" do
     state =
       VendingBench.initial_state(sim_id: "vb_support_terminal")
@@ -145,6 +152,11 @@ defmodule LemonSim.Examples.VendingBenchTest do
              "physical_worker_run_requested",
              "physical_worker_finished"
            ]
+
+    [_, finished_event] = result.details["events"]
+    assert finished_event.payload["tool_calls"] == []
+    assert finished_event.payload["memory_namespace"] == "vb_worker_model/physical_worker"
+    assert finished_event.payload["turn_count"] == nil
   end
 
   test "run_physical_worker rejects dispatches that would run past 17:00" do
@@ -340,6 +352,72 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert next_state.world.status == "complete"
     assert next_state.world.day_number == 1
+  end
+
+  test "worker report metadata is persisted in authoritative state" do
+    state = VendingBench.initial_state(sim_id: "vb_worker_report")
+
+    runner = fn _world, _worker_opts ->
+      {:ok,
+       %{
+         events: [VendingBench.Events.physical_worker_finished("Collected cash.", [])],
+         summary: "Collected cash.",
+         tool_calls: [
+           %{
+             tool_name: "collect_cash",
+             result_text: "Collected $12.50 from the machine",
+             result_details: %{},
+             is_error: false
+           }
+         ],
+         turn_count: 2
+       }}
+    end
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-worker-report",
+             name: "run_physical_worker",
+             arguments: %{"instructions" => "Collect cash and report."}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               VendingBench.modules(),
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               tool_policy: VendingBench.ToolPolicy,
+               physical_worker_runner: runner
+             )
+
+    assert result.state.world.physical_worker_last_report == %{
+             summary: "Collected cash.",
+             day: 1,
+             time: 615,
+             tool_calls: [
+               %{
+                 tool_name: "collect_cash",
+                 result_text: "Collected $12.50 from the machine",
+                 result_details: %{},
+                 is_error: false
+               }
+             ],
+             memory_namespace: "vb_worker_report/physical_worker",
+             turn_count: 2
+           }
   end
 
   defp fake_model(id) do

@@ -295,6 +295,9 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
   defp apply_worker_finished(state, event) do
     summary = get(event.payload, :summary, "")
+    tool_calls = get(event.payload, :tool_calls, [])
+    memory_namespace = get(event.payload, :memory_namespace)
+    turn_count = get(event.payload, :turn_count)
 
     state =
       state
@@ -304,7 +307,10 @@ defmodule LemonSim.Examples.VendingBench.Updater do
         report = %{
           summary: summary,
           day: get(world, :day_number, 1),
-          time: get(world, :time_minutes, 540)
+          time: get(world, :time_minutes, 540),
+          tool_calls: tool_calls,
+          memory_namespace: memory_namespace,
+          turn_count: turn_count
         }
 
         world

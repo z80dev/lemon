@@ -360,7 +360,7 @@ defmodule LemonSimUi.SimManager do
   defp build_initial_state(:vending_bench, sim_id, opts) do
     max_days = Keyword.get(opts, :max_days, 30)
 
-    initial_state = %{VendingBench.initial_state(max_days: max_days) | sim_id: sim_id}
+    initial_state = VendingBench.initial_state(sim_id: sim_id, max_days: max_days)
     modules = VendingBench.modules()
 
     {model, stream_options} = resolve_default_model_for_ui()
