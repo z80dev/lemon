@@ -28,6 +28,7 @@ defmodule LemonRouter.RunProcess do
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
   @abort_completion_grace_ms 150
+  @gateway_bind_grace_ms 200
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -224,6 +225,10 @@ defmodule LemonRouter.RunProcess do
       state
       |> Watchdog.schedule_run_watchdog()
       |> maybe_monitor_gateway_run()
+
+    if is_nil(state.gateway_run_pid) do
+      Process.send_after(self(), :ensure_gateway_bound, @gateway_bind_grace_ms)
+    end
 
     {:noreply, state}
   end
@@ -470,6 +475,48 @@ defmodule LemonRouter.RunProcess do
               completed: %{
                 ok: false,
                 error: reason,
+                answer: ""
+              },
+              duration_ms: nil
+            },
+            %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              synthetic: true
+            }
+          )
+
+        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info(:ensure_gateway_bound, state) do
+    cond do
+      state.completed ->
+        {:noreply, state}
+
+      not is_nil(state.gateway_run_pid) ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess finalizing started run without gateway pid run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)}"
+        )
+
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{
+                ok: false,
+                error: :gateway_run_missing_after_start,
                 answer: ""
               },
               duration_ms: nil

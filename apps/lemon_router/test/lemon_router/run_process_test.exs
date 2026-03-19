@@ -338,6 +338,43 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "run_started without gateway binding" do
+    test "started run without a gateway pid synthesizes completion and exits" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      :ok =
+        LemonCore.Bus.broadcast(
+          LemonCore.Bus.run_topic(run_id),
+          LemonCore.Event.new(
+            :run_started,
+            %{run_id: run_id},
+            %{run_id: run_id, session_key: session_key}
+          )
+        )
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: :gateway_run_missing_after_start}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+  end
+
   describe ":submit_to_gateway retry/backoff" do
     test "retries until scheduler becomes available and submits the job once" do
       run_id = "run_#{System.unique_integer([:positive])}"

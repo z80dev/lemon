@@ -156,6 +156,8 @@ background Codex/Claude task progress stays attached to the originating `task(..
 of creating blank standalone `task:` status entries.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
+Started runs that lose their gateway process before the router binds a monitor must also synthesize
+`:run_completed`; a bare `:run_started` without a surviving gateway pid is another permanent busy-session race.
 
 ### Change compaction behavior
 
