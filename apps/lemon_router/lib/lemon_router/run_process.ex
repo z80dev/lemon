@@ -27,6 +27,9 @@ defmodule LemonRouter.RunProcess do
 
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
+  @abort_completion_grace_ms 150
+  @gateway_bind_grace_ms 200
+  @gateway_missing_completion_grace_ms 1_500
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -141,6 +144,7 @@ defmodule LemonRouter.RunProcess do
       run_watchdog_ref: nil,
       run_watchdog_confirmation_ref: nil,
       run_watchdog_awaiting_confirmation?: false,
+      run_watchdog_prompt_seq: 0,
       submit_to_gateway?: submit_to_gateway?,
       gateway_scheduler: gateway_scheduler,
       run_orchestrator: run_orchestrator,
@@ -153,7 +157,12 @@ defmodule LemonRouter.RunProcess do
         opts[:conversation_key] ||
           match_conversation_key(execution_request),
       generated_image_paths: [],
-      requested_send_files: []
+      requested_send_files: [],
+      task_status_surfaces: %{},
+      task_status_refs: %{},
+      task_status_surface_monitors: %{},
+      task_status_surface_monitor_refs: %{},
+      synthetic_completion_sent?: false
     }
 
     Logger.debug(
@@ -221,6 +230,10 @@ defmodule LemonRouter.RunProcess do
       state
       |> Watchdog.schedule_run_watchdog()
       |> maybe_monitor_gateway_run()
+
+    if is_nil(state.gateway_run_pid) do
+      Process.send_after(self(), :ensure_gateway_bound, @gateway_bind_grace_ms)
+    end
 
     {:noreply, state}
   end
@@ -304,9 +317,9 @@ defmodule LemonRouter.RunProcess do
     # Forward delta to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-    # Ensure any pending tool-status output is emitted before we start streaming the answer.
+    # Finalize the previous tool-status segment before we start streaming a new answer chunk.
     if state.saw_delta == false do
-      OutputTracker.flush_tool_status(state)
+      OutputTracker.commit_tool_status_segment(state)
     end
 
     # Also ingest into StreamCoalescer for channel delivery
@@ -318,11 +331,12 @@ defmodule LemonRouter.RunProcess do
   def handle_info(%LemonCore.Event{type: :engine_action, payload: action_ev} = event, state) do
     state = Watchdog.touch_run_watchdog(state)
 
-    # Detect turn boundary: model was streaming text, now a tool has started.
-    # Commit the current answer so the next delta creates a fresh message.
+    {state, tool_status_surface, capture_current_turn?} =
+      OutputTracker.prepare_tool_status_action(state, action_ev)
+
     state =
-      if state.saw_delta and is_tool_start?(action_ev) do
-        OutputTracker.commit_stream_turn(state)
+      if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
+        OutputTracker.handoff_stream_turn_to_tool_status(state, tool_status_surface)
         %{state | saw_delta: false}
       else
         state
@@ -332,8 +346,41 @@ defmodule LemonRouter.RunProcess do
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
     # Also ingest into ToolStatusCoalescer for channel delivery
-    OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev)
+    OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev, tool_status_surface)
 
+    state = OutputTracker.maybe_track_task_surface_monitor(state, tool_status_surface)
+    state = OutputTracker.maybe_track_generated_images(state, action_ev)
+    state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        %LemonCore.Event{type: :task_projected_child_action, payload: action_ev} = event,
+        state
+      ) do
+    state = Watchdog.touch_run_watchdog(state)
+
+    {state, tool_status_surface, capture_current_turn?} =
+      OutputTracker.prepare_projected_tool_status_action(state, event)
+
+    state =
+      if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
+        OutputTracker.handoff_stream_turn_to_tool_status(state, tool_status_surface)
+        %{state | saw_delta: false}
+      else
+        state
+      end
+
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+
+    OutputTracker.ingest_projected_child_action_to_tool_status_coalescer(
+      state,
+      event,
+      tool_status_surface
+    )
+
+    state = OutputTracker.maybe_track_task_surface_monitor(state, tool_status_surface)
     state = OutputTracker.maybe_track_generated_images(state, action_ev)
     state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
 
@@ -395,6 +442,13 @@ defmodule LemonRouter.RunProcess do
     {:noreply, %{state | gateway_run_ref: nil, gateway_run_pid: nil}}
   end
 
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    case OutputTracker.cleanup_task_surface_monitor(state, ref, pid) do
+      {:ok, state} -> {:noreply, state}
+      :unknown -> {:noreply, state}
+    end
+  end
+
   def handle_info({:gateway_run_down, reason}, state) do
     if state.completed do
       {:noreply, state}
@@ -404,26 +458,80 @@ defmodule LemonRouter.RunProcess do
           "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
       )
 
-      event =
-        LemonCore.Event.new(
-          :run_completed,
-          %{
-            completed: %{
-              ok: false,
-              error: {:gateway_run_down, reason},
-              answer: ""
-            },
-            duration_ms: nil
-          },
-          %{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            synthetic: true
-          }
+      {:noreply, emit_synthetic_completion_once(state, {:gateway_run_down, reason})}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info({:finalize_aborted_run, reason}, state) do
+    cond do
+      state.completed or not state.aborted ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess finalizing aborted run without gateway pid run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
         )
 
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
-      {:noreply, state}
+        {:noreply, emit_synthetic_completion_once(state, reason)}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info(:ensure_gateway_bound, state) do
+    cond do
+      state.completed ->
+        {:noreply, state}
+
+      not is_nil(state.gateway_run_pid) ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess started without gateway pid; awaiting completion grace run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)}"
+        )
+
+        Process.send_after(
+          self(),
+          :finalize_missing_gateway_after_start,
+          @gateway_missing_completion_grace_ms
+        )
+
+        {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info(:finalize_missing_gateway_after_start, state) do
+    cond do
+      state.completed ->
+        {:noreply, state}
+
+      not is_nil(state.gateway_run_pid) ->
+        {:noreply, state}
+
+      gateway_run_pid(state.run_id) != nil ->
+        {:noreply, maybe_monitor_gateway_run(state)}
+
+      true ->
+        Logger.warning(
+          "RunProcess finalizing started run without gateway pid after completion grace " <>
+            "run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
+        )
+
+        {:noreply, emit_synthetic_completion_once(state, :gateway_run_missing_after_start)}
     end
   rescue
     _ -> {:noreply, state}
@@ -443,6 +551,10 @@ defmodule LemonRouter.RunProcess do
       # Best-effort cancel of the gateway run. This does not currently remove
       # queued jobs for the same session_key; it only cancels the in-flight run.
       LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+
+      if is_nil(state.gateway_run_pid) do
+        Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
+      end
 
       {:noreply, %{state | aborted: true}}
     end
@@ -555,6 +667,49 @@ defmodule LemonRouter.RunProcess do
   defp gateway_down_grace_ms(:shutdown), do: 200
   defp gateway_down_grace_ms({:shutdown, _}), do: 200
   defp gateway_down_grace_ms(_), do: 20
+
+  defp gateway_run_pid(run_id) when is_binary(run_id) do
+    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
+      [{pid, _}] when is_pid(pid) -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp gateway_run_pid(_), do: nil
+
+  defp emit_synthetic_completion_once(state, error) do
+    cond do
+      state.completed ->
+        state
+
+      state.synthetic_completion_sent? ->
+        state
+
+      true ->
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{
+                ok: false,
+                error: error,
+                answer: ""
+              },
+              duration_ms: nil
+            },
+            %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              synthetic: true
+            }
+          )
+
+        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        %{state | synthetic_completion_sent?: true}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Utility helpers

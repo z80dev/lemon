@@ -144,6 +144,32 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @doc """
+  Finalize the current answer turn, move its message tracking to another surface,
+  and reset the answer coalescer so the next delta creates a fresh message.
+  """
+  @spec handoff_turn(
+          session_key :: binary(),
+          channel_id :: binary(),
+          run_id :: binary(),
+          target_surface :: term()
+        ) :: {:ok, binary()} | :noop
+  def handoff_turn(session_key, channel_id, run_id, target_surface)
+      when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) and
+             not is_nil(target_surface) do
+    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, {:handoff_turn, run_id, target_surface}, 5_000)
+        catch
+          :exit, _ -> :noop
+        end
+
+      _ ->
+        :noop
+    end
+  end
+
+  @doc """
   Force flush the coalescer buffer.
   """
   @spec flush(session_key :: binary(), channel_id :: binary()) :: :ok
@@ -338,6 +364,33 @@ defmodule LemonRouter.StreamCoalescer do
     {:reply, :ok, state}
   end
 
+  def handle_call({:handoff_turn, run_id, target_surface}, _from, state) do
+    {reply, state} =
+      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
+        text = state.full_text
+        state = do_finalize(state, text)
+        move_presentation_state_answer(state, target_surface)
+        cancel_timer(state.flush_timer)
+
+        state = %{
+          state
+          | buffer: "",
+            full_text: "",
+            last_sent_text: nil,
+            flush_timer: nil,
+            first_delta_ts: nil,
+            finalized: false,
+            pending_clear: false
+        }
+
+        {{:ok, text}, state}
+      else
+        {:noop, state}
+      end
+
+    {:reply, reply, state}
+  end
+
   @impl true
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
@@ -420,17 +473,39 @@ defmodule LemonRouter.StreamCoalescer do
         is_binary(final_text) and final_text != "" -> final_text
         is_binary(state.full_text) and state.full_text != "" -> state.full_text
         is_binary(state.buffer) and state.buffer != "" -> state.buffer
-        true -> "Done"
+        true -> nil
       end
 
     state =
-      case build_intent(state, :stream_finalize, text) do
-        {:ok, intent} ->
-          _ = dispatcher().dispatch(intent)
-          %{state | last_sent_text: text, finalized: true}
+      case text do
+        nil ->
+          Logger.warning(
+            "StreamCoalescer finalizing #{state.session_key} with empty text " <>
+              "(run_id=#{state.run_id}, last_seq=#{state.last_seq})"
+          )
 
-        :error ->
-          %{state | finalized: true}
+          case build_intent(
+                 state,
+                 :stream_finalize,
+                 "⚠️ Empty response from model — no output was generated."
+               ) do
+            {:ok, intent} ->
+              _ = dispatcher().dispatch(intent)
+              %{state | last_sent_text: nil, finalized: true}
+
+            :error ->
+              %{state | finalized: true}
+          end
+
+        _ ->
+          case build_intent(state, :stream_finalize, text) do
+            {:ok, intent} ->
+              _ = dispatcher().dispatch(intent)
+              %{state | last_sent_text: text, finalized: true}
+
+            :error ->
+              %{state | finalized: true}
+          end
       end
 
     cancel_timer(state.flush_timer)
@@ -440,7 +515,8 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp build_intent(state, kind, text) when is_binary(text) do
-    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+    with {:ok, route} <-
+           DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
       {:ok,
        %DeliveryIntent{
          intent_id: "#{state.run_id}:stream:#{state.last_seq}:#{Atom.to_string(kind)}",
@@ -460,8 +536,20 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp clear_presentation_state_answer(state) do
-    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+    with {:ok, route} <-
+           DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
       LemonChannels.PresentationState.clear(route, state.run_id, :answer)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp move_presentation_state_answer(state, target_surface) when not is_nil(target_surface) do
+    with {:ok, route} <-
+           DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      LemonChannels.PresentationState.move(route, state.run_id, :answer, target_surface)
     end
 
     :ok
