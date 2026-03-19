@@ -15,7 +15,7 @@ defmodule LemonChannels.PresentationState do
 
   @notify_tag :presentation_delivery
 
-  @type surface :: :answer | :status
+  @type surface :: term()
   @type entry :: %{
           route: DeliveryRoute.t(),
           run_id: binary(),
@@ -39,11 +39,20 @@ defmodule LemonChannels.PresentationState do
   def notify_tag, do: @notify_tag
 
   @spec get(DeliveryRoute.t(), binary(), surface()) :: entry()
-  def get(%DeliveryRoute{} = route, run_id, surface) when is_binary(run_id) and is_atom(surface) do
+  def get(%DeliveryRoute{} = route, run_id, surface)
+      when is_binary(run_id) and not is_nil(surface) do
     GenServer.call(__MODULE__, {:get, key(route, run_id, surface), route, run_id, surface})
   end
 
-  @spec register_pending_create(DeliveryRoute.t(), binary(), surface(), reference(), non_neg_integer(), integer() | nil, term() | nil) ::
+  @spec register_pending_create(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          reference(),
+          non_neg_integer(),
+          integer() | nil,
+          term() | nil
+        ) ::
           :ok
   def register_pending_create(
         %DeliveryRoute{} = route,
@@ -54,7 +63,7 @@ defmodule LemonChannels.PresentationState do
         text_hash,
         pending_resume \\ nil
       )
-      when is_binary(run_id) and is_atom(surface) and is_reference(ref) and is_integer(seq) do
+      when is_binary(run_id) and not is_nil(surface) and is_reference(ref) and is_integer(seq) do
     GenServer.call(
       __MODULE__,
       {:register_pending_create, key(route, run_id, surface), route, run_id, surface, ref, seq,
@@ -62,10 +71,26 @@ defmodule LemonChannels.PresentationState do
     )
   end
 
-  @spec defer_text(DeliveryRoute.t(), binary(), surface(), binary(), non_neg_integer(), integer() | nil, map()) ::
+  @spec defer_text(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          binary(),
+          non_neg_integer(),
+          integer() | nil,
+          map()
+        ) ::
           :ok
-  def defer_text(%DeliveryRoute{} = route, run_id, surface, text, seq, text_hash, deferred_meta \\ %{})
-      when is_binary(run_id) and is_atom(surface) and is_binary(text) and is_integer(seq) and
+  def defer_text(
+        %DeliveryRoute{} = route,
+        run_id,
+        surface,
+        text,
+        seq,
+        text_hash,
+        deferred_meta \\ %{}
+      )
+      when is_binary(run_id) and not is_nil(surface) and is_binary(text) and is_integer(seq) and
              is_map(deferred_meta) do
     GenServer.call(
       __MODULE__,
@@ -74,20 +99,38 @@ defmodule LemonChannels.PresentationState do
     )
   end
 
-  @spec mark_sent(DeliveryRoute.t(), binary(), surface(), non_neg_integer(), integer() | nil, integer() | binary() | nil) ::
+  @spec mark_sent(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          non_neg_integer(),
+          integer() | nil,
+          integer() | binary() | nil
+        ) ::
           :ok
   def mark_sent(%DeliveryRoute{} = route, run_id, surface, seq, text_hash, message_id \\ nil)
-      when is_binary(run_id) and is_atom(surface) and is_integer(seq) do
+      when is_binary(run_id) and not is_nil(surface) and is_integer(seq) do
     GenServer.call(
       __MODULE__,
-      {:mark_sent, key(route, run_id, surface), route, run_id, surface, seq, text_hash, message_id}
+      {:mark_sent, key(route, run_id, surface), route, run_id, surface, seq, text_hash,
+       message_id}
     )
   end
 
   @spec clear(DeliveryRoute.t(), binary(), surface()) :: :ok
   def clear(%DeliveryRoute{} = route, run_id, surface)
-      when is_binary(run_id) and is_atom(surface) do
+      when is_binary(run_id) and not is_nil(surface) do
     GenServer.call(__MODULE__, {:clear, key(route, run_id, surface)})
+  end
+
+  @spec move(DeliveryRoute.t(), binary(), surface(), surface()) :: :ok
+  def move(%DeliveryRoute{} = route, run_id, from_surface, to_surface)
+      when is_binary(run_id) and not is_nil(from_surface) and not is_nil(to_surface) do
+    GenServer.call(
+      __MODULE__,
+      {:move, key(route, run_id, from_surface), key(route, run_id, to_surface), route, run_id,
+       to_surface}
+    )
   end
 
   @impl true
@@ -143,14 +186,19 @@ defmodule LemonChannels.PresentationState do
     {:reply, :ok, put_entry(state, key, entry)}
   end
 
-  def handle_call({:mark_sent, key, route, run_id, surface, seq, text_hash, message_id}, _from, state) do
+  def handle_call(
+        {:mark_sent, key, route, run_id, surface, seq, text_hash, message_id},
+        _from,
+        state
+      ) do
     entry =
       state.entries
       |> Map.get(key, new_entry(route, run_id, surface))
       |> Map.merge(%{
         last_seq: seq,
         last_text_hash: text_hash,
-        platform_message_id: message_id || Map.get(state.entries[key] || %{}, :platform_message_id),
+        platform_message_id:
+          message_id || Map.get(state.entries[key] || %{}, :platform_message_id),
         pending_create_ref: nil,
         deferred_text: nil,
         deferred_seq: nil,
@@ -170,6 +218,25 @@ defmodule LemonChannels.PresentationState do
 
     entries = Map.delete(state.entries, key)
     {:reply, :ok, %{state | entries: entries, refs: refs}}
+  end
+
+  def handle_call({:move, from_key, to_key, route, run_id, to_surface}, _from, state) do
+    {entry, entries} =
+      case Map.pop(state.entries, from_key) do
+        {nil, entries} -> {new_entry(route, run_id, to_surface), entries}
+        {entry, entries} -> {%{entry | surface: to_surface}, entries}
+      end
+
+    refs =
+      state.refs
+      |> Enum.map(fn
+        {ref, ^from_key} -> {ref, to_key}
+        other -> other
+      end)
+      |> Map.new()
+
+    state = %{state | entries: Map.put(entries, to_key, entry), refs: refs}
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -226,13 +293,14 @@ defmodule LemonChannels.PresentationState do
 
       _ = Outbox.enqueue(payload)
 
-      %{entry |
-        last_seq: entry.deferred_seq || entry.last_seq,
-        last_text_hash: entry.deferred_hash || entry.last_text_hash,
-        deferred_text: nil,
-        deferred_seq: nil,
-        deferred_hash: nil,
-        deferred_meta: %{}
+      %{
+        entry
+        | last_seq: entry.deferred_seq || entry.last_seq,
+          last_text_hash: entry.deferred_hash || entry.last_text_hash,
+          deferred_text: nil,
+          deferred_seq: nil,
+          deferred_hash: nil,
+          deferred_meta: %{}
       }
     else
       _ -> entry
@@ -252,7 +320,13 @@ defmodule LemonChannels.PresentationState do
       msg_id = parse_int(message_id)
 
       if is_integer(chat_id) and is_integer(msg_id) do
-        ResumeIndexStore.put_resume(route.account_id || "default", chat_id, thread_id, msg_id, pending_resume)
+        ResumeIndexStore.put_resume(
+          route.account_id || "default",
+          chat_id,
+          thread_id,
+          msg_id,
+          pending_resume
+        )
       end
     end
 

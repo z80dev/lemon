@@ -22,6 +22,7 @@ defmodule LemonRouter.Application do
         {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},
         # Tool status coalescer registry
         {Registry, keys: :unique, name: LemonRouter.ToolStatusRegistry},
+        {Registry, keys: :unique, name: LemonRouter.AsyncTaskSurfaceRegistry},
         # Run supervisor (DynamicSupervisor for run processes)
         {
           DynamicSupervisor,
@@ -30,11 +31,13 @@ defmodule LemonRouter.Application do
           max_children: run_process_limit()
         },
         # Session coordinator supervisor (router-owned queue semantics)
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
+        {DynamicSupervisor,
+         strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
         # Stream coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor},
         # Tool status coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor},
+        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.AsyncTaskSurfaceSupervisor},
         # Run count telemetry tracker (must start before orchestrator)
         LemonRouter.RunCountTracker,
         # Run orchestrator
