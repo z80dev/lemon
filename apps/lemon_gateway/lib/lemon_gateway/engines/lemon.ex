@@ -37,6 +37,8 @@ defmodule LemonGateway.Engines.Lemon do
   alias LemonGateway.Engines.CliAdapter
   alias LemonCore.ResumeToken
 
+  @runner_module CodingAgent.CliRunners.LemonRunner
+
   @impl true
   def id, do: "lemon"
 
@@ -60,7 +62,9 @@ defmodule LemonGateway.Engines.Lemon do
     # registries and supervisors are available.
     case LemonGateway.DependencyManager.ensure_app(:coding_agent) do
       :ok ->
-        CliAdapter.start_run(CodingAgent.CliRunners.LemonRunner, id(), job, opts, sink_pid)
+        with :ok <- ensure_runner_available() do
+          CliAdapter.start_run(@runner_module, id(), job, opts, sink_pid)
+        end
 
       {:error, _reason} = error ->
         error
@@ -72,8 +76,23 @@ defmodule LemonGateway.Engines.Lemon do
 
   @impl true
   def steer(%{runner_pid: pid}, text) when is_pid(pid) do
-    CodingAgent.CliRunners.LemonRunner.steer(pid, text)
+    @runner_module.steer(pid, text)
   end
 
   def steer(_ctx, _text), do: {:error, :no_runner}
+
+  defp ensure_runner_available do
+    case Code.ensure_loaded(@runner_module) do
+      {:module, @runner_module} ->
+        if function_exported?(@runner_module, :start_link, 1) and
+             function_exported?(@runner_module, :stream, 1) do
+          :ok
+        else
+          {:error, {:runner_unavailable, @runner_module}}
+        end
+
+      {:error, reason} ->
+        {:error, {:runner_unavailable, @runner_module, reason}}
+    end
+  end
 end

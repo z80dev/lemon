@@ -9,7 +9,7 @@ defmodule LemonCore.Runtime.Profile do
 
   | Profile | Apps | Use case |
   |---|---|---|
-  | `:runtime_min` | gateway, router, channels, control_plane | CI, headless, embedded |
+  | `:runtime_min` | gateway, router, channels, control_plane, coding_agent | CI, headless, embedded |
   | `:runtime_full` | all of the above + automation, skills, web, sim_ui | Local development |
 
   ## Usage
@@ -33,12 +33,13 @@ defmodule LemonCore.Runtime.Profile do
 
   @profiles_data %{
     runtime_min: {
-      "Minimal runtime: gateway, router, channels, and control plane only.",
-      [:lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
+      "Minimal runtime: gateway, router, channels, control plane, and coding agent.",
+      [:coding_agent, :lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
     },
     runtime_full: {
       "Full runtime: all core apps including skills, web UI, and sim UI.",
       [
+        :coding_agent,
         :lemon_gateway,
         :lemon_router,
         :lemon_channels,

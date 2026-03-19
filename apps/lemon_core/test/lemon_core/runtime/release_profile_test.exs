@@ -8,7 +8,7 @@ defmodule LemonCore.Runtime.ReleaseProfileTest do
 
   alias LemonCore.Runtime.Profile
 
-  @min_apps [:lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
+  @min_apps [:coding_agent, :lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
   @full_extras [:lemon_automation, :lemon_skills, :lemon_web, :lemon_sim_ui]
 
   describe "lemon_runtime_min profile" do
