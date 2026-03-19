@@ -197,31 +197,41 @@ defmodule LemonRouter.RunProcess.Watchdog do
   end
 
   defp emit_synthetic_run_completion(state, error, duration_ms) do
-    try do
-      LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_watchdog_timeout)
-    rescue
-      _ -> :ok
+    cond do
+      state.completed ->
+        state
+
+      Map.get(state, :synthetic_completion_sent?, false) ->
+        state
+
+      true ->
+        try do
+          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_watchdog_timeout)
+        rescue
+          _ -> :ok
+        end
+
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{
+                ok: false,
+                error: error,
+                answer: ""
+              },
+              duration_ms: duration_ms
+            },
+            %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              synthetic: true
+            }
+          )
+
+        LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
+        Map.put(state, :synthetic_completion_sent?, true)
     end
-
-    event =
-      LemonCore.Event.new(
-        :run_completed,
-        %{
-          completed: %{
-            ok: false,
-            error: error,
-            answer: ""
-          },
-          duration_ms: duration_ms
-        },
-        %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          synthetic: true
-        }
-      )
-
-    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
   end
 
   defp put_in_watchdog_confirmation(state, ref) do

@@ -127,13 +127,20 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp equivalent_action_id(actions, data) when is_map(actions) and is_map(data) do
     Enum.find_value(actions, fn {existing_id, existing_data} ->
-      if equivalent_action?(existing_data, data), do: existing_id, else: nil
+      if equivalent_action?({existing_id, existing_data}, {data[:id], data}),
+        do: existing_id,
+        else: nil
     end)
   end
 
   defp equivalent_action_id(_, _), do: nil
 
-  defp equivalent_action?(existing, incoming) when is_map(existing) and is_map(incoming) do
+  defp equivalent_action?(
+         {existing_id, existing},
+         {incoming_id, incoming}
+       )
+       when is_binary(existing_id) and is_binary(incoming_id) and is_map(existing) and
+              is_map(incoming) do
     existing_detail = existing[:detail] || %{}
     incoming_detail = incoming[:detail] || %{}
 
@@ -146,7 +153,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
     incoming_parent =
       incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
 
-    is_binary(existing_child_run_id) and is_binary(incoming_child_run_id) and
+    projected_embedded_equivalent_ids?(existing_id, incoming_id) and
+      is_binary(existing_child_run_id) and is_binary(incoming_child_run_id) and
       existing_child_run_id == incoming_child_run_id and existing_parent == incoming_parent and
       normalize_embedded_kind(to_string(existing[:kind])) ==
         normalize_embedded_kind(to_string(incoming[:kind])) and
@@ -500,7 +508,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def handle_info({:reap_if_idle, token}, %{reap_token: token} = state) do
     state = %{state | reap_timer: nil, reap_token: nil}
 
-    if task_surface?(state.surface) and state.finalized == true do
+    if task_surface_reapable?(state) do
       {:stop, :normal, state}
     else
       {:noreply, state}
@@ -562,7 +570,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
           %{state | last_text: text, last_kind: kind}
       end
 
-    %{state | first_event_ts: nil, flush_timer: nil}
+    state
+    |> Map.put(:first_event_ts, nil)
+    |> Map.put(:flush_timer, nil)
+    |> maybe_schedule_task_reap()
   end
 
   defp finalize_running_actions(state, ok?) do
@@ -618,10 +629,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
       not task_surface?(state.surface) ->
         state
 
-      state.finalized != true ->
+      not is_integer(task_reap_ms) or task_reap_ms <= 0 ->
         state
 
-      not is_integer(task_reap_ms) or task_reap_ms <= 0 ->
+      not task_surface_reapable?(state) ->
         state
 
       true ->
@@ -637,6 +648,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp cancel_task_reap(%__MODULE__{reap_timer: timer} = state) do
     cancel_timer(timer)
     %{state | reap_timer: nil, reap_token: nil}
+  end
+
+  defp task_surface_reapable?(%__MODULE__{} = state) do
+    task_surface?(state.surface) and state.order != [] and not any_running_action?(state)
   end
 
   defp task_surface?({:status_task, task_id}) when is_binary(task_id) and task_id != "", do: true
@@ -689,14 +704,14 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp maybe_prefix_running(text, _state), do: text
 
-  defp maybe_prefix_text(text, %__MODULE__{prefix_text: prefix})
+  defp maybe_prefix_text(text, %__MODULE__{prefix_text: prefix} = state)
        when is_binary(text) and is_binary(prefix) do
     trimmed = String.trim(prefix)
 
     if trimmed == "" do
       text
     else
-      combine_prefix_and_status(trimmed, text)
+      combine_prefix_and_status(trimmed, text, chunk_limit(state.channel_id))
     end
   end
 
@@ -706,9 +721,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   # assistant prefix is long. Telegram truncation preserves the start of a
   # message, so without budgeting the prefix separately we can hide the tool
   # lines entirely.
-  defp combine_prefix_and_status(prefix, text) when is_binary(prefix) and is_binary(text) do
+  defp combine_prefix_and_status(prefix, text, max_len)
+       when is_binary(prefix) and is_binary(text) and is_integer(max_len) and max_len > 0 do
     separator = "\n\n"
-    max_len = telegram_max_length()
     combined = prefix <> separator <> text
 
     cond do
@@ -730,11 +745,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp telegram_max_length do
-    LemonChannels.Telegram.Truncate.max_length()
+  defp chunk_limit(channel_id) when is_binary(channel_id) and channel_id != "" do
+    case LemonChannels.Registry.get_capabilities(channel_id) do
+      %{chunk_limit: limit} when is_integer(limit) and limit > 0 -> limit
+      _ -> 4096
+    end
   rescue
     _ -> 4096
   end
+
+  defp chunk_limit(_), do: 4096
 
   defp any_running_action?(%__MODULE__{} = state) do
     actions = state.actions || %{}
@@ -1036,9 +1056,26 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp embedded_ok(_), do: nil
 
+  defp projected_embedded_equivalent_ids?(left, right) do
+    {projected_child_action_id?(left), embedded_child_action_id?(left),
+     projected_child_action_id?(right), embedded_child_action_id?(right)} in [
+      {true, false, false, true},
+      {false, true, true, false}
+    ]
+  end
+
+  defp projected_child_action_id?(<<"taskproj:", _::binary>>), do: true
+  defp projected_child_action_id?(_), do: false
+
+  defp embedded_child_action_id?(id) when is_binary(id) do
+    not projected_child_action_id?(id) and String.match?(id, ~r/:[0-9a-f]{32}$/)
+  end
+
+  defp embedded_child_action_id?(_), do: false
+
   defp upsert_action(actions, order, id, data) do
     id = equivalent_action_id(actions, data) || id
-    actions = Map.put(actions, id, data)
+    actions = Map.put(actions, id, Map.put(data, :id, id))
     order = if id in order, do: order, else: order ++ [id]
 
     if length(order) > @max_actions do

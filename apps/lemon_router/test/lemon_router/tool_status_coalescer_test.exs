@@ -29,6 +29,28 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     end
   end
 
+  defmodule ToolStatusCoalescerTestShortPlugin do
+    @moduledoc false
+
+    def id, do: "short"
+
+    def meta do
+      %{
+        name: "Test Short",
+        capabilities: %{
+          edit_support: true,
+          chunk_limit: 120
+        }
+      }
+    end
+
+    def deliver(payload) do
+      pid = :persistent_term.get({__MODULE__, :test_pid}, nil)
+      if is_pid(pid), do: send(pid, {:delivered, payload})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 1002}}}
+    end
+  end
+
   defmodule ToolStatusIntentDispatcherStub do
     @moduledoc false
 
@@ -489,6 +511,96 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     refute Enum.any?(state.order, &(&1 == "task_poll_live_1"))
   end
 
+  test "distinct projected child actions with the same title remain distinct" do
+    session_key = "agent:embedded:telegram:bot:dm:658"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    surface = {:status_task, "task_codex_root_repeat"}
+
+    started = %{
+      engine: "lemon",
+      action: %{
+        id: "task_codex_root_repeat",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    projected_1 = %{
+      engine: "codex",
+      action: %{
+        id: "taskproj:child_run_repeat:read_1",
+        kind: "tool",
+        title: "Read: AGENTS.md",
+        detail: %{parent_tool_use_id: "task_codex_root_repeat", child_run_id: "child_run_repeat"}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    projected_2 = %{
+      engine: "codex",
+      action: %{
+        id: "taskproj:child_run_repeat:read_2",
+        kind: "tool",
+        title: "Read: AGENTS.md",
+        detail: %{parent_tool_use_id: "task_codex_root_repeat", child_run_id: "child_run_repeat"}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_projected_child_action(
+               session_key,
+               channel_id,
+               run_id,
+               surface,
+               projected_1
+             )
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_projected_child_action(
+               session_key,
+               channel_id,
+               run_id,
+               surface,
+               projected_2
+             )
+
+    [{pid, _}] =
+      Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+
+    state = :sys.get_state(pid)
+
+    matching_children =
+      state.actions
+      |> Map.values()
+      |> Enum.filter(fn action ->
+        action[:detail][:parent_tool_use_id] == "task_codex_root_repeat" and
+          action[:title] == "Read: AGENTS.md"
+      end)
+
+    assert Enum.sort(Enum.map(matching_children, & &1.id)) == [
+             "taskproj:child_run_repeat:read_1",
+             "taskproj:child_run_repeat:read_2"
+           ]
+  end
+
   test "telegram tool status creates a new message when only progress_msg_id is present (no status_msg_id)" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
@@ -664,6 +776,58 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     refute String.starts_with?(text, prefix <> "\n\n")
   end
 
+  test "anchored tool status uses the channel chunk limit instead of telegram-specific budgeting" do
+    _ = LemonChannels.Registry.unregister("short")
+    :persistent_term.put({__MODULE__.ToolStatusCoalescerTestShortPlugin, :test_pid}, self())
+    :ok = LemonChannels.Registry.register(__MODULE__.ToolStatusCoalescerTestShortPlugin)
+
+    on_exit(fn ->
+      :persistent_term.erase({__MODULE__.ToolStatusCoalescerTestShortPlugin, :test_pid})
+
+      if is_pid(Process.whereis(LemonChannels.Registry)) do
+        _ = LemonChannels.Registry.unregister("short")
+      end
+    end)
+
+    session_key = "agent:tool-status:short:bot:group:12345:thread:7782"
+    channel_id = "short"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    prefix = String.duplicate("thinking block ", 20)
+
+    assert :ok =
+             ToolStatusCoalescer.anchor_segment(session_key, channel_id, run_id, prefix,
+               meta: %{user_msg_id: 9, peer: %{kind: :group, id: "12345", thread_id: "7782"}}
+             )
+
+    started = %{
+      engine: "lemon",
+      action: %{id: "a1", kind: "tool", title: "Read: markdown.ex", detail: %{}},
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               meta: %{user_msg_id: 9, peer: %{kind: :group, id: "12345", thread_id: "7782"}}
+             )
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "short",
+                      content: text,
+                      meta: %{run_id: ^run_id}
+                    }},
+                   1_000
+
+    assert String.contains?(text, "Read: markdown.ex")
+    assert String.length(text) <= 120
+    refute String.starts_with?(text, prefix <> "\n\n")
+  end
+
   test "task-specific surface keeps its message separate from generic status" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:779"
     channel_id = "telegram"
@@ -822,6 +986,53 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
              ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
                surface: surface
              )
+
+    state = :sys.get_state(pid)
+    assert is_reference(state.reap_timer)
+    assert is_reference(state.reap_token)
+
+    ref = Process.monitor(pid)
+    send(pid, {:reap_if_idle, state.reap_token})
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+  end
+
+  test "task-scoped coalescers reap themselves after idle completed actions" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:7802"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    surface = {:status_task, "task_reap_idle_1"}
+
+    assert {:ok, pid} =
+             DynamicSupervisor.start_child(
+               Elixir.LemonRouter.ToolStatusSupervisor,
+               {ToolStatusCoalescer,
+                session_key: session_key,
+                channel_id: channel_id,
+                surface: surface,
+                task_reap_ms: 25}
+             )
+
+    completed = %{
+      engine: "lemon",
+      action: %{
+        id: "task_reap_idle_1",
+        kind: "subagent",
+        title: "task(codex): inspect repo",
+        detail: %{name: "task"}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, completed,
+               surface: surface
+             )
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
 
     state = :sys.get_state(pid)
     assert is_reference(state.reap_timer)

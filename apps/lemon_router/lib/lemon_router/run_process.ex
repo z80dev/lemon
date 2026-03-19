@@ -158,7 +158,8 @@ defmodule LemonRouter.RunProcess do
       generated_image_paths: [],
       requested_send_files: [],
       task_status_surfaces: %{},
-      task_status_refs: %{}
+      task_status_refs: %{},
+      synthetic_completion_sent?: false
     }
 
     Logger.debug(
@@ -371,7 +372,7 @@ defmodule LemonRouter.RunProcess do
 
     OutputTracker.ingest_projected_child_action_to_tool_status_coalescer(
       state,
-      action_ev,
+      event,
       tool_status_surface
     )
 
@@ -445,26 +446,7 @@ defmodule LemonRouter.RunProcess do
           "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
       )
 
-      event =
-        LemonCore.Event.new(
-          :run_completed,
-          %{
-            completed: %{
-              ok: false,
-              error: {:gateway_run_down, reason},
-              answer: ""
-            },
-            duration_ms: nil
-          },
-          %{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            synthetic: true
-          }
-        )
-
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
-      {:noreply, state}
+      {:noreply, emit_synthetic_completion_once(state, {:gateway_run_down, reason})}
     end
   rescue
     _ -> {:noreply, state}
@@ -485,26 +467,7 @@ defmodule LemonRouter.RunProcess do
             "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
         )
 
-        event =
-          LemonCore.Event.new(
-            :run_completed,
-            %{
-              completed: %{
-                ok: false,
-                error: reason,
-                answer: ""
-              },
-              duration_ms: nil
-            },
-            %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              synthetic: true
-            }
-          )
-
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
-        {:noreply, state}
+        {:noreply, emit_synthetic_completion_once(state, reason)}
     end
   rescue
     _ -> {:noreply, state}
@@ -556,26 +519,7 @@ defmodule LemonRouter.RunProcess do
             "run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
         )
 
-        event =
-          LemonCore.Event.new(
-            :run_completed,
-            %{
-              completed: %{
-                ok: false,
-                error: :gateway_run_missing_after_start,
-                answer: ""
-              },
-              duration_ms: nil
-            },
-            %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              synthetic: true
-            }
-          )
-
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
-        {:noreply, state}
+        {:noreply, emit_synthetic_completion_once(state, :gateway_run_missing_after_start)}
     end
   rescue
     _ -> {:noreply, state}
@@ -722,6 +666,38 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp gateway_run_pid(_), do: nil
+
+  defp emit_synthetic_completion_once(state, error) do
+    cond do
+      state.completed ->
+        state
+
+      state.synthetic_completion_sent? ->
+        state
+
+      true ->
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{
+              completed: %{
+                ok: false,
+                error: error,
+                answer: ""
+              },
+              duration_ms: nil
+            },
+            %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              synthetic: true
+            }
+          )
+
+        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        %{state | synthetic_completion_sent?: true}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Utility helpers

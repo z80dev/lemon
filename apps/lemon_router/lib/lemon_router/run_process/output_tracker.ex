@@ -48,10 +48,17 @@ defmodule LemonRouter.RunProcess.OutputTracker do
     _ -> :ok
   end
 
-  @spec ingest_projected_child_action_to_tool_status_coalescer(map(), map(), term()) :: :ok
-  def ingest_projected_child_action_to_tool_status_coalescer(state, action_ev, surface) do
+  @spec ingest_projected_child_action_to_tool_status_coalescer(map(), LemonCore.Event.t(), term()) ::
+          :ok
+  def ingest_projected_child_action_to_tool_status_coalescer(
+        state,
+        %LemonCore.Event{payload: action_ev, meta: event_meta},
+        surface
+      ) do
     case ChannelContext.channel_id(state.session_key) do
       {:ok, channel_id} ->
+        action_ev = normalize_projected_action(action_ev, event_meta, surface)
+
         LemonRouter.ToolStatusCoalescer.ingest_projected_child_action(
           state.session_key,
           channel_id,
@@ -67,6 +74,8 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   rescue
     _ -> :ok
   end
+
+  def ingest_projected_child_action_to_tool_status_coalescer(_state, _event, _surface), do: :ok
 
   # ---- Turn commit ----
 
@@ -643,6 +652,57 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   end
 
   defp attach_task_parent(action_ev, _), do: action_ev
+
+  defp normalize_projected_action(action_ev, event_meta, surface)
+       when is_map(action_ev) and is_map(event_meta) do
+    action = Map.get(action_ev, :action) || %{}
+    detail = Map.get(action, :detail) || %{}
+
+    root_action_id =
+      [
+        fetch(event_meta, :root_action_id),
+        fetch(detail, :root_action_id),
+        action_parent_tool_use_id(action),
+        surface_root_action_id(surface)
+      ]
+      |> Enum.find(&(is_binary(&1) and &1 != ""))
+
+    detail =
+      detail
+      |> maybe_put_surface(surface)
+      |> maybe_put_projected_parent(action, root_action_id)
+
+    Map.put(action_ev, :action, Map.put(action, :detail, detail))
+  end
+
+  defp normalize_projected_action(action_ev, _event_meta, _surface), do: action_ev
+
+  defp maybe_put_surface(detail, surface) when is_map(detail) do
+    case fetch(detail, :surface) do
+      nil ->
+        if valid_surface?(surface), do: Map.put(detail, :surface, surface), else: detail
+
+      _ ->
+        detail
+    end
+  end
+
+  defp maybe_put_projected_parent(detail, action, root_action_id)
+       when is_map(detail) and is_map(action) do
+    cond do
+      action_parent_tool_use_id(action) ->
+        detail
+
+      not (is_binary(root_action_id) and root_action_id != "") ->
+        detail
+
+      Map.get(action, :id) == root_action_id ->
+        detail
+
+      true ->
+        Map.put(detail, :parent_tool_use_id, root_action_id)
+    end
+  end
 
   defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
        when is_binary(cwd) and cwd != "",
