@@ -63,7 +63,7 @@ defmodule Ai.ModelsLegacyTest do
       assert model.name == "Kimi K2 Coding"
       assert model.api == :anthropic_messages
       assert model.provider == :kimi_coding
-      assert model.base_url == "https://api.moonshot.ai/anthropic"
+      assert model.base_url == "https://api.kimi.com/coding"
       assert model.reasoning == true
       assert model.input == [:text]
     end

@@ -25,6 +25,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportResumeSelectionTest do
     assert stripped == "Continue with the fix."
   end
 
+  test "extract_explicit_resume_and_strip does not treat engine-prefixed prompts as resume tokens" do
+    text =
+      "codex review comparing all five, give me an overview comparison, no tables in the response."
+
+    assert {nil, ^text} = ResumeSelection.extract_explicit_resume_and_strip(text)
+  end
+
   test "format helpers produce stable session references" do
     resume = %ResumeToken{engine: "claude", value: "token-123"}
 

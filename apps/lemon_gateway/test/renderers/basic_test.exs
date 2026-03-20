@@ -41,4 +41,17 @@ defmodule LemonGateway.Renderers.BasicTest do
     assert String.contains?(text, "test resume xyz")
     assert state.resume_line == "test resume xyz"
   end
+
+  test "completed error renders tuple errors without crashing" do
+    state = Basic.init(%{engine: __MODULE__.BasicTestEngine})
+
+    {_, result} =
+      Basic.apply_event(
+        state,
+        Event.completed(%{engine: "test", ok: false, error: {:session_mismatch, %{got: "b"}}})
+      )
+
+    assert {:render, %{text: text, status: :error}} = result
+    assert String.contains?(text, "{:session_mismatch")
+  end
 end

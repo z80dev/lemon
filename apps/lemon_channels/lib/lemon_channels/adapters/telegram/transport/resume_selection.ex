@@ -270,12 +270,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   @spec extract_explicit_resume_and_strip(String.t() | term()) ::
           {ResumeToken.t() | nil, String.t() | term()}
   def extract_explicit_resume_and_strip(text) when is_binary(text) do
-    case parse_resume_selector(text) do
+    case parse_explicit_resume(text) do
       %ResumeToken{} = token ->
         stripped =
           text
           |> String.split("\n")
-          |> Enum.reject(&(match?(%ResumeToken{}, parse_resume_selector(&1))))
+          |> Enum.reject(&match?(%ResumeToken{}, parse_explicit_resume(&1)))
           |> Enum.join("\n")
           |> String.trim()
 
@@ -304,7 +304,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
       meta[:fork_when_busy] == true or meta["fork_when_busy"] == true ->
         inbound
 
-      match?(%ResumeToken{}, parse_resume_selector(inbound.message.text || "")) ->
+      match?(%ResumeToken{}, parse_explicit_resume(inbound.message.text || "")) ->
         inbound
 
       true ->
@@ -375,7 +375,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
     cond do
       is_binary(reply_text) and reply_text != "" ->
-        case parse_resume_selector(reply_text) do
+        case parse_explicit_resume(reply_text) do
           %ResumeToken{} = token -> {token, :reply_text}
           _ -> {nil, nil}
         end
@@ -441,7 +441,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
             case EngineCatalog.normalize(engine_id) do
               normalized_engine when is_binary(normalized_engine) and is_binary(token_value) ->
                 trimmed_token = String.trim(token_value)
-                if trimmed_token == "", do: nil, else: %ResumeToken{engine: normalized_engine, value: trimmed_token}
+
+                if trimmed_token == "",
+                  do: nil,
+                  else: %ResumeToken{engine: normalized_engine, value: trimmed_token}
 
               _ ->
                 nil
@@ -456,6 +459,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   end
 
   defp parse_resume_selector(_), do: nil
+
+  defp parse_explicit_resume(text) when is_binary(text) do
+    case EngineRegistry.extract_resume(text) do
+      {:ok, %ResumeToken{} = token} -> token
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp parse_explicit_resume(_), do: nil
 
   @spec format_resume_line(ResumeToken.t()) :: String.t()
   def format_resume_line(%ResumeToken{} = resume), do: ResumeToken.format_plain(resume)

@@ -169,6 +169,29 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
              "llm_minimax_api_key"
   end
 
+  test "explicit kimi provider arg routes through top-level onboarding", %{tmp_dir: tmp_dir} do
+    config_path = Path.join(tmp_dir, "config.toml")
+
+    Onboard.run_with_io(
+      [
+        "kimi",
+        "--token",
+        "kimi-token-123",
+        "--config-path",
+        config_path
+      ],
+      build_io(self(), [], [])
+    )
+
+    assert {:ok, "kimi-token-123"} =
+             Secrets.get("llm_kimi_api_key", prefer_env: false, env_fallback: false)
+
+    {:ok, config_map} = Toml.decode_file(config_path)
+
+    assert get_in(config_map, ["providers", "kimi", "auth_source"]) == "api_key"
+    assert get_in(config_map, ["providers", "kimi", "api_key_secret"]) == "llm_kimi_api_key"
+  end
+
   defp build_io(test_pid, prompts, secrets, selects \\ []) do
     prompt_agent = start_agent(prompts)
     secret_agent = start_agent(secrets)

@@ -45,7 +45,7 @@ defmodule LemonGateway.Renderers.Basic do
 
   def apply_event(state, %{__event__: :completed, ok: false, error: error} = completed) do
     state = maybe_apply_resume_from_completed(state, completed)
-    render(state, :error, to_string(error || ""))
+    render(state, :error, format_error(error))
   end
 
   def apply_event(state, _event), do: {state, :unchanged}
@@ -162,4 +162,9 @@ defmodule LemonGateway.Renderers.Basic do
         %{state | resume_line: resume_line}
     end
   end
+
+  defp format_error(nil), do: ""
+  defp format_error(error) when is_binary(error), do: error
+  defp format_error(error) when is_atom(error), do: Atom.to_string(error)
+  defp format_error(error), do: inspect(error)
 end

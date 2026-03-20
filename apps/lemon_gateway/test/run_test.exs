@@ -148,6 +148,57 @@ defmodule LemonGateway.RunTest do
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
 
+  defmodule StructuredErrorEngine do
+    @behaviour Elixir.LemonGateway.Engine
+
+    alias Elixir.LemonGateway.Event
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
+
+    @impl true
+    def id, do: "structured_error"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "structured_error resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
+      error = get_in(job.meta || %{}, [:error]) || {:structured, :error}
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{engine: id(), resume: resume, ok: false, error: error})}
+          )
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
   # An engine that fails on start_run
   defmodule FailingEngine do
     @behaviour Elixir.LemonGateway.Engine
@@ -426,6 +477,7 @@ defmodule LemonGateway.RunTest do
     Application.put_env(:lemon_gateway, :engines, [
       Elixir.LemonGateway.RunTest.TestEngine,
       ControllableEngine,
+      StructuredErrorEngine,
       FailingEngine,
       RaisingEngine,
       SteerableTestEngine,
@@ -584,8 +636,11 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       assert_receive {:run_complete, ^pid,
-                      %{__event__: :completed, ok: false,
-                        error: "engine_start_exception: boom during start_run"}},
+                      %{
+                        __event__: :completed,
+                        ok: false,
+                        error: "engine_start_exception: boom during start_run"
+                      }},
                      2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
@@ -1096,6 +1151,7 @@ defmodule LemonGateway.RunTest do
       Application.put_env(:lemon_gateway, :engines, [
         Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
+        StructuredErrorEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
@@ -1228,6 +1284,7 @@ defmodule LemonGateway.RunTest do
       Application.put_env(:lemon_gateway, :engines, [
         Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
+        StructuredErrorEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
@@ -1758,6 +1815,7 @@ defmodule LemonGateway.RunTest do
       Application.put_env(:lemon_gateway, :engines, [
         Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
+        StructuredErrorEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
@@ -2191,6 +2249,28 @@ defmodule LemonGateway.RunTest do
                      2000
     end
 
+    test "engine completed event with structured error does not crash the run" do
+      scope = make_scope()
+
+      job =
+        make_job(scope,
+          engine_hint: "structured_error",
+          meta: %{
+            notify_pid: self(),
+            error: {:session_mismatch, %{expected: "review prompt", got: "019d0cef"}}
+          }
+        )
+
+      {:ok, pid} = start_run_direct(job)
+
+      error = {:session_mismatch, %{expected: "review prompt", got: "019d0cef"}}
+
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: ^error}},
+                     2000
+
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+    end
+
     test "cancel is idempotent - second cancel is ignored" do
       scope = make_scope()
 
@@ -2242,6 +2322,7 @@ defmodule LemonGateway.RunTest do
       Application.put_env(:lemon_gateway, :engines, [
         Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
+        StructuredErrorEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
@@ -2497,6 +2578,7 @@ defmodule LemonGateway.RunTest do
       Application.put_env(:lemon_gateway, :engines, [
         Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
+        StructuredErrorEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,

@@ -113,6 +113,21 @@ defmodule LemonCore.Onboarding.Providers do
       auth_source_by_mode: %{api_key: "api_key"}
     },
     %Provider{
+      id: "kimi",
+      display_name: "Kimi",
+      description: "Kimi API key for K2 models",
+      provider_table: "providers.kimi",
+      default_secret_name: "llm_kimi_api_key",
+      api_key_secret_provider: "onboarding_kimi",
+      auth_modes: [:api_key],
+      default_auth_mode: :api_key,
+      preferred_models: ["k2p5", "kimi-k2-thinking", "kimi-for-coding"],
+      aliases: ["kimi-k2", "moonshot"],
+      api_key_prompt: "Enter your Kimi API key: ",
+      api_key_choice_label: "Paste API key",
+      auth_source_by_mode: %{api_key: "api_key"}
+    },
+    %Provider{
       id: "minimax",
       display_name: "MiniMax",
       description: "MiniMax API key for M2 models",
