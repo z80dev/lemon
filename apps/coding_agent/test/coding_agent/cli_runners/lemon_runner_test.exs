@@ -359,24 +359,24 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
              ) == "Let me read the key files:"
     end
 
-    test "falls back to thinking when no visible text exists yet" do
+    test "does not leak thinking when no visible text exists yet" do
       msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
 
       assert LemonRunner.text_delta_from_message_update(
                msg,
                {:tool_call_start, 0, msg},
                ""
-             ) == "I should inspect the provider first."
+             ) == nil
     end
 
-    test "emits raw thinking deltas to the user" do
+    test "does not emit thinking deltas to the user" do
       msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
 
       assert LemonRunner.text_delta_from_message_update(
                msg,
                {:thinking_delta, 0, "I should inspect the provider first.", msg},
                ""
-             ) == "I should inspect the provider first."
+             ) == nil
     end
 
     test "prefers visible text over thinking when both are present" do

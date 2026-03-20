@@ -672,7 +672,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         text
 
       _ ->
-        Ai.get_thinking(msg)
+        ""
     end
   rescue
     _ -> ""
