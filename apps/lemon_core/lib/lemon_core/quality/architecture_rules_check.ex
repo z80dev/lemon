@@ -461,6 +461,23 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       ]
     },
     %{
+      code: :external_ai_auth_leak,
+      message: "Apps outside ai/lemon_ai_runtime must use LemonAiRuntime.Auth.*, not Ai.Auth.*",
+      files: [
+        "apps/*/lib/**/*.ex",
+        "apps/*/test/**/*.exs",
+        "apps/*/priv/scripts/**/*.exs"
+      ],
+      exclude: [
+        "apps/ai/**",
+        "apps/lemon_ai_runtime/**"
+      ],
+      patterns: [
+        "Ai.Auth.",
+        "Elixir.Ai.Auth"
+      ]
+    },
+    %{
       code: :forbidden_provider_direct_env,
       message:
         "Provider modules must resolve config-backed provider env vars via LemonCore.ProviderConfigResolver",

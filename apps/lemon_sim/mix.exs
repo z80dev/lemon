@@ -27,7 +27,8 @@ defmodule LemonSim.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true}
+      {:ai, in_umbrella: true},
+      {:lemon_ai_runtime, in_umbrella: true}
     ]
   end
 end
