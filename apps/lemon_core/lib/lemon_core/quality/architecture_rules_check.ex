@@ -481,6 +481,23 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ~s|System.get_env("AWS_REGION")|,
         ~s|System.get_env("AWS_DEFAULT_REGION")|
       ]
+    },
+    %{
+      code: :external_ai_auth_leak,
+      message: "Apps outside ai/lemon_ai_runtime must use LemonAiRuntime.Auth.*, not Ai.Auth.*",
+      files: [
+        "apps/*/lib/**/*.ex",
+        "apps/*/test/**/*.exs",
+        "apps/*/priv/scripts/**/*.exs"
+      ],
+      exclude: [
+        "apps/ai/**",
+        "apps/lemon_ai_runtime/**"
+      ],
+      patterns: [
+        "Ai.Auth.",
+        "Elixir.Ai.Auth"
+      ]
     }
   ]
 
