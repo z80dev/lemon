@@ -26,6 +26,7 @@ defmodule LemonChannels.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_ai_runtime, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:earmark_parser, "~> 1.4"},
       {:req, "~> 0.5.0"},
