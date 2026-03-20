@@ -14,7 +14,6 @@
 
 # Temporary files, for example, from tests.
 /tmp/
-apps/lemon_skills/tmp/
 .lemon/skill/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
@@ -74,3 +73,13 @@ tools/session-analyzer/output/
 
 # Generated diagram output
 tools/diagrams/output/
+
+# macOS metadata
+.DS_Store
+
+# IDE/tool caches
+.expert/
+.factory/
+
+# Test artifact temp directories
+apps/*/tmp/
