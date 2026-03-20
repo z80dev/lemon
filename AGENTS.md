@@ -10,6 +10,7 @@
 | If you want to... | Look in... |
 |-------------------|------------|
 | Add/modify AI provider support | `apps/ai/` |
+| Work on AI runtime auth facade boundary | `apps/lemon_ai_runtime/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
@@ -142,6 +143,7 @@ Future agents (and humans) depend on accurate documentation to be effective. Don
 apps/
 ├── agent_core/          # Core agent runtime, CLI runners (claude, codex, pi, kimi, opencode), subagent management
 ├── ai/                  # AI provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock)
+├── lemon_ai_runtime/     # Thin auth/config facade boundary (OAuth resolver delegating modules)
 ├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter

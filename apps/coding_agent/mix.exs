@@ -29,6 +29,7 @@ defmodule CodingAgent.MixProject do
     [
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
+      {:lemon_ai_runtime, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},

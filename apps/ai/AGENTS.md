@@ -63,6 +63,9 @@ Ai (main API)
 
 ### Internal Provider Helpers
 
+`Ai.Auth.*` modules are implemented in this app for now and should be consumed via
+`LemonAiRuntime.Auth.*` facades by other apps to avoid direct cross-app auth coupling.
+
 - `Ai.Providers.GoogleShared` - Shared request/response logic for all Google providers
   - Includes async HTTP error-body normalization for streaming calls so provider errors
     surface real upstream JSON messages (not `Req.Response.Async` struct dumps)

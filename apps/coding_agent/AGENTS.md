@@ -779,7 +779,7 @@ Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` wi
 3. `providers.<name>.api_key_secret` from `LemonCore.Secrets`
 4. Default secret name `llm_<provider>_api_key`
 
-When a secret value is an OAuth payload, `Ai.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Copilot, Anthropic, Google Antigravity, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
+When a secret value is an OAuth payload, `LemonAiRuntime.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
 If the central resolver module is unavailable at runtime (mixed-version or partial deploy), `ModelResolver` falls back to calling provider-specific resolver modules directly so secret resolution does not crash.
 
 ## Testing Guidelines

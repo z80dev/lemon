@@ -294,7 +294,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     Application.put_env(
       :coding_agent,
       :oauth_secret_resolver_module,
-      Ai.Auth.MissingOAuthSecretResolver
+      LemonAiRuntime.Auth.MissingOAuthSecretResolver
     )
 
     on_exit(fn ->
