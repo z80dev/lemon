@@ -94,6 +94,9 @@ Ai.Supervisor (one_for_one)
 
 ### Auth Modules
 
+The `Ai.Auth.*` modules remain in `apps/ai`; external Lemon apps should call the
+`LemonAiRuntime.Auth.*` façade modules instead of depending directly on `Ai.Auth.*`.
+
 | Module | Purpose |
 |--------|---------|
 | `Ai.Auth.OAuthSecretResolver` | Central dispatcher -- routes encrypted secret payloads to provider-specific OAuth resolvers |

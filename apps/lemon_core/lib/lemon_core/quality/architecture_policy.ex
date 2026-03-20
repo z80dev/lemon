@@ -13,10 +13,11 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @allowed_direct_deps %{
     agent_core: [:ai, :lemon_core],
     ai: [:lemon_core],
-    coding_agent: [:agent_core, :ai, :lemon_core, :lemon_skills],
+    coding_agent: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core, :lemon_skills],
     coding_agent_ui: [:coding_agent],
     lemon_automation: [:lemon_core, :lemon_router],
     lemon_channels: [:lemon_core],
+    lemon_ai_runtime: [:ai],
     lemon_control_plane: [
       :ai,
       :coding_agent,

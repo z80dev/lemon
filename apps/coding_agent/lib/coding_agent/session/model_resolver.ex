@@ -441,7 +441,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_openai_codex_oauth_secret(secret_name) do
     case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case Ai.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
+        case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
@@ -581,10 +581,10 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_secret_api_key(_, _), do: nil
 
   @oauth_secret_fallback_resolvers [
-    Ai.Auth.GitHubCopilotOAuth,
-    Ai.Auth.GoogleAntigravityOAuth,
-    Ai.Auth.GoogleGeminiCliOAuth,
-    Ai.Auth.OpenAICodexOAuth
+    LemonAiRuntime.Auth.GitHubCopilotOAuth,
+    LemonAiRuntime.Auth.GoogleAntigravityOAuth,
+    LemonAiRuntime.Auth.GoogleGeminiCliOAuth,
+    LemonAiRuntime.Auth.OpenAICodexOAuth
   ]
 
   defp resolve_oauth_secret_api_key(secret_name, secret_value)
@@ -620,7 +620,11 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_oauth_secret_api_key(_, _), do: {:error, :invalid_secret_value}
 
   defp oauth_secret_resolver_module do
-    Application.get_env(:coding_agent, :oauth_secret_resolver_module, Ai.Auth.OAuthSecretResolver)
+    Application.get_env(
+      :coding_agent,
+      :oauth_secret_resolver_module,
+      LemonAiRuntime.Auth.OAuthSecretResolver
+    )
   end
 
   defp oauth_resolver_available?(resolver) when is_atom(resolver) do
