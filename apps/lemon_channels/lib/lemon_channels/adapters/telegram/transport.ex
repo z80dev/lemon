@@ -3454,15 +3454,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp present_value?(_), do: false
 
   defp openai_codex_auth_available? do
-    mod = :"Elixir.Ai.Auth.OpenAICodexOAuth"
-
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :get_api_key, 0) do
-      case apply(mod, :get_api_key, []) do
-        value when is_binary(value) -> String.trim(value) != ""
-        _ -> false
-      end
-    else
-      false
+    case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token() do
+      value when is_binary(value) -> String.trim(value) != ""
+      _ -> false
     end
   rescue
     _ -> false
