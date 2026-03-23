@@ -171,22 +171,52 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  # Create a minimal job struct for testing
-  defp make_test_job(run_id, meta \\ %{}) do
-    %LemonGateway.Types.Job{
-      run_id: run_id,
-      session_key: nil,
-      prompt: "test",
-      engine_id: "echo",
-      meta: meta
-    }
+  # Create a minimal execution request for testing
+  defp make_test_request(run_id, meta \\ %{}, attrs \\ %{}) do
+    struct(
+      %LemonGateway.ExecutionRequest{
+        run_id: run_id,
+        session_key: nil,
+        prompt: "test",
+        engine_id: "echo",
+        conversation_key: {:session, "test:#{run_id}"},
+        meta: meta
+      },
+      attrs
+    )
   end
 
   describe "start_link/1" do
     test "starts successfully with valid args" do
       run_id = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
+
+      result =
+        RunProcess.start_link(%{
+          run_id: run_id,
+          session_key: session_key,
+          execution_request: job
+        })
+
+      # Process should start successfully (even if it completes quickly)
+      assert {:ok, pid} = result
+      assert is_pid(pid)
+    end
+
+    test "rejects legacy job-only initialization" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = SessionKey.main("test-agent")
+      previous = Process.flag(:trap_exit, true)
+
+      job = %LemonGateway.Types.Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: "test",
+        engine_id: "echo"
+      }
+
+      on_exit(fn -> Process.flag(:trap_exit, previous) end)
 
       result =
         RunProcess.start_link(%{
@@ -195,22 +225,29 @@ defmodule LemonRouter.RunProcessTest do
           job: job
         })
 
-      # Process should start successfully (even if it completes quickly)
-      assert {:ok, pid} = result
-      assert is_pid(pid)
+      case result do
+        {:error, reason} ->
+          assert reason in [
+                   {:invalid_execution_request, run_id},
+                   {:shutdown, {:invalid_execution_request, run_id}}
+                 ]
+
+        other ->
+          flunk("expected invalid execution request error, got: #{inspect(other)}")
+      end
     end
 
     test "does not own SessionRegistry entries directly" do
       run_id = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
 
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -238,14 +275,14 @@ defmodule LemonRouter.RunProcessTest do
       run_id2 = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
 
-      job1 = make_test_job(run_id1)
-      job2 = make_test_job(run_id2)
+      job1 = make_test_request(run_id1)
+      job2 = make_test_request(run_id2)
 
       assert {:ok, pid1} =
                RunProcess.start_link(%{
                  run_id: run_id1,
                  session_key: session_key,
-                 job: job1,
+                 execution_request: job1,
                  submit_to_gateway?: false
                })
 
@@ -264,7 +301,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id2,
                  session_key: session_key,
-                 job: job2,
+                 execution_request: job2,
                  submit_to_gateway?: false
                })
 
@@ -313,7 +350,7 @@ defmodule LemonRouter.RunProcessTest do
     test "aborted run without a gateway pid synthesizes completion and exits" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -321,7 +358,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -342,7 +379,7 @@ defmodule LemonRouter.RunProcessTest do
     test "late run_completed beats synthetic missing-gateway failure" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -350,7 +387,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -398,7 +435,7 @@ defmodule LemonRouter.RunProcessTest do
     test "started run without a gateway pid synthesizes completion and exits" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -406,7 +443,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -437,7 +474,7 @@ defmodule LemonRouter.RunProcessTest do
     test "retries until scheduler becomes available and submits the job once" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       assert Process.whereis(TestScheduler) == nil
 
@@ -445,7 +482,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  gateway_scheduler: TestScheduler
                })
 
@@ -469,7 +506,7 @@ defmodule LemonRouter.RunProcessTest do
     test "does not submit after abort while waiting for scheduler" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       assert Process.whereis(TestScheduler) == nil
 
@@ -477,7 +514,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  gateway_scheduler: TestScheduler
                })
 
@@ -551,7 +588,7 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       job =
-        make_test_job(run_id, %{
+        make_test_request(run_id, %{
           progress_msg_id: 111,
           user_msg_id: 222
         })
@@ -560,7 +597,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -661,7 +698,7 @@ defmodule LemonRouter.RunProcessTest do
     test "synthesizes run_completed and exits when a started run never completes" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -669,7 +706,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_watchdog_timeout_ms: 50
                })
@@ -698,7 +735,7 @@ defmodule LemonRouter.RunProcessTest do
     test "activity extends watchdog timeout" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -706,7 +743,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_watchdog_timeout_ms: 80
                })
@@ -758,7 +795,7 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -766,7 +803,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_watchdog_timeout_ms: 40,
                  run_watchdog_confirm_timeout_ms: 120
@@ -818,7 +855,10 @@ defmodule LemonRouter.RunProcessTest do
       session_key = SessionKey.main("test-agent")
 
       job =
-        %{make_test_job(run_id, %{origin: :channel}) | prompt: "Collect the latest status report"}
+        %{
+          make_test_request(run_id, %{origin: :channel})
+          | prompt: "Collect the latest status report"
+        }
 
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
@@ -827,7 +867,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_orchestrator: __MODULE__.TestRunOrchestrator
                })
@@ -863,7 +903,7 @@ defmodule LemonRouter.RunProcessTest do
     test "does not auto-retry when there is non-empty answer text" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
+      job = %{make_test_request(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
@@ -872,7 +912,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_orchestrator: __MODULE__.TestRunOrchestrator
                })
@@ -902,7 +942,7 @@ defmodule LemonRouter.RunProcessTest do
 
       job =
         %{
-          make_test_job(run_id, %{origin: :channel, zero_answer_retry_attempt: 1})
+          make_test_request(run_id, %{origin: :channel, zero_answer_retry_attempt: 1})
           | prompt: "Do work"
         }
 
@@ -913,7 +953,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_orchestrator: __MODULE__.TestRunOrchestrator
                })
@@ -940,7 +980,7 @@ defmodule LemonRouter.RunProcessTest do
     test "does not auto-retry when assistant error is context overflow" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
+      job = %{make_test_request(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
@@ -949,7 +989,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false,
                  run_orchestrator: __MODULE__.TestRunOrchestrator
                })
@@ -988,13 +1028,13 @@ defmodule LemonRouter.RunProcessTest do
           updated_at: System.system_time(:millisecond)
         })
 
-      job = make_test_job(run_id, %{origin: :channel})
+      job = make_test_request(run_id, %{origin: :channel})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1070,7 +1110,7 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       job =
-        make_test_job(run_id, %{
+        make_test_request(run_id, %{
           progress_msg_id: 111,
           user_msg_id: 222
         })
@@ -1079,7 +1119,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1274,7 +1314,7 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       job =
-        make_test_job(run_id, %{
+        make_test_request(run_id, %{
           progress_msg_id: 111,
           user_msg_id: 222
         })
@@ -1283,7 +1323,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1506,13 +1546,13 @@ defmodule LemonRouter.RunProcessTest do
         %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "222"}
       ]
 
-      job = make_test_job(run_id, %{fanout_routes: fanout_routes})
+      job = make_test_request(run_id, %{fanout_routes: fanout_routes})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1613,7 +1653,7 @@ defmodule LemonRouter.RunProcessTest do
       _ = ResumeIndexStore.delete_thread("botx", 12_345, nil, generation: 0)
 
       job =
-        make_test_job(run_id, %{
+        make_test_request(run_id, %{
           progress_msg_id: 111,
           user_msg_id: 222
         })
@@ -1622,7 +1662,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1688,13 +1728,13 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_001, stale_resume, generation: 0)
 
-      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+      job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1769,13 +1809,13 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = ResumeIndexStore.put_resume("botx", 12_345, 777, 9_002, stale_resume, generation: 0)
 
-      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+      job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1843,13 +1883,13 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+      job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1920,13 +1960,13 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+      job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -1997,13 +2037,13 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+      job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -2081,19 +2121,16 @@ defmodule LemonRouter.RunProcessTest do
       # Create a job with a long prompt (400 chars → ~100 estimated tokens)
       long_prompt = String.duplicate("a", 400)
 
-      job = %LemonGateway.Types.Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: long_prompt,
-        engine_id: "echo",
-        meta: %{progress_msg_id: 111, user_msg_id: 222}
-      }
+      job =
+        make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222}, %{
+          prompt: long_prompt
+        })
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -2172,19 +2209,16 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      job = %LemonGateway.Types.Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: "short prompt",
-        engine_id: "echo",
-        meta: %{progress_msg_id: 111, user_msg_id: 222}
-      }
+      job =
+        make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222}, %{
+          prompt: "short prompt"
+        })
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -2243,19 +2277,16 @@ defmodule LemonRouter.RunProcessTest do
 
       _ = PendingCompactionStore.delete(session_key)
 
-      job = %LemonGateway.Types.Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: String.duplicate("a", 400),
-        engine_id: "echo",
-        meta: %{progress_msg_id: 111, user_msg_id: 222}
-      }
+      job =
+        make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222}, %{
+          prompt: String.duplicate("a", 400)
+        })
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -2315,13 +2346,13 @@ defmodule LemonRouter.RunProcessTest do
     test "tracks image file_change paths from completed engine actions" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_job(run_id)
+      job = make_test_request(run_id)
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 
@@ -2358,13 +2389,13 @@ defmodule LemonRouter.RunProcessTest do
     test "tracks explicit auto_send_files from tool result metadata" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = %{make_test_job(run_id) | cwd: "/tmp/project"}
+      job = %{make_test_request(run_id) | cwd: "/tmp/project"}
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job,
+                 execution_request: job,
                  submit_to_gateway?: false
                })
 

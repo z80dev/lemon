@@ -15,6 +15,7 @@ defmodule LemonGateway.RunSupervisorTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.RunSupervisor
+  alias LemonGateway.ExecutionRequest
   alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
@@ -244,6 +245,25 @@ defmodule LemonGateway.RunSupervisorTest do
     }
   end
 
+  defp make_request(job, opts \\ []) do
+    slot_ref = Keyword.get(opts, :slot_ref, make_ref())
+    worker_pid = Keyword.get(opts, :worker_pid, self())
+
+    %{
+      execution_request:
+        ExecutionRequest.from_job(job, conversation_key: conversation_key_for(job)),
+      slot_ref: slot_ref,
+      worker_pid: worker_pid
+    }
+  end
+
+  defp conversation_key_for(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
+       when is_binary(engine) and is_binary(value),
+       do: {:resume, engine, value}
+
+  defp conversation_key_for(%Job{session_key: session_key}) when is_binary(session_key),
+    do: {:session, session_key}
+
   # ============================================================================
   # 1. Supervisor Startup and Initialization
   # ============================================================================
@@ -298,10 +318,10 @@ defmodule LemonGateway.RunSupervisorTest do
         )
 
       {:ok, _pid1} =
-        RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job1))
 
       {:ok, _pid2} =
-        RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job2))
 
       # Both should start
       assert_receive {:engine_started, _, task_pid1}, 2000
@@ -325,7 +345,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert is_pid(pid)
       assert Process.alive?(pid)
@@ -338,7 +358,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      result = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      result = RunSupervisor.start_run(make_request(job))
 
       assert {:ok, pid} = result
       assert is_pid(pid)
@@ -350,7 +370,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, engine_hint: "slow_test", meta: %{notify_pid: self(), delay_ms: 500})
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       # Check that the process is a child of the supervisor
       children = DynamicSupervisor.which_children(RunSupervisor)
@@ -368,7 +388,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "run #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           {i, pid}
         end
@@ -384,7 +404,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, text: "unique test text #{System.unique_integer()}")
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Quick: " <> answer_text}},
@@ -403,7 +423,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -426,7 +446,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, _, task_pid}, 2000
@@ -460,7 +480,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
@@ -513,10 +533,10 @@ defmodule LemonGateway.RunSupervisorTest do
         )
 
       {:ok, _pid1} =
-        RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job1))
 
       {:ok, pid2} =
-        RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job2))
 
       assert_receive {:engine_started, :job1, _run_ref1, task_pid1}, 2000
       assert_receive {:engine_started, :job2, _run_ref2, task_pid2}, 2000
@@ -548,7 +568,7 @@ defmodule LemonGateway.RunSupervisorTest do
             )
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           {i, pid}
         end
@@ -569,7 +589,7 @@ defmodule LemonGateway.RunSupervisorTest do
         )
 
       {:ok, pid1} =
-        RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job1))
 
       assert_receive {:engine_started, _, _task_pid1}, 2000
 
@@ -585,7 +605,7 @@ defmodule LemonGateway.RunSupervisorTest do
       job2 = make_job(scope2)
 
       {:ok, pid2} =
-        RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job2))
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 2000
     end
@@ -600,7 +620,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, engine_hint: "slow_test", meta: %{notify_pid: self(), delay_ms: 500})
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       children = DynamicSupervisor.which_children(RunSupervisor)
       child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
@@ -621,7 +641,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, _pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:engine_started, _, task_pid}, 2000
 
@@ -646,7 +666,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, _, _task_pid}, 2000
@@ -675,10 +695,10 @@ defmodule LemonGateway.RunSupervisorTest do
         )
 
       {:ok, pid1} =
-        RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job1))
 
       {:ok, pid2} =
-        RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
+        RunSupervisor.start_run(make_request(job2))
 
       # Engine start notifications are asynchronous and can arrive in either order.
       assert_receive {:engine_started, _, task_pid_a}, 2000
@@ -718,7 +738,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "parallel #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           {i, pid}
         end
@@ -743,7 +763,7 @@ defmodule LemonGateway.RunSupervisorTest do
             job = make_job(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
 
             {:ok, pid} =
-              RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: test_pid})
+              RunSupervisor.start_run(make_request(job, worker_pid: test_pid))
 
             pid
           end)
@@ -763,7 +783,7 @@ defmodule LemonGateway.RunSupervisorTest do
         job = make_job(scope)
 
         {:ok, pid} =
-          RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+          RunSupervisor.start_run(make_request(job))
 
         assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
@@ -786,14 +806,14 @@ defmodule LemonGateway.RunSupervisorTest do
               )
 
             {:ok, pid} =
-              RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+              RunSupervisor.start_run(make_request(job))
 
             {:slow, pid}
           else
             job = make_job(scope, text: "fast #{i}")
 
             {:ok, pid} =
-              RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+              RunSupervisor.start_run(make_request(job))
 
             {:fast, pid}
           end
@@ -814,7 +834,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -823,7 +843,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, text: "notification test")
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Quick: notification test"}},
@@ -838,13 +858,13 @@ defmodule LemonGateway.RunSupervisorTest do
       job1 = make_job(scope1, text: "job1")
 
       {:ok, pid1} =
-        RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: test_pid})
+        RunSupervisor.start_run(make_request(job1, worker_pid: test_pid))
 
       scope2 = make_scope()
       job2 = make_job(scope2, text: "job2")
 
       {:ok, pid2} =
-        RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: test_pid})
+        RunSupervisor.start_run(make_request(job2, worker_pid: test_pid))
 
       # Both should complete with correct answers
       completions =
@@ -875,7 +895,7 @@ defmodule LemonGateway.RunSupervisorTest do
       job = make_job(scope)
       slot_ref = make_ref()
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: slot_ref, worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job, slot_ref: slot_ref))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -888,7 +908,7 @@ defmodule LemonGateway.RunSupervisorTest do
           slot_ref = make_ref()
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: slot_ref, worker_pid: self()})
+            RunSupervisor.start_run(make_request(job, slot_ref: slot_ref))
 
           {slot_ref, pid}
         end
@@ -915,7 +935,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, _, _task_pid}, 2000
@@ -933,7 +953,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
@@ -957,7 +977,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, text: "")
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Quick: "}},
                      2000
@@ -968,7 +988,7 @@ defmodule LemonGateway.RunSupervisorTest do
       long_text = String.duplicate("a", 10000)
       job = make_job(scope, text: long_text)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -977,7 +997,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, text: "Special chars: \n\t\r unicode: \u{1F600}")
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -990,7 +1010,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "rapid #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           pid
         end
@@ -1005,7 +1025,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, meta: nil)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -1020,7 +1040,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       # Worker receives run_complete
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
@@ -1040,7 +1060,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:run_complete, ^pid, _}, 2000
@@ -1052,7 +1072,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 2000
@@ -1066,7 +1086,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "monitor test #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           ref = Process.monitor(pid)
           {ref, pid}
@@ -1094,7 +1114,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, _, _task_pid}, 2000
@@ -1118,7 +1138,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
 
       # Verify it's a GenServer (Run is a GenServer)
       assert Process.alive?(pid)
@@ -1141,7 +1161,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "burst #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           pid
         end
@@ -1163,7 +1183,7 @@ defmodule LemonGateway.RunSupervisorTest do
           job = make_job(scope, text: "stability test batch #{batch} run #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+            RunSupervisor.start_run(make_request(job))
 
           assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
         end
@@ -1175,7 +1195,7 @@ defmodule LemonGateway.RunSupervisorTest do
       # Can still start new runs
       scope = make_scope()
       job = make_job(scope, text: "final test")
-      {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      {:ok, pid} = RunSupervisor.start_run(make_request(job))
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
@@ -1192,8 +1212,16 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      result = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+      result = RunSupervisor.start_run(make_request(job))
       assert {:ok, _pid} = result
+    end
+
+    test "start_run/1 rejects legacy %{job: ...} input" do
+      scope = make_scope()
+      job = make_job(scope)
+
+      assert {:error, :invalid_execution_request} =
+               RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
     end
 
     test "start_link/1 starts the supervisor" do

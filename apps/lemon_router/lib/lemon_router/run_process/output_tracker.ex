@@ -416,7 +416,7 @@ defmodule LemonRouter.RunProcess.OutputTracker do
   defp fanout_routes(_), do: []
 
   defp coalescer_meta(%{execution_request: %LemonGateway.ExecutionRequest{} = request}),
-    do: ChannelContext.coalescer_meta_from_job(request)
+    do: ChannelContext.coalescer_meta_from_request(request)
 
   defp coalescer_meta(_), do: %{}
 

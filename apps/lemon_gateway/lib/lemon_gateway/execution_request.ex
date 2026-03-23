@@ -1,6 +1,10 @@
 defmodule LemonGateway.ExecutionRequest do
   @moduledoc """
-  Queue-semantic-free execution contract for gateway submission.
+  Queue-semantic-free public execution contract for gateway submission.
+
+  Router-owned callers hand `%ExecutionRequest{}` values across the
+  router->gateway boundary. Gateway internals still convert these requests into
+  `%LemonGateway.Types.Job{}` before invoking engines.
   """
 
   alias LemonGateway.Types.Job
@@ -34,6 +38,10 @@ defmodule LemonGateway.ExecutionRequest do
           meta: map()
         }
 
+  @doc """
+  Compatibility/migration helper; new code should build `%ExecutionRequest{}`
+  values directly.
+  """
   @spec from_job(Job.t(), keyword()) :: t()
   def from_job(%Job{} = job, opts \\ []) do
     %__MODULE__{
@@ -50,6 +58,10 @@ defmodule LemonGateway.ExecutionRequest do
     }
   end
 
+  @doc """
+  Converts the public execution contract into the internal engine-facing job
+  shape used inside gateway run execution.
+  """
   @spec to_job(t()) :: Job.t()
   def to_job(%__MODULE__{} = request) do
     %Job{

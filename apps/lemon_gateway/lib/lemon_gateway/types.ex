@@ -12,11 +12,11 @@ defmodule LemonGateway.Types do
 
   defmodule Job do
     @moduledoc """
-    Legacy transport-agnostic job definition for run orchestration.
+    Internal engine-facing compatibility type for gateway run execution.
 
-    New code should prefer `LemonGateway.ExecutionRequest` as the scheduler
-    input contract. `Job` remains as a compatibility surface while callers
-    migrate.
+    New router and gateway submission code should use
+    `LemonGateway.ExecutionRequest`. `Job` remains inside gateway run execution
+    and in compatibility helpers while engines still speak this shape.
 
     ## Fields
 

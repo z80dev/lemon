@@ -2,6 +2,10 @@ defmodule LemonRouter.RunProcess do
   @moduledoc """
   Process that owns a single run lifecycle.
 
+  `RunProcess` expects a router-built `%LemonGateway.ExecutionRequest{}` at init
+  time. Router-owned conversation identity must already be resolved before this
+  process submits work into the gateway.
+
   Each RunProcess:
   - Owns a run_id
   - Manages abort state
@@ -22,7 +26,6 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonGateway.ExecutionRequest
   alias LemonCore.{Bus, Introspection}
-  alias LemonRouter.ConversationKey
   alias LemonRouter.RunProcess.{CompactionTrigger, OutputTracker, RetryHandler, Watchdog}
 
   @gateway_submit_retry_base_ms 100
@@ -102,91 +105,88 @@ defmodule LemonRouter.RunProcess do
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
     run_watchdog_confirm_timeout_ms = Watchdog.resolve_run_watchdog_confirm_timeout_ms(opts)
 
-    execution_request =
-      opts[:execution_request] ||
-        case opts[:job] do
-          %LemonGateway.Types.Job{} = legacy_job -> ExecutionRequest.from_job(legacy_job)
-          _ -> nil
+    with %ExecutionRequest{} = request <- opts[:execution_request],
+         {:ok, execution_request} <-
+           normalize_execution_request(
+             request,
+             session_key,
+             opts[:conversation_key],
+             run_id
+           ) do
+      queue_mode = opts[:queue_mode] || :collect
+
+      # For tests and partial-boot scenarios, allow skipping gateway submission.
+      submit_to_gateway? =
+        case opts[:submit_to_gateway?] do
+          nil -> true
+          other -> other
         end
 
-    execution_request =
-      normalize_execution_request(
-        execution_request,
-        session_key,
-        opts[:conversation_key]
+      # Subscribe to run events
+      Bus.subscribe(Bus.run_topic(run_id))
+
+      state = %{
+        run_id: run_id,
+        session_key: session_key,
+        execution_request: execution_request,
+        queue_mode: queue_mode,
+        start_ts_ms: LemonCore.Clock.now_ms(),
+        aborted: false,
+        completed: false,
+        saw_delta: false,
+        run_started_at_ms: nil,
+        run_last_activity_at_ms: nil,
+        run_watchdog_timeout_ms: run_watchdog_timeout_ms,
+        run_watchdog_confirm_timeout_ms: run_watchdog_confirm_timeout_ms,
+        run_watchdog_ref: nil,
+        run_watchdog_confirmation_ref: nil,
+        run_watchdog_awaiting_confirmation?: false,
+        submit_to_gateway?: submit_to_gateway?,
+        gateway_scheduler: gateway_scheduler,
+        run_orchestrator: run_orchestrator,
+        gateway_submit_attempt: 0,
+        gateway_submitted?: false,
+        gateway_run_pid: nil,
+        gateway_run_ref: nil,
+        coordinator_pid: opts[:coordinator_pid],
+        conversation_key:
+          opts[:conversation_key] ||
+            match_conversation_key(execution_request),
+        generated_image_paths: [],
+        requested_send_files: [],
+        task_status_surfaces: %{},
+        task_status_refs: %{}
+      }
+
+      Logger.debug(
+        "RunProcess init run_id=#{inspect(run_id)} session_key=#{inspect(session_key)} " <>
+          "engine=#{inspect(execution_request && execution_request.engine_id)} " <>
+          "queue_mode=#{inspect(queue_mode)} " <>
+          "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
       )
 
-    queue_mode = opts[:queue_mode] || :collect
+      # Emit introspection event for run start
+      Introspection.record(
+        :run_started,
+        %{
+          engine_id: execution_request && execution_request.engine_id,
+          queue_mode: queue_mode
+        },
+        run_id: run_id,
+        session_key: session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
 
-    # For tests and partial-boot scenarios, allow skipping gateway submission.
-    submit_to_gateway? =
-      case opts[:submit_to_gateway?] do
-        nil -> true
-        other -> other
+      # Submit to gateway
+      if submit_to_gateway? do
+        send(self(), :submit_to_gateway)
       end
 
-    # Subscribe to run events
-    Bus.subscribe(Bus.run_topic(run_id))
-
-    state = %{
-      run_id: run_id,
-      session_key: session_key,
-      execution_request: execution_request,
-      queue_mode: queue_mode,
-      start_ts_ms: LemonCore.Clock.now_ms(),
-      aborted: false,
-      completed: false,
-      saw_delta: false,
-      run_started_at_ms: nil,
-      run_last_activity_at_ms: nil,
-      run_watchdog_timeout_ms: run_watchdog_timeout_ms,
-      run_watchdog_confirm_timeout_ms: run_watchdog_confirm_timeout_ms,
-      run_watchdog_ref: nil,
-      run_watchdog_confirmation_ref: nil,
-      run_watchdog_awaiting_confirmation?: false,
-      submit_to_gateway?: submit_to_gateway?,
-      gateway_scheduler: gateway_scheduler,
-      run_orchestrator: run_orchestrator,
-      gateway_submit_attempt: 0,
-      gateway_submitted?: false,
-      gateway_run_pid: nil,
-      gateway_run_ref: nil,
-      coordinator_pid: opts[:coordinator_pid],
-      conversation_key:
-        opts[:conversation_key] ||
-          match_conversation_key(execution_request),
-      generated_image_paths: [],
-      requested_send_files: [],
-      task_status_surfaces: %{},
-      task_status_refs: %{}
-    }
-
-    Logger.debug(
-      "RunProcess init run_id=#{inspect(run_id)} session_key=#{inspect(session_key)} " <>
-        "engine=#{inspect(execution_request && execution_request.engine_id)} " <>
-        "queue_mode=#{inspect(queue_mode)} " <>
-        "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
-    )
-
-    # Emit introspection event for run start
-    Introspection.record(
-      :run_started,
-      %{
-        engine_id: execution_request && execution_request.engine_id,
-        queue_mode: queue_mode
-      },
-      run_id: run_id,
-      session_key: session_key,
-      engine: "lemon",
-      provenance: :direct
-    )
-
-    # Submit to gateway
-    if submit_to_gateway? do
-      send(self(), :submit_to_gateway)
+      {:ok, state}
+    else
+      _ -> {:stop, {:invalid_execution_request, run_id}}
     end
-
-    {:ok, state}
   end
 
   @impl true
@@ -726,22 +726,23 @@ defmodule LemonRouter.RunProcess do
 
   defp match_conversation_key(_request), do: nil
 
-  defp normalize_execution_request(%ExecutionRequest{} = request, session_key, conversation_key) do
-    normalized_session_key = request.session_key || session_key
-
-    normalized_conversation_key =
-      request.conversation_key ||
-        conversation_key ||
-        ConversationKey.resolve(normalized_session_key, request.resume)
-
-    %{
+  defp normalize_execution_request(
+         %ExecutionRequest{} = request,
+         session_key,
+         conversation_key,
+         run_id
+       ) do
+    normalized_request = %{
       request
-      | session_key: normalized_session_key,
-        conversation_key: normalized_conversation_key
+      | session_key: request.session_key || session_key,
+        conversation_key: request.conversation_key || conversation_key
     }
-  end
 
-  defp normalize_execution_request(request, _session_key, _conversation_key), do: request
+    {:ok, ExecutionRequest.ensure_conversation_key(normalized_request)}
+  rescue
+    ArgumentError ->
+      {:error, {:invalid_execution_request, run_id}}
+  end
 
   # Unsubscribe control-plane EventBridge from run events
   defp unsubscribe_event_bridge(run_id) do

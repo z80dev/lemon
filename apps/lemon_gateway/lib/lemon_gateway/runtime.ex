@@ -11,7 +11,9 @@ defmodule LemonGateway.Runtime do
   @doc "Submits an execution request to the scheduler."
   @spec submit_execution(ExecutionRequest.t()) :: :ok
   def submit_execution(%ExecutionRequest{} = request) do
-    LemonGateway.Scheduler.submit_execution(request)
+    request
+    |> ExecutionRequest.ensure_conversation_key()
+    |> LemonGateway.Scheduler.submit_execution()
   end
 
   @doc "Cancels a run identified by its progress message ID within a scope."

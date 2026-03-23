@@ -39,7 +39,10 @@ defmodule LemonRouter.ChannelContextTest do
   describe "helpers" do
     test "channel_id/1 returns channel only for channel peer sessions" do
       assert ChannelContext.channel_id("agent:a1:telegram:bot:dm:42") == {:ok, "telegram"}
-      assert ChannelContext.channel_id("agent:coder:delegate:agent:main:p123:thread:oracle") == :error
+
+      assert ChannelContext.channel_id("agent:coder:delegate:agent:main:p123:thread:oracle") ==
+               :error
+
       assert ChannelContext.channel_id("agent:a1:main") == :error
     end
 
@@ -48,10 +51,10 @@ defmodule LemonRouter.ChannelContextTest do
       assert ChannelContext.compact_meta(nil) == %{}
     end
 
-    test "coalescer_meta_from_job/1 returns semantic metadata only" do
-      job = %{meta: %{progress_msg_id: 10, status_msg_id: 11, user_msg_id: 12, ignore: "x"}}
+    test "coalescer_meta_from_request/1 returns semantic metadata only" do
+      request = %{meta: %{progress_msg_id: 10, status_msg_id: 11, user_msg_id: 12, ignore: "x"}}
 
-      assert ChannelContext.coalescer_meta_from_job(job) == %{
+      assert ChannelContext.coalescer_meta_from_request(request) == %{
                user_msg_id: 12,
                show_running_prefix?: true
              }

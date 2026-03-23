@@ -516,9 +516,22 @@ defmodule LemonGateway.RunTest do
     }
   end
 
+  defp make_request(session_key, opts \\ []) do
+    job = make_job(session_key, opts)
+    ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
+  end
+
+  defp test_conversation_key(%Job{resume: %ResumeToken{engine: engine, value: value}})
+       when is_binary(engine) and is_binary(value),
+       do: {:resume, engine, value}
+
+  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
+    do: {:session, session_key}
+
   defp start_run_direct(job, slot_ref \\ make_ref()) do
     args = %{
-      execution_request: ExecutionRequest.from_job(job),
+      execution_request:
+        ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job)),
       slot_ref: slot_ref,
       worker_pid: self()
     }
@@ -826,8 +839,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Send steer cast
-      steer_job = make_job(scope, text: "steering message")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steering message")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should receive steer notification
       assert_receive {:steered, "steering message"}, 2000
@@ -846,8 +859,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Try to steer after completion
-      steer_job = make_job(scope, text: "late steer")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "late steer")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should receive rejection (though process may be dead)
       # Note: This test may be flaky since the process stops after completion
@@ -867,11 +880,11 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer (engine doesn't support it)
-      steer_job = make_job(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steer attempt")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should receive rejection
-      assert_receive {:steer_rejected, ^steer_job}, 2000
+      assert_receive {:steer_rejected, ^steer_request}, 2000
     end
 
     test "rejects steer when engine is not yet initialized" do
@@ -893,11 +906,11 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer (engine will fail)
-      steer_job = make_job(scope, text: "steer that fails")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steer that fails")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should receive rejection due to steer error
-      assert_receive {:steer_rejected, ^steer_job}, 2000
+      assert_receive {:steer_rejected, ^steer_request}, 2000
     end
   end
 
@@ -1631,8 +1644,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Steer should succeed
-      steer_job = make_job(scope, text: "steering text")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steering text")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Engine receives the steer
       assert_receive {:steered, "steering text"}, 2000
@@ -1656,8 +1669,8 @@ defmodule LemonGateway.RunTest do
 
       # Send multiple steers
       for i <- 1..5 do
-        steer_job = make_job(scope, text: "steer #{i}")
-        GenServer.cast(pid, {:steer, steer_job, self()})
+        steer_request = make_request(scope, text: "steer #{i}")
+        GenServer.cast(pid, {:steer, steer_request, self()})
       end
 
       # All should be received by engine - collect all messages
@@ -1691,16 +1704,16 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Process should be stopping/stopped, but if we can still message it...
-      steer_job = make_job(scope, text: "late steer")
+      steer_request = make_request(scope, text: "late steer")
       ref = Process.monitor(pid)
 
       # After completion, a late steer is either explicitly rejected (if the
       # process is still alive) or the process exits before handling it.
       if Process.alive?(pid) do
-        GenServer.cast(pid, {:steer, steer_job, self()})
+        GenServer.cast(pid, {:steer, steer_request, self()})
 
         receive do
-          {:steer_rejected, ^steer_job} -> :ok
+          {:steer_rejected, ^steer_request} -> :ok
           {:DOWN, ^ref, :process, ^pid, _} -> :ok
         after
           2000 ->
@@ -1733,11 +1746,11 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer
-      steer_job = make_job(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steer attempt")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should be rejected because engine doesn't support steering
-      assert_receive {:steer_rejected, ^steer_job}, 2000
+      assert_receive {:steer_rejected, ^steer_request}, 2000
     end
 
     test "steer is rejected when engine.steer returns error" do
@@ -1754,11 +1767,11 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer
-      steer_job = make_job(scope, text: "steer that fails")
-      GenServer.cast(pid, {:steer, steer_job, self()})
+      steer_request = make_request(scope, text: "steer that fails")
+      GenServer.cast(pid, {:steer, steer_request, self()})
 
       # Should be rejected because engine.steer returned error
-      assert_receive {:steer_rejected, ^steer_job}, 2000
+      assert_receive {:steer_rejected, ^steer_request}, 2000
     end
 
     test "steer rejection sends message to correct worker_pid" do
@@ -1780,18 +1793,18 @@ defmodule LemonGateway.RunTest do
       worker =
         spawn(fn ->
           receive do
-            {:steer_rejected, job} -> send(test_pid, {:worker_got_rejection, job})
+            {:steer_rejected, request} -> send(test_pid, {:worker_got_rejection, request})
           after
             5000 -> send(test_pid, :worker_timeout)
           end
         end)
 
-      steer_job = make_job(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_job, worker})
+      steer_request = make_request(scope, text: "steer attempt")
+      GenServer.cast(pid, {:steer, steer_request, worker})
 
       # The worker should receive the rejection, not us
       refute_receive {:steer_rejected, _}, 100
-      assert_receive {:worker_got_rejection, ^steer_job}, 2000
+      assert_receive {:worker_got_rejection, ^steer_request}, 2000
     end
   end
 

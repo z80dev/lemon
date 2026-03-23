@@ -24,4 +24,17 @@ defmodule LemonGateway.QueueModeTest do
     assert request.engine_id == "codex"
     refute Map.has_key?(Map.from_struct(request), :queue_mode)
   end
+
+  test "Scheduler.submit_execution/1 requires router-owned conversation_key" do
+    request = %ExecutionRequest{
+      run_id: "run_missing_conversation",
+      session_key: "agent:test:main",
+      prompt: "hello",
+      engine_id: "codex"
+    }
+
+    assert_raise ArgumentError,
+                 ~r/missing router-owned conversation_key/,
+                 fn -> LemonGateway.Scheduler.submit_execution(request) end
+  end
 end

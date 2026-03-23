@@ -16,7 +16,8 @@ defmodule LemonRouter.ChannelContext do
           sub_id: nil
         }
 
-      parsed when is_map(parsed) -> parsed
+      parsed when is_map(parsed) ->
+        parsed
     end
   rescue
     _ ->
@@ -68,7 +69,7 @@ defmodule LemonRouter.ChannelContext do
 
   def compact_meta(_), do: %{}
 
-  def coalescer_meta_from_job(%{meta: meta}) when is_map(meta) do
+  def coalescer_meta_from_request(%{meta: meta}) when is_map(meta) do
     %{
       user_msg_id: meta[:user_msg_id],
       show_running_prefix?:
@@ -76,7 +77,7 @@ defmodule LemonRouter.ChannelContext do
     }
   end
 
-  def coalescer_meta_from_job(_), do: %{}
+  def coalescer_meta_from_request(_), do: %{}
 
   defp present_progress_reference?(value) when is_integer(value), do: true
   defp present_progress_reference?(value) when is_binary(value), do: value != ""

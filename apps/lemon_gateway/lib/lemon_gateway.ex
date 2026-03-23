@@ -11,7 +11,8 @@ defmodule LemonGateway do
       request = %LemonGateway.ExecutionRequest{
         prompt: "Fix the failing test",
         engine_id: "lemon",
-        session_key: "telegram:12345"
+        session_key: "telegram:12345",
+        conversation_key: {:session, "telegram:12345"}
       }
 
       LemonGateway.submit(request)

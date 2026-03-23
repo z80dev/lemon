@@ -24,6 +24,7 @@ defmodule LemonGateway.Scheduler do
   @doc "Submits an execution request for scheduling."
   @spec submit_execution(ExecutionRequest.t()) :: :ok
   def submit_execution(%ExecutionRequest{} = request) do
+    request = ExecutionRequest.ensure_conversation_key(request)
     GenServer.cast(__MODULE__, {:submit_execution, request})
   end
 

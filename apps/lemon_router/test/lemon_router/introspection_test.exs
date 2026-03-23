@@ -6,6 +6,17 @@ defmodule LemonRouter.IntrospectionTest do
 
   alias LemonCore.Introspection
 
+  defp make_test_request(run_id, session_key, engine_id, meta \\ %{}) do
+    %LemonGateway.ExecutionRequest{
+      run_id: run_id,
+      session_key: session_key,
+      prompt: "test",
+      engine_id: engine_id,
+      conversation_key: {:session, session_key},
+      meta: meta
+    }
+  end
+
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
@@ -21,19 +32,13 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_run_#{token}"
       session_key = "agent:introspection_test:#{token}:main"
 
-      job = %LemonGateway.Types.Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: "test",
-        engine_id: "lemon",
-        meta: %{origin: :test}
-      }
+      execution_request = make_test_request(run_id, session_key, "lemon", %{origin: :test})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
           run_id: run_id,
           session_key: session_key,
-          job: job,
+          execution_request: execution_request,
           submit_to_gateway?: false
         )
 
@@ -60,19 +65,13 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_complete_#{token}"
       session_key = "agent:introspection_complete:#{token}:main"
 
-      job = %LemonGateway.Types.Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: "test",
-        engine_id: "echo",
-        meta: %{origin: :test}
-      }
+      execution_request = make_test_request(run_id, session_key, "echo", %{origin: :test})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
           run_id: run_id,
           session_key: session_key,
-          job: job,
+          execution_request: execution_request,
           submit_to_gateway?: false
         )
 
