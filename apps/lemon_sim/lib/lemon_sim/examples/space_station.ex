@@ -30,8 +30,10 @@ defmodule LemonSim.Examples.SpaceStation do
 
   alias LemonSim.Examples.SpaceStation.{
     ActionSpace,
+    Lore,
     Performance,
     Roles,
+    TranscriptLogger,
     Updater
   }
 
@@ -50,6 +52,26 @@ defmodule LemonSim.Examples.SpaceStation do
     player_names = Enum.map(players, fn {_id, p} -> get(p, :name) end)
     traits = Roles.assign_traits(player_names)
     connections = Roles.generate_connections(player_names)
+
+    # Optional LLM character lore
+    character_profiles =
+      if Keyword.get(opts, :generate_lore?, false) do
+        case Keyword.fetch(opts, :lore_model) do
+          {:ok, model} ->
+            stream_opts = Keyword.get(opts, :lore_stream_options, %{})
+
+            case Lore.generate(players, connections, model, stream_opts) do
+              {:ok, profiles} -> profiles
+              {:error, _} -> %{}
+            end
+
+          :error ->
+            %{}
+        end
+      else
+        %{}
+      end
+
     action_order = Roles.action_turn_order(players)
     first_actor = List.first(action_order)
 
@@ -57,6 +79,7 @@ defmodule LemonSim.Examples.SpaceStation do
       players: players,
       traits: traits,
       connections: connections,
+      character_profiles: character_profiles,
       journals: %{},
       systems: %{
         "o2" => %{health: 100, decay_rate: 5, name: "Oxygen"},
@@ -184,6 +207,15 @@ defmodule LemonSim.Examples.SpaceStation do
               "journal" => my_journal,
               "clues_found" => my_clues
             })
+
+          # Add character profile if lore was generated
+          character_profiles = get(world, :character_profiles, %{})
+          my_profile = Map.get(character_profiles, actor_id, %{})
+
+          enriched =
+            if my_profile != %{},
+              do: Map.put(enriched, "character_profile", my_profile),
+              else: enriched
 
           %{
             id: :role_info,
@@ -314,6 +346,8 @@ defmodule LemonSim.Examples.SpaceStation do
 
   @spec default_opts(keyword()) :: keyword()
   def default_opts(overrides \\ []) when is_list(overrides) do
+    overrides = Keyword.put_new(overrides, :provider_min_interval_ms, %{google_gemini_cli: 5_000})
+
     GameRunner.build_default_opts(projector_opts(), overrides,
       game_name: "Space Station Crisis",
       max_turns: @default_max_turns,
@@ -343,13 +377,17 @@ defmodule LemonSim.Examples.SpaceStation do
   """
   @spec run_multi_model(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run_multi_model(opts \\ []) when is_list(opts) do
-    state = initial_state(opts)
+    model_assignments = Keyword.fetch!(opts, :model_assignments)
+    state = initial_state(opts) |> attach_model_assignments(model_assignments)
 
     GameRunner.run_multi_model(state, modules(), &default_opts/1, opts,
       print_setup: &print_setup/1,
       print_result: &print_game_result/1,
       announce_turn: &announce_turn/2,
       print_step: &print_step/2,
+      transcript_step_meta: &TranscriptLogger.step_meta/1,
+      transcript_step_entry: &TranscriptLogger.turn_start_entry/3,
+      transcript_result_entry: &TranscriptLogger.turn_result_entry/3,
       transcript_detail: &transcript_detail/1,
       transcript_game_over_extra: &transcript_game_over_extra/1
     )
@@ -720,67 +758,10 @@ defmodule LemonSim.Examples.SpaceStation do
     IO.puts("Step #{turn} | round=#{round} phase=#{phase} actor=#{actor_name} (#{actor_id})")
   end
 
-  defp print_step(_turn, %{state: next_state}) do
-    world = next_state.world
-    phase = get(world, :phase)
-
-    case phase do
-      "discussion" ->
-        transcript = get(world, :discussion_transcript, [])
-        players = get(world, :players, %{})
-
-        case List.last(transcript) do
-          nil ->
-            :ok
-
-          entry ->
-            speaker = player_name(players, get(entry, :player))
-            entry_type = get(entry, :type, "statement")
-            statement = get(entry, :statement, "")
-
-            case entry_type do
-              "question" ->
-                target = player_name(players, get(entry, :target))
-                IO.puts("  [#{speaker}] asks #{target}: \"#{statement}\"")
-
-              "accusation" ->
-                target = player_name(players, get(entry, :target))
-                IO.puts("  [#{speaker}] ACCUSES #{target}: \"#{statement}\"")
-
-              _ ->
-                IO.puts("  [#{speaker}]: \"#{statement}\"")
-            end
-        end
-
-      "voting" ->
-        votes = get(world, :votes, %{})
-
-        if map_size(votes) > 0 do
-          {voter, target} = Enum.max_by(votes, fn {_k, _v} -> map_size(votes) end)
-
-          IO.puts(
-            "  #{player_name(get(world, :players, %{}), voter)} voted for #{player_name(get(world, :players, %{}), target)}"
-          )
-        end
-
-      "action" ->
-        systems = get(world, :systems, %{})
-
-        if map_size(systems) > 0 do
-          health_str =
-            systems
-            |> Enum.sort_by(fn {id, _s} -> id end)
-            |> Enum.map(fn {id, s} -> "#{id}=#{get(s, :health, "?")}" end)
-            |> Enum.join(" ")
-
-          IO.puts("  Systems: #{health_str}")
-        end
-
-      "game_over" ->
-        IO.puts("  Game over! Winner: #{get(world, :winner)}")
-
-      _ ->
-        :ok
+  defp print_step(_turn, result) when is_map(result) do
+    case TranscriptLogger.print_step_summary(result) do
+      nil -> :ok
+      line -> IO.puts(line)
     end
   end
 
@@ -852,7 +833,9 @@ defmodule LemonSim.Examples.SpaceStation do
 
     IO.puts("\nPerformance summary:")
 
-    Performance.summarize(world)
+    perf = Performance.summarize(world)
+
+    perf
     |> get(:players, [])
     |> Enum.each(fn player ->
       IO.puts(
@@ -861,6 +844,23 @@ defmodule LemonSim.Examples.SpaceStation do
           "locks=#{get(player, :locks)} vents=#{get(player, :vents)} correct_votes=#{get(player, :correct_votes)}"
       )
     end)
+
+    models = get(perf, :models, %{})
+
+    if map_size(models) > 1 do
+      IO.puts("\nModel-level summary:")
+
+      models
+      |> Enum.sort_by(fn {model, _metrics} -> model || "" end)
+      |> Enum.each(fn {model, metrics} ->
+        IO.puts(
+          "  #{model}: seats=#{get(metrics, :seats, 0)} wins=#{get(metrics, :team_wins, 0)} " <>
+            "repairs=#{get(metrics, :repairs, 0)} sabotages=#{get(metrics, :sabotages, 0)} " <>
+            "scans=#{get(metrics, :scans, 0)} correct_votes=#{get(metrics, :correct_votes, 0)} " <>
+            "wrong_votes=#{get(metrics, :wrong_votes, 0)}"
+        )
+      end)
+    end
   end
 
   # -- Transcript detail helpers --
@@ -905,6 +905,19 @@ defmodule LemonSim.Examples.SpaceStation do
       discussion_transcript: get(world, :discussion_transcript, []),
       performance: Performance.summarize(world)
     }
+  end
+
+  defp attach_model_assignments(state, model_assignments) do
+    players =
+      state.world
+      |> get(:players, %{})
+      |> Enum.into(%{}, fn {player_id, info} ->
+        {model, _key} = Map.get(model_assignments, player_id, {nil, nil})
+        model_name = if model, do: "#{model.provider}/#{model.id}", else: nil
+        {player_id, Map.put(info, :model, model_name)}
+      end)
+
+    %{state | world: Map.put(state.world, :players, players)}
   end
 
   defp print_setup(state) do

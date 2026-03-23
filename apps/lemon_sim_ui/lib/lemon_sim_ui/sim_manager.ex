@@ -2,11 +2,13 @@ defmodule LemonSimUi.SimManager do
   @moduledoc """
   GenServer managing running simulation processes.
 
-  Bridges the UI with LemonSim.Runner by spawning tasks under a
-  DynamicSupervisor and providing start/stop/list operations.
+  Bridges the UI with LemonSim.Runner by spawning linked runner
+  processes and providing start/stop/list operations.
   """
 
   use GenServer
+
+  require Logger
 
   alias LemonCore.MapHelpers
   alias LemonSim.{Runner, State, Store}
@@ -47,6 +49,11 @@ defmodule LemonSimUi.SimManager do
     GenServer.call(__MODULE__, {:stop_sim, sim_id})
   end
 
+  @spec resume_sim(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def resume_sim(sim_id) do
+    GenServer.call(__MODULE__, {:resume_sim, sim_id})
+  end
+
   @spec list_running() :: [String.t()]
   def list_running do
     GenServer.call(__MODULE__, :list_running)
@@ -67,39 +74,56 @@ defmodule LemonSimUi.SimManager do
     GenServer.call(__MODULE__, {:status, sim_id})
   end
 
+  @spec enable_auto_loop(atom(), keyword()) :: :ok
+  def enable_auto_loop(domain, opts \\ []) do
+    GenServer.call(__MODULE__, {:enable_auto_loop, domain, opts})
+  end
+
+  @spec disable_auto_loop(atom()) :: :ok
+  def disable_auto_loop(domain) do
+    GenServer.call(__MODULE__, {:disable_auto_loop, domain})
+  end
+
+  @spec auto_loop_status() :: map()
+  def auto_loop_status do
+    GenServer.call(__MODULE__, :auto_loop_status)
+  end
+
   # --- GenServer callbacks ---
 
   @impl true
   def init(_) do
-    {:ok, %{runners: %{}, human_players: %{}}}
+    # Keep linked runner exits as messages so the manager can monitor
+    # completion without crashing, while still ensuring runners stop if
+    # the manager terminates.
+    Process.flag(:trap_exit, true)
+
+    # Schedule boot auto-loop after deps have started
+    case Application.get_env(:lemon_sim_ui, :auto_loop) do
+      config when is_list(config) and config != [] ->
+        Process.send_after(self(), {:boot_auto_loop, config}, 5_000)
+
+      _ ->
+        :ok
+    end
+
+    {:ok,
+     %{
+       runners: %{},
+       human_players: %{},
+       auto_loops: %{},
+       pending_restarts: %{}
+     }}
   end
 
   @impl true
   def handle_call({:start_sim, domain, opts}, _from, state) do
-    sim_id = Keyword.get(opts, :sim_id, generate_id(domain))
-    human_player = Keyword.get(opts, :human_player)
+    case do_start_sim(domain, opts, state) do
+      {:ok, sim_id, new_state} ->
+        {:reply, {:ok, sim_id}, new_state}
 
-    case build_initial_state(domain, sim_id, opts) do
-      {:ok, initial_state, modules, run_opts} ->
-        put_state_with_retry(initial_state, 3)
-        maybe_start_post_launch_tasks(domain, initial_state, run_opts)
-        broadcast_lobby()
-
-        task_ref = start_runner(initial_state, modules, run_opts, human_player)
-
-        runners = Map.put(state.runners, sim_id, %{ref: task_ref, domain: domain})
-
-        human_players =
-          if human_player do
-            Map.put(state.human_players, sim_id, human_player)
-          else
-            state.human_players
-          end
-
-        {:reply, {:ok, sim_id}, %{state | runners: runners, human_players: human_players}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -114,6 +138,39 @@ defmodule LemonSimUi.SimManager do
         human_players = Map.delete(state.human_players, sim_id)
         broadcast_lobby()
         {:reply, :ok, %{state | runners: runners, human_players: human_players}}
+    end
+  end
+
+  def handle_call({:resume_sim, sim_id}, _from, state) do
+    if Map.has_key?(state.runners, sim_id) do
+      {:reply, {:error, :already_running}, state}
+    else
+      case Store.get_state(sim_id) do
+        nil ->
+          {:reply, {:error, :not_found}, state}
+
+        stored_state ->
+          status = MapHelpers.get_key(stored_state.world, :status)
+
+          if status == "game_over" do
+            {:reply, {:error, :game_over}, state}
+          else
+            domain = domain_from_sim_id(sim_id)
+
+            case build_resume_opts(domain, stored_state) do
+              {:ok, modules, run_opts} ->
+                broadcast_lobby()
+
+                task_ref = start_runner(stored_state, modules, run_opts, nil)
+                runners = Map.put(state.runners, sim_id, %{ref: task_ref, domain: domain})
+
+                {:reply, {:ok, sim_id}, %{state | runners: runners}}
+
+              {:error, reason} ->
+                {:reply, {:error, reason}, state}
+            end
+          end
+      end
     end
   end
 
@@ -147,24 +204,218 @@ defmodule LemonSimUi.SimManager do
     {:reply, status, state}
   end
 
+  def handle_call({:enable_auto_loop, domain, opts}, _from, state) do
+    state = ensure_auto_loop_keys(state)
+    loop_config = %{enabled: true, opts: opts, game_count: 0, current_sim_id: nil}
+    auto_loops = Map.put(state.auto_loops, domain, loop_config)
+    state = %{state | auto_loops: auto_loops}
+
+    # Start first game if none of this domain is currently running
+    domain_running? =
+      Enum.any?(state.runners, fn {_id, %{domain: d}} -> d == domain end)
+
+    state =
+      if domain_running? do
+        state
+      else
+        case do_start_sim(domain, opts, state) do
+          {:ok, sim_id, new_state} ->
+            auto_loops =
+              Map.update!(new_state.auto_loops, domain, fn lc ->
+                %{lc | current_sim_id: sim_id, game_count: lc.game_count + 1}
+              end)
+
+            %{new_state | auto_loops: auto_loops}
+
+          {:error, _reason, new_state} ->
+            new_state
+        end
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:disable_auto_loop, domain}, _from, state) do
+    state = ensure_auto_loop_keys(state)
+    auto_loops = Map.delete(state.auto_loops, domain)
+
+    # Cancel any pending restart timer
+    pending_restarts =
+      case Map.pop(state.pending_restarts, domain) do
+        {nil, pr} ->
+          pr
+
+        {timer_ref, pr} ->
+          Process.cancel_timer(timer_ref)
+          pr
+      end
+
+    {:reply, :ok, %{state | auto_loops: auto_loops, pending_restarts: pending_restarts}}
+  end
+
+  def handle_call(:auto_loop_status, _from, state) do
+    {:reply, Map.get(state, :auto_loops, %{}), state}
+  end
+
+  @auto_loop_restart_delay_ms 8_000
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {sim_id, _} =
+    state = ensure_auto_loop_keys(state)
+
+    {sim_id, runner_entry} =
       Enum.find(state.runners, {nil, nil}, fn {_id, %{ref: ref}} -> ref == pid end)
 
     if sim_id do
+      domain = runner_entry.domain
       runners = Map.delete(state.runners, sim_id)
       human_players = Map.delete(state.human_players, sim_id)
       broadcast_lobby()
-      {:noreply, %{state | runners: runners, human_players: human_players}}
+
+      state = %{state | runners: runners, human_players: human_players}
+
+      # Check if auto-loop should restart this domain
+      state =
+        case Map.get(state.auto_loops, domain) do
+          %{enabled: true} ->
+            # Verify game actually finished
+            case Store.get_state(sim_id) do
+              %{world: world} ->
+                status = MapHelpers.get_key(world, :status)
+
+                if status == "game_over" do
+                  timer_ref =
+                    Process.send_after(
+                      self(),
+                      {:auto_loop_restart, domain},
+                      @auto_loop_restart_delay_ms
+                    )
+
+                  %{state | pending_restarts: Map.put(state.pending_restarts, domain, timer_ref)}
+                else
+                  state
+                end
+
+              _ ->
+                state
+            end
+
+          _ ->
+            state
+        end
+
+      {:noreply, state}
     else
       {:noreply, state}
     end
   end
 
+  def handle_info({:auto_loop_restart, domain}, state) do
+    state = ensure_auto_loop_keys(state)
+    pending_restarts = Map.delete(state.pending_restarts, domain)
+    state = %{state | pending_restarts: pending_restarts}
+
+    case Map.get(state.auto_loops, domain) do
+      %{enabled: true, opts: opts} ->
+        # Guard: no sim of this domain already running
+        domain_running? =
+          Enum.any?(state.runners, fn {_id, %{domain: d}} -> d == domain end)
+
+        if domain_running? do
+          {:noreply, state}
+        else
+          case do_start_sim(domain, opts, state) do
+            {:ok, sim_id, new_state} ->
+              auto_loops =
+                Map.update!(new_state.auto_loops, domain, fn lc ->
+                  %{lc | current_sim_id: sim_id, game_count: lc.game_count + 1}
+                end)
+
+              {:noreply, %{new_state | auto_loops: auto_loops}}
+
+            {:error, reason, new_state} ->
+              Logger.error(
+                "[SimManager] Auto-loop restart failed for #{domain}: #{inspect(reason)}"
+              )
+
+              {:noreply, new_state}
+          end
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:boot_auto_loop, config}, state) do
+    state = ensure_auto_loop_keys(state)
+
+    state =
+      Enum.reduce(config, state, fn {domain, opts}, acc ->
+        domain = if is_binary(domain), do: String.to_existing_atom(domain), else: domain
+        opts = if is_list(opts), do: opts, else: Keyword.new(opts)
+
+        loop_config = %{enabled: true, opts: opts, game_count: 0, current_sim_id: nil}
+        auto_loops = Map.put(acc.auto_loops, domain, loop_config)
+        acc = %{acc | auto_loops: auto_loops}
+
+        case do_start_sim(domain, opts, acc) do
+          {:ok, sim_id, new_acc} ->
+            auto_loops =
+              Map.update!(new_acc.auto_loops, domain, fn lc ->
+                %{lc | current_sim_id: sim_id, game_count: lc.game_count + 1}
+              end)
+
+            %{new_acc | auto_loops: auto_loops}
+
+          {:error, reason, new_acc} ->
+            Logger.error("[SimManager] Boot auto-loop failed for #{domain}: #{inspect(reason)}")
+            new_acc
+        end
+      end)
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # --- Private helpers ---
+
+  # Ensures auto_loops/pending_restarts keys exist in state, for hot-code-reload
+  # compatibility when the GenServer was started before these keys were added.
+  defp ensure_auto_loop_keys(state) do
+    state
+    |> Map.put_new(:auto_loops, %{})
+    |> Map.put_new(:pending_restarts, %{})
+  end
+
+  defp do_start_sim(domain, opts, state) do
+    sim_id = Keyword.get(opts, :sim_id, generate_id(domain))
+    human_player = Keyword.get(opts, :human_player)
+
+    case build_initial_state(domain, sim_id, opts) do
+      {:ok, initial_state, modules, run_opts} ->
+        put_state_with_retry(initial_state, 3)
+        maybe_start_post_launch_tasks(domain, initial_state, run_opts)
+        broadcast_lobby()
+
+        task_ref = start_runner(initial_state, modules, run_opts, human_player)
+
+        runners = Map.put(state.runners, sim_id, %{ref: task_ref, domain: domain})
+
+        human_players =
+          if human_player do
+            Map.put(state.human_players, sim_id, human_player)
+          else
+            state.human_players
+          end
+
+        {:ok, sim_id, %{state | runners: runners, human_players: human_players}}
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
 
   defp build_initial_state(:tic_tac_toe, sim_id, opts) do
     max_turns = Keyword.get(opts, :max_turns, 20)
@@ -394,12 +645,8 @@ defmodule LemonSimUi.SimManager do
   defp maybe_start_post_launch_tasks(_domain, _initial_state, _run_opts), do: :ok
 
   defp start_runner(initial_state, modules, run_opts, human_player) do
-    manager_pid = self()
-
     pid =
       spawn_link(fn ->
-        Process.monitor(manager_pid)
-
         if human_player do
           run_interactive(initial_state, modules, run_opts, human_player)
         else
@@ -449,6 +696,12 @@ defmodule LemonSimUi.SimManager do
 
   defp do_ai_loop(state, _modules, _opts, _terminal?, max_turns, turn)
        when turn >= max_turns do
+    Logger.warning("[SimManager] #{state.sim_id} hit max turns (#{max_turns})",
+      sim_id: state.sim_id,
+      turn: turn
+    )
+
+    state = record_sim_error(state, turn, :turn_limit_exceeded, "Hit max turns (#{max_turns})")
     Store.put_state(state)
     broadcast_update(state)
   end
@@ -459,13 +712,24 @@ defmodule LemonSimUi.SimManager do
 
   @max_step_retries 3
 
-  defp do_ai_loop(state, _modules, _opts, _terminal?, _max_turns, _turn, retries)
+  defp do_ai_loop(state, _modules, _opts, _terminal?, _max_turns, turn, retries)
        when retries >= @max_step_retries do
-    require Logger
+    ctx = sim_context(state, turn)
 
-    Logger.warning(
-      "[SimManager] Giving up after #{@max_step_retries} retries for #{state.sim_id}"
+    Logger.error(
+      "[SimManager] #{state.sim_id} giving up after #{@max_step_retries} consecutive failures " <>
+        "(phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn})",
+      sim_id: state.sim_id
     )
+
+    state =
+      record_sim_error(
+        state,
+        turn,
+        :retry_limit_exceeded,
+        "Gave up after #{@max_step_retries} consecutive step failures " <>
+          "(phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor})"
+      )
 
     Store.put_state(state)
     broadcast_update(state)
@@ -491,23 +755,39 @@ defmodule LemonSimUi.SimManager do
             do_ai_loop(result.state, modules, opts, terminal?, max_turns, turn + 1, 0)
 
           {:error, reason} ->
-            require Logger
+            ctx = sim_context(state, turn)
 
             Logger.warning(
-              "[SimManager] Step error for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{inspect(reason)}"
+              "[SimManager] #{state.sim_id} step error (retry #{retries + 1}/#{@max_step_retries}, " <>
+                "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
+                inspect_error(reason),
+              sim_id: state.sim_id
             )
 
+            state = record_sim_error(state, turn, :step_error, inspect_error(reason))
+            Store.put_state(state)
+            broadcast_update(state)
             Process.sleep(2000 * (retries + 1))
             do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
         end
       catch
         kind, reason ->
-          require Logger
+          ctx = sim_context(state, turn)
+          stacktrace = __STACKTRACE__
 
           Logger.error(
-            "[SimManager] Step crashed for #{state.sim_id} (retry #{retries + 1}/#{@max_step_retries}): #{kind} #{inspect(reason)}"
+            "[SimManager] #{state.sim_id} step crashed (retry #{retries + 1}/#{@max_step_retries}, " <>
+              "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
+              "#{kind} #{inspect_error(reason)}\n" <>
+              Exception.format_stacktrace(stacktrace),
+            sim_id: state.sim_id
           )
 
+          state =
+            record_sim_error(state, turn, :step_crash, "#{kind}: #{inspect_error(reason)}")
+
+          Store.put_state(state)
+          broadcast_update(state)
           Process.sleep(2000 * (retries + 1))
           do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
       end
@@ -595,7 +875,17 @@ defmodule LemonSimUi.SimManager do
               human_team
             )
 
-          {:error, _reason} ->
+          {:error, reason} ->
+            ctx = sim_context(state, turn)
+
+            Logger.warning(
+              "[SimManager] #{state.sim_id} interactive step error " <>
+                "(phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
+                inspect_error(reason),
+              sim_id: state.sim_id
+            )
+
+            state = record_sim_error(state, turn, :step_error, inspect_error(reason))
             Store.put_state(state)
             broadcast_update(state)
         end
@@ -653,6 +943,66 @@ defmodule LemonSimUi.SimManager do
   defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
   defp generate_id(:vending_bench), do: "vb_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
+
+  defp domain_from_sim_id("ww_" <> _), do: :werewolf
+  defp domain_from_sim_id("ttt_" <> _), do: :tic_tac_toe
+  defp domain_from_sim_id("skm_" <> _), do: :skirmish
+  defp domain_from_sim_id("stk_" <> _), do: :stock_market
+  defp domain_from_sim_id("srv_" <> _), do: :survivor
+  defp domain_from_sim_id("spc_" <> _), do: :space_station
+  defp domain_from_sim_id("vb_" <> _), do: :vending_bench
+  defp domain_from_sim_id(_), do: :unknown
+
+  defp build_resume_opts(:werewolf, state) do
+    modules = LemonSim.Examples.Werewolf.modules()
+    {model, stream_options} = resolve_default_model_for_ui()
+
+    # Check if state has per-player model assignments and rebuild them
+    players = MapHelpers.get_key(state.world, :players) || %{}
+
+    has_model_info =
+      Enum.any?(players, fn {_id, p} -> MapHelpers.get_key(p, :model) != nil end)
+
+    run_opts =
+      if has_model_info do
+        config = load_project_config()
+
+        model_assignments =
+          players
+          |> Enum.filter(fn {_id, p} -> MapHelpers.get_key(p, :model) != nil end)
+          |> Enum.into(%{}, fn {player_id, p} ->
+            spec = MapHelpers.get_key(p, :model)
+            {provider, model_id} = parse_model_spec(spec)
+            m = resolve_model!(provider, model_id, config)
+            api_key = SimConfig.resolve_provider_api_key!(provider, config, "werewolf")
+            {player_id, {m, api_key}}
+          end)
+
+        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+
+        LemonSim.Examples.Werewolf.default_opts(
+          model: default_model,
+          stream_options: %{api_key: default_key}
+        )
+        |> Keyword.put(:persist?, true)
+        |> Keyword.put(:on_before_step, nil)
+        |> Keyword.put(:on_after_step, &on_after_step/2)
+        |> Keyword.put(:model_assignments, model_assignments)
+      else
+        LemonSim.Examples.Werewolf.default_opts(model: model, stream_options: stream_options)
+        |> Keyword.put(:persist?, true)
+        |> Keyword.put(:on_before_step, nil)
+        |> Keyword.put(:on_after_step, &on_after_step/2)
+      end
+
+    {:ok, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_resume_opts(domain, _state) do
+    {:error, "Resume not yet supported for #{domain}"}
+  end
 
   defp random_hex(bytes) do
     :crypto.strong_rand_bytes(bytes) |> Base.encode16(case: :lower)
@@ -834,4 +1184,37 @@ defmodule LemonSimUi.SimManager do
   defp load_project_config do
     LemonCore.Config.Modular.load(project_dir: ProjectRoot.resolve(__DIR__))
   end
+
+  # -- Error logging helpers --
+
+  defp sim_context(%State{} = state, turn) do
+    %{
+      phase: MapHelpers.get_key(state.world, :phase) || "?",
+      day: MapHelpers.get_key(state.world, :day_number) || "?",
+      actor: MapHelpers.get_key(state.world, :active_actor_id) || "none",
+      turn: turn
+    }
+  end
+
+  defp record_sim_error(%State{} = state, turn, kind, message) do
+    ctx = sim_context(state, turn)
+
+    entry = %{
+      at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      kind: kind,
+      message: message,
+      phase: ctx.phase,
+      day: ctx.day,
+      actor: ctx.actor,
+      turn: turn
+    }
+
+    errors = MapHelpers.get_key(state.world, :runner_errors) || []
+    # Keep last 20 errors
+    updated_errors = Enum.take(errors ++ [entry], -20)
+    State.put_world(state, Map.put(state.world, :runner_errors, updated_errors))
+  end
+
+  defp inspect_error(reason) when is_binary(reason), do: reason
+  defp inspect_error(reason), do: inspect(reason, limit: 5, printable_limit: 500)
 end

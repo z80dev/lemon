@@ -9,7 +9,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
   alias LemonSim.{Event, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles}
 
-  @wander_sighting_chance 0.05
+  @wander_sighting_chance 0.15
   @evidence_chance_high 0.10
   @evidence_chance_low 0.05
 

@@ -38,41 +38,57 @@ defmodule Mix.Tasks.Lemon.Sim.SpaceStationReplay do
     help: :boolean
   ]
 
-  @impl Mix.Task
+  @impl true
   def run(args) do
-    {opts, positional, _} = OptionParser.parse(args, switches: @switches)
+    {opts, argv, invalid} = OptionParser.parse(args, strict: @switches)
+
     cond do
-      Keyword.get(opts, :help, false) -> Mix.shell().info(@moduledoc)
-      positional == [] ->
-        Mix.shell().error("Usage: mix lemon.sim.space_station_replay <path.jsonl> [options]")
-        Mix.shell().error("Run with --help for details.")
+      opts[:help] ->
+        Mix.shell().info(@moduledoc)
+
+      invalid != [] ->
+        Mix.raise("invalid options: #{inspect(invalid)}")
+
+      argv == [] ->
+        Mix.raise(
+          "missing argument: path to transcript file\n\nUsage: mix lemon.sim.space_station_replay path/to/transcript.jsonl"
+        )
+
       true ->
-        log_path = List.first(positional)
-        do_generate(log_path, opts)
-    end
-  end
+        [log_path | _] = argv
 
-  defp do_generate(log_path, opts) do
-    Mix.shell().info("Generating Space Station replay from #{log_path}...")
-    gen_opts = []
-      |> maybe_put(:output, Keyword.get(opts, :output))
-      |> maybe_put(:fps, Keyword.get(opts, :fps))
-      |> maybe_put(:hold_frames, Keyword.get(opts, :hold_frames))
-      |> maybe_put(:width, Keyword.get(opts, :width))
-      |> maybe_put(:height, Keyword.get(opts, :height))
-      |> maybe_put(:keep_frames, Keyword.get(opts, :keep_frames))
+        unless File.exists?(log_path) do
+          Mix.raise("file not found: #{log_path}")
+        end
 
-    case VideoGenerator.generate(log_path, gen_opts) do
-      {:ok, video_path} ->
-        file_size = File.stat!(video_path).size
-        Mix.shell().info("Replay video: #{video_path} (#{format_file_size(file_size)})")
-      {:error, {:missing_tools, tools}} ->
-        Mix.shell().error("Missing required tools: #{Enum.join(tools, ", ")}")
-        Mix.shell().error("Install with: brew install librsvg ffmpeg")
-      {:error, {:file_not_found, path}} ->
-        Mix.shell().error("Log file not found: #{path}")
-      {:error, reason} ->
-        Mix.shell().error("Failed to generate replay: #{inspect(reason)}")
+        case VideoGenerator.check_dependencies() do
+          :ok ->
+            :ok
+
+          {:error, {:missing_tools, tools}} ->
+            Mix.raise(
+              "missing required tools: #{Enum.join(tools, ", ")}\n" <>
+                "Install: brew install librsvg ffmpeg"
+            )
+        end
+
+        gen_opts =
+          []
+          |> maybe_put(:output, opts[:output])
+          |> maybe_put(:fps, opts[:fps])
+          |> maybe_put(:hold_frames, opts[:hold_frames])
+          |> maybe_put(:width, opts[:width])
+          |> maybe_put(:height, opts[:height])
+          |> maybe_put(:keep_frames, opts[:keep_frames])
+
+        case VideoGenerator.generate(log_path, gen_opts) do
+          {:ok, video_path} ->
+            file_size = File.stat!(video_path).size
+            Mix.shell().info("Space Station replay: #{video_path} (#{format_file_size(file_size)})")
+
+          {:error, reason} ->
+            Mix.raise("video generation failed: #{inspect(reason)}")
+        end
     end
   end
 

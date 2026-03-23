@@ -11,14 +11,15 @@ lemon_sim (Runner, Store, Bus, all domain examples)
       |
 lemon_sim_ui
   |-- LemonSimUi.SimManager         GenServer: start/stop/run simulation processes
-  |-- LemonSimUi.SimDashboardLive   Dashboard LiveView for lobby and sim detail
+  |-- LemonSimUi.LobbyLive          Public live-games landing page
+  |-- LemonSimUi.SimDashboardLive   Admin LiveView for sim launch and detail
   |-- LemonSimUi.SpectatorLive      Public read-only werewolf spectator LiveView
   |-- LemonSimUi.SimHelpers         Pure helpers: domain inference, labels, colors
   |-- LemonSimUi.Live.Components.*  Stateless function components per domain board
   |-- LemonSimUi.Endpoint           Bandit-backed Phoenix endpoint
 ```
 
-`SimManager` owns all running simulation tasks under a `DynamicSupervisor`. It drives `LemonSim.Runner.step/3` in a loop, writes state to `LemonSim.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling. For Werewolf specifically, those push updates now carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
+`SimManager` owns the runner lifecycle for active sims. It spawns linked runner processes, traps exit signals so child exits do not crash the manager, writes state to `LemonSim.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling. For Werewolf specifically, those push updates now carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
 
 The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/live/longpoll` transport, and the browser client connects without enabling a long-poll fallback.
 
@@ -27,11 +28,11 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
 - `LemonSim.Bus` topic for the currently viewed sim — for per-step world updates
 
-The dashboard routes (`/` and `/sims/:sim_id`) are handled by `SimDashboardLive` using `live_action` (`:index` and `:show`). Public werewolf spectator viewing is served separately at `/watch/:sim_id` by `SpectatorLive`.
+Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`.
 
 On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
-Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/`, `/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The spectator route (`/watch/:sim_id`) and `/healthz` remain public.
+Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/admin`, `/admin/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The public lobby (`/`), spectator route (`/watch/:sim_id`), and `/healthz` remain public.
 
 ### Supported Simulation Domains
 
@@ -67,8 +68,9 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | Module | File | Purpose |
 |---|---|---|
 | `LemonSimUi.Application` | `lib/lemon_sim_ui/application.ex` | Starts `Telemetry`, `SimRunnerSupervisor`, `SimManager`, `Endpoint` |
+| `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims |
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
-| `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Lobby + sim detail LiveView; handles sim launch and admin/detail events |
+| `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Admin dashboard LiveView for sim launch and detail flows |
 | `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable werewolf watcher with no admin controls |
 | `LemonSimUi.WerewolfPlayback` | `lib/lemon_sim_ui/werewolf_playback.ex` | Buffers exact Werewolf snapshots and applies dwell heuristics so live viewing stays legible |
 | `LemonSimUi.AdminSimController` | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | Protected JSON API for starting and stopping sims remotely |
@@ -86,7 +88,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.AuctionBoard` | `lib/lemon_sim_ui/live/components/auction_board.ex` | Lot and bidder state display |
 | `LemonSimUi.Live.Components.DiplomacyBoard` | `lib/lemon_sim_ui/live/components/diplomacy_board.ex` | Territory map and faction negotiation display |
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
-| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` and `/sims/:sim_id` to `SimDashboardLive`, plus public `/watch/:sim_id` to `SpectatorLive` |
+| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |
 
@@ -115,16 +117,27 @@ mix phx.server
 iex -S mix phx.server
 ```
 
-The dashboard is available at `http://localhost:4000` (port configured in `config/dev.exs`).
+The public lobby is available at `http://localhost:4000/` and the admin dashboard at `http://localhost:4000/admin` (port configured in `config/dev.exs`).
 
 ### Starting a Simulation from the Dashboard
 
-1. Click "New Sim" in the sidebar.
+1. Open `/admin` and click "New Sim" in the sidebar.
 2. Choose a domain from the "Domain Protocol" dropdown.
 3. Configure domain-specific options (player count, model assignments, map preset, etc.).
 4. Click "INITIALIZE". The sim starts immediately and its entry appears in the sidebar.
 5. Click a sim entry to open the detail view, which shows the domain board, event log, agent strategy (plan history), and data banks (memory files).
 6. For Werewolf sims, share `/watch/<sim_id>` for the public spectator page.
+
+### Auto-Loop Operations
+
+The admin dashboard can enable or disable auto-looping for supported domains. Auto-loop is currently used for continuously restarting Werewolf broadcasts after a completed game.
+
+For deployment-driven auto-loop startup, set:
+
+- `LEMON_SIM_AUTO_LOOP=true`
+- `LEMON_SIM_WEREWOLF_PLAYERS=<count>` to override the default of `6`
+
+These runtime flags are operational concerns. They belong with deployment config such as [fly.toml](./fly.toml), not with the core public/admin route split.
 
 ### Starting or Stopping Sims Remotely
 
@@ -169,6 +182,8 @@ The create response includes the private admin URL and, for werewolf, the public
 | `LEMON_SIM_UI_ACCESS_TOKEN` | Protects admin dashboard + admin API |
 | `LEMON_STORE_PATH` | Persistent SQLite path or directory for sim state |
 | `LEMON_SECRETS_MASTER_KEY` | Required on servers/containers that cannot read your local keychain but still need encrypted Lemon secrets |
+| `LEMON_SIM_AUTO_LOOP` | When `true`, boot configured auto-loop simulations on startup |
+| `LEMON_SIM_WEREWOLF_PLAYERS` | Player count for boot-time Werewolf auto-loop (defaults to `6`) |
 
 You will also need the provider credentials used by your chosen sim models (for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or Google/Gemini credentials).
 

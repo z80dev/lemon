@@ -13,7 +13,7 @@ defmodule LemonSimUi.AdminSimController do
       payload = %{
         "sim_id" => sim_id,
         "domain" => Atom.to_string(domain),
-        "admin_url" => url(~p"/sims/#{sim_id}"),
+        "admin_url" => url(~p"/admin/sims/#{sim_id}"),
         "watch_url" => watch_url(domain, sim_id)
       }
 

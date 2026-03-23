@@ -56,6 +56,7 @@ defmodule LemonSimUi.SimDashboardLive do
      assign(socket,
        sims: sims,
        running: running,
+       sidebar_open: true,
        selected_sim: nil,
        subscribed_sim_id: nil,
        playback: nil,
@@ -64,7 +65,10 @@ defmodule LemonSimUi.SimDashboardLive do
        show_new_sim_form: false,
        new_sim_domain: "tic_tac_toe",
        new_player_count: 6,
+       seat_providers: %{},
+       seat_models: %{},
        human_player: nil,
+       auto_loop_status: SimManager.auto_loop_status(),
        page_title: "LemonSim"
      )}
   end
@@ -83,7 +87,7 @@ defmodule LemonSimUi.SimDashboardLive do
         {:noreply,
          socket
          |> put_flash(:error, "Sim not found: #{sim_id}")
-         |> push_patch(to: ~p"/")}
+         |> push_patch(to: ~p"/admin")}
 
       state ->
         if connected?(socket), do: Bus.subscribe(sim_id)
@@ -119,11 +123,15 @@ defmodule LemonSimUi.SimDashboardLive do
 
   @impl true
   def handle_event("select_sim", %{"sim_id" => sim_id}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/sims/#{sim_id}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/sims/#{sim_id}")}
   end
 
   def handle_event("go_home", _params, socket) do
-    {:noreply, push_patch(socket, to: ~p"/")}
+    {:noreply, push_patch(socket, to: ~p"/admin")}
+  end
+
+  def handle_event("toggle_sidebar", _params, socket) do
+    {:noreply, assign(socket, sidebar_open: !socket.assigns.sidebar_open)}
   end
 
   def handle_event("toggle_new_sim_form", _params, socket) do
@@ -135,17 +143,56 @@ defmodule LemonSimUi.SimDashboardLive do
     min_p = min_players(domain)
     max_p = max_players(domain)
 
-    player_count =
+    {player_count, seat_providers, seat_models} =
       if params["domain"] && params["domain"] != socket.assigns.new_sim_domain do
-        # Domain changed — reset to default for new domain
-        default_player_count(String.to_existing_atom(domain))
+        # Domain changed — reset to defaults
+        {default_player_count(String.to_existing_atom(domain)), %{}, %{}}
       else
-        parse_int(params["player_count"], socket.assigns.new_player_count)
-        |> max(min_p)
-        |> min(max_p)
+        pc =
+          parse_int(params["player_count"], socket.assigns.new_player_count)
+          |> max(min_p)
+          |> min(max_p)
+
+        old_providers = socket.assigns.seat_providers
+        old_models = socket.assigns.seat_models
+
+        {sp, sm} =
+          Enum.reduce(1..pc, {old_providers, old_models}, fn seat, {pacc, macc} ->
+            new_provider =
+              case params["provider_#{seat}"] do
+                nil -> Map.get(pacc, seat)
+                val -> String.to_existing_atom(val)
+              end
+
+            old_provider = Map.get(pacc, seat)
+            provider_changed = new_provider != nil and new_provider != old_provider
+
+            pacc = if new_provider, do: Map.put(pacc, seat, new_provider), else: pacc
+
+            macc =
+              if provider_changed do
+                # Provider changed — reset model to default for new provider
+                Map.delete(macc, seat)
+              else
+                case params["model_#{seat}"] do
+                  nil -> macc
+                  val -> Map.put(macc, seat, val)
+                end
+              end
+
+            {pacc, macc}
+          end)
+
+        {pc, sp, sm}
       end
 
-    {:noreply, assign(socket, new_sim_domain: domain, new_player_count: player_count)}
+    {:noreply,
+     assign(socket,
+       new_sim_domain: domain,
+       new_player_count: player_count,
+       seat_providers: seat_providers,
+       seat_models: seat_models
+     )}
   end
 
   def handle_event("start_sim", params, socket) do
@@ -177,28 +224,18 @@ defmodule LemonSimUi.SimDashboardLive do
         :werewolf ->
           player_count = parse_int(params["player_count"], 6)
 
-          model_specs =
-            for seat <- 1..player_count do
-              params["model_#{seat}"] || default_model_for_seat(seat)
-            end
-
           [
             player_count: player_count,
-            model_specs: model_specs
+            model_specs: build_model_specs(params, player_count)
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
         domain when domain in [:stock_market, :survivor, :space_station] ->
           player_count = parse_int(params["player_count"], default_player_count(domain))
 
-          model_specs =
-            for seat <- 1..player_count do
-              params["model_#{seat}"] || default_model_for_seat(seat)
-            end
-
           [
             player_count: player_count,
-            model_specs: model_specs
+            model_specs: build_model_specs(params, player_count)
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
@@ -218,7 +255,8 @@ defmodule LemonSimUi.SimDashboardLive do
           player_count = parse_int(params["player_count"], default_player_count(domain))
 
           [
-            player_count: player_count
+            player_count: player_count,
+            model_specs: build_model_specs(params, player_count)
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
@@ -240,7 +278,7 @@ defmodule LemonSimUi.SimDashboardLive do
           {:noreply,
            socket
            |> assign(show_new_sim_form: false, human_player: opts[:human_player])
-           |> push_patch(to: ~p"/sims/#{sim_id}")}
+           |> push_patch(to: ~p"/admin/sims/#{sim_id}")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Failed to start sim: #{inspect(reason)}")}
@@ -258,8 +296,44 @@ defmodule LemonSimUi.SimDashboardLive do
     {:noreply, socket}
   end
 
+  def handle_event("resume_sim", %{"sim_id" => sim_id}, socket) do
+    if resume_supported?(socket.assigns.domain_type) do
+      try do
+        case SimManager.resume_sim(sim_id) do
+          {:ok, _} ->
+            {:noreply, assign(socket, running: SimManager.list_running())}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Failed to resume: #{inspect(reason)}")}
+        end
+      catch
+        kind, reason ->
+          require Logger
+          Logger.error("resume_sim #{kind}: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, "Failed to resume: #{inspect(reason)}")}
+      end
+    else
+      {:noreply,
+       put_flash(socket, :error, "Resume is currently supported only for werewolf sims")}
+    end
+  end
+
   def handle_event("refresh_sims", _params, socket) do
     {:noreply, assign(socket, sims: build_sim_list(), running: SimManager.list_running())}
+  end
+
+  def handle_event("toggle_auto_loop", %{"domain" => domain_str}, socket) do
+    domain = String.to_existing_atom(domain_str)
+    current = socket.assigns.auto_loop_status
+
+    if Map.has_key?(current, domain) do
+      SimManager.disable_auto_loop(domain)
+    else
+      default_opts = [player_count: default_player_count(domain)]
+      SimManager.enable_auto_loop(domain, default_opts)
+    end
+
+    {:noreply, assign(socket, auto_loop_status: SimManager.auto_loop_status())}
   end
 
   # TicTacToe human move
@@ -378,7 +452,12 @@ defmodule LemonSimUi.SimDashboardLive do
   end
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
-    {:noreply, assign(socket, sims: build_sim_list(), running: SimManager.list_running())}
+    {:noreply,
+     assign(socket,
+       sims: build_sim_list(),
+       running: SimManager.list_running(),
+       auto_loop_status: SimManager.auto_loop_status()
+     )}
   end
 
   def handle_info({:werewolf_playback_tick, ref}, socket) do
@@ -407,27 +486,76 @@ defmodule LemonSimUi.SimDashboardLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-screen overflow-hidden text-slate-200">
+      <!-- Sidebar toggle button (visible when sidebar is closed) -->
+      <button
+        :if={!@sidebar_open}
+        phx-click="toggle_sidebar"
+        class="fixed top-3 left-3 z-20 w-8 h-8 rounded-lg glass-panel border border-glass-border flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:border-cyan-500/50 transition-all shadow-lg"
+        title="Show sidebar"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+        </svg>
+      </button>
+
       <!-- Sidebar -->
-      <aside class="w-56 glass-panel flex flex-col flex-shrink-0 z-10 border-r border-glass-border">
+      <aside :if={@sidebar_open} class="w-56 glass-panel flex flex-col flex-shrink-0 z-10 border-r border-glass-border">
         <div class="px-4 py-3 border-b border-glass-border flex items-center gap-2.5 bg-slate-900/30">
           <div class="w-7 h-7 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-sm text-white">
             L
           </div>
-          <div>
+          <div class="flex-1 min-w-0">
             <button phx-click="go_home" class="text-base font-bold text-white hover:text-cyan-400 transition tracking-tight text-glow-cyan">
               LemonSim
             </button>
             <p class="text-[10px] text-slate-400 font-mono">{length(@sims)} active</p>
           </div>
+          <button
+            phx-click="toggle_sidebar"
+            class="w-6 h-6 rounded flex items-center justify-center text-slate-500 hover:text-cyan-400 hover:bg-slate-800/50 transition-all"
+            title="Hide sidebar"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+          </button>
         </div>
 
-        <div class="px-3 py-2.5 border-b border-glass-border bg-slate-900/20">
+        <div class="px-3 py-2.5 border-b border-glass-border bg-slate-900/20 space-y-2">
           <button phx-click="toggle_new_sim_form" class="w-full glass-button font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
             </svg>
             New Sim
           </button>
+
+          <%!-- Auto-loop controls --%>
+          <div class="mt-2 pt-2 border-t border-glass-border/50">
+            <div class="text-[9px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-1.5">Auto-Loop</div>
+            <div class="space-y-1">
+              <% werewolf_loop = Map.get(@auto_loop_status, :werewolf) %>
+              <button
+                phx-click="toggle_auto_loop"
+                phx-value-domain="werewolf"
+                class={[
+                  "w-full text-left text-[11px] px-2.5 py-1.5 rounded border transition-all flex items-center justify-between",
+                  if(werewolf_loop,
+                    do: "bg-emerald-900/30 border-emerald-500/30 text-emerald-400",
+                    else: "bg-slate-800/30 border-glass-border text-slate-500 hover:text-slate-300"
+                  )
+                ]}
+              >
+                <span class="font-mono">Werewolf</span>
+                <span class="text-[9px] font-bold uppercase">
+                  <%= if werewolf_loop do %>
+                    ON (#<%= werewolf_loop.game_count %>)
+                  <% else %>
+                    OFF
+                  <% end %>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <nav class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
@@ -572,13 +700,22 @@ defmodule LemonSimUi.SimDashboardLive do
                           <div class="text-[10px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2">Model Assignment</div>
                           <p class="text-[10px] text-slate-500 mb-3">Assign AI models to player seats.</p>
                           <%= for seat <- 1..@new_player_count do %>
+                            <% seat_provider = Map.get(@seat_providers, seat, default_provider()) %>
+                            <% seat_model = Map.get(@seat_models, seat, default_model_for_provider(seat_provider)) %>
                             <div class="flex items-center gap-2 mb-1.5">
                               <span class="text-[10px] text-slate-500 font-mono w-6 shrink-0">P{seat}</span>
                               <.select
+                                name={"provider_#{seat}"}
+                                label=""
+                                value={to_string(seat_provider)}
+                                options={provider_options()}
+                                class="text-xs! py-1!"
+                              />
+                              <.select
                                 name={"model_#{seat}"}
                                 label=""
-                                value={default_model_for_seat(seat)}
-                                options={available_model_options()}
+                                value={seat_model}
+                                options={model_options_for_provider(seat_provider)}
                                 class="text-xs! py-1!"
                               />
                             </div>
@@ -656,7 +793,37 @@ defmodule LemonSimUi.SimDashboardLive do
               >
                 Abort Sim
               </.button>
+              <.button
+                :if={resume_supported?(@domain_type) and @selected_sim.sim_id not in @running and Map.get((@selected_sim && @selected_sim.world) || %{}, :status, Map.get((@selected_sim && @selected_sim.world) || %{}, "status")) == "in_progress"}
+                phx-click="resume_sim"
+                phx-value-sim_id={@selected_sim.sim_id}
+                class="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition-all font-bold tracking-widest uppercase px-5 py-2.5 rounded shadow-neon-amber"
+              >
+                Resume Sim
+              </.button>
             </div>
+          </div>
+
+          <!-- Runner errors banner -->
+          <% runner_errors = Map.get((@selected_sim && @selected_sim.world) || %{}, :runner_errors) || Map.get((@selected_sim && @selected_sim.world) || %{}, "runner_errors") || [] %>
+          <div :if={runner_errors != []} class="glass-card rounded-lg border border-red-500/30 bg-red-950/20 p-3 mb-4">
+            <details>
+              <summary class="text-xs font-bold text-red-400 uppercase tracking-widest cursor-pointer hover:text-red-300 flex items-center gap-2">
+                <span>Runner Errors ({length(runner_errors)})</span>
+                <span class="text-red-500/50 font-normal normal-case tracking-normal">click to expand</span>
+              </summary>
+              <div class="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                <%= for err <- Enum.reverse(runner_errors) do %>
+                  <div class="text-[11px] font-mono text-red-300/80 bg-red-950/40 rounded px-2 py-1">
+                    <span class="text-red-500/60">{Map.get(err, :at, Map.get(err, "at", ""))}</span>
+                    <span class="text-amber-400/70 ml-1">turn={Map.get(err, :turn, Map.get(err, "turn", "?"))}</span>
+                    <span class="text-cyan-400/70 ml-1">phase={Map.get(err, :phase, Map.get(err, "phase", "?"))}</span>
+                    <span class="text-fuchsia-400/70 ml-1">actor={Map.get(err, :actor, Map.get(err, "actor", "?"))}</span>
+                    <br/><span class="text-red-300">{Map.get(err, :message, Map.get(err, "message", ""))}</span>
+                  </div>
+                <% end %>
+              </div>
+            </details>
           </div>
 
           <!-- Board + details layout -->
@@ -891,6 +1058,9 @@ defmodule LemonSimUi.SimDashboardLive do
   defp maybe_put_sim_id(opts, ""), do: opts
   defp maybe_put_sim_id(opts, sim_id), do: Keyword.put(opts, :sim_id, sim_id)
 
+  defp resume_supported?(:werewolf), do: true
+  defp resume_supported?(_domain), do: false
+
   defp queue_werewolf_selected_sim(socket, updated_state) do
     playback =
       socket.assigns.playback
@@ -1006,26 +1176,49 @@ defmodule LemonSimUi.SimDashboardLive do
 
   # -- Model helpers --
 
-  defp available_model_options do
-    [
-      {"Gemini 3 Flash", "google_gemini_cli:gemini-3-flash-preview"},
-      {"Gemini 3 Pro", "google_gemini_cli:gemini-3-pro-preview"},
-      {"Gemini 2.5 Flash", "google_gemini_cli:gemini-2.5-flash"},
-      {"Gemini 2.5 Pro", "google_gemini_cli:gemini-2.5-pro"},
-      {"Claude Sonnet 4", "anthropic:claude-sonnet-4-20250514"},
-      {"Claude Haiku 3.5", "anthropic:claude-haiku-4-5-20251001"},
-      {"GPT-4o", "openai:gpt-4o"},
-      {"GPT-5.1 Codex Mini", "openai-codex:gpt-5.1-codex-mini"},
-      {"GPT-5.3 Codex Spark", "openai-codex:gpt-5.3-codex-spark"},
-      {"GPT-5.3 Codex", "openai-codex:gpt-5.3-codex"},
-      {"GPT-5.4", "openai-codex:gpt-5.4"},
-      {"Kimi K2P5", "kimi:k2p5"},
-      {"Z.ai GLM-5", "zai:glm-5"},
-      {"DeepSeek V3", "deepseek:deepseek-chat"}
-    ]
+  @default_provider :"openai-codex"
+  @default_model_id "gpt-5.3-codex-spark"
+
+  defp default_provider, do: @default_provider
+
+  defp provider_options do
+    Ai.Models.get_providers()
+    |> Enum.map(fn provider ->
+      {provider_display_name(provider), to_string(provider)}
+    end)
+    |> Enum.sort_by(fn {label, _} -> label end)
   end
 
-  @default_model "openai-codex:gpt-5.3-codex-spark"
+  defp model_options_for_provider(provider) do
+    Ai.Models.get_models(provider)
+    |> Enum.map(fn model -> {model.name, model.id} end)
+    |> Enum.sort_by(fn {label, _} -> label end)
+  end
 
-  defp default_model_for_seat(_seat), do: @default_model
+  defp default_model_for_provider(provider) do
+    if provider == @default_provider do
+      @default_model_id
+    else
+      case Ai.Models.get_models(provider) do
+        [first | _] -> first.id
+        [] -> ""
+      end
+    end
+  end
+
+  defp build_model_specs(params, player_count) do
+    for seat <- 1..player_count do
+      provider = params["provider_#{seat}"] || to_string(@default_provider)
+      model_id = params["model_#{seat}"] || @default_model_id
+      "#{provider}:#{model_id}"
+    end
+  end
+
+  defp provider_display_name(provider) do
+    provider
+    |> to_string()
+    |> String.replace("_", " ")
+    |> String.split(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
 end

@@ -2,9 +2,9 @@ defmodule LemonSimUi.Router do
   @moduledoc """
   Phoenix router for the LemonSim UI.
 
-  Mounts `SimDashboardLive` at `/` and `/sims/:sim_id`, plus the public
-  read-only `SpectatorLive` route at `/watch/:sim_id` for shareable werewolf
-  viewing.
+  Public routes: `/` (lobby), `/watch/:sim_id` (spectator), `/healthz`.
+  Admin routes: `/admin` and `/admin/sims/:id` (dashboard, requires access token).
+  API routes: `/api/admin/*` (JSON API, requires access token).
   """
 
   use LemonSimUi, :router
@@ -35,17 +35,18 @@ defmodule LemonSimUi.Router do
   end
 
   scope "/", LemonSimUi do
+    pipe_through(:public_browser)
+
+    live("/", LobbyLive, :index)
+    live("/watch/:sim_id", SpectatorLive, :show)
+    get("/healthz", HealthController, :index)
+  end
+
+  scope "/admin", LemonSimUi do
     pipe_through(:browser)
 
     live("/", SimDashboardLive, :index)
     live("/sims/:sim_id", SimDashboardLive, :show)
-  end
-
-  scope "/", LemonSimUi do
-    pipe_through(:public_browser)
-
-    live("/watch/:sim_id", SpectatorLive, :show)
-    get("/healthz", HealthController, :index)
   end
 
   scope "/api/admin", LemonSimUi do

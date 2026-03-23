@@ -20,6 +20,7 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
         %{
           player_id: player_id,
           name: get(info, :name, player_id),
+          model: get(info, :model),
           role: role,
           team: team,
           team_won: winner == team,
@@ -44,9 +45,11 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
       |> apply_vote_history(get(world, :vote_history, []), saboteur_id)
 
     %{
+      benchmark_focus: "hidden-role reasoning, cooperative coordination, and deception",
       winner: winner,
       saboteur_id: saboteur_id,
-      players: metrics
+      players: metrics,
+      models: summarize_models(metrics)
     }
   end
 
@@ -102,6 +105,24 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
             update_player(player_acc, voter_id, &increment(&1, :wrong_votes))
         end
       end)
+    end)
+  end
+
+  defp summarize_models(player_metrics) do
+    player_metrics
+    |> Enum.group_by(fn m -> get(m, :model, "unknown") end)
+    |> Enum.into(%{}, fn {model, entries} ->
+      {model,
+       %{
+         seats: length(entries),
+         team_wins: Enum.count(entries, &get(&1, :team_won, false)),
+         survived: Enum.count(entries, &get(&1, :survived, false)),
+         repairs: Enum.sum(Enum.map(entries, &get(&1, :repairs, 0))),
+         sabotages: Enum.sum(Enum.map(entries, &get(&1, :sabotages, 0))),
+         scans: Enum.sum(Enum.map(entries, &get(&1, :scans, 0))),
+         correct_votes: Enum.sum(Enum.map(entries, &get(&1, :correct_votes, 0))),
+         wrong_votes: Enum.sum(Enum.map(entries, &get(&1, :wrong_votes, 0)))
+       }}
     end)
   end
 

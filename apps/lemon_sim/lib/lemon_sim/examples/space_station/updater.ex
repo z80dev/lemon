@@ -73,6 +73,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Repaired the #{system_display_name(system_id)} system.")
+        |> adjust_reputation(player_id, 5)
 
       advance_action_turn(next_state)
     else
@@ -116,6 +118,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Sabotaged the #{system_display_name(system_id)} system. No one seemed to notice.")
 
       advance_action_turn(next_state)
     else
@@ -158,6 +161,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Pretended to repair #{system_display_name(system_id)}. Keeping up appearances.")
 
       advance_action_turn(next_state)
     else
@@ -221,6 +225,16 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       updated_players = put_player_field(players, player_id, :location, cover_system)
       updated_players = put_player_field(updated_players, player_id, :last_action, "scan")
 
+      target_name = get(Map.get(players, target_id, %{}), :name, target_id)
+
+      scan_journal =
+        case scan_result_text do
+          "sabotaged" -> "Scanned #{target_name} — readings suggest sabotage activity."
+          "repaired" -> "Scanned #{target_name} — readings look clean."
+          "no_previous_action" -> "Scanned #{target_name} — no prior activity to analyze."
+          _ -> "Scanned #{target_name} — readings were inconclusive."
+        end
+
       next_state =
         state
         |> State.put_world(
@@ -233,6 +247,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         )
         |> State.append_event(event)
         |> State.append_event(Events.scan_result(player_id, target_id, scan_result_text))
+        |> add_journal_entry(player_id, scan_journal)
 
       advance_action_turn(next_state)
     else
@@ -276,6 +291,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Locked down #{system_display_name(system_id)} to prevent sabotage.")
 
       advance_action_turn(next_state)
     else
@@ -314,6 +330,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Called an emergency meeting. Something doesn't feel right.")
 
       advance_action_turn(next_state)
     else
@@ -351,6 +368,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Used the vents to move unseen. Risky, but necessary.")
 
       advance_action_turn(next_state)
     else
@@ -459,6 +477,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       accusations = get(state.world, :accusations, [])
       new_accusations = accusations ++ [%{accuser: player_id, accused: target_id, evidence: evidence}]
 
+      target_name = get(Map.get(players, target_id, %{}), :name, target_id)
+
       next_state =
         state
         |> State.put_world(
@@ -468,6 +488,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
+        |> add_journal_entry(player_id, "Formally accused #{target_name}. I believe they're the saboteur.")
+        |> adjust_reputation(target_id, -2)
 
       advance_discussion_turn(next_state)
     else
@@ -493,10 +515,19 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         |> get(:votes, %{})
         |> Map.put(player_id, target_id)
 
+      vote_journal =
+        if target_id == "skip" do
+          "Decided to skip the vote. Not enough evidence to eject anyone."
+        else
+          target_name = get(Map.get(players, target_id, %{}), :name, target_id)
+          "Voted to eject #{target_name}."
+        end
+
       next_state =
         state
         |> State.put_world(world_updates(state.world, %{votes: votes}))
         |> State.append_event(event)
+        |> add_journal_entry(player_id, vote_journal)
 
       advance_voting_turn(next_state)
     else
@@ -946,11 +977,53 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           }
         ]
 
+    # Apply reputation changes based on ejection result
+    state_with_rep =
+      if not is_nil(ejected_id) do
+        victim_role = get(Map.get(players, ejected_id, %{}), :role, "unknown")
+        ejected_name = get(Map.get(players, ejected_id, %{}), :name, ejected_id)
+
+        # Journal entries for all living players about the ejection
+        living_ids = Roles.living_players(players) |> Enum.map(fn {id, _p} -> id end)
+
+        state_after_journals =
+          Enum.reduce(living_ids, state, fn pid, acc ->
+            if pid == ejected_id do
+              acc
+            else
+              add_journal_entry(acc, pid, "#{ejected_name} was ejected. They were #{victim_role}.")
+            end
+          end)
+
+        if victim_role == "saboteur" do
+          # Correct ejection: +10 for voters who voted for the saboteur
+          # +15 for captain if emergency meeting was called this game
+          Enum.reduce(votes, state_after_journals, fn {voter_id, target}, acc ->
+            if target == ejected_id do
+              adjust_reputation(acc, voter_id, 10)
+            else
+              acc
+            end
+          end)
+        else
+          # Wrong ejection: -5 for voters who voted for a crew member
+          Enum.reduce(votes, state_after_journals, fn {voter_id, target}, acc ->
+            if target == ejected_id do
+              adjust_reputation(acc, voter_id, -5)
+            else
+              acc
+            end
+          end)
+        end
+      else
+        state
+      end
+
     if not is_nil(ejected_id) and get(Map.get(players, ejected_id, %{}), :role) == "saboteur" do
       next_state =
-        state
+        state_with_rep
         |> State.put_world(
-          world_updates(state.world, %{
+          world_updates(state_with_rep.world, %{
             players: updated_players,
             votes: %{},
             vote_history: vote_history,
@@ -972,16 +1045,16 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
     else
       # Check if crew survived all rounds after this vote
       # (last round vote happens, then game ends)
-      if round >= get(state.world, :max_rounds, 8) do
+      if round >= get(state_with_rep.world, :max_rounds, 8) do
         # Game over: crew survived
         game_over_events = [
           Events.game_over("crew", "The crew survived all #{round} rounds! The station is saved!")
         ]
 
         next_state =
-          state
+          state_with_rep
           |> State.put_world(
-            world_updates(state.world, %{
+            world_updates(state_with_rep.world, %{
               players: updated_players,
               votes: %{},
               vote_history: vote_history,
@@ -998,7 +1071,7 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         {:ok, next_state, :skip}
       else
         transition_to_next_round(
-          state,
+          state_with_rep,
           updated_players,
           new_elimination_log,
           vote_history,
@@ -1083,6 +1156,39 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
       )
 
     {:ok, next_state, {:decide, "#{first_actor} action"}}
+  end
+
+  # -- Journal helpers --
+
+  defp add_journal_entry(state, player_id, text) do
+    journals = get(state.world, :journals, %{})
+    player_journal = Map.get(journals, player_id, [])
+
+    entry = %{
+      round: get(state.world, :round, 1),
+      phase: get(state.world, :phase),
+      text: text
+    }
+
+    new_journals = Map.put(journals, player_id, player_journal ++ [entry])
+    State.put_world(state, world_updates(state.world, %{journals: new_journals}))
+  end
+
+  # -- Reputation helpers --
+
+  defp adjust_reputation(state, player_id, delta) do
+    players = get(state.world, :players, %{})
+
+    case Map.get(players, player_id) do
+      nil ->
+        state
+
+      player ->
+        current = get(player, :reputation, 0)
+        new_rep = max(-100, min(100, current + delta))
+        updated_players = Map.put(players, player_id, Map.put(player, :reputation, new_rep))
+        State.put_world(state, world_updates(state.world, %{players: updated_players}))
+    end
   end
 
   # -- Helpers --
@@ -1222,14 +1328,14 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
     selected_clues = clue_pool |> Enum.shuffle() |> Enum.take(clue_count)
 
     # Distribute each clue to a random living player (not the actor)
-    {updated_clues, clue_events} =
-      Enum.reduce(selected_clues, {get(state.world, :clues, %{}), []}, fn clue, {acc_clues, acc_events} ->
+    {updated_clues, clue_events, clue_recipients} =
+      Enum.reduce(selected_clues, {get(state.world, :clues, %{}), [], []}, fn clue, {acc_clues, acc_events, acc_recipients} ->
         actor_id = Map.get(clue, :about_player)
         eligible = Enum.reject(living, &(&1 == actor_id))
 
         case eligible do
           [] ->
-            {acc_clues, acc_events}
+            {acc_clues, acc_events, acc_recipients}
 
           recipients ->
             recipient = Enum.random(recipients)
@@ -1239,12 +1345,19 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
             updated = Map.put(acc_clues, recipient, player_clues ++ [clue_with_round])
 
             event = Events.clue_found(recipient, clue_with_round)
-            {updated, acc_events ++ [event]}
+            clue_type = Map.get(clue, :type, "evidence")
+            {updated, acc_events ++ [event], acc_recipients ++ [{recipient, clue_type}]}
         end
       end)
 
     updated_state =
       State.put_world(state, world_updates(state.world, %{clues: updated_clues}))
+
+    # Add journal entries for clue recipients
+    updated_state =
+      Enum.reduce(clue_recipients, updated_state, fn {recipient, clue_type}, acc ->
+        add_journal_entry(acc, recipient, "Found a clue: #{clue_type} evidence noted.")
+      end)
 
     {updated_state, clue_events}
   end

@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
   @moduledoc false
 
-  alias LemonSim.Examples.SpaceStation.{FrameRenderer, GameLog}
+  alias LemonSim.Examples.SpaceStation.{FrameRenderer, ReplayStoryboard}
 
   @default_fps 2
   @default_hold_frames 1
@@ -38,18 +38,19 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
       tmp_dir = create_temp_dir()
 
       try do
-        entries = GameLog.read_log(log_path)
-        total = length(entries)
+        entries = read_transcript(log_path)
+        beats = ReplayStoryboard.build(entries, fps: fps, hold_frames: hold_frames)
+        total = length(beats)
 
-        IO.puts("Read #{total} log entries from #{log_path}")
+        IO.puts("Built #{total} replay beats from #{log_path}")
 
-        frame_index = render_all_frames(entries, tmp_dir, render_opts, hold_frames, total)
+        frame_index = render_all_frames(beats, tmp_dir, render_opts, total)
 
         IO.puts("Converting #{frame_index} frames to PNG...")
         :ok = convert_svgs_to_pngs(tmp_dir, frame_index, width, height)
 
         IO.puts("Encoding video...")
-        :ok = encode_video(tmp_dir, frame_index, fps, output)
+        :ok = encode_video(tmp_dir, fps, output)
 
         file_size = File.stat!(output).size
         IO.puts("Video written to #{output} (#{format_file_size(file_size)})")
@@ -102,11 +103,19 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
     dir
   end
 
-  defp render_all_frames(entries, tmp_dir, render_opts, base_hold, total) do
+  defp read_transcript(path) do
+    path
+    |> File.stream!()
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&Jason.decode!/1)
+  end
+
+  defp render_all_frames(beats, tmp_dir, render_opts, total) do
     {final_index, _} =
-      Enum.reduce(entries, {1, 1}, fn entry, {frame_index, entry_num} ->
+      Enum.reduce(beats, {1, 1}, fn %{entry: entry, hold_frames: hold_count},
+                                    {frame_index, entry_num} ->
         IO.puts("Rendering frame #{entry_num}/#{total}...")
-        hold_count = hold_count_for(entry, base_hold)
 
         svg = FrameRenderer.render_frame(entry, render_opts)
 
@@ -122,43 +131,6 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
 
     final_index - 1
   end
-
-  defp hold_count_for(entry, base_hold) do
-    type = get(entry, "type", "step")
-    events = get(entry, "events", [])
-
-    multiplier =
-      cond do
-        type == "init" -> 3
-        type == "game_over" -> 5
-        has_event?(events, "player_ejected") -> 3
-        has_event?(events, "phase_changed") && meeting_phase_change?(events) -> 3
-        has_event?(events, "sabotage_system") -> 2
-        has_event?(events, "vote_result") -> 3
-        true -> 1
-      end
-
-    base_hold * multiplier
-  end
-
-  defp meeting_phase_change?(events) do
-    Enum.any?(events, fn ev ->
-      kind = get(ev, "kind", "")
-      payload = get(ev, "payload", %{})
-      phase = get(payload, "phase", "")
-      kind == "phase_changed" and phase in ["discussion", "voting"]
-    end)
-  end
-
-  defp has_event?(events, kind) when is_list(events) do
-    Enum.any?(events, fn
-      %{"kind" => k} -> k == kind
-      %{kind: k} -> to_string(k) == kind
-      _ -> false
-    end)
-  end
-
-  defp has_event?(_, _), do: false
 
   defp frame_path(tmp_dir, index, extension) do
     filename = "frame_#{String.pad_leading(Integer.to_string(index), 4, "0")}.#{extension}"
@@ -185,7 +157,7 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
     :ok
   end
 
-  defp encode_video(tmp_dir, _frame_count, fps, output) do
+  defp encode_video(tmp_dir, fps, output) do
     input_pattern = Path.join(tmp_dir, "frame_%04d.png")
     output_abs = Path.expand(output)
 

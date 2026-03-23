@@ -153,6 +153,12 @@ mix test apps/lemon_skills        # one app
 mix lemon.quality                 # lint + doc freshness + architecture boundaries
 ```
 
+GitHub Copilot coding-agent runs use
+[`/.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml)
+to preinstall BEAM/Rust toolchains plus Hex dependencies before the agent firewall is
+enabled. Keep it aligned with the versions and dependency bootstrap steps in
+[`/.github/workflows/quality.yml`](.github/workflows/quality.yml).
+
 **Release profiles:**
 
 | Profile | Use case |
@@ -160,7 +166,7 @@ mix lemon.quality                 # lint + doc freshness + architecture boundari
 | `lemon_runtime_min` | Headless / CI / embedded |
 | `lemon_runtime_full` | Local development |
 | `games_platform` | Public games web deployment |
-| `sim_broadcast_platform` | Public sim broadcast deployment (`lemon_sim_ui`) |
+| `sim_broadcast_platform` | Public sim broadcast and replay deployment (`lemon_sim_ui`) |
 
 ```bash
 MIX_ENV=prod mix release lemon_runtime_full

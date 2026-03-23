@@ -29,6 +29,15 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
   # Public API
   # ---------------------------------------------------------------------------
 
+  @doc """
+  Renders a frame and writes it to the given file path.
+  """
+  @spec render_frame_to_file(map(), String.t(), keyword()) :: :ok | {:error, term()}
+  def render_frame_to_file(entry, path, opts \\ []) do
+    svg = render_frame(entry, opts)
+    File.write(path, svg)
+  end
+
   @spec render_frame(map(), keyword()) :: String.t()
   def render_frame(entry, opts \\ []) do
     w = Keyword.get(opts, :width, 1920)

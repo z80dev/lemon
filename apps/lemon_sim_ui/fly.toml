@@ -1,0 +1,32 @@
+app = "lemonsim"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PHX_SERVER = "true"
+  LEMON_SIM_AUTO_LOOP = "true"
+  LEMON_SIM_WEREWOLF_PLAYERS = "6"
+  LEMON_SIM_UI_PORT = "4090"
+  RELEASE_NAME = "sim_broadcast_platform"
+
+[http_service]
+  internal_port = 4090
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[mounts]
+  source = "lemonsim_data"
+  destination = "/app/data"

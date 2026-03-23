@@ -57,6 +57,7 @@ defmodule LemonSimUi.SpectatorLive do
            playback: if(supported, do: WerewolfPlayback.new(state), else: nil),
            playback_timer_ref: nil,
            running: running,
+           game_over_redirect: false,
            page_title: "Watch: #{sim_id}"
          )}
     end
@@ -89,7 +90,26 @@ defmodule LemonSimUi.SpectatorLive do
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
     running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
-    {:noreply, assign(socket, running: running)}
+    socket = assign(socket, running: running)
+
+    # If current game is over and not running, look for a new active werewolf sim
+    if !running && socket.assigns[:state] do
+      status = LemonCore.MapHelpers.get_key(socket.assigns.state.world, :status)
+
+      if status == "game_over" do
+        case find_active_werewolf(socket.assigns.sim_id) do
+          nil ->
+            {:noreply, assign(socket, game_over_redirect: true)}
+
+          new_sim_id ->
+            {:noreply, push_navigate(socket, to: ~p"/watch/#{new_sim_id}")}
+        end
+      else
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:werewolf_playback_tick, ref}, socket) do
@@ -129,6 +149,15 @@ defmodule LemonSimUi.SpectatorLive do
             sim_id={@sim_id}
             running={@running}
           />
+          <div :if={@game_over_redirect} class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center">
+            <div class="text-center glass-panel p-10 rounded-2xl max-w-md">
+              <h2 class="text-2xl font-bold text-white mb-3">Game Over</h2>
+              <p class="text-slate-400 font-mono text-sm mb-6">Next game starting soon...</p>
+              <a href="/" class="glass-button px-6 py-2 rounded-lg text-sm inline-block">
+                Back to Lobby
+              </a>
+            </div>
+          </div>
       <% end %>
     </div>
     """
@@ -371,6 +400,23 @@ defmodule LemonSimUi.SpectatorLive do
             assign(socket, playback_timer_ref: ref)
         end
     end
+  end
+
+  defp find_active_werewolf(exclude_sim_id) do
+    running_ids = LemonSimUi.SimManager.list_running()
+
+    Enum.find_value(running_ids, fn sim_id ->
+      if sim_id != exclude_sim_id do
+        case Store.get_state(sim_id) do
+          %{world: world} ->
+            domain = SimHelpers.infer_domain_type(%LemonSim.State{world: world, sim_id: sim_id})
+            if domain == :werewolf, do: sim_id
+
+          _ ->
+            nil
+        end
+      end
+    end)
   end
 
   defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do

@@ -1361,8 +1361,9 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
         </div>
         <div :if={is_list(@items) && length(@items) > 0} class="flex gap-0.5 flex-wrap mt-0.5">
           <%= for item <- @items do %>
-            <span class="text-[7px] px-1 py-0 rounded bg-amber-950/40 text-amber-400/70 border border-amber-500/10 leading-tight" title={item}>
-              {item_emoji(item)}
+            <% item_name = if is_map(item), do: item[:type] || inspect(item), else: item %>
+            <span class="text-[7px] px-1 py-0 rounded bg-amber-950/40 text-amber-400/70 border border-amber-500/10 leading-tight" title={item_name}>
+              {item_emoji(item_name)}
             </span>
           <% end %>
         </div>

@@ -57,7 +57,8 @@ defmodule LemonSim.Examples.SpaceStation.Roles do
          status: "alive",
          name: name,
          location: nil,
-         last_action: nil
+         last_action: nil,
+         reputation: 0
        }}
     end)
   end

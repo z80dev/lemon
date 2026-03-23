@@ -1,0 +1,62 @@
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+      - "mix.exs"
+      - "mix.lock"
+      - "apps/**/mix.exs"
+  pull_request:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+      - "mix.exs"
+      - "mix.lock"
+      - "apps/**/mix.exs"
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            ~/.hex
+            ~/.mix
+          key: ${{ runner.os }}-copilot-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-copilot-mix-
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile deps
+        run: mix deps.compile
+
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2

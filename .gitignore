@@ -83,3 +83,6 @@ tools/diagrams/output/
 
 # Test artifact temp directories
 apps/*/tmp/
+
+# Game logs (generated simulation artifacts)
+priv/game_logs/

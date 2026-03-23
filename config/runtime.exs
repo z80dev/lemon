@@ -48,6 +48,20 @@ if is_binary(uploads_dir) and uploads_dir != "" do
   config :lemon_web, :uploads_dir, uploads_dir
 end
 
+# Auto-loop: automatically start and restart games
+if System.get_env("LEMON_SIM_AUTO_LOOP") in ["1", "true", "TRUE"] do
+  werewolf_players =
+    case System.get_env("LEMON_SIM_WEREWOLF_PLAYERS") do
+      nil -> 6
+      "" -> 6
+      n -> String.to_integer(n)
+    end
+
+  config :lemon_sim_ui, :auto_loop, [
+    {:werewolf, [player_count: werewolf_players]}
+  ]
+end
+
 if config_env() == :prod do
   release_name = System.get_env("RELEASE_NAME")
 
@@ -78,7 +92,7 @@ if config_env() == :prod do
     end
   end
 
-  configure_endpoint.(:lemon_web, LemonWeb.Endpoint, "LEMON_WEB", 4080, "games_platform")
+  configure_endpoint.(:lemon_web, LemonWeb.Endpoint, "LEMON_WEB", 4080, "lemon_runtime_full")
 
   configure_endpoint.(
     :lemon_sim_ui,
