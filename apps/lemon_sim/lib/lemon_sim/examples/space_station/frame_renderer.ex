@@ -333,7 +333,14 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, players: players, winner: winner, elimination_log: elimination_log, turn_order: turn_order}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         players: players,
+         winner: winner,
+         elimination_log: elimination_log,
+         turn_order: turn_order
+       }) do
     cx = @roster_w + div(w - @roster_w - @systems_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -426,7 +433,14 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
     end
   end
 
-  defp render_action_phase(%{w: w, h: h, active_actor_id: actor_id, players: players, systems: systems, events: events}) do
+  defp render_action_phase(%{
+         w: w,
+         h: h,
+         active_actor_id: actor_id,
+         players: players,
+         systems: systems,
+         events: events
+       }) do
     cx = @roster_w + div(w - @roster_w - @systems_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -438,8 +452,17 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
     action_event =
       Enum.find(events, fn ev ->
         kind = get(ev, "kind", "")
-        kind in ["repair_system", "sabotage_system", "scan_player", "lock_room",
-                 "call_emergency_meeting", "vent", "fake_repair", "inspect_system"]
+
+        kind in [
+          "repair_system",
+          "sabotage_system",
+          "scan_player",
+          "lock_room",
+          "call_emergency_meeting",
+          "vent",
+          "fake_repair",
+          "inspect_system"
+        ]
       end)
 
     action_text =
@@ -619,11 +642,13 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
       |> Enum.sort_by(fn {_pid, count} -> -count end)
 
     total_votes = map_size(votes)
-    living_count = Enum.count(turn_order, fn pid ->
-      player = Map.get(players, pid, %{})
-      status = get(player, "status", get(player, :status, "alive"))
-      status == "alive"
-    end)
+
+    living_count =
+      Enum.count(turn_order, fn pid ->
+        player = Map.get(players, pid, %{})
+        status = get(player, "status", get(player, :status, "alive"))
+        status == "alive"
+      end)
 
     [
       ~s[<rect x="#{cx - 250}" y="#{cy - 200}" width="500" height="400" ] <>
@@ -829,7 +854,12 @@ defmodule LemonSim.Examples.SpaceStation.FrameRenderer do
         p = get(ev, "payload", ev || %{})
         player_id = get(p, "player_id", "?")
         statement = get(p, "statement", "")
-        short = if String.length(statement) > 80, do: String.slice(statement, 0, 80) <> "...", else: statement
+
+        short =
+          if String.length(statement) > 80,
+            do: String.slice(statement, 0, 80) <> "...",
+            else: statement
+
         "#{player_id}: \"#{short}\""
 
       has_event?(events, "accuse") ->

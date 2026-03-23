@@ -57,7 +57,10 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
           else
             investor = Map.get(investors, player_id, %{})
             fund_size = Map.get(investor, :fund_size, Map.get(investor, "fund_size", 0))
-            remaining = Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0))
+
+            remaining =
+              Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0))
+
             portfolio = Map.get(investor, :portfolio, Map.get(investor, "portfolio", []))
             deployed = fund_size - remaining
 
@@ -71,7 +74,9 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
               end)
 
             return_pct =
-              if deployed > 0, do: Float.round((total_portfolio_value - deployed) / deployed * 100.0, 2), else: 0.0
+              if deployed > 0,
+                do: Float.round((total_portfolio_value - deployed) / deployed * 100.0, 2),
+                else: 0.0
 
             sectors_invested =
               portfolio

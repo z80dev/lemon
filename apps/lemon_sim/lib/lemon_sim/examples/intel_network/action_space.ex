@@ -256,9 +256,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
-               "proposed #{operation_type} on #{target_id}"
-             )
+             AgentCore.text_content("proposed #{operation_type} on #{target_id}")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -308,7 +306,11 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
   defp mole_action_tool(actor_id, neighbor_enum, neighbors, fragments) do
     can_leak = length(fragments) > 0
-    leak_desc = if can_leak, do: "'leak_intel' (secretly leak a fragment to adversary)", else: "'leak_intel' (no fragments to leak — will pass)"
+
+    leak_desc =
+      if can_leak,
+        do: "'leak_intel' (secretly leak a fragment to adversary)",
+        else: "'leak_intel' (no fragments to leak — will pass)"
 
     %AgentTool{
       name: "mole_action",
@@ -329,7 +331,8 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
           },
           "target_id" => %{
             "type" => "string",
-            "description" => "Target agent for frame_agent (must be adjacent, ignored for other actions)",
+            "description" =>
+              "Target agent for frame_agent (must be adjacent, ignored for other actions)",
             "anyOf" => neighbor_enum
           }
         },

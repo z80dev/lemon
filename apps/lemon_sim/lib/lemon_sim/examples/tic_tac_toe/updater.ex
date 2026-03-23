@@ -33,13 +33,15 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
 
       next_state =
         state
-        |> State.put_world(world_updates(state.world, %{
-          board: board_after,
-          current_player: outcome.next_player,
-          status: outcome.status,
-          winner: outcome.winner,
-          move_count: move_count
-        }))
+        |> State.put_world(
+          world_updates(state.world, %{
+            board: board_after,
+            current_player: outcome.next_player,
+            status: outcome.status,
+            winner: outcome.winner,
+            move_count: move_count
+          })
+        )
         |> State.append_event(Events.move_applied(player, row, col, move_count))
         |> State.append_events(outcome.events)
 
@@ -81,7 +83,9 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
   defp raw_coords(_), do: {nil, nil}
 
   defp ensure_in_progress(%State{world: world}) do
-    if MapHelpers.get_key(world, :status) in [nil, "in_progress"], do: :ok, else: {:error, :game_over}
+    if MapHelpers.get_key(world, :status) in [nil, "in_progress"],
+      do: :ok,
+      else: {:error, :game_over}
   end
 
   defp ensure_empty_cell(world, row, col) do

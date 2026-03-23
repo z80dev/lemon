@@ -45,13 +45,14 @@ defmodule LemonSim.Examples.DiplomacyOrdersTest do
 
   test "unopposed move succeeds — player_1 moves from A to empty B" do
     # player_1 issues move A->B, then both players submit
-    state = base_state(%{
-      territories: %{
-        "A" => %{owner: "player_1", armies: 2},
-        "B" => %{owner: nil, armies: 0},
-        "C" => %{owner: "player_2", armies: 2}
-      }
-    })
+    state =
+      base_state(%{
+        territories: %{
+          "A" => %{owner: "player_1", armies: 2},
+          "B" => %{owner: nil, armies: 0},
+          "C" => %{owner: "player_2", armies: 2}
+        }
+      })
 
     # player_1 issues move order
     assert {:ok, state2, _} =
@@ -207,20 +208,21 @@ defmodule LemonSim.Examples.DiplomacyOrdersTest do
   test "non-adjacent move rejected" do
     # A is not adjacent to a territory not in adjacency list
     # Add a territory Z that is not adjacent to A
-    state = base_state(%{
-      territories: %{
-        "A" => %{owner: "player_1", armies: 2},
-        "B" => %{owner: nil, armies: 0},
-        "C" => %{owner: "player_2", armies: 2},
-        "Z" => %{owner: nil, armies: 0}
-      },
-      adjacency: %{
-        "A" => ["B"],
-        "B" => ["A", "C"],
-        "C" => ["B"],
-        "Z" => []
-      }
-    })
+    state =
+      base_state(%{
+        territories: %{
+          "A" => %{owner: "player_1", armies: 2},
+          "B" => %{owner: nil, armies: 0},
+          "C" => %{owner: "player_2", armies: 2},
+          "Z" => %{owner: nil, armies: 0}
+        },
+        adjacency: %{
+          "A" => ["B"],
+          "B" => ["A", "C"],
+          "C" => ["B"],
+          "Z" => []
+        }
+      })
 
     # player_1 tries to move A->Z (non-adjacent)
     assert {:ok, _next_state, {:decide, msg}} =
@@ -230,13 +232,14 @@ defmodule LemonSim.Examples.DiplomacyOrdersTest do
   end
 
   test "message quota enforced — third message in a round is rejected" do
-    state = base_state(%{
-      phase: "diplomacy",
-      players: %{
-        "player_1" => %{status: "alive"},
-        "player_2" => %{status: "alive"}
-      }
-    })
+    state =
+      base_state(%{
+        phase: "diplomacy",
+        players: %{
+          "player_1" => %{status: "alive"},
+          "player_2" => %{status: "alive"}
+        }
+      })
 
     # Send first message — OK
     assert {:ok, s2, _} =
@@ -321,7 +324,8 @@ defmodule LemonSim.Examples.DiplomacyOrdersTest do
     assert {:ok, s3, _} = Updater.apply_event(s2, Events.submit_orders("player_1"), [])
 
     # player_2 submits (default hold)
-    assert {:ok, final_state, :skip} = Updater.apply_event(s3, Events.submit_orders("player_2"), [])
+    assert {:ok, final_state, :skip} =
+             Updater.apply_event(s3, Events.submit_orders("player_2"), [])
 
     assert final_state.world.status == "won"
     assert final_state.world.winner == "player_1"

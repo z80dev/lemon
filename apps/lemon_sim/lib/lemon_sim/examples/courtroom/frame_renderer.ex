@@ -224,6 +224,7 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
 
           if vote do
             vote_color = if vote == "guilty", do: @prosecution_color, else: @defense_color
+
             ~s[<text x="#{@roster_w - 16}" y="#{y + 68}" text-anchor="end" font-size="10" ] <>
               ~s[font-weight="700" fill="#{vote_color}">#{String.upcase(vote)}</text>\n]
           else
@@ -295,7 +296,14 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
     ]
   end
 
-  defp render_verdict_card(%{w: w, h: h, outcome: outcome, verdict_votes: verdict_votes, players: players, winner: winner}) do
+  defp render_verdict_card(%{
+         w: w,
+         h: h,
+         outcome: outcome,
+         verdict_votes: verdict_votes,
+         players: players,
+         winner: winner
+       }) do
     cx = @roster_w + div(w - @roster_w - @evidence_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -366,7 +374,14 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
         |> Enum.map(fn {entry, idx} ->
           ey = panel_y + 48 + idx * 35
           type = get(entry, "type", get(entry, :type, ""))
-          player_id = get(entry, "player_id", get(entry, :player_id, get(entry, "asker_id", get(entry, :asker_id, "?"))))
+
+          player_id =
+            get(
+              entry,
+              "player_id",
+              get(entry, :player_id, get(entry, "asker_id", get(entry, :asker_id, "?")))
+            )
+
           content = get(entry, "content", get(entry, :content, ""))
 
           player = Map.get(players, player_id, %{})
@@ -411,13 +426,24 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
   # Evidence panel (right panel)
   # ---------------------------------------------------------------------------
 
-  defp render_evidence_panel(%{w: w, h: h, evidence_presented: evidence_presented, case_file: case_file, objections: objections} = _ctx) do
+  defp render_evidence_panel(
+         %{
+           w: w,
+           h: h,
+           evidence_presented: evidence_presented,
+           case_file: case_file,
+           objections: objections
+         } = _ctx
+       ) do
     panel_x = w - @evidence_w
     panel_h = h - @header_h - @footer_h
     evidence_details = get(case_file, "evidence_details", get(case_file, :evidence_details, %{}))
 
-    sustain_count = Enum.count(objections, &(get(&1, "ruling", get(&1, :ruling, "")) == "sustained"))
-    overrule_count = Enum.count(objections, &(get(&1, "ruling", get(&1, :ruling, "")) == "overruled"))
+    sustain_count =
+      Enum.count(objections, &(get(&1, "ruling", get(&1, :ruling, "")) == "sustained"))
+
+    overrule_count =
+      Enum.count(objections, &(get(&1, "ruling", get(&1, :ruling, "")) == "overruled"))
 
     evidence_entries =
       evidence_presented

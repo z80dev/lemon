@@ -222,33 +222,60 @@ defmodule LemonSim.Examples.Auction.Items do
   # -- Collector Characters --
 
   @collector_names [
-    "Ashworth", "Beaumont", "Crane", "Duvall", "Etchingham", "Fontaine",
-    "Grimaldi", "Huxley", "Ivory", "Jarvis", "Kingsley", "Lockhart",
-    "Montague", "Northcott", "Osgood", "Pemberton"
+    "Ashworth",
+    "Beaumont",
+    "Crane",
+    "Duvall",
+    "Etchingham",
+    "Fontaine",
+    "Grimaldi",
+    "Huxley",
+    "Ivory",
+    "Jarvis",
+    "Kingsley",
+    "Lockhart",
+    "Montague",
+    "Northcott",
+    "Osgood",
+    "Pemberton"
   ]
 
   @traits ~w(obsessive shrewd impulsive patient showoff calculating completionist penny_pincher)
 
   @trait_descriptions %{
-    "obsessive" => "You are OBSESSIVE — when you want something, nothing else matters. You will overpay for the piece that completes your vision.",
-    "shrewd" => "You are SHREWD — you know the true value of everything and refuse to pay a cent more. Every bid is calculated to the gold piece.",
-    "impulsive" => "You are IMPULSIVE — you bid with your heart, not your head. A beautiful item demands a beautiful price.",
-    "patient" => "You are PATIENT — you let others waste gold on early lots. The best items come to those who wait with full coffers.",
-    "showoff" => "You are a SHOWOFF — winning the auction matters as much as the item. You want rivals to see you outbid them.",
-    "calculating" => "You are CALCULATING — you track every gold piece spent by every rival, predict their limits, and bid accordingly.",
-    "completionist" => "You are a COMPLETIONIST — set bonuses obsess you. You will sacrifice individual item value to complete a collection.",
-    "penny_pincher" => "You are a PENNY PINCHER — every gold piece saved is a gold piece earned. You pass on good deals waiting for great ones."
+    "obsessive" =>
+      "You are OBSESSIVE — when you want something, nothing else matters. You will overpay for the piece that completes your vision.",
+    "shrewd" =>
+      "You are SHREWD — you know the true value of everything and refuse to pay a cent more. Every bid is calculated to the gold piece.",
+    "impulsive" =>
+      "You are IMPULSIVE — you bid with your heart, not your head. A beautiful item demands a beautiful price.",
+    "patient" =>
+      "You are PATIENT — you let others waste gold on early lots. The best items come to those who wait with full coffers.",
+    "showoff" =>
+      "You are a SHOWOFF — winning the auction matters as much as the item. You want rivals to see you outbid them.",
+    "calculating" =>
+      "You are CALCULATING — you track every gold piece spent by every rival, predict their limits, and bid accordingly.",
+    "completionist" =>
+      "You are a COMPLETIONIST — set bonuses obsess you. You will sacrifice individual item value to complete a collection.",
+    "penny_pincher" =>
+      "You are a PENNY PINCHER — every gold piece saved is a gold piece earned. You pass on good deals waiting for great ones."
   }
 
   @connection_types ~w(estate_rivals auction_nemesis mentor_student old_partners collection_thieves gallery_neighbors)
 
   @connection_templates %{
-    "estate_rivals" => " have been outbidding each other at estate sales for decades. It's become personal.",
-    "auction_nemesis" => ": one always seems to want exactly what the other is bidding on. Coincidence or spite?",
-    "mentor_student" => ": the first taught the second the art of collecting. Now they compete for the same treasures.",
-    "old_partners" => " once shared a gallery before a disagreement over a forged painting tore them apart.",
-    "collection_thieves" => " both claim ownership of the same legendary piece that went missing years ago.",
-    "gallery_neighbors" => " run galleries on the same street. Professional courtesy masks fierce competition."
+    "estate_rivals" =>
+      " have been outbidding each other at estate sales for decades. It's become personal.",
+    "auction_nemesis" =>
+      ": one always seems to want exactly what the other is bidding on. Coincidence or spite?",
+    "mentor_student" =>
+      ": the first taught the second the art of collecting. Now they compete for the same treasures.",
+    "old_partners" =>
+      " once shared a gallery before a disagreement over a forged painting tore them apart.",
+    "collection_thieves" =>
+      " both claim ownership of the same legendary piece that went missing years ago.",
+    "gallery_neighbors" =>
+      " run galleries on the same street. Professional courtesy masks fierce competition."
   }
 
   @doc """

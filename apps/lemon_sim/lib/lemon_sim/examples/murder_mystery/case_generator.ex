@@ -154,9 +154,14 @@ defmodule LemonSim.Examples.MurderMystery.CaseGenerator do
     # Place clues into their rooms
     updated_rooms =
       Enum.reduce(all_clues, rooms, fn clue, acc_rooms ->
-        Map.update(acc_rooms, clue.room_id, %{clues_present: [clue.clue_id], searched_by: []}, fn room ->
-          Map.update(room, :clues_present, [clue.clue_id], &(&1 ++ [clue.clue_id]))
-        end)
+        Map.update(
+          acc_rooms,
+          clue.room_id,
+          %{clues_present: [clue.clue_id], searched_by: []},
+          fn room ->
+            Map.update(room, :clues_present, [clue.clue_id], &(&1 ++ [clue.clue_id]))
+          end
+        )
       end)
 
     {updated_rooms, evidence}

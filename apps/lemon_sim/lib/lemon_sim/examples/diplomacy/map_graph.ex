@@ -10,32 +10,56 @@ defmodule LemonSim.Examples.Diplomacy.MapGraph do
   # -- Character Data --
 
   @leader_names [
-    "Alaric", "Cassius", "Drusilla", "Empress Yara", "Fenrik", "Galatea",
-    "Hadrian", "Isolde", "Justinian", "Kalindra", "Leopold", "Morgause"
+    "Alaric",
+    "Cassius",
+    "Drusilla",
+    "Empress Yara",
+    "Fenrik",
+    "Galatea",
+    "Hadrian",
+    "Isolde",
+    "Justinian",
+    "Kalindra",
+    "Leopold",
+    "Morgause"
   ]
 
   @traits ~w(expansionist defensive treacherous honorable aggressive diplomatic cautious vengeful)
 
   @trait_descriptions %{
-    "expansionist" => "You are EXPANSIONIST — you always want more territory. Peace is just preparation for the next campaign.",
-    "defensive" => "You are DEFENSIVE — you protect what you have above all. You build alliances to deter aggression, not to conquer.",
-    "treacherous" => "You are TREACHEROUS — alliances are tools to be discarded when they stop serving you. Every promise has an expiration date.",
-    "honorable" => "You are HONORABLE — your word is your bond. You keep promises even when it costs you, and you despise oath-breakers.",
-    "aggressive" => "You are AGGRESSIVE — you attack early and often. The best defense is overwhelming force.",
-    "diplomatic" => "You are DIPLOMATIC — you prefer to win through negotiation. Why fight when you can convince someone to fight for you?",
-    "cautious" => "You are CAUTIOUS — you never overextend. Every move is calculated, every risk assessed. Patience wins empires.",
-    "vengeful" => "You are VENGEFUL — you never forget a slight. Anyone who attacks you will pay, even if it costs you the game."
+    "expansionist" =>
+      "You are EXPANSIONIST — you always want more territory. Peace is just preparation for the next campaign.",
+    "defensive" =>
+      "You are DEFENSIVE — you protect what you have above all. You build alliances to deter aggression, not to conquer.",
+    "treacherous" =>
+      "You are TREACHEROUS — alliances are tools to be discarded when they stop serving you. Every promise has an expiration date.",
+    "honorable" =>
+      "You are HONORABLE — your word is your bond. You keep promises even when it costs you, and you despise oath-breakers.",
+    "aggressive" =>
+      "You are AGGRESSIVE — you attack early and often. The best defense is overwhelming force.",
+    "diplomatic" =>
+      "You are DIPLOMATIC — you prefer to win through negotiation. Why fight when you can convince someone to fight for you?",
+    "cautious" =>
+      "You are CAUTIOUS — you never overextend. Every move is calculated, every risk assessed. Patience wins empires.",
+    "vengeful" =>
+      "You are VENGEFUL — you never forget a slight. Anyone who attacks you will pay, even if it costs you the game."
   }
 
   @connection_types ~w(blood_feud marriage_alliance ancient_treaty border_dispute trade_partners sworn_enemies)
 
   @connection_templates %{
-    "blood_feud" => " have waged wars against each other for generations. The hatred runs deep in both courts.",
-    "marriage_alliance" => " are bound by a royal marriage. The alliance is politically convenient but personally complicated.",
-    "ancient_treaty" => " signed a mutual defense pact generations ago. Whether it still holds is a matter of interpretation.",
-    "border_dispute" => " share a contested border. Skirmishes are common and diplomats on both sides are exhausted.",
-    "trade_partners" => " depend on each other economically. War between them would be mutually ruinous.",
-    "sworn_enemies" => ": one conquered the other's ancestral homeland. The displaced ruler has sworn to reclaim it."
+    "blood_feud" =>
+      " have waged wars against each other for generations. The hatred runs deep in both courts.",
+    "marriage_alliance" =>
+      " are bound by a royal marriage. The alliance is politically convenient but personally complicated.",
+    "ancient_treaty" =>
+      " signed a mutual defense pact generations ago. Whether it still holds is a matter of interpretation.",
+    "border_dispute" =>
+      " share a contested border. Skirmishes are common and diplomats on both sides are exhausted.",
+    "trade_partners" =>
+      " depend on each other economically. War between them would be mutually ruinous.",
+    "sworn_enemies" =>
+      ": one conquered the other's ancestral homeland. The displaced ruler has sworn to reclaim it."
   }
 
   @doc """
@@ -62,7 +86,16 @@ defmodule LemonSim.Examples.Diplomacy.MapGraph do
       "highland" => ["northland", "eastmarch", "central"],
       "eastmarch" => ["highland", "eastwood", "central"],
       "westwood" => ["northland", "central", "southmoor"],
-      "central" => ["northland", "highland", "eastmarch", "westwood", "eastwood", "southmoor", "lowland", "southeast"],
+      "central" => [
+        "northland",
+        "highland",
+        "eastmarch",
+        "westwood",
+        "eastwood",
+        "southmoor",
+        "lowland",
+        "southeast"
+      ],
       "eastwood" => ["eastmarch", "central", "southeast"],
       "southmoor" => ["westwood", "central", "lowland", "farwest"],
       "lowland" => ["central", "southmoor", "southeast", "badlands"],
@@ -161,7 +194,9 @@ defmodule LemonSim.Examples.Diplomacy.MapGraph do
   Traits are distributed round-robin so each player gets a distinct trait
   when the player count does not exceed the trait pool size.
   """
-  @spec assign_traits([String.t()]) :: %{String.t() => %{trait: String.t(), description: String.t()}}
+  @spec assign_traits([String.t()]) :: %{
+          String.t() => %{trait: String.t(), description: String.t()}
+        }
   def assign_traits(player_ids) when is_list(player_ids) do
     player_ids
     |> Enum.with_index()

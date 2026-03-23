@@ -198,7 +198,13 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
         support_target = Map.get(params, "support_target", Map.get(params, :support_target))
 
         event =
-          Events.issue_order(actor_id, army_territory, order_type, target_territory, support_target)
+          Events.issue_order(
+            actor_id,
+            army_territory,
+            order_type,
+            target_territory,
+            support_target
+          )
 
         {:ok,
          %AgentToolResult{

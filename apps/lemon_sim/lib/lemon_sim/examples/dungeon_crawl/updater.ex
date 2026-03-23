@@ -124,10 +124,13 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
          :ok <- ensure_class(actor, "mage"),
          :ok <- ensure_ap(actor, 2) do
       enemies = get(state.world, :enemies, %{})
-      living_enemies = Enum.filter(enemies, fn {_id, e} -> get(e, :status, "alive") == "alive" end)
+
+      living_enemies =
+        Enum.filter(enemies, fn {_id, e} -> get(e, :status, "alive") == "alive" end)
 
       {updated_enemies, kill_events} =
-        Enum.reduce(living_enemies, {enemies, []}, fn {enemy_id, enemy}, {acc_enemies, acc_events} ->
+        Enum.reduce(living_enemies, {enemies, []}, fn {enemy_id, enemy},
+                                                      {acc_enemies, acc_events} ->
           new_hp = max(get(enemy, :hp, 0) - 2, 0)
 
           updated_enemy =
@@ -362,10 +365,24 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
       {next_world, item_events} =
         case get(item, :effect, nil) do
           "heal" ->
-            apply_healing_item(state.world, actor_id, target_id, updated_actor, item, remaining_inventory)
+            apply_healing_item(
+              state.world,
+              actor_id,
+              target_id,
+              updated_actor,
+              item,
+              remaining_inventory
+            )
 
           "damage" ->
-            apply_damage_item(state.world, actor_id, target_id, updated_actor, item, remaining_inventory)
+            apply_damage_item(
+              state.world,
+              actor_id,
+              target_id,
+              updated_actor,
+              item,
+              remaining_inventory
+            )
 
           _ ->
             world =
@@ -406,7 +423,10 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         |> Map.put(:inventory, remaining_inventory)
 
       events = [
-        Events.item_used(actor_id, get(item, :name, "healing_potion"), %{"heal" => actual_heal, "target" => target_id}),
+        Events.item_used(actor_id, get(item, :name, "healing_potion"), %{
+          "heal" => actual_heal,
+          "target" => target_id
+        }),
         Events.heal_applied(actor_id, target_id, actual_heal, new_hp)
       ]
 
@@ -417,7 +437,8 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         |> put_adventurer(actor_id, updated_actor)
         |> Map.put(:inventory, remaining_inventory)
 
-      {next_world, [Events.item_used(actor_id, get(item, :name, "healing_potion"), %{"wasted" => true})]}
+      {next_world,
+       [Events.item_used(actor_id, get(item, :name, "healing_potion"), %{"wasted" => true})]}
     end
   end
 
@@ -442,7 +463,10 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
 
       events =
         [
-          Events.item_used(actor_id, get(item, :name, "damage_scroll"), %{"damage" => damage_value, "target" => target_id}),
+          Events.item_used(actor_id, get(item, :name, "damage_scroll"), %{
+            "damage" => damage_value,
+            "target" => target_id
+          }),
           Events.damage_applied(target_id, damage_value, new_hp)
         ] ++
           if(new_hp <= 0, do: [Events.enemy_killed(target_id)], else: [])
@@ -454,7 +478,8 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         |> put_adventurer(actor_id, updated_actor)
         |> Map.put(:inventory, remaining_inventory)
 
-      {next_world, [Events.item_used(actor_id, get(item, :name, "damage_scroll"), %{"wasted" => true})]}
+      {next_world,
+       [Events.item_used(actor_id, get(item, :name, "damage_scroll"), %{"wasted" => true})]}
     end
   end
 
@@ -523,8 +548,11 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
       [] ->
         # All dead - should have been caught earlier
         next_world = Map.merge(world, %{status: "lost", winner: nil})
-        next_state = State.update_world(state, fn _ -> next_world end)
-        |> State.append_event(Events.game_over("lost", "The party has been wiped out"))
+
+        next_state =
+          State.update_world(state, fn _ -> next_world end)
+          |> State.append_event(Events.game_over("lost", "The party has been wiped out"))
+
         {:ok, next_state, :skip}
 
       _ ->
@@ -620,7 +648,9 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         state
         |> State.update_world(fn _ -> final_world end)
         |> State.append_events(
-          attack_events ++ trap_events ++ round_events ++
+          attack_events ++
+            trap_events ++
+            round_events ++
             [Events.game_over("lost", "The party has been wiped out")]
         )
 
@@ -633,7 +663,9 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         state
         |> State.update_world(fn _ -> final_world end)
         |> State.append_events(
-          attack_events ++ trap_events ++ round_events ++
+          attack_events ++
+            trap_events ++
+            round_events ++
             [Events.turn_ended("enemies", next_actor_id)]
         )
 
@@ -726,7 +758,9 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
         |> State.update_world(fn _ -> next_world end)
         |> State.append_events(enter_events)
 
-      {:ok, next_state, {:decide, "Room #{next_room_index + 1}: #{get(next_room, :name, "Unknown")} - #{first_actor} turn"}}
+      {:ok, next_state,
+       {:decide,
+        "Room #{next_room_index + 1}: #{get(next_room, :name, "Unknown")} - #{first_actor} turn"}}
     end
   end
 
@@ -1057,5 +1091,4 @@ defmodule LemonSim.Examples.DungeonCrawl.Updater do
   defp rejection_reason(:unknown_ability), do: "unknown ability"
   defp rejection_reason(:no_active_traps), do: "no active traps to disarm"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
-
 end

@@ -186,7 +186,11 @@ defmodule LemonSim.Examples.SupplyChain.Events do
     Event.new("game_over", %{
       "status" => status,
       "winner" => winner,
-      "message" => if(winner, do: "#{winner} wins with lowest total cost!", else: "Supply chain simulation complete")
+      "message" =>
+        if(winner,
+          do: "#{winner} wins with lowest total cost!",
+          else: "Supply chain simulation complete"
+        )
     })
   end
 

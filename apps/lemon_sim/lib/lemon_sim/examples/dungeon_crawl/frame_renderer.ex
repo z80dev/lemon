@@ -234,11 +234,13 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     hp_pct = if max_hp > 0, do: hp / max_hp, else: 0
     hp_bar_w = @party_panel_w - 40
     hp_fill_w = round(hp_bar_w * hp_pct)
-    hp_color = cond do
-      hp_pct > 0.5 -> @hp_green
-      hp_pct > 0.25 -> @hp_yellow
-      true -> @hp_red
-    end
+
+    hp_color =
+      cond do
+        hp_pct > 0.5 -> @hp_green
+        hp_pct > 0.25 -> @hp_yellow
+        true -> @hp_red
+      end
 
     # AP dots
     ap_dots = render_ap_dots(ap, max_ap, 16, y + 86)
@@ -346,16 +348,21 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     enemy_type = get(enemy, "type", enemy_id)
     enemy_status = get(enemy, "status", "alive")
     is_dead = hp <= 0 or enemy_status == "dead"
-    is_boss = String.contains?(to_string(enemy_type), "boss") or String.contains?(to_string(enemy_id), "boss")
+
+    is_boss =
+      String.contains?(to_string(enemy_type), "boss") or
+        String.contains?(to_string(enemy_id), "boss")
 
     hp_pct = if max_hp > 0, do: hp / max_hp, else: 0
     hp_bar_w = @enemy_panel_w - 32
     hp_fill_w = round(hp_bar_w * hp_pct)
-    hp_color = cond do
-      hp_pct > 0.5 -> @hp_green
-      hp_pct > 0.25 -> @hp_yellow
-      true -> @hp_red
-    end
+
+    hp_color =
+      cond do
+        hp_pct > 0.5 -> @hp_green
+        hp_pct > 0.25 -> @hp_yellow
+        true -> @hp_red
+      end
 
     name_color = if is_boss, do: @boss_color, else: @enemy_color
     opacity = if is_dead, do: "0.25", else: "1"
@@ -475,11 +482,20 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     events = ctx.events
 
     cond do
-      has_event?(events, "room_cleared") -> render_room_cleared_card(ctx)
-      has_event?(events, "room_entered") -> render_room_entered_card(ctx)
-      has_event?(events, "enemy_killed") -> render_combat_action_card(ctx, "enemy_killed")
-      has_event?(events, "adventurer_downed") -> render_combat_action_card(ctx, "adventurer_downed")
-      true -> render_combat_state(ctx)
+      has_event?(events, "room_cleared") ->
+        render_room_cleared_card(ctx)
+
+      has_event?(events, "room_entered") ->
+        render_room_entered_card(ctx)
+
+      has_event?(events, "enemy_killed") ->
+        render_combat_action_card(ctx, "enemy_killed")
+
+      has_event?(events, "adventurer_downed") ->
+        render_combat_action_card(ctx, "adventurer_downed")
+
+      true ->
+        render_combat_state(ctx)
     end
   end
 
@@ -516,7 +532,10 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
 
     room = Enum.at(ctx.rooms, ctx.current_room_index, %{})
     room_name = get(room, "name", "Room #{ctx.current_room_index + 1}")
-    enemy_count = ctx.enemies |> Map.values() |> Enum.count(fn e -> get(e, "status", "alive") == "alive" end)
+
+    enemy_count =
+      ctx.enemies |> Map.values() |> Enum.count(fn e -> get(e, "status", "alive") == "alive" end)
+
     traps = get(room, "traps", [])
     active_traps = Enum.count(traps, fn t -> not get(t, "disarmed", false) end)
 
@@ -580,7 +599,9 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     class = get(adventurer, "class", "?")
     class_color = class_color(class)
 
-    living_enemies = ctx.enemies |> Enum.filter(fn {_, e} -> get(e, "status", "alive") == "alive" end)
+    living_enemies =
+      ctx.enemies |> Enum.filter(fn {_, e} -> get(e, "status", "alive") == "alive" end)
+
     enemy_count = length(living_enemies)
 
     room = Enum.at(ctx.rooms, ctx.current_room_index, %{})
@@ -611,9 +632,20 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
       events
       |> Enum.filter(fn ev ->
         kind = get(ev, "kind", "")
-        kind in ["attack_resolved", "damage_applied", "heal_applied", "enemy_killed",
-                 "adventurer_downed", "trap_triggered", "trap_disarmed", "fireball_resolved",
-                 "backstab_resolved", "buff_applied", "item_used"]
+
+        kind in [
+          "attack_resolved",
+          "damage_applied",
+          "heal_applied",
+          "enemy_killed",
+          "adventurer_downed",
+          "trap_triggered",
+          "trap_disarmed",
+          "fireball_resolved",
+          "backstab_resolved",
+          "buff_applied",
+          "item_used"
+        ]
       end)
       |> Enum.take(4)
 
@@ -626,6 +658,7 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
         |> Enum.map(fn {ev, idx} ->
           ey = y + 16 + idx * 18
           text = format_event_text(ev)
+
           ~s[<text x="#{cx}" y="#{ey}" text-anchor="middle" font-size="11" fill="#{@text_secondary}">#{esc(text)}</text>\n]
         end)
 
@@ -640,7 +673,8 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     if inventory == [] do
       ~s[<text x="#{cx}" y="#{y}" text-anchor="middle" font-size="10" fill="#{@text_dim}">No items in inventory</text>\n]
     else
-      item_texts = inventory |> Enum.map(fn item -> get(item, "name", "?") end) |> Enum.join(" · ")
+      item_texts =
+        inventory |> Enum.map(fn item -> get(item, "name", "?") end) |> Enum.join(" · ")
 
       [
         ~s[<text x="#{cx}" y="#{y - 4}" text-anchor="middle" font-size="10" fill="#{@text_dim}">Inventory</text>\n],
@@ -733,6 +767,7 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
       has_event?(events, "trap_disarmed") ->
         ev = find_event(events, "trap_disarmed")
         p = get(ev, "payload", ev || %{})
+
         "#{format_entity_name(get(p, "actor_id", "?"))} disarms the #{get(p, "trap_type", "trap")}!"
 
       has_event?(events, "round_advanced") ->
@@ -750,6 +785,7 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
 
       true ->
         active_id = ctx.active_actor
+
         if active_id do
           adventurer = Map.get(ctx.party, active_id, %{})
           char_name = get(adventurer, "name", active_id)
@@ -771,6 +807,7 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
   defp class_color(_), do: @text_secondary
 
   defp format_entity_name(nil), do: "?"
+
   defp format_entity_name(name) when is_binary(name) do
     name
     |> String.replace("_", " ")
@@ -778,6 +815,7 @@ defmodule LemonSim.Examples.DungeonCrawl.FrameRenderer do
     |> Enum.map(&String.capitalize/1)
     |> Enum.join(" ")
   end
+
   defp format_entity_name(other), do: to_string(other)
 
   defp format_event_text(ev) do

@@ -151,6 +151,7 @@ defmodule LemonSim.Examples.SupplyChain do
           round = get(frame.world, :round, 1)
 
           incoming = get(tier, :incoming_deliveries, [])
+
           incoming_summary =
             Enum.map(incoming, fn d ->
               %{
@@ -166,7 +167,9 @@ defmodule LemonSim.Examples.SupplyChain do
           # Messages received this round
           all_messages = get(frame.world, :messages, %{})
           my_messages = Map.get(all_messages, actor_id, [])
-          recent_msgs = Enum.filter(my_messages, fn m -> get(m, "round", get(m, :round, 0)) == round end)
+
+          recent_msgs =
+            Enum.filter(my_messages, fn m -> get(m, "round", get(m, :round, 0)) == round end)
 
           %{
             id: :your_tier,
@@ -179,11 +182,13 @@ defmodule LemonSim.Examples.SupplyChain do
               "backlog" => get(tier, :backlog, 0),
               "safety_stock_target" => get(tier, :safety_stock, 0),
               "incoming_deliveries" => incoming_summary,
-              "total_incoming" => Enum.sum(Enum.map(incoming, fn d -> get(d, :quantity, get(d, "quantity", 0)) end)),
+              "total_incoming" =>
+                Enum.sum(Enum.map(incoming, fn d -> get(d, :quantity, get(d, "quantity", 0)) end)),
               "total_cost_so_far" => get(tier, :total_cost, 0.0),
               "orders_received" => get(tier, :orders_received, 0),
               "orders_fulfilled" => get(tier, :orders_fulfilled, 0),
-              "fill_rate" => fill_rate_pct(get(tier, :orders_fulfilled, 0), get(tier, :orders_received, 0)),
+              "fill_rate" =>
+                fill_rate_pct(get(tier, :orders_fulfilled, 0), get(tier, :orders_received, 0)),
               "recent_orders" => recent_orders,
               "messages_received_this_round" => recent_msgs,
               "holding_cost_per_unit" => get(costs, :holding_cost_per_unit, 0.5),
@@ -207,7 +212,8 @@ defmodule LemonSim.Examples.SupplyChain do
               }
             else
               %{
-                "note" => "You cannot observe end consumer demand directly. Infer from retailer communication.",
+                "note" =>
+                  "You cannot observe end consumer demand directly. Infer from retailer communication.",
                 "demand_avg_visible_from_comms" => nil
               }
             end
@@ -305,7 +311,10 @@ defmodule LemonSim.Examples.SupplyChain do
 
     IO.puts("Starting Supply Chain simulation")
     IO.puts("Tiers: #{Enum.join(@tier_order, " -> ")} -> Consumers")
-    IO.puts("Rounds: #{get(state.world, :max_rounds, @default_max_rounds)} | Delivery delay: #{@delivery_delay} rounds")
+
+    IO.puts(
+      "Rounds: #{get(state.world, :max_rounds, @default_max_rounds)} | Delivery delay: #{@delivery_delay} rounds"
+    )
 
     case Runner.run_until_terminal(state, modules(), run_opts) do
       {:ok, final_state} ->
@@ -394,10 +403,14 @@ defmodule LemonSim.Examples.SupplyChain do
       backlog = get(tier, :backlog, 0)
       cost = get(tier, :total_cost, 0.0)
 
-      IO.puts("  #{tier_id}: inventory=#{inv} backlog=#{backlog} total_cost=#{Float.round(cost, 1)}")
+      IO.puts(
+        "  #{tier_id}: inventory=#{inv} backlog=#{backlog} total_cost=#{Float.round(cost, 1)}"
+      )
     end)
 
-    IO.puts("status=#{get(state.world, :status, "?")} winner=#{inspect(get(state.world, :winner, nil))}")
+    IO.puts(
+      "status=#{get(state.world, :status, "?")} winner=#{inspect(get(state.world, :winner, nil))}"
+    )
   end
 
   defp print_final_state(state) do
@@ -595,6 +608,7 @@ defmodule LemonSim.Examples.SupplyChain do
   end
 
   defp get(map, key, default)
+
   defp get(map, key, default) when is_map(map) and is_atom(key) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))
   end

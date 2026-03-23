@@ -60,6 +60,7 @@ defmodule LemonSim.Examples.Courtroom do
       |> then(fn acc ->
         Enum.reduce(witness_ids, acc, fn wid, a ->
           witness_info = Map.get(case_file.witnesses, wid, %{})
+
           Map.put(a, wid, %{
             role: "witness",
             status: "active",
@@ -284,8 +285,7 @@ defmodule LemonSim.Examples.Courtroom do
       "defendant" => get(case_file, :defendant, "Unknown"),
       "evidence_presented" => evidence_presented,
       "evidence_count" => length(evidence_presented),
-      "total_evidence_available" =>
-        length(get(case_file, :evidence_list, [])),
+      "total_evidence_available" => length(get(case_file, :evidence_list, [])),
       "objections_raised" => length(objections),
       "objections_sustained" =>
         Enum.count(objections, &(get(&1, :ruling, "overruled") == "sustained")),

@@ -172,7 +172,8 @@ defmodule LemonSim.Examples.StockMarket do
             |> Enum.map(fn conn ->
               %{
                 "type" => get(conn, :type),
-                "with" => get(conn, :players, []) |> Enum.reject(&(&1 == actor_id)) |> List.first(),
+                "with" =>
+                  get(conn, :players, []) |> Enum.reject(&(&1 == actor_id)) |> List.first(),
                 "description" => get(conn, :description)
               }
             end)

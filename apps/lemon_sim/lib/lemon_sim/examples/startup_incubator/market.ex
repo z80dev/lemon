@@ -23,52 +23,122 @@ defmodule LemonSim.Examples.StartupIncubator.Market do
     %{
       name: "AI Hype Wave",
       description: "Generative AI captures headlines; valuations skyrocket.",
-      changes: %{"ai" => 1.5, "fintech" => 1.0, "healthtech" => 1.1, "edtech" => 0.9, "climatetech" => 1.0, "ecommerce" => 0.9}
+      changes: %{
+        "ai" => 1.5,
+        "fintech" => 1.0,
+        "healthtech" => 1.1,
+        "edtech" => 0.9,
+        "climatetech" => 1.0,
+        "ecommerce" => 0.9
+      }
     },
     %{
       name: "Fintech Regulatory Crackdown",
       description: "Regulators tighten rules; fintech multiples compress.",
-      changes: %{"ai" => 1.1, "fintech" => 0.6, "healthtech" => 1.0, "edtech" => 1.0, "climatetech" => 1.0, "ecommerce" => 1.0}
+      changes: %{
+        "ai" => 1.1,
+        "fintech" => 0.6,
+        "healthtech" => 1.0,
+        "edtech" => 1.0,
+        "climatetech" => 1.0,
+        "ecommerce" => 1.0
+      }
     },
     %{
       name: "Healthcare Boom",
       description: "Post-pandemic health spending drives healthtech investment.",
-      changes: %{"ai" => 1.0, "fintech" => 1.0, "healthtech" => 1.5, "edtech" => 1.0, "climatetech" => 1.1, "ecommerce" => 0.9}
+      changes: %{
+        "ai" => 1.0,
+        "fintech" => 1.0,
+        "healthtech" => 1.5,
+        "edtech" => 1.0,
+        "climatetech" => 1.1,
+        "ecommerce" => 0.9
+      }
     },
     %{
       name: "Education Stimulus",
       description: "Government grants pour into edtech platforms.",
-      changes: %{"ai" => 1.0, "fintech" => 1.0, "healthtech" => 1.0, "edtech" => 1.4, "climatetech" => 1.0, "ecommerce" => 0.9}
+      changes: %{
+        "ai" => 1.0,
+        "fintech" => 1.0,
+        "healthtech" => 1.0,
+        "edtech" => 1.4,
+        "climatetech" => 1.0,
+        "ecommerce" => 0.9
+      }
     },
     %{
       name: "Green Energy Mandate",
       description: "Carbon legislation makes climatetech the darling of LPs.",
-      changes: %{"ai" => 1.0, "fintech" => 0.9, "healthtech" => 1.0, "edtech" => 1.0, "climatetech" => 1.6, "ecommerce" => 0.9}
+      changes: %{
+        "ai" => 1.0,
+        "fintech" => 0.9,
+        "healthtech" => 1.0,
+        "edtech" => 1.0,
+        "climatetech" => 1.6,
+        "ecommerce" => 0.9
+      }
     },
     %{
       name: "E-Commerce Renaissance",
       description: "Consumer spending shifts online; e-commerce multiples rise.",
-      changes: %{"ai" => 1.0, "fintech" => 1.0, "healthtech" => 0.9, "edtech" => 0.9, "climatetech" => 1.0, "ecommerce" => 1.5}
+      changes: %{
+        "ai" => 1.0,
+        "fintech" => 1.0,
+        "healthtech" => 0.9,
+        "edtech" => 0.9,
+        "climatetech" => 1.0,
+        "ecommerce" => 1.5
+      }
     },
     %{
       name: "Interest Rate Hike",
       description: "Central banks raise rates; growth stocks hammered across the board.",
-      changes: %{"ai" => 0.7, "fintech" => 0.7, "healthtech" => 0.8, "edtech" => 0.8, "climatetech" => 0.8, "ecommerce" => 0.7}
+      changes: %{
+        "ai" => 0.7,
+        "fintech" => 0.7,
+        "healthtech" => 0.8,
+        "edtech" => 0.8,
+        "climatetech" => 0.8,
+        "ecommerce" => 0.7
+      }
     },
     %{
       name: "Bull Market Euphoria",
       description: "Risk-on sentiment; investors write cheques to everyone.",
-      changes: %{"ai" => 1.3, "fintech" => 1.2, "healthtech" => 1.2, "edtech" => 1.2, "climatetech" => 1.2, "ecommerce" => 1.2}
+      changes: %{
+        "ai" => 1.3,
+        "fintech" => 1.2,
+        "healthtech" => 1.2,
+        "edtech" => 1.2,
+        "climatetech" => 1.2,
+        "ecommerce" => 1.2
+      }
     },
     %{
       name: "Crypto Winter Spillover",
       description: "Fintech and AI take heat from the crypto collapse.",
-      changes: %{"ai" => 0.8, "fintech" => 0.65, "healthtech" => 1.1, "edtech" => 1.0, "climatetech" => 1.0, "ecommerce" => 1.0}
+      changes: %{
+        "ai" => 0.8,
+        "fintech" => 0.65,
+        "healthtech" => 1.1,
+        "edtech" => 1.0,
+        "climatetech" => 1.0,
+        "ecommerce" => 1.0
+      }
     },
     %{
       name: "Quiet Market",
       description: "Nothing dramatic — slow quarter with modest movements.",
-      changes: %{"ai" => 1.0, "fintech" => 1.0, "healthtech" => 1.0, "edtech" => 1.0, "climatetech" => 1.0, "ecommerce" => 1.0}
+      changes: %{
+        "ai" => 1.0,
+        "fintech" => 1.0,
+        "healthtech" => 1.0,
+        "edtech" => 1.0,
+        "climatetech" => 1.0,
+        "ecommerce" => 1.0
+      }
     }
   ]
 

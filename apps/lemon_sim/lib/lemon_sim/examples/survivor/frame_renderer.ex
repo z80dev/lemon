@@ -348,7 +348,10 @@ defmodule LemonSim.Examples.Survivor.FrameRenderer do
   defp render_center_content(%{type: "game_over"} = ctx), do: render_game_over_card(ctx)
   defp render_center_content(%{phase: "challenge"} = ctx), do: render_challenge_view(ctx)
   defp render_center_content(%{phase: "strategy"} = ctx), do: render_strategy_view(ctx)
-  defp render_center_content(%{phase: "tribal_council"} = ctx), do: render_tribal_council_view(ctx)
+
+  defp render_center_content(%{phase: "tribal_council"} = ctx),
+    do: render_tribal_council_view(ctx)
+
   defp render_center_content(%{phase: "final_tribal_council"} = ctx), do: render_ftc_view(ctx)
   defp render_center_content(ctx), do: render_generic_view(ctx)
 
@@ -392,7 +395,14 @@ defmodule LemonSim.Examples.Survivor.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, winner: winner, jury_votes: jury_votes, elimination_log: elimination_log, players: players}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         winner: winner,
+         jury_votes: jury_votes,
+         elimination_log: elimination_log,
+         players: players
+       }) do
     cx = @roster_w + div(w - @roster_w - @history_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 

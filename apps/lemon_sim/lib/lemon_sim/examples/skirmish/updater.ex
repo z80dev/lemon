@@ -54,7 +54,10 @@ defmodule LemonSim.Examples.Skirmish.Updater do
         state.world
         |> put_unit(
           unit_id,
-          unit |> Map.put(:ap, get(unit, :ap, 0) - move_cost) |> Map.put(:cover?, on_cover) |> put_pos(x, y)
+          unit
+          |> Map.put(:ap, get(unit, :ap, 0) - move_cost)
+          |> Map.put(:cover?, on_cover)
+          |> put_pos(x, y)
         )
 
       action_events = [
@@ -93,7 +96,10 @@ defmodule LemonSim.Examples.Skirmish.Updater do
         state.world
         |> put_unit(
           unit_id,
-          unit |> Map.put(:ap, get(unit, :ap, 0) - 1) |> Map.put(:cover?, on_cover) |> put_pos(x, y)
+          unit
+          |> Map.put(:ap, get(unit, :ap, 0) - 1)
+          |> Map.put(:cover?, on_cover)
+          |> put_pos(x, y)
         )
 
       action_events = [
@@ -558,5 +564,4 @@ defmodule LemonSim.Examples.Skirmish.Updater do
   defp rejection_reason(:not_ally), do: "target is not an ally"
   defp rejection_reason(:target_full_hp), do: "target is at full health"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
-
 end

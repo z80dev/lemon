@@ -41,11 +41,15 @@ defmodule Mix.Tasks.Lemon.Sim.DiplomacyReplay do
   @impl Mix.Task
   def run(args) do
     {opts, positional, _} = OptionParser.parse(args, switches: @switches)
+
     cond do
-      Keyword.get(opts, :help, false) -> Mix.shell().info(@moduledoc)
+      Keyword.get(opts, :help, false) ->
+        Mix.shell().info(@moduledoc)
+
       positional == [] ->
         Mix.shell().error("Usage: mix lemon.sim.diplomacy_replay <path.jsonl> [options]")
         Mix.shell().error("Run with --help for details.")
+
       true ->
         log_path = List.first(positional)
         do_generate(log_path, opts)
@@ -54,7 +58,9 @@ defmodule Mix.Tasks.Lemon.Sim.DiplomacyReplay do
 
   defp do_generate(log_path, opts) do
     Mix.shell().info("Generating Diplomacy replay from #{log_path}...")
-    gen_opts = []
+
+    gen_opts =
+      []
       |> maybe_put(:output, Keyword.get(opts, :output))
       |> maybe_put(:fps, Keyword.get(opts, :fps))
       |> maybe_put(:hold_frames, Keyword.get(opts, :hold_frames))
@@ -66,11 +72,14 @@ defmodule Mix.Tasks.Lemon.Sim.DiplomacyReplay do
       {:ok, video_path} ->
         file_size = File.stat!(video_path).size
         Mix.shell().info("Replay video: #{video_path} (#{format_file_size(file_size)})")
+
       {:error, {:missing_tools, tools}} ->
         Mix.shell().error("Missing required tools: #{Enum.join(tools, ", ")}")
         Mix.shell().error("Install with: brew install librsvg ffmpeg")
+
       {:error, {:file_not_found, path}} ->
         Mix.shell().error("Log file not found: #{path}")
+
       {:error, reason} ->
         Mix.shell().error("Failed to generate replay: #{inspect(reason)}")
     end

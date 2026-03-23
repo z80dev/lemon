@@ -200,7 +200,10 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
     else
       # Founders: counter, accept, reject, merge
       investors = player_ids_with_role(players, "investor")
-      other_founders = players |> player_ids_with_role("founder") |> Enum.reject(&(&1 == actor_id))
+
+      other_founders =
+        players |> player_ids_with_role("founder") |> Enum.reject(&(&1 == actor_id))
+
       active_offers = get_active_offers_for(world, actor_id, investors)
 
       tools =
@@ -262,7 +265,9 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("offer sent to #{founder_id}: $#{amount} for #{equity_pct}%")],
+           content: [
+             AgentCore.text_content("offer sent to #{founder_id}: $#{amount} for #{equity_pct}%")
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -469,7 +474,9 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
       },
       label: "Allocate Funds",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        allocation_type = Map.get(params, "allocation_type", Map.get(params, :allocation_type, "reserve"))
+        allocation_type =
+          Map.get(params, "allocation_type", Map.get(params, :allocation_type, "reserve"))
+
         amount = Map.get(params, "amount", Map.get(params, :amount, 0))
         event = Events.allocate_funds(actor_id, allocation_type, amount)
 

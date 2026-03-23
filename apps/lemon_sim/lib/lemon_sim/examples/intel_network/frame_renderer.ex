@@ -268,7 +268,11 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
 
     intel_pool_size = length(ctx.intel_pool)
     bar_w = @roster_w - 40
-    intel_fill_w = if intel_pool_size > 0, do: round(bar_w * min(fragment_count / intel_pool_size, 1.0)), else: 0
+
+    intel_fill_w =
+      if intel_pool_size > 0,
+        do: round(bar_w * min(fragment_count / intel_pool_size, 1.0)),
+        else: 0
 
     [
       highlight,
@@ -352,7 +356,9 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, players: players, winner: winner} = ctx) do
+  defp render_game_over_card(
+         %{w: w, h: h, turn_order: turn_order, players: players, winner: winner} = ctx
+       ) do
     cx = @roster_w + div(w - @roster_w - @net_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -387,7 +393,12 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
         is_mole_player = pid == mole_id
         display_color = if is_mole_player, do: @mole_color, else: @cyan
         player_idx = Enum.find_index(turn_order, &(&1 == pid)) || 0
-        player_color = if is_mole_player, do: @mole_color, else: Enum.at(@player_colors, player_idx, @text_primary)
+
+        player_color =
+          if is_mole_player,
+            do: @mole_color,
+            else: Enum.at(@player_colors, player_idx, @text_primary)
+
         player = Map.get(players, pid, %{})
         codename = get(player, "codename", format_player_name(pid))
 
@@ -456,7 +467,9 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
     ]
   end
 
-  defp render_communication_panel(%{w: w, h: h, message_log: message_log, turn_order: turn_order, players: players} = ctx) do
+  defp render_communication_panel(
+         %{w: w, h: h, message_log: message_log, turn_order: turn_order, players: players} = ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @net_w - 20
@@ -494,7 +507,9 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
           from_color = Enum.at(@player_colors, from_idx, @text_secondary)
           to_color = Enum.at(@player_colors, to_idx, @text_secondary)
 
-          from_codename = get(Map.get(players, from_id, %{}), "codename", format_player_name(from_id))
+          from_codename =
+            get(Map.get(players, from_id, %{}), "codename", format_player_name(from_id))
+
           to_codename = get(Map.get(players, to_id, %{}), "codename", format_player_name(to_id))
 
           is_recent = idx >= length(recent_messages) - 3
@@ -534,7 +549,10 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
     ]
   end
 
-  defp render_operations_panel(%{w: w, h: h, operations_log: operations_log, turn_order: turn_order, players: players} = ctx) do
+  defp render_operations_panel(
+         %{w: w, h: h, operations_log: operations_log, turn_order: turn_order, players: players} =
+           ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @net_w - 20
@@ -604,7 +622,9 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
   # Network panel (right panel)
   # ---------------------------------------------------------------------------
 
-  defp render_network_panel(%{w: w, h: h, adjacency: adjacency, turn_order: turn_order, players: players} = ctx) do
+  defp render_network_panel(
+         %{w: w, h: h, adjacency: adjacency, turn_order: turn_order, players: players} = ctx
+       ) do
     panel_x = w - @net_w
     panel_h = h - @header_h - @footer_h
 

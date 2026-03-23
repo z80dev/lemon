@@ -210,8 +210,9 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
     water_set = pos_set(get(map_data, "water", []))
     high_set = pos_set(get(map_data, "high_ground", []))
 
-    grid_bg = ~s[<rect x="#{gx - 2}" y="#{gy - 2}" width="#{tw + 4}" ] <>
-      ~s[height="#{th + 4}" fill="#{@grid_bg}" rx="3"/>\n]
+    grid_bg =
+      ~s[<rect x="#{gx - 2}" y="#{gy - 2}" width="#{tw + 4}" ] <>
+        ~s[height="#{th + 4}" fill="#{@grid_bg}" rx="3"/>\n]
 
     coord_labels_x =
       for col <- 0..(cols - 1) do
@@ -244,11 +245,13 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
       [
         for col <- 1..(cols - 1) do
           lx = gx + col * (ts + 1) - 1
+
           ~s[<line x1="#{lx}" y1="#{gy}" x2="#{lx}" y2="#{gy + th}" ] <>
             ~s[stroke="#{@grid_line}" stroke-width="1"/>\n]
         end,
         for row <- 1..(rows - 1) do
           ly = gy + row * (ts + 1) - 1
+
           ~s[<line x1="#{gx}" y1="#{ly}" x2="#{gx + tw}" y2="#{ly}" ] <>
             ~s[stroke="#{@grid_line}" stroke-width="1"/>\n]
         end
@@ -295,6 +298,7 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
       ~s[<rect x="#{x}" y="#{y}" width="#{s}" height="#{s}" fill="#{@tile_water}"/>\n],
       for i <- 1..3 do
         wy = y + i * m
+
         ~s[<path d="M#{x + 2},#{wy} Q#{x + div(s, 4)},#{wy - 3} #{x + div(s, 2)},#{wy} ] <>
           ~s[Q#{x + 3 * div(s, 4)},#{wy + 3} #{x + s - 2},#{wy}" ] <>
           ~s[stroke="#2a6a9c" stroke-width="1" fill="none" opacity="0.6"/>\n]
@@ -350,8 +354,19 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
         render_dead_unit(cx, cy, r, ts, tx)
       else
         render_alive_unit(
-          cx, cy, r, ts, tx, team, class, hp, max_hp, ap, max_ap,
-          has_cover, is_active
+          cx,
+          cy,
+          r,
+          ts,
+          tx,
+          team,
+          class,
+          hp,
+          max_hp,
+          ap,
+          max_ap,
+          has_cover,
+          is_active
         )
       end
     end)
@@ -367,7 +382,21 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
     ]
   end
 
-  defp render_alive_unit(cx, cy, r, ts, tx, team, class, hp, max_hp, ap, max_ap, has_cover, is_active) do
+  defp render_alive_unit(
+         cx,
+         cy,
+         r,
+         ts,
+         tx,
+         team,
+         class,
+         hp,
+         max_hp,
+         ap,
+         max_ap,
+         has_cover,
+         is_active
+       ) do
     fill = team_color(team)
     stroke = team_dark(team)
     light = team_light(team)

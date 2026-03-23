@@ -237,9 +237,24 @@ defmodule LemonSim.Examples.SurvivorMechanicsTest do
         sim_id: "survivor-test",
         world: %{
           players: %{
-            "finalist_1" => %{status: "alive", tribe: "Solana", has_idol: false, jury_member: false},
-            "finalist_2" => %{status: "alive", tribe: "Solana", has_idol: false, jury_member: false},
-            "juror_1" => %{status: "eliminated", tribe: "Solana", has_idol: false, jury_member: true}
+            "finalist_1" => %{
+              status: "alive",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: false
+            },
+            "finalist_2" => %{
+              status: "alive",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: false
+            },
+            "juror_1" => %{
+              status: "eliminated",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: true
+            }
           },
           tribes: %{"Solana" => ["finalist_1", "finalist_2"]},
           phase: "final_tribal_council",
@@ -292,11 +307,36 @@ defmodule LemonSim.Examples.SurvivorMechanicsTest do
         sim_id: "survivor-test",
         world: %{
           players: %{
-            "finalist_1" => %{status: "alive", tribe: "Solana", has_idol: false, jury_member: false},
-            "finalist_2" => %{status: "alive", tribe: "Solana", has_idol: false, jury_member: false},
-            "juror_1" => %{status: "eliminated", tribe: "Solana", has_idol: false, jury_member: true},
-            "juror_2" => %{status: "eliminated", tribe: "Solana", has_idol: false, jury_member: true},
-            "juror_3" => %{status: "eliminated", tribe: "Solana", has_idol: false, jury_member: true}
+            "finalist_1" => %{
+              status: "alive",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: false
+            },
+            "finalist_2" => %{
+              status: "alive",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: false
+            },
+            "juror_1" => %{
+              status: "eliminated",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: true
+            },
+            "juror_2" => %{
+              status: "eliminated",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: true
+            },
+            "juror_3" => %{
+              status: "eliminated",
+              tribe: "Solana",
+              has_idol: false,
+              jury_member: true
+            }
           },
           tribes: %{"Solana" => ["finalist_1", "finalist_2"]},
           phase: "final_tribal_council",

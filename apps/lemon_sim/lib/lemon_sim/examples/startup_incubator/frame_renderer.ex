@@ -339,7 +339,15 @@ defmodule LemonSim.Examples.StartupIncubator.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, players: players, startups: startups, investors_map: investors_map, winner: winner}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         turn_order: turn_order,
+         players: players,
+         startups: startups,
+         investors_map: investors_map,
+         winner: winner
+       }) do
     cx = @sidebar_w + div(w - @sidebar_w - @market_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -379,7 +387,11 @@ defmodule LemonSim.Examples.StartupIncubator.FrameRenderer do
         _ = player
 
         role_label = if role == "founder", do: "Founder", else: "Investor"
-        score_label = if role == "founder", do: "Val: $#{format_number(score)}", else: "Capital: $#{format_number(score)}"
+
+        score_label =
+          if role == "founder",
+            do: "Val: $#{format_number(score)}",
+            else: "Capital: $#{format_number(score)}"
 
         [
           if is_winner do
@@ -489,7 +501,9 @@ defmodule LemonSim.Examples.StartupIncubator.FrameRenderer do
     ]
   end
 
-  defp render_negotiation_panel(%{w: w, h: h, deal_history: deal_history, players: players, turn_order: turn_order} = ctx) do
+  defp render_negotiation_panel(
+         %{w: w, h: h, deal_history: deal_history, players: players, turn_order: turn_order} = ctx
+       ) do
     panel_x = @sidebar_w + 10
     panel_y = @header_h + 10
     panel_w = w - @sidebar_w - @market_w - 20

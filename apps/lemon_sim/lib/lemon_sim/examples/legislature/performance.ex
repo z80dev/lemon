@@ -61,7 +61,9 @@ defmodule LemonSim.Examples.Legislature.Performance do
 
         my_votes = Map.get(vote_record, player_id, %{})
 
-        capital_remaining = Map.get(info, :political_capital, Map.get(info, "political_capital", 0))
+        capital_remaining =
+          Map.get(info, :political_capital, Map.get(info, "political_capital", 0))
+
         final_score = Map.get(scores, player_id, 0)
 
         {player_id,
@@ -83,7 +85,8 @@ defmodule LemonSim.Examples.Legislature.Performance do
       end)
 
     %{
-      benchmark_focus: "preference satisfaction, logrolling coordination, amendment success, and capital efficiency",
+      benchmark_focus:
+        "preference satisfaction, logrolling coordination, amendment success, and capital efficiency",
       bills_passed: length(passed_bills),
       passed_bill_ids: passed_bills,
       players: player_metrics,

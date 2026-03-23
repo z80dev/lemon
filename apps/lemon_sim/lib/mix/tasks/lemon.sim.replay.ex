@@ -62,7 +62,9 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
         Mix.raise("invalid options: #{inspect(invalid)}")
 
       argv == [] ->
-        Mix.raise("missing required argument: path to game log file\n\nUsage: mix lemon.sim.replay path/to/game.jsonl [options]")
+        Mix.raise(
+          "missing required argument: path to game log file\n\nUsage: mix lemon.sim.replay path/to/game.jsonl [options]"
+        )
 
       true ->
         [log_path | _] = argv
@@ -95,7 +97,10 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
         case VideoGenerator.generate(log_path, gen_opts) do
           {:ok, video_path} ->
             file_size = File.stat!(video_path).size
-            Mix.shell().info("Replay video generated: #{video_path} (#{format_file_size(file_size)})")
+
+            Mix.shell().info(
+              "Replay video generated: #{video_path} (#{format_file_size(file_size)})"
+            )
 
           {:error, reason} ->
             Mix.raise("video generation failed: #{inspect(reason)}")

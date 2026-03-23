@@ -154,7 +154,8 @@ defmodule LemonSim.Examples.MurderMystery do
                 },
                 "evidence_planted" => length(planted),
                 "evidence_destroyed" => length(destroyed),
-                "goal" => "Survive all #{get(frame.world, :max_rounds, @default_max_rounds)} rounds without being correctly accused"
+                "goal" =>
+                  "Survive all #{get(frame.world, :max_rounds, @default_max_rounds)} rounds without being correctly accused"
               }
             else
               %{
@@ -308,7 +309,10 @@ defmodule LemonSim.Examples.MurderMystery do
     killer_id = get(solution, :killer_id, "unknown")
 
     IO.puts("Starting Murder Mystery with #{player_count} suspects")
-    IO.puts("Secret: killer=#{killer_id}, weapon=#{get(solution, :weapon, "?")}, room=#{get(solution, :room_id, "?")}")
+
+    IO.puts(
+      "Secret: killer=#{killer_id}, weapon=#{get(solution, :weapon, "?")}, room=#{get(solution, :room_id, "?")}"
+    )
 
     case Runner.run_until_terminal(state, modules(), run_opts) do
       {:ok, final_state} ->
@@ -439,11 +443,15 @@ defmodule LemonSim.Examples.MurderMystery do
     solution = get(state.world, :solution, %{})
     performance = Performance.summarize(state.world)
 
-    IO.puts("\nSolution: killer=#{get(solution, :killer_id, "?")} weapon=#{get(solution, :weapon, "?")} room=#{get(solution, :room_id, "?")}")
+    IO.puts(
+      "\nSolution: killer=#{get(solution, :killer_id, "?")} weapon=#{get(solution, :weapon, "?")} room=#{get(solution, :room_id, "?")}"
+    )
 
     case winner do
       "investigators" ->
-        IO.puts("Result: INVESTIGATORS WIN! #{winning_player} solved the case after #{round} round(s).")
+        IO.puts(
+          "Result: INVESTIGATORS WIN! #{winning_player} solved the case after #{round} round(s)."
+        )
 
       "killer" ->
         killer_id = get(solution, :killer_id, "?")

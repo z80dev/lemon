@@ -9,18 +9,67 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
       status: "in_progress",
       active_actor_id: "warrior_1",
       party: %{
-        "warrior_1" => %{class: "warrior", hp: 20, max_hp: 20, ap: 2, max_ap: 2, attack: 5, armor: 2, status: "alive"},
-        "rogue_1" => %{class: "rogue", hp: 14, max_hp: 14, ap: 2, max_ap: 2, attack: 4, armor: 0, status: "alive"},
-        "mage_1" => %{class: "mage", hp: 10, max_hp: 10, ap: 2, max_ap: 2, attack: 3, armor: 0, status: "alive"},
-        "cleric_1" => %{class: "cleric", hp: 16, max_hp: 16, ap: 2, max_ap: 2, attack: 2, armor: 1, heal: 4, status: "alive"}
+        "warrior_1" => %{
+          class: "warrior",
+          hp: 20,
+          max_hp: 20,
+          ap: 2,
+          max_ap: 2,
+          attack: 5,
+          armor: 2,
+          status: "alive"
+        },
+        "rogue_1" => %{
+          class: "rogue",
+          hp: 14,
+          max_hp: 14,
+          ap: 2,
+          max_ap: 2,
+          attack: 4,
+          armor: 0,
+          status: "alive"
+        },
+        "mage_1" => %{
+          class: "mage",
+          hp: 10,
+          max_hp: 10,
+          ap: 2,
+          max_ap: 2,
+          attack: 3,
+          armor: 0,
+          status: "alive"
+        },
+        "cleric_1" => %{
+          class: "cleric",
+          hp: 16,
+          max_hp: 16,
+          ap: 2,
+          max_ap: 2,
+          attack: 2,
+          armor: 1,
+          heal: 4,
+          status: "alive"
+        }
       },
       turn_order: ["warrior_1", "rogue_1", "mage_1", "cleric_1"],
       enemies: %{
         "goblin_1" => %{id: "goblin_1", hp: 8, attack: 3, armor: 1, status: "alive"}
       },
       rooms: [
-        %{name: "Entry Hall", enemies: [%{id: "goblin_1", hp: 8, attack: 3, armor: 1, status: "alive"}], traps: [], treasure: [], cleared: false},
-        %{name: "Dark Corridor", enemies: [%{id: "goblin_2", hp: 6, attack: 2, armor: 0, status: "alive"}], traps: [], treasure: [], cleared: false}
+        %{
+          name: "Entry Hall",
+          enemies: [%{id: "goblin_1", hp: 8, attack: 3, armor: 1, status: "alive"}],
+          traps: [],
+          treasure: [],
+          cleared: false
+        },
+        %{
+          name: "Dark Corridor",
+          enemies: [%{id: "goblin_2", hp: 6, attack: 2, armor: 0, status: "alive"}],
+          traps: [],
+          treasure: [],
+          cleared: false
+        }
       ],
       current_room: 0,
       round: 1,
@@ -61,7 +110,13 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
         },
         # Only 1 room so we can check the final state without room advancement confusion
         rooms: [
-          %{name: "Entry Hall", enemies: [%{id: "goblin_1", hp: 4, attack: 3, armor: 0, status: "alive"}], traps: [], treasure: [], cleared: false}
+          %{
+            name: "Entry Hall",
+            enemies: [%{id: "goblin_1", hp: 4, attack: 3, armor: 0, status: "alive"}],
+            traps: [],
+            treasure: [],
+            cleared: false
+          }
         ]
       })
 
@@ -136,10 +191,47 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
       new_state(%{
         active_actor_id: "cleric_1",
         party: %{
-          "warrior_1" => %{class: "warrior", hp: 10, max_hp: 20, ap: 2, max_ap: 2, attack: 5, armor: 2, status: "alive"},
-          "rogue_1" => %{class: "rogue", hp: 14, max_hp: 14, ap: 2, max_ap: 2, attack: 4, armor: 0, status: "alive"},
-          "mage_1" => %{class: "mage", hp: 10, max_hp: 10, ap: 2, max_ap: 2, attack: 3, armor: 0, status: "alive"},
-          "cleric_1" => %{class: "cleric", hp: 16, max_hp: 16, ap: 2, max_ap: 2, attack: 2, armor: 1, heal: 4, status: "alive"}
+          "warrior_1" => %{
+            class: "warrior",
+            hp: 10,
+            max_hp: 20,
+            ap: 2,
+            max_ap: 2,
+            attack: 5,
+            armor: 2,
+            status: "alive"
+          },
+          "rogue_1" => %{
+            class: "rogue",
+            hp: 14,
+            max_hp: 14,
+            ap: 2,
+            max_ap: 2,
+            attack: 4,
+            armor: 0,
+            status: "alive"
+          },
+          "mage_1" => %{
+            class: "mage",
+            hp: 10,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            attack: 3,
+            armor: 0,
+            status: "alive"
+          },
+          "cleric_1" => %{
+            class: "cleric",
+            hp: 16,
+            max_hp: 16,
+            ap: 2,
+            max_ap: 2,
+            attack: 2,
+            armor: 1,
+            heal: 4,
+            status: "alive"
+          }
         }
       })
 
@@ -163,10 +255,47 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
       new_state(%{
         active_actor_id: "cleric_1",
         party: %{
-          "warrior_1" => %{class: "warrior", hp: 18, max_hp: 20, ap: 2, max_ap: 2, attack: 5, armor: 2, status: "alive"},
-          "rogue_1" => %{class: "rogue", hp: 14, max_hp: 14, ap: 2, max_ap: 2, attack: 4, armor: 0, status: "alive"},
-          "mage_1" => %{class: "mage", hp: 10, max_hp: 10, ap: 2, max_ap: 2, attack: 3, armor: 0, status: "alive"},
-          "cleric_1" => %{class: "cleric", hp: 16, max_hp: 16, ap: 2, max_ap: 2, attack: 2, armor: 1, heal: 4, status: "alive"}
+          "warrior_1" => %{
+            class: "warrior",
+            hp: 18,
+            max_hp: 20,
+            ap: 2,
+            max_ap: 2,
+            attack: 5,
+            armor: 2,
+            status: "alive"
+          },
+          "rogue_1" => %{
+            class: "rogue",
+            hp: 14,
+            max_hp: 14,
+            ap: 2,
+            max_ap: 2,
+            attack: 4,
+            armor: 0,
+            status: "alive"
+          },
+          "mage_1" => %{
+            class: "mage",
+            hp: 10,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            attack: 3,
+            armor: 0,
+            status: "alive"
+          },
+          "cleric_1" => %{
+            class: "cleric",
+            hp: 16,
+            max_hp: 16,
+            ap: 2,
+            max_ap: 2,
+            attack: 2,
+            armor: 1,
+            heal: 4,
+            status: "alive"
+          }
         }
       })
 
@@ -213,10 +342,47 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
     state =
       new_state(%{
         party: %{
-          "warrior_1" => %{class: "warrior", hp: 20, max_hp: 20, ap: 0, max_ap: 2, attack: 5, armor: 2, status: "alive"},
-          "rogue_1" => %{class: "rogue", hp: 14, max_hp: 14, ap: 2, max_ap: 2, attack: 4, armor: 0, status: "alive"},
-          "mage_1" => %{class: "mage", hp: 10, max_hp: 10, ap: 2, max_ap: 2, attack: 3, armor: 0, status: "alive"},
-          "cleric_1" => %{class: "cleric", hp: 16, max_hp: 16, ap: 2, max_ap: 2, attack: 2, armor: 1, heal: 4, status: "alive"}
+          "warrior_1" => %{
+            class: "warrior",
+            hp: 20,
+            max_hp: 20,
+            ap: 0,
+            max_ap: 2,
+            attack: 5,
+            armor: 2,
+            status: "alive"
+          },
+          "rogue_1" => %{
+            class: "rogue",
+            hp: 14,
+            max_hp: 14,
+            ap: 2,
+            max_ap: 2,
+            attack: 4,
+            armor: 0,
+            status: "alive"
+          },
+          "mage_1" => %{
+            class: "mage",
+            hp: 10,
+            max_hp: 10,
+            ap: 2,
+            max_ap: 2,
+            attack: 3,
+            armor: 0,
+            status: "alive"
+          },
+          "cleric_1" => %{
+            class: "cleric",
+            hp: 16,
+            max_hp: 16,
+            ap: 2,
+            max_ap: 2,
+            attack: 2,
+            armor: 1,
+            heal: 4,
+            status: "alive"
+          }
         }
       })
 
@@ -237,7 +403,13 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
           "goblin_1" => %{id: "goblin_1", hp: 1, attack: 3, armor: 0, status: "alive"}
         },
         rooms: [
-          %{name: "Entry Hall", enemies: [%{id: "goblin_1", hp: 1, attack: 3, armor: 0, status: "alive"}], traps: [], treasure: [], cleared: false}
+          %{
+            name: "Entry Hall",
+            enemies: [%{id: "goblin_1", hp: 1, attack: 3, armor: 0, status: "alive"}],
+            traps: [],
+            treasure: [],
+            cleared: false
+          }
         ]
       })
 

@@ -75,7 +75,10 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
     tools =
       if length(adjacent) > 0 do
-        [send_forecast_tool(actor_id, adjacent), request_info_tool(actor_id, adjacent, existing_tiers)]
+        [
+          send_forecast_tool(actor_id, adjacent),
+          request_info_tool(actor_id, adjacent, existing_tiers)
+        ]
       else
         []
       end
@@ -107,9 +110,18 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
               "Forecast data. Can include: expected_demand (integer), recommended_order (integer), notes (string). " <>
                 "Include whatever information you think is useful.",
             "properties" => %{
-              "expected_demand" => %{"type" => "integer", "description" => "Expected demand for next round"},
-              "recommended_order" => %{"type" => "integer", "description" => "Suggested order quantity"},
-              "notes" => %{"type" => "string", "description" => "Free-form message to your partner"}
+              "expected_demand" => %{
+                "type" => "integer",
+                "description" => "Expected demand for next round"
+              },
+              "recommended_order" => %{
+                "type" => "integer",
+                "description" => "Suggested order quantity"
+              },
+              "notes" => %{
+                "type" => "string",
+                "description" => "Free-form message to your partner"
+              }
             }
           }
         },
@@ -200,7 +212,11 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
     tier = Map.get(tiers, actor_id, %{})
     safety_stock = get(tier, :safety_stock, 0)
 
-    [place_order_tool(actor_id, safety_stock), adjust_safety_stock_tool(actor_id), expedite_order_tool(actor_id)]
+    [
+      place_order_tool(actor_id, safety_stock),
+      adjust_safety_stock_tool(actor_id),
+      expedite_order_tool(actor_id)
+    ]
     |> Enum.reject(&is_nil/1)
   end
 

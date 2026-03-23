@@ -32,8 +32,7 @@ defmodule LemonSim.GameHelpers.Tools do
         "properties" => %{
           "statement" => %{
             "type" => "string",
-            "description" =>
-              "Your public statement. Keep it concise (1-3 sentences)."
+            "description" => "Your public statement. Keep it concise (1-3 sentences)."
           }
         },
         "required" => ["statement"],
@@ -205,7 +204,11 @@ defmodule LemonSim.GameHelpers.Tools do
       end
     end
 
-    %{tool | parameters: Map.put(tool.parameters, "properties", new_props), execute: wrapped_execute}
+    %{
+      tool
+      | parameters: Map.put(tool.parameters, "properties", new_props),
+        execute: wrapped_execute
+    }
   end
 
   defp build_vote_description(targets_desc, true),

@@ -160,7 +160,8 @@ defmodule LemonSim.Examples.Legislature.Bills do
     rank_scores = [10, 7, 5, 3, 1]
 
     Enum.into(players, %{}, fn {player_id, player_data} ->
-      ranking = Map.get(player_data, :preference_ranking, Map.get(player_data, "preference_ranking", []))
+      ranking =
+        Map.get(player_data, :preference_ranking, Map.get(player_data, "preference_ranking", []))
 
       points =
         passed_bill_ids
@@ -211,7 +212,9 @@ defmodule LemonSim.Examples.Legislature.Bills do
   @spec score_capital(map()) :: map()
   def score_capital(players) do
     Enum.into(players, %{}, fn {player_id, player_data} ->
-      capital = Map.get(player_data, :political_capital, Map.get(player_data, "political_capital", 0))
+      capital =
+        Map.get(player_data, :political_capital, Map.get(player_data, "political_capital", 0))
+
       {player_id, capital}
     end)
   end

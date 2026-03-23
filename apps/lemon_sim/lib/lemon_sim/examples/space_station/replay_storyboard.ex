@@ -255,7 +255,9 @@ defmodule LemonSim.Examples.SpaceStation.ReplayStoryboard do
     if crisis != nil do
       crisis_type = get(crisis, :type, get(crisis, :name, "Unknown Crisis"))
       crisis_name = get(crisis, :name, String.capitalize(to_string(crisis_type)))
-      description = get(crisis, :description, get(crisis, :announcement, "A crisis strikes the station!"))
+
+      description =
+        get(crisis, :description, get(crisis, :announcement, "A crisis strikes the station!"))
 
       round = round_after || round_of(entry)
 
@@ -455,7 +457,8 @@ defmodule LemonSim.Examples.SpaceStation.ReplayStoryboard do
           |> add_beat_entry(beat_entry, seconds_to_frames(3.0, acc))
           |> Map.update!(:alerted_destroyed, &MapSet.put(&1, sys_id_str))
 
-        health_val > 0 and health_val <= 30 and not MapSet.member?(acc.alerted_critical, sys_id_str) ->
+        health_val > 0 and health_val <= 30 and
+            not MapSet.member?(acc.alerted_critical, sys_id_str) ->
           name = system_display_name(sys_id_str)
 
           beat_entry =
@@ -490,44 +493,42 @@ defmodule LemonSim.Examples.SpaceStation.ReplayStoryboard do
     case action do
       "repair" ->
         {"Repair", "#{player_str} repairs #{system_name}.",
-         ["#{player_str} works on the #{system_name} system.", "Role: #{String.capitalize(role)}."],
-         2.5}
+         [
+           "#{player_str} works on the #{system_name} system.",
+           "Role: #{String.capitalize(role)}."
+         ], 2.5}
 
       a when a in ["sabotage", "sabotage_system"] ->
         {"Sabotage!", "#{player_str} sabotages #{system_name}.",
-         ["#{player_str} is the saboteur.", "The audience sees the sabotage — the crew does not."],
-         3.0}
+         [
+           "#{player_str} is the saboteur.",
+           "The audience sees the sabotage — the crew does not."
+         ], 3.0}
 
       a when a in ["fake_repair", "fake_repair_system"] ->
         {"Fake Repair", "#{player_str} pretends to repair #{system_name}.",
-         ["#{player_str} is the saboteur.", "The repair is a deception."],
-         2.8}
+         ["#{player_str} is the saboteur.", "The repair is a deception."], 2.8}
 
       "scan" ->
         target_str = if target_id, do: to_string(target_id), else: "?"
+
         {"Scanner Check", "#{player_str} scans #{target_str}.",
-         ["#{player_str} is the engineer.", "Scan results stay private."],
-         2.8}
+         ["#{player_str} is the engineer.", "Scan results stay private."], 2.8}
 
       a when a in ["lock", "lock_room"] ->
         {"Room Locked", "#{player_str} locks #{system_name}.",
-         ["#{player_str} is the captain.", "No sabotage can occur here this round."],
-         2.5}
+         ["#{player_str} is the captain.", "No sabotage can occur here this round."], 2.5}
 
       "vent" ->
         {"Vent!", "#{player_str} moves through the vents.",
-         ["#{player_str} is the saboteur.", "No location recorded this round."],
-         2.5}
+         ["#{player_str} is the saboteur.", "No location recorded this round."], 2.5}
 
       "emergency_meeting" ->
         {"Emergency Meeting!", "#{player_str} calls an emergency meeting!",
-         ["#{player_str} is the captain.", "The crew assembles immediately."],
-         3.0}
+         ["#{player_str} is the captain.", "The crew assembles immediately."], 3.0}
 
       _ ->
-        {"Action", "#{player_str} acts.",
-         ["Role: #{String.capitalize(role)}."],
-         2.0}
+        {"Action", "#{player_str} acts.", ["Role: #{String.capitalize(role)}."], 2.0}
     end
   end
 

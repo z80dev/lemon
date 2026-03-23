@@ -320,7 +320,14 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, territories: territories, winner: winner, players: players}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         turn_order: turn_order,
+         territories: territories,
+         winner: winner,
+         players: players
+       }) do
     cx = @roster_w + div(w - @roster_w - @map_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -387,7 +394,10 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     end
   end
 
-  defp render_diplomacy_panel(%{w: w, h: h, message_history: message_history, turn_order: turn_order, players: players} = ctx) do
+  defp render_diplomacy_panel(
+         %{w: w, h: h, message_history: message_history, turn_order: turn_order, players: players} =
+           ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @map_w - 20
@@ -444,7 +454,13 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
       if ctx.active_actor do
         actor_idx = Enum.find_index(turn_order, &(&1 == ctx.active_actor)) || 0
         actor_color = Enum.at(@player_colors, actor_idx, @text_secondary)
-        actor_faction = get(Map.get(players, ctx.active_actor, %{}), "faction", format_player_name(ctx.active_actor))
+
+        actor_faction =
+          get(
+            Map.get(players, ctx.active_actor, %{}),
+            "faction",
+            format_player_name(ctx.active_actor)
+          )
 
         [
           ~s[<rect x="#{panel_x + 10}" y="#{panel_y + panel_h - 42}" width="#{panel_w - 20}" height="28" ] <>
@@ -458,7 +474,10 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_orders_panel(%{w: w, h: h, pending_orders: pending_orders, turn_order: turn_order, players: players} = ctx) do
+  defp render_orders_panel(
+         %{w: w, h: h, pending_orders: pending_orders, turn_order: turn_order, players: players} =
+           ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @map_w - 20
@@ -508,7 +527,13 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
       if ctx.active_actor do
         actor_idx = Enum.find_index(turn_order, &(&1 == ctx.active_actor)) || 0
         actor_color = Enum.at(@player_colors, actor_idx, @text_secondary)
-        actor_faction = get(Map.get(players, ctx.active_actor, %{}), "faction", format_player_name(ctx.active_actor))
+
+        actor_faction =
+          get(
+            Map.get(players, ctx.active_actor, %{}),
+            "faction",
+            format_player_name(ctx.active_actor)
+          )
 
         [
           ~s[<rect x="#{panel_x + 10}" y="#{panel_y + panel_h - 42}" width="#{panel_w - 20}" height="28" ] <>
@@ -522,7 +547,16 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_resolution_panel(%{w: w, h: h, events: events, capture_history: capture_history, players: players, turn_order: turn_order} = _ctx) do
+  defp render_resolution_panel(
+         %{
+           w: w,
+           h: h,
+           events: events,
+           capture_history: capture_history,
+           players: players,
+           turn_order: turn_order
+         } = _ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @map_w - 20
@@ -561,6 +595,7 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
           end),
           if recent_captures != [] do
             cap_y = panel_y + panel_h - length(recent_captures) * 30 - 10
+
             [
               ~s[<text x="#{panel_x + 16}" y="#{cap_y - 10}" font-size="10" fill="#{@gold_dim}" letter-spacing="1">CAPTURES THIS GAME</text>\n],
               recent_captures
@@ -586,7 +621,15 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_resolution_event("territory_captured", payload, y, panel_x, panel_w, players, turn_order) do
+  defp render_resolution_event(
+         "territory_captured",
+         payload,
+         y,
+         panel_x,
+         panel_w,
+         players,
+         turn_order
+       ) do
     territory = get(payload, "territory", "?")
     new_owner = get(payload, "new_owner", "?")
     old_owner = get(payload, "old_owner", nil)
@@ -597,7 +640,9 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
 
     old_text =
       if old_owner do
-        old_faction = get(Map.get(players, old_owner, %{}), "faction", format_player_name(old_owner))
+        old_faction =
+          get(Map.get(players, old_owner, %{}), "faction", format_player_name(old_owner))
+
         " from #{old_faction}"
       else
         " (uncontested)"
@@ -620,7 +665,15 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_resolution_event("move_resolved", payload, y, panel_x, _panel_w, players, turn_order) do
+  defp render_resolution_event(
+         "move_resolved",
+         payload,
+         y,
+         panel_x,
+         _panel_w,
+         players,
+         turn_order
+       ) do
     player_id = get(payload, "player_id", "?")
     from = get(payload, "from", "?")
     to = get(payload, "to", "?")
@@ -639,13 +692,16 @@ defmodule LemonSim.Examples.Diplomacy.FrameRenderer do
     ]
   end
 
-  defp render_resolution_event(_kind, _payload, _y, _panel_x, _panel_w, _players, _turn_order), do: ""
+  defp render_resolution_event(_kind, _payload, _y, _panel_x, _panel_w, _players, _turn_order),
+    do: ""
 
   # ---------------------------------------------------------------------------
   # Territory map (right panel)
   # ---------------------------------------------------------------------------
 
-  defp render_territory_map(%{w: w, h: h, territories: territories, turn_order: turn_order} = _ctx) do
+  defp render_territory_map(
+         %{w: w, h: h, territories: territories, turn_order: turn_order} = _ctx
+       ) do
     panel_x = w - @map_w
     panel_h = h - @header_h - @footer_h
 

@@ -7,7 +7,11 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
   defp base_world do
     %{
       rooms: %{
-        "library" => %{name: "Library", clues_present: ["clue_lib_1", "clue_lib_2"], searched_by: []},
+        "library" => %{
+          name: "Library",
+          clues_present: ["clue_lib_1", "clue_lib_2"],
+          searched_by: []
+        },
         "kitchen" => %{name: "Kitchen", clues_present: ["clue_kit_1"], searched_by: []}
       },
       players: %{
@@ -34,9 +38,27 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
         }
       },
       evidence: %{
-        "clue_lib_1" => %{clue_id: "clue_lib_1", clue_type: "fingerprint", room_id: "library", points_to: "player_2", is_false: false},
-        "clue_lib_2" => %{clue_id: "clue_lib_2", clue_type: "footprint", room_id: "library", points_to: "player_1", is_false: false},
-        "clue_kit_1" => %{clue_id: "clue_kit_1", clue_type: "weapon_trace", room_id: "kitchen", points_to: "player_2", is_false: false}
+        "clue_lib_1" => %{
+          clue_id: "clue_lib_1",
+          clue_type: "fingerprint",
+          room_id: "library",
+          points_to: "player_2",
+          is_false: false
+        },
+        "clue_lib_2" => %{
+          clue_id: "clue_lib_2",
+          clue_type: "footprint",
+          room_id: "library",
+          points_to: "player_1",
+          is_false: false
+        },
+        "clue_kit_1" => %{
+          clue_id: "clue_kit_1",
+          clue_type: "weapon_trace",
+          room_id: "kitchen",
+          points_to: "player_2",
+          is_false: false
+        }
       },
       solution: %{killer_id: "player_2", weapon: "knife", room_id: "library"},
       turn_order: ["player_1", "player_2", "player_3"],
@@ -119,12 +141,20 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
       |> Map.put(:phase, "interrogation")
       |> Map.put(:active_actor_id, "player_2")
       |> Map.put(:interrogation_log, [
-        %{"round" => 1, "asker_id" => "player_1", "target_id" => "player_2",
-          "question" => "Where were you?", "answer" => nil}
+        %{
+          "round" => 1,
+          "asker_id" => "player_1",
+          "target_id" => "player_2",
+          "question" => "Where were you?",
+          "answer" => nil
+        }
       ])
       |> Map.put(:pending_question, %{
-        "round" => 1, "asker_id" => "player_1", "target_id" => "player_2",
-        "question" => "Where were you?", "answer" => nil
+        "round" => 1,
+        "asker_id" => "player_1",
+        "target_id" => "player_2",
+        "question" => "Where were you?",
+        "answer" => nil
       })
 
     state = State.new(sim_id: "mm-test", world: world)

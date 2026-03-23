@@ -118,7 +118,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
-        |> add_journal_entry(player_id, "Sabotaged the #{system_display_name(system_id)} system. No one seemed to notice.")
+        |> add_journal_entry(
+          player_id,
+          "Sabotaged the #{system_display_name(system_id)} system. No one seemed to notice."
+        )
 
       advance_action_turn(next_state)
     else
@@ -161,7 +164,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
-        |> add_journal_entry(player_id, "Pretended to repair #{system_display_name(system_id)}. Keeping up appearances.")
+        |> add_journal_entry(
+          player_id,
+          "Pretended to repair #{system_display_name(system_id)}. Keeping up appearances."
+        )
 
       advance_action_turn(next_state)
     else
@@ -291,7 +297,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
-        |> add_journal_entry(player_id, "Locked down #{system_display_name(system_id)} to prevent sabotage.")
+        |> add_journal_entry(
+          player_id,
+          "Locked down #{system_display_name(system_id)} to prevent sabotage."
+        )
 
       advance_action_turn(next_state)
     else
@@ -330,7 +339,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
-        |> add_journal_entry(player_id, "Called an emergency meeting. Something doesn't feel right.")
+        |> add_journal_entry(
+          player_id,
+          "Called an emergency meeting. Something doesn't feel right."
+        )
 
       advance_action_turn(next_state)
     else
@@ -475,7 +487,9 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
 
       # Track accusations for the UI and agent awareness
       accusations = get(state.world, :accusations, [])
-      new_accusations = accusations ++ [%{accuser: player_id, accused: target_id, evidence: evidence}]
+
+      new_accusations =
+        accusations ++ [%{accuser: player_id, accused: target_id, evidence: evidence}]
 
       target_name = get(Map.get(players, target_id, %{}), :name, target_id)
 
@@ -488,7 +502,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           })
         )
         |> State.append_event(event)
-        |> add_journal_entry(player_id, "Formally accused #{target_name}. I believe they're the saboteur.")
+        |> add_journal_entry(
+          player_id,
+          "Formally accused #{target_name}. I believe they're the saboteur."
+        )
         |> adjust_reputation(target_id, -2)
 
       advance_discussion_turn(next_state)
@@ -659,7 +676,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
     # Step 2: Apply player actions to systems
     # Only 1 repair per system takes effect per round (cap prevents "verified pair = 100%" strategy)
     {resolved_systems, _repaired_set} =
-      Enum.reduce(action_log, {noisy_systems, MapSet.new()}, fn {_player_id, action_entry}, {acc_systems, repaired} ->
+      Enum.reduce(action_log, {noisy_systems, MapSet.new()}, fn {_player_id, action_entry},
+                                                                {acc_systems, repaired} ->
         action = get_action_field(action_entry, :action)
         system_id = get_action_field(action_entry, :system)
 
@@ -670,7 +688,9 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
               {acc_systems, repaired}
             else
               repair_amt = Enum.random(@repair_min..@repair_max)
-              {apply_system_change(acc_systems, system_id, repair_amt), MapSet.put(repaired, system_id)}
+
+              {apply_system_change(acc_systems, system_id, repair_amt),
+               MapSet.put(repaired, system_id)}
             end
 
           "sabotage" when is_binary(system_id) ->
@@ -991,7 +1011,11 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
             if pid == ejected_id do
               acc
             else
-              add_journal_entry(acc, pid, "#{ejected_name} was ejected. They were #{victim_role}.")
+              add_journal_entry(
+                acc,
+                pid,
+                "#{ejected_name} was ejected. They were #{victim_role}."
+              )
             end
           end)
 
@@ -1329,7 +1353,10 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
 
     # Distribute each clue to a random living player (not the actor)
     {updated_clues, clue_events, clue_recipients} =
-      Enum.reduce(selected_clues, {get(state.world, :clues, %{}), [], []}, fn clue, {acc_clues, acc_events, acc_recipients} ->
+      Enum.reduce(selected_clues, {get(state.world, :clues, %{}), [], []}, fn clue,
+                                                                              {acc_clues,
+                                                                               acc_events,
+                                                                               acc_recipients} ->
         actor_id = Map.get(clue, :about_player)
         eligible = Enum.reject(living, &(&1 == actor_id))
 
@@ -1371,12 +1398,14 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           Enum.random([
             %{
               type: "tool_marks",
-              text: "You notice fresh tool marks and repair residue on the #{system_name} system.",
+              text:
+                "You notice fresh tool marks and repair residue on the #{system_name} system.",
               about_player: player_id
             },
             %{
               type: "sound",
-              text: "You heard the distinctive hum of repair equipment coming from #{system_name} this round.",
+              text:
+                "You heard the distinctive hum of repair equipment coming from #{system_name} this round.",
               about_player: player_id
             }
           ])
@@ -1387,17 +1416,20 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
           Enum.random([
             %{
               type: "damage_evidence",
-              text: "You spot scorch marks and deliberate cuts on the #{system_name} system — this doesn't look like normal wear.",
+              text:
+                "You spot scorch marks and deliberate cuts on the #{system_name} system — this doesn't look like normal wear.",
               about_player: player_id
             },
             %{
               type: "suspicious_activity",
-              text: "A security camera near #{system_name} captured a blurred figure working hastily, unlike normal repair posture.",
+              text:
+                "A security camera near #{system_name} captured a blurred figure working hastily, unlike normal repair posture.",
               about_player: player_id
             },
             %{
               type: "chemical_residue",
-              text: "You detect an unusual chemical residue near the #{system_name} system — consistent with deliberate interference.",
+              text:
+                "You detect an unusual chemical residue near the #{system_name} system — consistent with deliberate interference.",
               about_player: player_id
             }
           ])
@@ -1407,7 +1439,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         [
           %{
             type: "incomplete_work",
-            text: "The #{system_name} system shows signs someone was there, but no actual repairs were completed.",
+            text:
+              "The #{system_name} system shows signs someone was there, but no actual repairs were completed.",
             about_player: player_id
           }
         ]
@@ -1416,7 +1449,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         [
           %{
             type: "vent_noise",
-            text: "You heard unusual sounds from the ventilation system — someone might be moving through the ducts.",
+            text:
+              "You heard unusual sounds from the ventilation system — someone might be moving through the ducts.",
             about_player: player_id
           }
         ]
@@ -1425,7 +1459,8 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         [
           %{
             type: "scanner_activity",
-            text: "You noticed a brief spike in the station's bio-scanner array. Someone used the scanning equipment.",
+            text:
+              "You noticed a brief spike in the station's bio-scanner array. Someone used the scanning equipment.",
             about_player: player_id
           }
         ]

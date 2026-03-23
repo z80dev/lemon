@@ -31,7 +31,8 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     chain_metrics = build_chain_metrics(tiers, demand_history, total_chain_cost, team_bonus)
 
     %{
-      benchmark_focus: "cost efficiency, bullwhip reduction, fill rate, and communication quality",
+      benchmark_focus:
+        "cost efficiency, bullwhip reduction, fill rate, and communication quality",
       tiers: tier_metrics,
       chain: chain_metrics
     }
@@ -56,7 +57,9 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
         total_inv / length(cost_history)
       end
 
-    avg_demand = if demand_history == [], do: 0.0, else: Enum.sum(demand_history) / length(demand_history)
+    avg_demand =
+      if demand_history == [], do: 0.0, else: Enum.sum(demand_history) / length(demand_history)
+
     inv_efficiency = DemandModel.inventory_efficiency(avg_inventory, avg_demand)
 
     messages_sent =
@@ -99,7 +102,9 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     retailer_received = get(retailer, :orders_received, 0)
     end_to_end_fill_rate = DemandModel.fill_rate(retailer_fulfilled, retailer_received)
 
-    avg_demand = if demand_history == [], do: 0.0, else: Enum.sum(demand_history) / length(demand_history)
+    avg_demand =
+      if demand_history == [], do: 0.0, else: Enum.sum(demand_history) / length(demand_history)
+
     peak_demand = Enum.max(demand_history ++ [0])
     demand_variance = compute_variance(demand_history)
 

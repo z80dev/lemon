@@ -124,10 +124,11 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   end
 
   test "check_inventory transitions to communicate phase when all tiers observe" do
-    world = base_world(%{
-      observe_done: MapSet.new(["distributor", "factory", "raw_materials"]),
-      active_actor_id: "retailer"
-    })
+    world =
+      base_world(%{
+        observe_done: MapSet.new(["distributor", "factory", "raw_materials"]),
+        active_actor_id: "retailer"
+      })
 
     state = State.new(sim_id: "test", world: world)
 
@@ -152,11 +153,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   # -- Communicate phase tests --
 
   test "send_forecast adds message to recipient inbox" do
-    state = make_state(%{
-      phase: "communicate",
-      communicate_done: MapSet.new(),
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "communicate",
+        communicate_done: MapSet.new(),
+        active_actor_id: "retailer"
+      })
 
     forecast = %{"expected_demand" => 12, "notes" => "spike expected"}
 
@@ -179,11 +181,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   end
 
   test "send_forecast rejected for non-adjacent tier" do
-    state = make_state(%{
-      phase: "communicate",
-      communicate_done: MapSet.new(),
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "communicate",
+        communicate_done: MapSet.new(),
+        active_actor_id: "retailer"
+      })
 
     # retailer cannot communicate directly with factory (not adjacent)
     assert {:ok, next_state, {:decide, msg}} =
@@ -199,11 +202,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   end
 
   test "end_communicate advances tier and transitions to order when all done" do
-    state = make_state(%{
-      phase: "communicate",
-      communicate_done: MapSet.new(["distributor", "factory", "raw_materials"]),
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "communicate",
+        communicate_done: MapSet.new(["distributor", "factory", "raw_materials"]),
+        active_actor_id: "retailer"
+      })
 
     assert {:ok, next_state, {:decide, prompt}} =
              Updater.apply_event(state, Events.end_communicate("retailer"), [])
@@ -216,11 +220,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   # -- Order phase tests --
 
   test "place_order records the order on the tier" do
-    state = make_state(%{
-      phase: "order",
-      order_done: MapSet.new(),
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "order",
+        order_done: MapSet.new(),
+        active_actor_id: "retailer"
+      })
 
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(state, Events.place_order("retailer", 15), [])
@@ -233,11 +238,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   end
 
   test "place_order triggers round resolution when all tiers order" do
-    world = base_world(%{
-      phase: "order",
-      order_done: MapSet.new(["distributor", "factory", "raw_materials"]),
-      active_actor_id: "retailer"
-    })
+    world =
+      base_world(%{
+        phase: "order",
+        order_done: MapSet.new(["distributor", "factory", "raw_materials"]),
+        active_actor_id: "retailer"
+      })
 
     # Give all other tiers a pending order so fulfillment can run
     tiers =
@@ -258,11 +264,12 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   end
 
   test "place_order rejected with negative quantity" do
-    state = make_state(%{
-      phase: "order",
-      order_done: MapSet.new(),
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "order",
+        order_done: MapSet.new(),
+        active_actor_id: "retailer"
+      })
 
     assert {:ok, next_state, {:decide, msg}} =
              Updater.apply_event(state, Events.place_order("retailer", -1), [])
@@ -274,10 +281,11 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   # -- Adjust safety stock test --
 
   test "adjust_safety_stock updates tier safety stock target" do
-    state = make_state(%{
-      phase: "observe",
-      active_actor_id: "retailer"
-    })
+    state =
+      make_state(%{
+        phase: "observe",
+        active_actor_id: "retailer"
+      })
 
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(state, Events.adjust_safety_stock("retailer", 12), [])
@@ -289,13 +297,14 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
 
   test "game ends after max_rounds with lowest-cost tier winning" do
     # Set up world at the final round to trigger victory
-    world = base_world(%{
-      phase: "order",
-      round: 20,
-      max_rounds: 20,
-      order_done: MapSet.new(["distributor", "factory", "raw_materials"]),
-      active_actor_id: "retailer"
-    })
+    world =
+      base_world(%{
+        phase: "order",
+        round: 20,
+        max_rounds: 20,
+        order_done: MapSet.new(["distributor", "factory", "raw_materials"]),
+        active_actor_id: "retailer"
+      })
 
     # Retailer has lowest total cost
     tiers =

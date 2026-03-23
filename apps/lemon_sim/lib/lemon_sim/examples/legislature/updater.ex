@@ -117,8 +117,7 @@ defmodule LemonSim.Examples.Legislature.Updater do
         "type" => "trade_proposal",
         "bill_a" => bill_a,
         "bill_b" => bill_b,
-        "message" =>
-          "I propose: I vote YES on #{bill_a} if you vote YES on #{bill_b}.",
+        "message" => "I propose: I vote YES on #{bill_a} if you vote YES on #{bill_b}.",
         "session" => session
       }
 
@@ -127,7 +126,9 @@ defmodule LemonSim.Examples.Legislature.Updater do
       sent_counts = get(state.world, :caucus_messages_sent, %{})
       player_sent = Map.get(sent_counts, proposer_id, %{})
       session_count = Map.get(player_sent, session, 0) + 1
-      updated_sent = Map.put(sent_counts, proposer_id, Map.put(player_sent, session, session_count))
+
+      updated_sent =
+        Map.put(sent_counts, proposer_id, Map.put(player_sent, session, session_count))
 
       message_history = get(state.world, :message_history, [])
 
@@ -137,7 +138,8 @@ defmodule LemonSim.Examples.Legislature.Updater do
         |> Map.put(:caucus_messages_sent, updated_sent)
         |> Map.put(
           :message_history,
-          message_history ++ [%{session: session, from: proposer_id, to: recipient_id, type: "trade"}]
+          message_history ++
+            [%{session: session, from: proposer_id, to: recipient_id, type: "trade"}]
         )
 
       next_state =
@@ -236,7 +238,8 @@ defmodule LemonSim.Examples.Legislature.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.speech_delivered(player_id, bill_id))
 
-      {:ok, next_state, {:decide, "#{player_id} made a speech about #{bill_id}, end floor debate when done"}}
+      {:ok, next_state,
+       {:decide, "#{player_id} made a speech about #{bill_id}, end floor debate when done"}}
     else
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
@@ -482,9 +485,10 @@ defmodule LemonSim.Examples.Legislature.Updater do
          :ok <- ensure_valid_vote(vote) do
       proposed = get(state.world, :proposed_amendments, [])
 
-      amendment_idx = Enum.find_index(proposed, fn a ->
-        Map.get(a, :id, Map.get(a, "id")) == amendment_id
-      end)
+      amendment_idx =
+        Enum.find_index(proposed, fn a ->
+          Map.get(a, :id, Map.get(a, "id")) == amendment_id
+        end)
 
       if amendment_idx == nil do
         reject_action(state, event, player_id, :invalid_amendment)
@@ -504,8 +508,7 @@ defmodule LemonSim.Examples.Legislature.Updater do
           |> State.append_event(Events.amendment_vote_cast(player_id, amendment_id, vote))
 
         {:ok, next_state,
-         {:decide,
-          "#{player_id} voted #{vote} on amendment #{amendment_id} for #{bill_id}"}}
+         {:decide, "#{player_id} voted #{vote} on amendment #{amendment_id} for #{bill_id}"}}
       end
     else
       {:error, reason} ->
@@ -668,7 +671,14 @@ defmodule LemonSim.Examples.Legislature.Updater do
 
           bill = Map.get(bills_acc, bill_id, %{})
           existing_amendments = Map.get(bill, :amendments, Map.get(bill, "amendments", []))
-          updated_bill = Map.put(bill, :amendments, existing_amendments ++ [%{id: amendment_id, text: amendment_text}])
+
+          updated_bill =
+            Map.put(
+              bill,
+              :amendments,
+              existing_amendments ++ [%{id: amendment_id, text: amendment_text}]
+            )
+
           Map.put(bills_acc, bill_id, updated_bill)
         else
           bills_acc
@@ -892,7 +902,9 @@ defmodule LemonSim.Examples.Legislature.Updater do
   defp ensure_sufficient_capital(world, player_id, amount) do
     players = get(world, :players, %{})
     player_data = Map.get(players, player_id, %{})
-    capital = Map.get(player_data, :political_capital, Map.get(player_data, "political_capital", 0))
+
+    capital =
+      Map.get(player_data, :political_capital, Map.get(player_data, "political_capital", 0))
 
     if capital >= amount,
       do: :ok,
@@ -936,7 +948,10 @@ defmodule LemonSim.Examples.Legislature.Updater do
   defp rejection_reason(:not_active_actor), do: "not the active player"
   defp rejection_reason(:invalid_player), do: "invalid player id"
   defp rejection_reason(:cannot_message_self), do: "cannot send message to yourself"
-  defp rejection_reason(:message_quota_exceeded), do: "message quota exceeded (max #{@max_caucus_messages} per session)"
+
+  defp rejection_reason(:message_quota_exceeded),
+    do: "message quota exceeded (max #{@max_caucus_messages} per session)"
+
   defp rejection_reason(:invalid_bill), do: "invalid bill id"
   defp rejection_reason(:insufficient_capital), do: "insufficient political capital"
   defp rejection_reason(:invalid_amount), do: "amount must be positive"

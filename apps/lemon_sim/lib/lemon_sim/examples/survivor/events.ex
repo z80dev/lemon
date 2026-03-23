@@ -98,7 +98,8 @@ defmodule LemonSim.Examples.Survivor.Events do
   def tribes_merged(merge_tribe_name) do
     Event.new("tribes_merged", %{
       "merge_tribe_name" => merge_tribe_name,
-      "message" => "The tribes have merged into #{merge_tribe_name}! It's every player for themselves now."
+      "message" =>
+        "The tribes have merged into #{merge_tribe_name}! It's every player for themselves now."
     })
   end
 
@@ -137,12 +138,23 @@ defmodule LemonSim.Examples.Survivor.Events do
       "episode" => episode,
       "message" =>
         case new_phase do
-          "challenge" -> "Episode #{episode}: The challenge begins!"
-          "strategy" -> "Episode #{episode}: Time to strategize before tribal council."
-          "tribal_council" -> "Episode #{episode}: Tribal council is now in session."
-          "final_tribal_council" -> "The Final Tribal Council begins. Jury, you will now address the finalists."
-          "game_over" -> "The game is over."
-          _ -> "Phase changed to #{new_phase}."
+          "challenge" ->
+            "Episode #{episode}: The challenge begins!"
+
+          "strategy" ->
+            "Episode #{episode}: Time to strategize before tribal council."
+
+          "tribal_council" ->
+            "Episode #{episode}: Tribal council is now in session."
+
+          "final_tribal_council" ->
+            "The Final Tribal Council begins. Jury, you will now address the finalists."
+
+          "game_over" ->
+            "The game is over."
+
+          _ ->
+            "Phase changed to #{new_phase}."
         end
     })
   end

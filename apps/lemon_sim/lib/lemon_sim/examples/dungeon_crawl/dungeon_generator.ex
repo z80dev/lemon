@@ -21,9 +21,10 @@ defmodule LemonSim.Examples.DungeonCrawl.DungeonGenerator do
     %{
       index: 4,
       name: "The Boss Chamber",
-      enemies: [
-        %{id: "ogre_1", type: "ogre", hp: 15, max_hp: 15, attack: 5, status: "alive"}
-      ] ++ maybe_boss_adds(),
+      enemies:
+        [
+          %{id: "ogre_1", type: "ogre", hp: 15, max_hp: 15, attack: 5, status: "alive"}
+        ] ++ maybe_boss_adds(),
       traps: [],
       treasure: [%{name: "healing_potion", effect: "heal", value: 5}],
       cleared: false

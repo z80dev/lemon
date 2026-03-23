@@ -87,7 +87,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         next_state2 = State.update_world(next_state, fn _ -> next_world2 end)
 
         {:ok, next_state2,
-         {:decide, "#{tier_id} observed inventory, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
+         {:decide,
+          "#{tier_id} observed inventory, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
       end
     else
       {:error, reason} ->
@@ -121,7 +122,9 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
       updated_messages = Map.put(messages, recipient_id, recipient_msgs ++ [new_msg])
 
       message_log = get(state.world, :message_log, [])
-      updated_log = message_log ++ [%{round: round, from: sender_id, to: recipient_id, type: "forecast"}]
+
+      updated_log =
+        message_log ++ [%{round: round, from: sender_id, to: recipient_id, type: "forecast"}]
 
       next_world =
         state.world
@@ -134,7 +137,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.forecast_sent(sender_id, recipient_id, forecast))
 
-      {:ok, next_state, {:decide, "#{sender_id} sent forecast to #{recipient_id}, continue communicating"}}
+      {:ok, next_state,
+       {:decide, "#{sender_id} sent forecast to #{recipient_id}, continue communicating"}}
     else
       {:error, reason} ->
         reject_action_sc(state, event, sender_id, reason)
@@ -173,7 +177,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.info_requested(requester_id, target_id))
 
-      {:ok, next_state, {:decide, "#{requester_id} requested info from #{target_id}, continue communicating"}}
+      {:ok, next_state,
+       {:decide, "#{requester_id} requested info from #{target_id}, continue communicating"}}
     else
       {:error, reason} ->
         reject_action_sc(state, event, requester_id, reason)
@@ -214,14 +219,16 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
           |> State.append_event(Events.phase_changed("communicate", "order"))
 
         {:ok, next_state2,
-         {:decide, "all tiers done communicating, now in order phase for #{List.first(@tier_order)}"}}
+         {:decide,
+          "all tiers done communicating, now in order phase for #{List.first(@tier_order)}"}}
       else
         {next_world2, _} = advance_tier(next_world, tier_id, communicate_done, "communicate_done")
 
         next_state2 = State.update_world(next_state, fn _ -> next_world2 end)
 
         {:ok, next_state2,
-         {:decide, "#{tier_id} done communicating, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
+         {:decide,
+          "#{tier_id} done communicating, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
       end
     else
       {:error, reason} ->
@@ -245,6 +252,7 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
       round = get(state.world, :round, 1)
 
       order_history = get(tier, :order_history, [])
+
       updated_tier =
         tier
         |> Map.put(:pending_order, quantity)
@@ -293,7 +301,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         next_state2 = State.update_world(next_state, fn _ -> next_world2 end)
 
         {:ok, next_state2,
-         {:decide, "#{tier_id} placed order for #{quantity} units, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
+         {:decide,
+          "#{tier_id} placed order for #{quantity} units, now #{MapHelpers.get_key(next_world2, :active_actor_id)}'s turn"}}
       end
     else
       {:error, reason} ->
@@ -352,10 +361,22 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
       supplier_id = upstream_tier(tier_id)
 
       incoming = get(tier, :incoming_deliveries, [])
+
       updated_tier =
         tier
         |> Map.put(:cash, get(tier, :cash, 0.0) - surcharge)
-        |> Map.put(:incoming_deliveries, incoming ++ [%{from: supplier_id, quantity: quantity, arrive_round: arrive_round, expedited: true}])
+        |> Map.put(
+          :incoming_deliveries,
+          incoming ++
+            [
+              %{
+                from: supplier_id,
+                quantity: quantity,
+                arrive_round: arrive_round,
+                expedited: true
+              }
+            ]
+        )
 
       updated_tiers = Map.put(tiers, tier_id, updated_tier)
       next_world = Map.put(state.world, :tiers, updated_tiers)
@@ -366,7 +387,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.expedite_order_placed(tier_id, quantity))
 
-      {:ok, next_state, {:decide, "#{tier_id} expedited #{quantity} units (surcharge: #{surcharge})"}}
+      {:ok, next_state,
+       {:decide, "#{tier_id} expedited #{quantity} units (surcharge: #{surcharge})"}}
     else
       {:error, reason} ->
         reject_action_sc(state, event, tier_id, reason)
@@ -407,7 +429,9 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
     round = get(world, :round, 1)
 
     {tiers, events} =
-      Enum.reduce(upstream_to_downstream, {get(world, :tiers, %{}), []}, fn supplier_id, {tiers_acc, events_acc} ->
+      Enum.reduce(upstream_to_downstream, {get(world, :tiers, %{}), []}, fn supplier_id,
+                                                                            {tiers_acc,
+                                                                             events_acc} ->
         customer_id = downstream_tier(supplier_id)
 
         if customer_id == nil do
@@ -447,7 +471,9 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
             |> Map.put(customer_id, updated_customer)
 
           fulfill_event = Events.order_fulfilled(supplier_id, customer_id, ordered, fulfilled)
-          dispatch_event = Events.delivery_dispatched(supplier_id, customer_id, fulfilled, arrive_round)
+
+          dispatch_event =
+            Events.delivery_dispatched(supplier_id, customer_id, fulfilled, arrive_round)
 
           {new_tiers, events_acc ++ [fulfill_event, dispatch_event]}
         end
@@ -469,7 +495,10 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
 
     updated_rm =
       rm
-      |> Map.put(:incoming_deliveries, incoming ++ [%{from: "source", quantity: ordered, arrive_round: arrive_round}])
+      |> Map.put(
+        :incoming_deliveries,
+        incoming ++ [%{from: "source", quantity: ordered, arrive_round: arrive_round}]
+      )
       |> Map.put(:pending_order, 0)
       |> Map.put(:orders_received, get(rm, :orders_received, 0) + ordered)
       |> Map.put(:orders_fulfilled, get(rm, :orders_fulfilled, 0) + ordered)
@@ -501,7 +530,9 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
 
     # Process arriving deliveries for all tiers
     {tiers_with_arrivals, arrival_events} =
-      Enum.reduce(@tier_order, {Map.put(tiers, "retailer", updated_retailer), []}, fn tier_id, {t_acc, e_acc} ->
+      Enum.reduce(@tier_order, {Map.put(tiers, "retailer", updated_retailer), []}, fn tier_id,
+                                                                                      {t_acc,
+                                                                                       e_acc} ->
         process_arrivals(t_acc, tier_id, round, e_acc)
       end)
 
@@ -526,7 +557,8 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
         Map.get(delivery, :arrive_round, Map.get(delivery, "arrive_round", 999)) <= current_round
       end)
 
-    total_arriving = Enum.sum(Enum.map(arriving, fn d -> Map.get(d, :quantity, Map.get(d, "quantity", 0)) end))
+    total_arriving =
+      Enum.sum(Enum.map(arriving, fn d -> Map.get(d, :quantity, Map.get(d, "quantity", 0)) end))
 
     if total_arriving > 0 do
       updated_tier =
@@ -560,7 +592,13 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
           |> Map.put(:cost_history, cost_history ++ [round_costs])
           |> Map.put(:order_placed_this_round, false)
 
-        cost_event = Events.costs_assessed(tier_id, round_costs.holding, round_costs.stockout, round_costs.total)
+        cost_event =
+          Events.costs_assessed(
+            tier_id,
+            round_costs.holding,
+            round_costs.stockout,
+            round_costs.total
+          )
 
         {Map.put(t_acc, tier_id, updated_tier), e_acc ++ [cost_event]}
       end)
@@ -589,10 +627,12 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
 
       # Check team bonus
       total_chain_cost =
-        Enum.sum(Enum.map(@tier_order, fn tier_id ->
-          tier = Map.get(tiers, tier_id, %{})
-          get(tier, :total_cost, 0.0)
-        end))
+        Enum.sum(
+          Enum.map(@tier_order, fn tier_id ->
+            tier = Map.get(tiers, tier_id, %{})
+            get(tier, :total_cost, 0.0)
+          end)
+        )
 
       team_bonus = costs != nil and total_chain_cost < costs
 
@@ -702,6 +742,7 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
 
   defp ensure_phase_in_order_or_communicate(world) do
     phase = get(world, :phase, nil)
+
     if phase in ["communicate", "order"],
       do: :ok,
       else: {:error, :wrong_phase}
@@ -727,6 +768,9 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
   defp rejection_reason_sc(:not_active_actor), do: "not the active tier"
   defp rejection_reason_sc(:not_adjacent_tier), do: "can only communicate with adjacent tiers"
   defp rejection_reason_sc(:invalid_quantity), do: "quantity must be a non-negative integer"
-  defp rejection_reason_sc(:no_upstream_supplier), do: "raw materials tier has no upstream supplier"
+
+  defp rejection_reason_sc(:no_upstream_supplier),
+    do: "raw materials tier has no upstream supplier"
+
   defp rejection_reason_sc(other), do: "rejected: #{inspect(other)}"
 end

@@ -328,7 +328,9 @@ defmodule LemonSim.Examples.StartupIncubator do
 
     world = state.world
     founders = world.players |> Enum.count(fn {_, p} -> get(p, :role, "founder") == "founder" end)
-    investors = world.players |> Enum.count(fn {_, p} -> get(p, :role, "investor") == "investor" end)
+
+    investors =
+      world.players |> Enum.count(fn {_, p} -> get(p, :role, "investor") == "investor" end)
 
     IO.puts(
       "Starting Startup Incubator: #{founders} founders, #{investors} investors, #{get(world, :max_rounds, 5)} rounds"
@@ -373,14 +375,16 @@ defmodule LemonSim.Examples.StartupIncubator do
           "sector" => Map.get(startup, :sector, Map.get(startup, "sector", "unknown")),
           "valuation" => Map.get(startup, :valuation, Map.get(startup, "valuation", 0)),
           "employees" => Map.get(startup, :employees, Map.get(startup, "employees", 0)),
-          "funding_raised" => Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0))
+          "funding_raised" =>
+            Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0))
         }
 
         private_additions =
           if is_self or actor_role == "investor" do
             %{
               "traction" => Map.get(startup, :traction, Map.get(startup, "traction", 0)),
-              "cash_on_hand" => Map.get(startup, :cash_on_hand, Map.get(startup, "cash_on_hand", 0)),
+              "cash_on_hand" =>
+                Map.get(startup, :cash_on_hand, Map.get(startup, "cash_on_hand", 0)),
               "burn_rate" => Map.get(startup, :burn_rate, Map.get(startup, "burn_rate", 50_000)),
               "pivoted" => Map.get(startup, :pivoted?, Map.get(startup, "pivoted?", false))
             }
@@ -396,15 +400,22 @@ defmodule LemonSim.Examples.StartupIncubator do
         is_self = id == actor_id
 
         public = %{
-          "portfolio_count" => length(Map.get(investor, :portfolio, Map.get(investor, "portfolio", [])))
+          "portfolio_count" =>
+            length(Map.get(investor, :portfolio, Map.get(investor, "portfolio", [])))
         }
 
         private =
           if is_self do
             %{
               "fund_size" => Map.get(investor, :fund_size, Map.get(investor, "fund_size", 0)),
-              "remaining_capital" => Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0)),
-              "sector_preferences" => Map.get(investor, :sector_preferences, Map.get(investor, "sector_preferences", [])),
+              "remaining_capital" =>
+                Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0)),
+              "sector_preferences" =>
+                Map.get(
+                  investor,
+                  :sector_preferences,
+                  Map.get(investor, "sector_preferences", [])
+                ),
               "portfolio" => Map.get(investor, :portfolio, Map.get(investor, "portfolio", []))
             }
           else
@@ -442,7 +453,8 @@ defmodule LemonSim.Examples.StartupIncubator do
         "employees" => Map.get(startup, :employees, Map.get(startup, "employees", 0)),
         "cash_on_hand" => Map.get(startup, :cash_on_hand, Map.get(startup, "cash_on_hand", 0)),
         "burn_rate" => Map.get(startup, :burn_rate, Map.get(startup, "burn_rate", 0)),
-        "funding_raised" => Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0)),
+        "funding_raised" =>
+          Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0)),
         "valuation" => Map.get(startup, :valuation, Map.get(startup, "valuation", 0)),
         "pivoted" => Map.get(startup, :pivoted?, Map.get(startup, "pivoted?", false))
       }
@@ -453,9 +465,12 @@ defmodule LemonSim.Examples.StartupIncubator do
       %{
         "role" => "investor",
         "fund_size" => Map.get(investor, :fund_size, Map.get(investor, "fund_size", 0)),
-        "remaining_capital" => Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0)),
-        "sector_preferences" => Map.get(investor, :sector_preferences, Map.get(investor, "sector_preferences", [])),
-        "risk_tolerance" => Map.get(investor, :risk_tolerance, Map.get(investor, "risk_tolerance", "moderate")),
+        "remaining_capital" =>
+          Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0)),
+        "sector_preferences" =>
+          Map.get(investor, :sector_preferences, Map.get(investor, "sector_preferences", [])),
+        "risk_tolerance" =>
+          Map.get(investor, :risk_tolerance, Map.get(investor, "risk_tolerance", "moderate")),
         "portfolio" => Map.get(investor, :portfolio, Map.get(investor, "portfolio", []))
       }
     end
@@ -499,7 +514,9 @@ defmodule LemonSim.Examples.StartupIncubator do
       traction = Map.get(startup, :traction, Map.get(startup, "traction", 0))
       funding = Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0))
 
-      IO.puts("  #{id} [#{sector}]: val=$#{format_number(val)} traction=#{traction} raised=$#{format_number(funding)}")
+      IO.puts(
+        "  #{id} [#{sector}]: val=$#{format_number(val)} traction=#{traction} raised=$#{format_number(funding)}"
+      )
     end)
 
     IO.puts(

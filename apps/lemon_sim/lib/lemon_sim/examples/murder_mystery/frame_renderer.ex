@@ -315,7 +315,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, winner: winner, players: players} = ctx) do
+  defp render_game_over_card(
+         %{w: w, h: h, turn_order: turn_order, winner: winner, players: players} = ctx
+       ) do
     cx = @roster_w + div(w - @roster_w - @clue_map_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -411,7 +413,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     {panel_x, panel_y, panel_w, panel_h}
   end
 
-  defp render_investigation_panel(%{events: events, turn_order: turn_order, players: players} = ctx) do
+  defp render_investigation_panel(
+         %{events: events, turn_order: turn_order, players: players} = ctx
+       ) do
     {panel_x, panel_y, panel_w, panel_h} = center_panel_bounds(ctx)
 
     recent_searches =
@@ -458,7 +462,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_interrogation_panel(%{interrogation_log: interrogation_log, turn_order: turn_order, players: players} = ctx) do
+  defp render_interrogation_panel(
+         %{interrogation_log: interrogation_log, turn_order: turn_order, players: players} = ctx
+       ) do
     {panel_x, panel_y, panel_w, panel_h} = center_panel_bounds(ctx)
 
     recent_qa =
@@ -493,7 +499,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
           target_color = Enum.at(@player_colors, target_idx, @text_secondary)
 
           asker_name = get(Map.get(players, asker_id, %{}), "name", format_player_name(asker_id))
-          target_name = get(Map.get(players, target_id, %{}), "name", format_player_name(target_id))
+
+          target_name =
+            get(Map.get(players, target_id, %{}), "name", format_player_name(target_id))
 
           [
             ~s[<rect x="#{panel_x + 10}" y="#{ey - 4}" width="#{panel_w - 20}" height="56" ] <>
@@ -516,7 +524,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_discussion_panel(%{discussion_log: discussion_log, turn_order: turn_order, players: players} = ctx) do
+  defp render_discussion_panel(
+         %{discussion_log: discussion_log, turn_order: turn_order, players: players} = ctx
+       ) do
     {panel_x, panel_y, panel_w, panel_h} = center_panel_bounds(ctx)
 
     recent_entries =
@@ -569,7 +579,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_killer_action_panel(%{events: events, turn_order: turn_order, players: _players} = ctx) do
+  defp render_killer_action_panel(
+         %{events: events, turn_order: turn_order, players: _players} = ctx
+       ) do
     {panel_x, panel_y, panel_w, panel_h} = center_panel_bounds(ctx)
 
     action_events =
@@ -627,7 +639,9 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_deduction_panel(%{accusations: accusations, turn_order: turn_order, players: players} = ctx) do
+  defp render_deduction_panel(
+         %{accusations: accusations, turn_order: turn_order, players: players} = ctx
+       ) do
     {panel_x, panel_y, panel_w, panel_h} = center_panel_bounds(ctx)
 
     recent_accusations =
@@ -681,7 +695,15 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     ]
   end
 
-  defp render_active_player_bar(ctx, panel_x, panel_y, panel_w, panel_h, action_text, color \\ nil) do
+  defp render_active_player_bar(
+         ctx,
+         panel_x,
+         panel_y,
+         panel_w,
+         panel_h,
+         action_text,
+         color \\ nil
+       ) do
     if ctx.active_actor do
       actor_idx = Enum.find_index(ctx.turn_order, &(&1 == ctx.active_actor)) || 0
       actor_color = color || Enum.at(@player_colors, actor_idx, @text_secondary)
@@ -708,8 +730,12 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
     panel_h = h - @header_h - @footer_h
 
     room_list = [
-      "library", "ballroom", "conservatory",
-      "study", "kitchen", "cellar"
+      "library",
+      "ballroom",
+      "conservatory",
+      "study",
+      "kitchen",
+      "cellar"
     ]
 
     room_entries =
@@ -743,6 +769,7 @@ defmodule LemonSim.Examples.MurderMystery.FrameRenderer do
               |> Enum.take(6)
               |> Enum.map(fn {pid, i} ->
                 cx = panel_x + @clue_map_w - 20 - i * 14
+
                 player_num =
                   case pid do
                     "player_" <> n -> String.to_integer(n) - 1

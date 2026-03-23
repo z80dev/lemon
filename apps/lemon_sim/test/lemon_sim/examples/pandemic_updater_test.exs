@@ -442,8 +442,8 @@ defmodule LemonSim.Examples.PandemicUpdaterTest do
     neighbors = Map.get(travel_routes, "central_hub", [])
 
     assert Enum.any?(neighbors, fn neighbor_id ->
-      get_in(spread_regions, [neighbor_id, :infected]) > 0
-    end)
+             get_in(spread_regions, [neighbor_id, :infected]) > 0
+           end)
   end
 
   test "quarantine reduces disease spread significantly" do
@@ -474,9 +474,9 @@ defmodule LemonSim.Examples.PandemicUpdaterTest do
 
     # Should have death events for central_hub
     assert Enum.any?(death_events, fn ev ->
-      ev.kind == "deaths_recorded" and
-        Map.get(ev.payload, "region_id") == "central_hub"
-    end)
+             ev.kind == "deaths_recorded" and
+               Map.get(ev.payload, "region_id") == "central_hub"
+           end)
   end
 
   # ---------------------------------------------------------------------------

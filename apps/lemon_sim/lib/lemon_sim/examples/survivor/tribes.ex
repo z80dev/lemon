@@ -12,8 +12,22 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   @merge_threshold 6
 
   @player_names [
-    "Kai", "Sierra", "Marcus", "Jade", "Rex", "Luna", "Dex", "Paloma",
-    "Blaze", "Isla", "Thorn", "Willow", "Nash", "Sable", "Zane", "Ember"
+    "Kai",
+    "Sierra",
+    "Marcus",
+    "Jade",
+    "Rex",
+    "Luna",
+    "Dex",
+    "Paloma",
+    "Blaze",
+    "Isla",
+    "Thorn",
+    "Willow",
+    "Nash",
+    "Sable",
+    "Zane",
+    "Ember"
   ]
 
   # -- Personality Traits --
@@ -21,14 +35,22 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   @traits ~w(strategic ruthless loyal charismatic paranoid athletic cunning underdog)
 
   @trait_descriptions %{
-    "strategic" => "You are STRATEGIC — you think three steps ahead, plan blindsides, and always have a target list ranked by threat level.",
-    "ruthless" => "You are RUTHLESS — you will cut any ally loose when they stop being useful. Winning is everything, and sentimentality is weakness.",
-    "loyal" => "You are LOYAL — you ride or die with your alliance. Betraying an ally is the worst sin, and you remember every backstab.",
-    "charismatic" => "You are CHARISMATIC — you can talk anyone into anything. You defuse conflicts, build bridges, and make everyone feel heard.",
-    "paranoid" => "You are PARANOID — you read too much into every whisper, every glance. If someone talked to your rival, they're plotting against you.",
-    "athletic" => "You are ATHLETIC — you live for challenges and respect physical prowess. You judge people by their performance under pressure.",
-    "cunning" => "You are CUNNING — you plant seeds of doubt, spread controlled misinformation, and let others do your dirty work.",
-    "underdog" => "You are an UNDERDOG — you fly under the radar, let bigger threats absorb attention, and strike when no one expects it."
+    "strategic" =>
+      "You are STRATEGIC — you think three steps ahead, plan blindsides, and always have a target list ranked by threat level.",
+    "ruthless" =>
+      "You are RUTHLESS — you will cut any ally loose when they stop being useful. Winning is everything, and sentimentality is weakness.",
+    "loyal" =>
+      "You are LOYAL — you ride or die with your alliance. Betraying an ally is the worst sin, and you remember every backstab.",
+    "charismatic" =>
+      "You are CHARISMATIC — you can talk anyone into anything. You defuse conflicts, build bridges, and make everyone feel heard.",
+    "paranoid" =>
+      "You are PARANOID — you read too much into every whisper, every glance. If someone talked to your rival, they're plotting against you.",
+    "athletic" =>
+      "You are ATHLETIC — you live for challenges and respect physical prowess. You judge people by their performance under pressure.",
+    "cunning" =>
+      "You are CUNNING — you plant seeds of doubt, spread controlled misinformation, and let others do your dirty work.",
+    "underdog" =>
+      "You are an UNDERDOG — you fly under the radar, let bigger threats absorb attention, and strike when no one expects it."
   }
 
   # -- Backstory Connections --
@@ -36,12 +58,18 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   @connection_types ~w(exes college_roommates work_rivals hometown secret_alliance bitter_enemies)
 
   @connection_templates %{
-    "exes" => " dated briefly before the show. There's unresolved tension and neither has told the others.",
-    "college_roommates" => " were college roommates and still know each other's tells and habits.",
-    "work_rivals" => " worked at the same company and competed for the same promotion. Old wounds die hard.",
-    "hometown" => " grew up in the same small town. They share memories no one else would understand.",
-    "secret_alliance" => " made a pact before the game started to watch each other's backs no matter what.",
-    "bitter_enemies" => " had a falling out years ago over a mutual friend. Neither has forgiven the other."
+    "exes" =>
+      " dated briefly before the show. There's unresolved tension and neither has told the others.",
+    "college_roommates" =>
+      " were college roommates and still know each other's tells and habits.",
+    "work_rivals" =>
+      " worked at the same company and competed for the same promotion. Old wounds die hard.",
+    "hometown" =>
+      " grew up in the same small town. They share memories no one else would understand.",
+    "secret_alliance" =>
+      " made a pact before the game started to watch each other's backs no matter what.",
+    "bitter_enemies" =>
+      " had a falling out years ago over a mutual friend. Neither has forgiven the other."
   }
 
   @doc """
@@ -210,7 +238,8 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   Merges all living players into a single tribe.
   Returns {updated_players, updated_tribes}.
   """
-  @spec merge_tribes(%{String.t() => map()}) :: {%{String.t() => map()}, %{String.t() => [String.t()]}}
+  @spec merge_tribes(%{String.t() => map()}) ::
+          {%{String.t() => map()}, %{String.t() => [String.t()]}}
   def merge_tribes(players) do
     merged_players =
       Enum.into(players, %{}, fn {id, p} ->
@@ -254,7 +283,9 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   Turn order for tribal council: losing tribe members (or all post-merge), each gets idol + vote.
   Returns list of {player_id, sub_phase} tuples for ordered actions.
   """
-  @spec tribal_council_turn_order(%{String.t() => map()}, String.t() | nil, boolean()) :: [String.t()]
+  @spec tribal_council_turn_order(%{String.t() => map()}, String.t() | nil, boolean()) :: [
+          String.t()
+        ]
   def tribal_council_turn_order(players, losing_tribe, merged) do
     strategy_turn_order(players, losing_tribe, merged)
   end
@@ -299,5 +330,4 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   end
 
   defp extract_ids(pairs), do: Enum.map(pairs, fn {id, _p} -> id end)
-
 end

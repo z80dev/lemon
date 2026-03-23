@@ -187,6 +187,7 @@ defmodule LemonSim.Examples.IntelNetwork do
             Enum.flat_map(neighbors, fn nid ->
               edge_key = edge_key(actor_id, nid)
               msgs = Map.get(message_log, edge_key, [])
+
               Enum.filter(msgs, fn m ->
                 get(m, :to, get(m, "to")) == actor_id and
                   get(m, :round, get(m, "round")) == round

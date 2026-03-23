@@ -221,7 +221,8 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
   defp end_communication_tool(actor_id) do
     %AgentTool{
       name: "end_communication",
-      description: "End your communication phase. Once all governors finish, resource allocation begins.",
+      description:
+        "End your communication phase. Once all governors finish, resource allocation begins.",
       parameters: %{
         "type" => "object",
         "properties" => %{},
@@ -375,7 +376,8 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
   defp end_resource_allocation_tool(actor_id) do
     %AgentTool{
       name: "end_resource_allocation",
-      description: "End your resource allocation turn. Once all governors finish, local action begins.",
+      description:
+        "End your resource allocation turn. Once all governors finish, local action begins.",
       parameters: %{
         "type" => "object",
         "properties" => %{},
@@ -614,7 +616,11 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("hoarding #{vaccines} vaccines, #{medical_teams} teams from pool (incident logged)")],
+           content: [
+             AgentCore.text_content(
+               "hoarding #{vaccines} vaccines, #{medical_teams} teams from pool (incident logged)"
+             )
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}

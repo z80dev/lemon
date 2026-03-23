@@ -25,7 +25,11 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
       if is_nil(actor) do
         {:ok, []}
       else
-        {:ok, Enum.map(tools_for_phase(phase, actor_id, players, world), &GameTools.add_thought_param/1)}
+        {:ok,
+         Enum.map(
+           tools_for_phase(phase, actor_id, players, world),
+           &GameTools.add_thought_param/1
+         )}
       end
     end
   end

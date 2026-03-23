@@ -429,14 +429,15 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
         not Map.has_key?(votes, actor_id)
       end)
 
-    tools = Enum.map(pending_votes, fn amendment ->
-      amendment_id = Map.get(amendment, :id, "")
-      bill_id = Map.get(amendment, :bill_id, "")
-      proposer = Map.get(amendment, :proposer_id, "")
-      text = Map.get(amendment, :amendment_text, "")
+    tools =
+      Enum.map(pending_votes, fn amendment ->
+        amendment_id = Map.get(amendment, :id, "")
+        bill_id = Map.get(amendment, :bill_id, "")
+        proposer = Map.get(amendment, :proposer_id, "")
+        text = Map.get(amendment, :amendment_text, "")
 
-      cast_amendment_vote_tool(actor_id, amendment_id, bill_id, proposer, text)
-    end)
+        cast_amendment_vote_tool(actor_id, amendment_id, bill_id, proposer, text)
+      end)
 
     tools ++ [end_amendment_vote_tool(actor_id)]
   end

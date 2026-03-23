@@ -73,7 +73,8 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.message_delivered(sender_id, recipient_id, content))
 
-      {:ok, next_state, {:decide, "#{sender_id} sent a message to #{recipient_id}, continue communication"}}
+      {:ok, next_state,
+       {:decide, "#{sender_id} sent a message to #{recipient_id}, continue communication"}}
     else
       {:error, reason} ->
         reject_action(state, event, sender_id, reason)
@@ -228,7 +229,8 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
         )
 
       {:ok, next_state,
-       {:decide, "#{player_id} performed #{operation_type} on #{inspect(target_id)}, continue or end operations"}}
+       {:decide,
+        "#{player_id} performed #{operation_type} on #{inspect(target_id)}, continue or end operations"}}
     else
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
@@ -271,8 +273,7 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
           |> State.append_event(Events.phase_changed("operation", "mole_action"))
 
         {:ok, next_state2,
-         {:decide,
-          "all players finished operations, now mole_action phase for #{mole_id}"}}
+         {:decide, "all players finished operations, now mole_action phase for #{mole_id}"}}
       else
         {next_world2, _} = advance_to_next_player(next_world, player_id, operations_done)
         next_state2 = State.update_world(next_state, fn _ -> next_world2 end)
@@ -521,7 +522,12 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
     {updated_players, events} =
       Enum.reduce(Map.keys(players), {players, []}, fn player_id, {p_acc, e_acc} ->
         fragment_index = length(get(world, :operations_log, [])) + round - 1
-        fragment_id = Enum.at(intel_pool, rem(fragment_index * 17 + :erlang.phash2(player_id), max(length(intel_pool), 1)))
+
+        fragment_id =
+          Enum.at(
+            intel_pool,
+            rem(fragment_index * 17 + :erlang.phash2(player_id), max(length(intel_pool), 1))
+          )
 
         if is_binary(fragment_id) do
           player = Map.get(p_acc, player_id, %{})
@@ -531,6 +537,7 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
             {p_acc, e_acc}
           else
             updated_player = Map.put(player, :intel_fragments, existing ++ [fragment_id])
+
             {Map.put(p_acc, player_id, updated_player),
              e_acc ++ [Events.briefing_received(player_id, fragment_id)]}
           end
@@ -746,7 +753,10 @@ defmodule LemonSim.Examples.IntelNetwork.Updater do
   defp rejection_reason(:invalid_operation_type), do: "invalid operation type"
   defp rejection_reason(:invalid_target), do: "invalid target"
   defp rejection_reason(:not_the_mole), do: "only the mole can perform this action"
-  defp rejection_reason(:invalid_mole_action), do: "invalid mole action (use leak_intel/frame_agent/pass)"
+
+  defp rejection_reason(:invalid_mole_action),
+    do: "invalid mole action (use leak_intel/frame_agent/pass)"
+
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
   # -- Utility --

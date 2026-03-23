@@ -169,7 +169,9 @@ defmodule LemonSim.GameHelpers.UpdaterHelpers do
       player_journal = Map.get(journals, player_id, [])
 
       entry = %{
-        round: get(state.world, :round, nil) || get(state.world, :episode, nil) || get(state.world, :current_round, nil) || 1,
+        round:
+          get(state.world, :round, nil) || get(state.world, :episode, nil) ||
+            get(state.world, :current_round, nil) || 1,
         phase: get(state.world, :phase),
         thought: thought
       }

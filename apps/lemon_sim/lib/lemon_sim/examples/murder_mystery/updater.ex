@@ -55,6 +55,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
       new_clues = Enum.reject(clues_present, &(&1 in current_clues))
 
       updated_player = Map.put(player, :clues_found, current_clues ++ new_clues)
+
       updated_room =
         room
         |> Map.put(:searched_by, (get(room, :searched_by, []) ++ [player_id]) |> Enum.uniq())
@@ -90,7 +91,8 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
           "no new clues in #{room_id}"
         end
 
-      {:ok, next_state2, {:decide, "#{player_id} searched #{room_id}: #{clue_summary}. #{prompt}"}}
+      {:ok, next_state2,
+       {:decide, "#{player_id} searched #{room_id}: #{clue_summary}. #{prompt}"}}
     else
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
@@ -136,7 +138,8 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
         |> State.append_event(event)
         |> State.append_event(Events.question_logged(asker_id, target_id, question))
 
-      {:ok, next_state, {:decide, "#{asker_id} asked #{target_id}: #{question}. #{target_id} must answer."}}
+      {:ok, next_state,
+       {:decide, "#{asker_id} asked #{target_id}: #{question}. #{target_id} must answer."}}
     else
       {:error, reason} ->
         reject_action(state, event, asker_id, reason)
@@ -159,6 +162,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
       # Update the last log entry with the answer
       interrogation_log = get(state.world, :interrogation_log, [])
+
       updated_log =
         interrogation_log
         |> Enum.reverse()
@@ -196,8 +200,12 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
     content =
       case disc_type do
-        "finding" -> fetch(event.payload, :finding, "finding", "")
-        "theory" -> fetch(event.payload, :theory, "theory", "")
+        "finding" ->
+          fetch(event.payload, :finding, "finding", "")
+
+        "theory" ->
+          fetch(event.payload, :theory, "theory", "")
+
         "challenge" ->
           target = fetch(event.payload, :target_id, "target_id", "")
           reason = fetch(event.payload, :reason, "reason", "")
@@ -224,8 +232,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
       {next_world2, prompt} =
         if next_player do
-          {Map.put(next_world, :active_actor_id, next_player),
-           "#{next_player}'s turn to discuss"}
+          {Map.put(next_world, :active_actor_id, next_player), "#{next_player}'s turn to discuss"}
         else
           # All players had a chance - transition to killer_action
           transition_to_killer_action(next_world)
@@ -259,8 +266,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
       {next_world2, prompt} =
         if next_player do
-          {Map.put(next_world, :active_actor_id, next_player),
-           "#{next_player}'s turn to discuss"}
+          {Map.put(next_world, :active_actor_id, next_player), "#{next_player}'s turn to discuss"}
         else
           transition_to_killer_action(next_world)
         end
@@ -298,7 +304,9 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
       # Pick a non-killer to frame
       killer_id = player_id
       non_killers = players |> Map.keys() |> Enum.reject(&(&1 == killer_id))
-      points_to = Enum.at(non_killers, rem(System.system_time(:second), max(length(non_killers), 1)))
+
+      points_to =
+        Enum.at(non_killers, rem(System.system_time(:second), max(length(non_killers), 1)))
 
       new_clue = %{
         clue_id: clue_id,
@@ -460,7 +468,9 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
           |> State.update_world(fn _ -> final_world end)
           |> State.append_event(event)
           |> State.append_event(Events.accusation_result(player_id, true, "correct accusation"))
-          |> State.append_event(Events.game_over("investigators", "#{player_id} correctly identified the killer"))
+          |> State.append_event(
+            Events.game_over("investigators", "#{player_id} correctly identified the killer")
+          )
 
         {:ok, next_state, :skip}
       else
@@ -519,8 +529,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
     next_player = next_in_turn_order(turn_order, current_player_id)
 
     if next_player do
-      {Map.put(world, :active_actor_id, next_player),
-       "#{next_player}'s turn to investigate"}
+      {Map.put(world, :active_actor_id, next_player), "#{next_player}'s turn to investigate"}
     else
       # Everyone has gone - move to interrogation
       next_world =
@@ -545,8 +554,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
     case remaining_askers do
       [next | _] ->
-        {Map.put(world, :active_actor_id, next),
-         "#{next}'s turn to ask a question"}
+        {Map.put(world, :active_actor_id, next), "#{next}'s turn to ask a question"}
 
       [] ->
         # All players have asked - move to discussion
@@ -634,13 +642,13 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
         turn_order
         |> Enum.reject(&MapSet.member?(deduction_done, &1))
 
-      next_active = case remaining do
-        [first | _] -> first
-        [] -> List.first(turn_order)
-      end
+      next_active =
+        case remaining do
+          [first | _] -> first
+          [] -> List.first(turn_order)
+        end
 
-      {Map.put(world, :active_actor_id, next_active),
-       "#{next_active}'s turn to vote or accuse"}
+      {Map.put(world, :active_actor_id, next_active), "#{next_active}'s turn to vote or accuse"}
     end
   end
 
@@ -680,6 +688,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
   defp ensure_not_already_searched_this_round(world, player_id) do
     searched = get(world, :searched_this_round, MapSet.new())
+
     if MapSet.member?(searched, player_id),
       do: {:error, :already_searched_this_round},
       else: :ok
@@ -687,6 +696,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
   defp ensure_not_asked_this_round(world, player_id) do
     asked = get(world, :asked_this_round, MapSet.new())
+
     if MapSet.member?(asked, player_id),
       do: {:error, :already_asked_this_round},
       else: :ok
@@ -694,6 +704,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
   defp ensure_pending_question(world, player_id) do
     pending = get(world, :pending_question, nil)
+
     if is_nil(pending),
       do: {:error, :no_pending_question},
       else: :ok
@@ -701,6 +712,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
 
   defp ensure_is_killer(players, player_id) do
     player = Map.get(players, player_id, %{})
+
     if get(player, :role, "") == "killer",
       do: :ok,
       else: {:error, :only_killer_can_act}
@@ -726,8 +738,10 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
     case Enum.find_index(turn_order, &(&1 == current_id)) do
       nil ->
         nil
+
       idx ->
         next_idx = idx + 1
+
         if next_idx < length(turn_order) do
           Enum.at(turn_order, next_idx)
         else

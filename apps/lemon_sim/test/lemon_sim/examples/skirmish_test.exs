@@ -53,16 +53,36 @@ defmodule LemonSim.Examples.SkirmishTest do
       },
       units: %{
         "red_1" => %{
-          team: "red", hp: 8, max_hp: 8, ap: 2, max_ap: 2,
-          pos: %{x: 0, y: 0}, status: "alive", cover?: false,
-          attack_range: 2, attack_damage: 3, attack_chance: 100,
-          sight_range: 4, class: "soldier", abilities: []
+          team: "red",
+          hp: 8,
+          max_hp: 8,
+          ap: 2,
+          max_ap: 2,
+          pos: %{x: 0, y: 0},
+          status: "alive",
+          cover?: false,
+          attack_range: 2,
+          attack_damage: 3,
+          attack_chance: 100,
+          sight_range: 4,
+          class: "soldier",
+          abilities: []
         },
         "blue_1" => %{
-          team: "blue", hp: 8, max_hp: 8, ap: 2, max_ap: 2,
-          pos: %{x: 2, y: 0}, status: "alive", cover?: false,
-          attack_range: 2, attack_damage: 3, attack_chance: 100,
-          sight_range: 4, class: "soldier", abilities: []
+          team: "blue",
+          hp: 8,
+          max_hp: 8,
+          ap: 2,
+          max_ap: 2,
+          pos: %{x: 2, y: 0},
+          status: "alive",
+          cover?: false,
+          attack_range: 2,
+          attack_damage: 3,
+          attack_chance: 100,
+          sight_range: 4,
+          class: "soldier",
+          abilities: []
         }
       },
       turn_order: ["red_1", "blue_1"],
@@ -75,12 +95,13 @@ defmodule LemonSim.Examples.SkirmishTest do
       kill_feed: []
     }
 
-    state = LemonSim.State.new(
-      sim_id: "test_skirmish",
-      world: small_world,
-      intent: %{goal: "Win the skirmish"},
-      plan_history: []
-    )
+    state =
+      LemonSim.State.new(
+        sim_id: "test_skirmish",
+        world: small_world,
+        intent: %{goal: "Win the skirmish"},
+        plan_history: []
+      )
 
     output =
       capture_io(fn ->
@@ -97,7 +118,12 @@ defmodule LemonSim.Examples.SkirmishTest do
                    on_before_step: fn _turn, _state -> :ok end,
                    on_after_step: fn _turn, _result -> :ok end,
                    section_builders: %{},
-                   section_order: [:world_state, :recent_events, :available_actions, :decision_contract]
+                   section_order: [
+                     :world_state,
+                     :recent_events,
+                     :available_actions,
+                     :decision_contract
+                   ]
                  )
 
         assert final_state.world.status == "won"

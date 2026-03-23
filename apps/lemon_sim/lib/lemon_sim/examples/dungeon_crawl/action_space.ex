@@ -30,7 +30,10 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
         ap = get(actor, :ap, 0)
         class = get(actor, :class, "warrior")
         enemies = get(world, :enemies, %{})
-        has_living_enemies = Enum.any?(enemies, fn {_id, e} -> get(e, :status, "alive") == "alive" end)
+
+        has_living_enemies =
+          Enum.any?(enemies, fn {_id, e} -> get(e, :status, "alive") == "alive" end)
+
         inventory = get(world, :inventory, [])
         has_items = length(inventory) > 0
         current_room_index = get(world, :current_room, 0)
@@ -50,7 +53,15 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
     end
   end
 
-  defp maybe_add_abilities(tools, actor_id, class, ap, has_living_enemies, has_active_traps, party) do
+  defp maybe_add_abilities(
+         tools,
+         actor_id,
+         class,
+         ap,
+         has_living_enemies,
+         has_active_traps,
+         party
+       ) do
     case class do
       "warrior" ->
         tools
@@ -66,9 +77,10 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
         |> maybe_add(ap > 0 and has_active_traps, disarm_trap_tool(actor_id))
 
       "cleric" ->
-        has_wounded = Enum.any?(party, fn {_id, a} ->
-          get(a, :hp, 0) > 0 and get(a, :hp, 0) < get(a, :max_hp, 0)
-        end)
+        has_wounded =
+          Enum.any?(party, fn {_id, a} ->
+            get(a, :hp, 0) > 0 and get(a, :hp, 0) < get(a, :max_hp, 0)
+          end)
 
         tools
         |> maybe_add(ap > 0 and has_wounded, heal_tool(actor_id))
@@ -112,7 +124,8 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
   defp taunt_tool(actor_id) do
     %AgentTool{
       name: "use_taunt",
-      description: "Force all enemies to attack #{actor_id} next enemy phase. Costs 1 AP. Warrior ability.",
+      description:
+        "Force all enemies to attack #{actor_id} next enemy phase. Costs 1 AP. Warrior ability.",
       parameters: %{
         "type" => "object",
         "properties" => %{},
@@ -274,14 +287,21 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
   defp use_item_tool(actor_id, inventory, enemies) do
     item_names = Enum.map(inventory, fn item -> get(item, :name, "unknown") end) |> Enum.uniq()
-    enemy_ids = enemies |> Enum.filter(fn {_id, e} -> get(e, :status, "alive") == "alive" end) |> Enum.map(fn {id, _e} -> id end)
+
+    enemy_ids =
+      enemies
+      |> Enum.filter(fn {_id, e} -> get(e, :status, "alive") == "alive" end)
+      |> Enum.map(fn {id, _e} -> id end)
 
     item_desc = Enum.join(item_names, ", ")
-    target_desc = if length(enemy_ids) > 0, do: " Target enemies: #{Enum.join(enemy_ids, ", ")}.", else: ""
+
+    target_desc =
+      if length(enemy_ids) > 0, do: " Target enemies: #{Enum.join(enemy_ids, ", ")}.", else: ""
 
     %AgentTool{
       name: "use_item",
-      description: "Use an item from party inventory. Available: #{item_desc}.#{target_desc} Costs 1 AP.",
+      description:
+        "Use an item from party inventory. Available: #{item_desc}.#{target_desc} Costs 1 AP.",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -291,7 +311,8 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
           },
           "target_id" => %{
             "type" => "string",
-            "description" => "Target id (ally id for potions, enemy id for damage scrolls). Optional for healing potions (defaults to self)."
+            "description" =>
+              "Target id (ally id for potions, enemy id for damage scrolls). Optional for healing potions (defaults to self)."
           }
         },
         "required" => ["item_name"],

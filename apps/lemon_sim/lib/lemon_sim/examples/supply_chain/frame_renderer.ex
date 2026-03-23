@@ -231,6 +231,7 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
 
     # Consumer demand indicator
     consumer_x = chain_x_end + 20
+
     consumer =
       ~s[<rect x="#{consumer_x}" y="#{chain_y + 20}" width="#{@side_panel_w - 40}" height="80" ] <>
         ~s[rx="6" fill="#{@panel_bg}" stroke="#{@accent}" stroke-width="1" opacity="0.8"/>\n] <>
@@ -255,9 +256,12 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
     incoming = get(tier, "incoming_deliveries", get(tier, :incoming_deliveries, []))
     pending_order = get(tier, "pending_order", get(tier, :pending_order, 0))
 
-    incoming_qty = Enum.sum(Enum.map(incoming, fn d ->
-      Map.get(d, :quantity, Map.get(d, "quantity", 0))
-    end))
+    incoming_qty =
+      Enum.sum(
+        Enum.map(incoming, fn d ->
+          Map.get(d, :quantity, Map.get(d, "quantity", 0))
+        end)
+      )
 
     box_w = tier_w - 20
     box_x = x + 10
@@ -301,6 +305,7 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
       # Safety stock line on bar
       if safety_stock > 0 do
         ss_x = box_x + 10 + round(min(safety_stock / bar_max, 1.0) * (box_w - 20))
+
         ~s[<line x1="#{ss_x}" y1="#{chain_y + 50}" x2="#{ss_x}" y2="#{chain_y + 60}" stroke="#{@accent}" stroke-width="1" opacity="0.8"/>\n]
       else
         ""
@@ -381,7 +386,11 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
 
     card_h = 100 + length(sorted) * 50
     bonus_text = if ctx.team_bonus, do: " + TEAM BONUS!", else: ""
-    chain_text = if ctx.total_chain_cost, do: "Chain Total: #{format_cost(ctx.total_chain_cost)}#{bonus_text}", else: ""
+
+    chain_text =
+      if ctx.total_chain_cost,
+        do: "Chain Total: #{format_cost(ctx.total_chain_cost)}#{bonus_text}",
+        else: ""
 
     [
       ~s[<rect x="#{cx - 300}" y="#{cy - div(card_h, 2)}" width="600" height="#{card_h}" ] <>
@@ -399,7 +408,11 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
         sy = cy - div(card_h, 2) + 90 + rank * 50
         is_winner = tid == ctx.winner
         color = if is_winner, do: "#f1c40f", else: @text_primary
-        color_idx = Enum.find_index(["retailer", "distributor", "factory", "raw_materials"], &(&1 == tid)) || 0
+
+        color_idx =
+          Enum.find_index(["retailer", "distributor", "factory", "raw_materials"], &(&1 == tid)) ||
+            0
+
         tier_color = Enum.at(@tier_colors, color_idx, @text_secondary)
 
         [
@@ -588,6 +601,7 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
         demand = get(p, "demand", "?")
         fulfilled = get(p, "fulfilled", "?")
         backlog = get(p, "backlog", 0)
+
         if backlog > 0 do
           "Consumer demand: #{demand} units | Fulfilled: #{fulfilled} | Backlog: #{backlog} units"
         else
@@ -606,6 +620,7 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
         customer = get(p, "customer_id", "?")
         ordered = get(p, "ordered", 0)
         fulfilled_qty = get(p, "fulfilled", 0)
+
         if ordered == fulfilled_qty do
           "#{format_tier_name(supplier)} fully fulfilled #{format_tier_name(customer)}'s order of #{ordered} units"
         else

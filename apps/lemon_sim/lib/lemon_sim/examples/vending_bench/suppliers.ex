@@ -67,7 +67,8 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
           item_info ->
             cond do
               quantity < item_info.min_order ->
-                {:error, "Minimum order for #{item_id} from #{supplier.name} is #{item_info.min_order} units"}
+                {:error,
+                 "Minimum order for #{item_id} from #{supplier.name} is #{item_info.min_order} units"}
 
               quantity <= 0 ->
                 {:error, "Quantity must be positive"}

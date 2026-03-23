@@ -146,14 +146,22 @@ defmodule LemonSim.Examples.SpaceStation.Roles do
   @traits ~w(methodical hotheaded empathetic calculating suspicious by_the_book improviser stoic)
 
   @trait_descriptions %{
-    "methodical" => "You are METHODICAL — you follow procedures exactly, document everything, and trust data over gut feelings. Chaos makes you uncomfortable.",
-    "hotheaded" => "You are HOTHEADED — you react fast, speak before thinking, and push for immediate action. Patience is not your strength.",
-    "empathetic" => "You are EMPATHETIC — you read people well, notice emotional shifts, and try to keep the crew together. You hate conflict.",
-    "calculating" => "You are CALCULATING — you think in probabilities, weigh every option, and rarely reveal your full reasoning to others.",
-    "suspicious" => "You are SUSPICIOUS — you question everyone's motives, look for inconsistencies, and trust no one completely.",
-    "by_the_book" => "You are BY-THE-BOOK — you follow chain of command, respect authority, and believe rules exist for a reason.",
-    "improviser" => "You are an IMPROVISER — you think on your feet, bend rules when needed, and trust your instincts over protocol.",
-    "stoic" => "You are STOIC — you stay calm under pressure, speak only when necessary, and never show fear. Others find you hard to read."
+    "methodical" =>
+      "You are METHODICAL — you follow procedures exactly, document everything, and trust data over gut feelings. Chaos makes you uncomfortable.",
+    "hotheaded" =>
+      "You are HOTHEADED — you react fast, speak before thinking, and push for immediate action. Patience is not your strength.",
+    "empathetic" =>
+      "You are EMPATHETIC — you read people well, notice emotional shifts, and try to keep the crew together. You hate conflict.",
+    "calculating" =>
+      "You are CALCULATING — you think in probabilities, weigh every option, and rarely reveal your full reasoning to others.",
+    "suspicious" =>
+      "You are SUSPICIOUS — you question everyone's motives, look for inconsistencies, and trust no one completely.",
+    "by_the_book" =>
+      "You are BY-THE-BOOK — you follow chain of command, respect authority, and believe rules exist for a reason.",
+    "improviser" =>
+      "You are an IMPROVISER — you think on your feet, bend rules when needed, and trust your instincts over protocol.",
+    "stoic" =>
+      "You are STOIC — you stay calm under pressure, speak only when necessary, and never show fear. Others find you hard to read."
   }
 
   @spec assign_traits([String.t()]) :: %{String.t() => [String.t()]}
@@ -173,12 +181,18 @@ defmodule LemonSim.Examples.SpaceStation.Roles do
   @connection_types ~w(academy_classmates former_crew mission_rivals mentor_protege bunkmates incident_survivors)
 
   @connection_templates %{
-    "academy_classmates" => " graduated from the same Space Academy class. They competed for top marks and know each other's strengths.",
-    "former_crew" => " served together on a previous deep-space mission. They've seen each other at their worst.",
-    "mission_rivals" => " both applied for the same mission commander position. Only one was chosen.",
-    "mentor_protege" => ": the first mentored the second through their early career. The dynamic hasn't fully evolved.",
-    "bunkmates" => " share quarters on the station. They know each other's habits, routines, and tells.",
-    "incident_survivors" => " survived a station breach together on a previous posting. That kind of bond doesn't break easily."
+    "academy_classmates" =>
+      " graduated from the same Space Academy class. They competed for top marks and know each other's strengths.",
+    "former_crew" =>
+      " served together on a previous deep-space mission. They've seen each other at their worst.",
+    "mission_rivals" =>
+      " both applied for the same mission commander position. Only one was chosen.",
+    "mentor_protege" =>
+      ": the first mentored the second through their early career. The dynamic hasn't fully evolved.",
+    "bunkmates" =>
+      " share quarters on the station. They know each other's habits, routines, and tells.",
+    "incident_survivors" =>
+      " survived a station breach together on a previous posting. That kind of bond doesn't break easily."
   }
 
   @spec generate_connections([String.t()]) :: [map()]

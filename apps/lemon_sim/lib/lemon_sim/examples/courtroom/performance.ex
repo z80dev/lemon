@@ -52,7 +52,8 @@ defmodule LemonSim.Examples.Courtroom.Performance do
       end
 
     %{
-      benchmark_focus: "evidence utilization, objection success, jury influence, testimony consistency",
+      benchmark_focus:
+        "evidence utilization, objection success, jury influence, testimony consistency",
       outcome: outcome,
       winner: winner,
       evidence_utilization_pct: evidence_utilization,
@@ -128,11 +129,12 @@ defmodule LemonSim.Examples.Courtroom.Performance do
     # Winner's "team" is the side the verdict favored
     # Count how many jurors voted for the winning outcome
     if winner do
-      winning_vote = if Map.get(metrics, winner, %{}) |> Map.get(:role) == "prosecution" do
-        "guilty"
-      else
-        "not_guilty"
-      end
+      winning_vote =
+        if Map.get(metrics, winner, %{}) |> Map.get(:role) == "prosecution" do
+          "guilty"
+        else
+          "not_guilty"
+        end
 
       influenced_count =
         verdict_votes

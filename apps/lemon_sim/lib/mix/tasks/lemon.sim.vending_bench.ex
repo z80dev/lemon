@@ -104,7 +104,14 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
         case Ai.Models.get_model(provider, model_id) do
           %Ai.Types.Model{} = model ->
             model = LemonSim.GameHelpers.Config.apply_provider_base_url(model, config)
-            api_key = LemonSim.GameHelpers.Config.resolve_provider_api_key!(provider, config, "vending_bench")
+
+            api_key =
+              LemonSim.GameHelpers.Config.resolve_provider_api_key!(
+                provider,
+                config,
+                "vending_bench"
+              )
+
             {:ok, model, api_key}
 
           nil ->
@@ -115,7 +122,14 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
         case Ai.Models.find_by_id(model_id) do
           %Ai.Types.Model{} = model ->
             model = LemonSim.GameHelpers.Config.apply_provider_base_url(model, config)
-            api_key = LemonSim.GameHelpers.Config.resolve_provider_api_key!(model.provider, config, "vending_bench")
+
+            api_key =
+              LemonSim.GameHelpers.Config.resolve_provider_api_key!(
+                model.provider,
+                config,
+                "vending_bench"
+              )
+
             {:ok, model, api_key}
 
           nil ->

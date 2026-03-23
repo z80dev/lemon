@@ -52,32 +52,60 @@ defmodule LemonSim.Examples.StockMarket.Market do
   ]
 
   @trader_names [
-    "Morgan", "Quinn", "Reeves", "Sterling", "Blake", "Hartley", "Cross", "Vale",
-    "Pierce", "Sloan", "Barrett", "Lennox", "Drake", "Ellis", "Griffin", "Hayes"
+    "Morgan",
+    "Quinn",
+    "Reeves",
+    "Sterling",
+    "Blake",
+    "Hartley",
+    "Cross",
+    "Vale",
+    "Pierce",
+    "Sloan",
+    "Barrett",
+    "Lennox",
+    "Drake",
+    "Ellis",
+    "Griffin",
+    "Hayes"
   ]
 
   @traits ~w(bull_headed contrarian insider risk_junkie conservative analyst bluffer patient)
 
   @trait_descriptions %{
-    "bull_headed" => "You are BULL-HEADED — you pick a thesis and ride it hard. Once you're in, you double down. Conviction is your edge.",
-    "contrarian" => "You are a CONTRARIAN — when everyone zigs, you zag. Consensus trades disgust you. The crowd is always wrong.",
-    "insider" => "You are an INSIDER — you trade on information edge. You hoard tips, cultivate sources, and never share your real thesis.",
-    "risk_junkie" => "You are a RISK JUNKIE — big positions, high leverage, maximum exposure. Small gains bore you. You want the ten-bagger.",
-    "conservative" => "You are CONSERVATIVE — capital preservation first. You size positions carefully, hedge constantly, and sleep well at night.",
-    "analyst" => "You are an ANALYST — you crunch numbers, track patterns, and trust fundamentals over narratives. Data doesn't lie.",
-    "bluffer" => "You are a BLUFFER — your public calls are weapons, not predictions. You talk your book, mislead competitors, and profit from confusion.",
-    "patient" => "You are PATIENT — you wait for asymmetric setups and ignore noise. Most rounds you do nothing interesting. When you strike, you strike big."
+    "bull_headed" =>
+      "You are BULL-HEADED — you pick a thesis and ride it hard. Once you're in, you double down. Conviction is your edge.",
+    "contrarian" =>
+      "You are a CONTRARIAN — when everyone zigs, you zag. Consensus trades disgust you. The crowd is always wrong.",
+    "insider" =>
+      "You are an INSIDER — you trade on information edge. You hoard tips, cultivate sources, and never share your real thesis.",
+    "risk_junkie" =>
+      "You are a RISK JUNKIE — big positions, high leverage, maximum exposure. Small gains bore you. You want the ten-bagger.",
+    "conservative" =>
+      "You are CONSERVATIVE — capital preservation first. You size positions carefully, hedge constantly, and sleep well at night.",
+    "analyst" =>
+      "You are an ANALYST — you crunch numbers, track patterns, and trust fundamentals over narratives. Data doesn't lie.",
+    "bluffer" =>
+      "You are a BLUFFER — your public calls are weapons, not predictions. You talk your book, mislead competitors, and profit from confusion.",
+    "patient" =>
+      "You are PATIENT — you wait for asymmetric setups and ignore noise. Most rounds you do nothing interesting. When you strike, you strike big."
   }
 
   @connection_types ~w(former_partners fund_rivals classmates mentor_protege old_grudge drinking_buddies)
 
   @connection_templates %{
-    "former_partners" => " used to run a fund together before a messy split. They know each other's strategies inside out.",
-    "fund_rivals" => " have been competing for the same institutional capital for years. Every quarter is a grudge match.",
-    "classmates" => " went through the same MBA program. They formed their trading philosophies in the same classroom.",
-    "mentor_protege" => ": the first taught the second everything about markets. Now the student may have surpassed the teacher.",
-    "old_grudge" => " haven't spoken since one cost the other a fortune on a bad trade recommendation.",
-    "drinking_buddies" => " are regulars at the same bar after market close. They share too much after a few drinks."
+    "former_partners" =>
+      " used to run a fund together before a messy split. They know each other's strategies inside out.",
+    "fund_rivals" =>
+      " have been competing for the same institutional capital for years. Every quarter is a grudge match.",
+    "classmates" =>
+      " went through the same MBA program. They formed their trading philosophies in the same classroom.",
+    "mentor_protege" =>
+      ": the first taught the second everything about markets. Now the student may have surpassed the teacher.",
+    "old_grudge" =>
+      " haven't spoken since one cost the other a fortune on a bad trade recommendation.",
+    "drinking_buddies" =>
+      " are regulars at the same bar after market close. They share too much after a few drinks."
   }
   @bullish_words ~w(bullish buy long up rise upside rally strong breakout moon surge boom undervalued accumulate squeeze)
   @bearish_words ~w(bearish sell short down fall downside dump weak overvalued crash panic fade risk miss)
@@ -250,7 +278,7 @@ defmodule LemonSim.Examples.StockMarket.Market do
           # Pull target back toward initial price — prevents secular drift
           anchor_pull = 0.20 * (config.initial_price - prev_target)
           momentum = if round > 1 and :rand.uniform() > 0.6, do: :rand.uniform() * 6 - 3, else: 0
-          delta = ((:rand.uniform() * 16 - 8) + momentum + anchor_pull) * config.volatility
+          delta = (:rand.uniform() * 16 - 8 + momentum + anchor_pull) * config.volatility
           new_target = max(5.0, prev_target + delta)
           {ticker, Float.round(new_target, 2)}
         end)
@@ -341,7 +369,7 @@ defmodule LemonSim.Examples.StockMarket.Market do
     # Dollar-weighted trade pressure (not raw shares)
     dollar_pressure =
       Enum.reduce(trades, Enum.into(stock_names(), %{}, &{&1, 0.0}), fn {_player_id, trade},
-                                                                         acc ->
+                                                                        acc ->
         stock = get(trade, :stock)
         action = get(trade, :action)
         quantity = (get(trade, :quantity) || 0) * 1.0
@@ -382,10 +410,17 @@ defmodule LemonSim.Examples.StockMarket.Market do
       narrative_effect = 0.28 * sentiment_pressure
       noise = (:rand.uniform() * 14 - 7) * volatility
 
-      new_price = current + mean_reversion + anchor_reversion + order_flow + narrative_effect + noise
+      new_price =
+        current + mean_reversion + anchor_reversion + order_flow + narrative_effect + noise
 
       # Circuit breaker: cap move to ±60% per round
-      new_price = clamp(new_price, current * (1 - @circuit_breaker_pct), current * (1 + @circuit_breaker_pct))
+      new_price =
+        clamp(
+          new_price,
+          current * (1 - @circuit_breaker_pct),
+          current * (1 + @circuit_breaker_pct)
+        )
+
       new_price = max(@price_floor, Float.round(new_price, 2))
 
       {ticker,
@@ -651,10 +686,25 @@ defmodule LemonSim.Examples.StockMarket.Market do
         |> Map.put(
           :trade_history,
           trade_history ++
-            [%{round: round, action: "buy", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}]
+            [
+              %{
+                round: round,
+                action: "buy",
+                stock: stock,
+                quantity: quantity,
+                price: Float.round(eff_price * 1.0, 2)
+              }
+            ]
         )
 
-      entry = %{player: player_id, action: "buy", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}
+      entry = %{
+        player: player_id,
+        action: "buy",
+        stock: stock,
+        quantity: quantity,
+        price: Float.round(eff_price * 1.0, 2)
+      }
+
       {Map.put(acc_players, player_id, updated_player), acc_log ++ [entry]}
     else
       reason = if quantity <= 0, do: "position limit reached", else: "insufficient funds"
@@ -695,10 +745,25 @@ defmodule LemonSim.Examples.StockMarket.Market do
         |> Map.put(
           :trade_history,
           trade_history ++
-            [%{round: round, action: "sell", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}]
+            [
+              %{
+                round: round,
+                action: "sell",
+                stock: stock,
+                quantity: quantity,
+                price: Float.round(eff_price * 1.0, 2)
+              }
+            ]
         )
 
-      entry = %{player: player_id, action: "sell", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}
+      entry = %{
+        player: player_id,
+        action: "sell",
+        stock: stock,
+        quantity: quantity,
+        price: Float.round(eff_price * 1.0, 2)
+      }
+
       {Map.put(acc_players, player_id, updated_player), acc_log ++ [entry]}
     else
       reject_trade(
@@ -748,7 +813,15 @@ defmodule LemonSim.Examples.StockMarket.Market do
         |> Map.put(
           :trade_history,
           trade_history ++
-            [%{round: round, action: "short", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}]
+            [
+              %{
+                round: round,
+                action: "short",
+                stock: stock,
+                quantity: quantity,
+                price: Float.round(eff_price * 1.0, 2)
+              }
+            ]
         )
 
       entry = %{
@@ -797,7 +870,15 @@ defmodule LemonSim.Examples.StockMarket.Market do
         |> Map.put(
           :trade_history,
           trade_history ++
-            [%{round: round, action: "cover", stock: stock, quantity: quantity, price: Float.round(eff_price * 1.0, 2)}]
+            [
+              %{
+                round: round,
+                action: "cover",
+                stock: stock,
+                quantity: quantity,
+                price: Float.round(eff_price * 1.0, 2)
+              }
+            ]
         )
 
       entry = %{

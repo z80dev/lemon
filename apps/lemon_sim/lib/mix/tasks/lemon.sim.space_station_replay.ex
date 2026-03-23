@@ -84,7 +84,10 @@ defmodule Mix.Tasks.Lemon.Sim.SpaceStationReplay do
         case VideoGenerator.generate(log_path, gen_opts) do
           {:ok, video_path} ->
             file_size = File.stat!(video_path).size
-            Mix.shell().info("Space Station replay: #{video_path} (#{format_file_size(file_size)})")
+
+            Mix.shell().info(
+              "Space Station replay: #{video_path} (#{format_file_size(file_size)})"
+            )
 
           {:error, reason} ->
             Mix.raise("video generation failed: #{inspect(reason)}")

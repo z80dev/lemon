@@ -13,35 +13,65 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
         "player_1" => %{
           faction: "Rural Caucus",
           faction_id: "rural",
-          preference_ranking: ["infrastructure", "defense", "education", "healthcare", "environment"],
+          preference_ranking: [
+            "infrastructure",
+            "defense",
+            "education",
+            "healthcare",
+            "environment"
+          ],
           political_capital: 100,
           status: "alive"
         },
         "player_2" => %{
           faction: "Progressive Coalition",
           faction_id: "progressive",
-          preference_ranking: ["healthcare", "environment", "education", "defense", "infrastructure"],
+          preference_ranking: [
+            "healthcare",
+            "environment",
+            "education",
+            "defense",
+            "infrastructure"
+          ],
           political_capital: 100,
           status: "alive"
         },
         "player_3" => %{
           faction: "Conservative Alliance",
           faction_id: "conservative",
-          preference_ranking: ["defense", "infrastructure", "education", "healthcare", "environment"],
+          preference_ranking: [
+            "defense",
+            "infrastructure",
+            "education",
+            "healthcare",
+            "environment"
+          ],
           political_capital: 100,
           status: "alive"
         },
         "player_4" => %{
           faction: "Moderate Democrats",
           faction_id: "centrist",
-          preference_ranking: ["healthcare", "education", "infrastructure", "defense", "environment"],
+          preference_ranking: [
+            "healthcare",
+            "education",
+            "infrastructure",
+            "defense",
+            "environment"
+          ],
           political_capital: 100,
           status: "alive"
         },
         "player_5" => %{
           faction: "Liberty Caucus",
           faction_id: "libertarian",
-          preference_ranking: ["infrastructure", "education", "healthcare", "defense", "environment"],
+          preference_ranking: [
+            "infrastructure",
+            "education",
+            "healthcare",
+            "defense",
+            "environment"
+          ],
           political_capital: 100,
           status: "alive"
         }
@@ -86,7 +116,11 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(
                state,
-               Events.send_message("player_1", "player_2", "Let's trade: I vote healthcare if you vote infrastructure."),
+               Events.send_message(
+                 "player_1",
+                 "player_2",
+                 "Let's trade: I vote healthcare if you vote infrastructure."
+               ),
                []
              )
 
@@ -175,7 +209,11 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(
                state,
-               Events.make_speech("player_1", "infrastructure", "Infrastructure is critical for our rural communities."),
+               Events.make_speech(
+                 "player_1",
+                 "infrastructure",
+                 "Infrastructure is critical for our rural communities."
+               ),
                []
              )
 
@@ -205,7 +243,11 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(
                state,
-               Events.propose_amendment("player_1", "infrastructure", "Add rural broadband provisions"),
+               Events.propose_amendment(
+                 "player_1",
+                 "infrastructure",
+                 "Add rural broadband provisions"
+               ),
                []
              )
 
@@ -218,17 +260,24 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   end
 
   test "propose_amendment rejects when insufficient capital" do
-    state = new_state(%{
-      phase: "amendment",
-      players: %{
-        "player_1" => %{
-          faction: "Rural Caucus",
-          preference_ranking: ["infrastructure", "defense", "education", "healthcare", "environment"],
-          political_capital: 10,
-          status: "alive"
+    state =
+      new_state(%{
+        phase: "amendment",
+        players: %{
+          "player_1" => %{
+            faction: "Rural Caucus",
+            preference_ranking: [
+              "infrastructure",
+              "defense",
+              "education",
+              "healthcare",
+              "environment"
+            ],
+            political_capital: 10,
+            status: "alive"
+          }
         }
-      }
-    })
+      })
 
     assert {:ok, next_state, {:decide, msg}} =
              Updater.apply_event(
@@ -269,15 +318,21 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
       passed: nil
     }
 
-    state = new_state(%{
-      phase: "amendment_vote",
-      proposed_amendments: [amendment]
-    })
+    state =
+      new_state(%{
+        phase: "amendment_vote",
+        proposed_amendments: [amendment]
+      })
 
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(
                state,
-               Events.cast_amendment_vote("player_1", "amendment_1_player_2_healthcare", "yes", "healthcare"),
+               Events.cast_amendment_vote(
+                 "player_1",
+                 "amendment_1_player_2_healthcare",
+                 "yes",
+                 "healthcare"
+               ),
                []
              )
 
@@ -304,11 +359,12 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
 
     already_done = MapSet.new(["player_2", "player_3", "player_4", "player_5"])
 
-    state = new_state(%{
-      phase: "amendment_vote",
-      amendment_vote_done: already_done,
-      proposed_amendments: [amendment]
-    })
+    state =
+      new_state(%{
+        phase: "amendment_vote",
+        amendment_vote_done: already_done,
+        proposed_amendments: [amendment]
+      })
 
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(state, Events.end_amendment_vote("player_1"), [])
@@ -344,20 +400,45 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   test "cast_votes resolves bills and advances session when all players voted" do
     # All players have already voted except player_5 (last in turn order)
     prior_votes = %{
-      "player_1" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "no"},
-      "player_2" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "no", "education" => "yes", "environment" => "yes"},
-      "player_3" => %{"infrastructure" => "yes", "healthcare" => "no", "defense" => "yes", "education" => "no", "environment" => "no"},
-      "player_4" => %{"infrastructure" => "no", "healthcare" => "yes", "defense" => "no", "education" => "yes", "environment" => "yes"}
+      "player_1" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "yes",
+        "education" => "yes",
+        "environment" => "no"
+      },
+      "player_2" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "no",
+        "education" => "yes",
+        "environment" => "yes"
+      },
+      "player_3" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "no",
+        "defense" => "yes",
+        "education" => "no",
+        "environment" => "no"
+      },
+      "player_4" => %{
+        "infrastructure" => "no",
+        "healthcare" => "yes",
+        "defense" => "no",
+        "education" => "yes",
+        "environment" => "yes"
+      }
     }
 
     already_voted = MapSet.new(["player_1", "player_2", "player_3", "player_4"])
 
-    state = new_state(%{
-      phase: "final_vote",
-      active_actor_id: "player_5",
-      votes_cast: already_voted,
-      vote_record: prior_votes
-    })
+    state =
+      new_state(%{
+        phase: "final_vote",
+        active_actor_id: "player_5",
+        votes_cast: already_voted,
+        vote_record: prior_votes
+      })
 
     final_vote = %{
       "infrastructure" => "yes",
@@ -387,30 +468,55 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
 
   test "game ends after max sessions with highest score winner" do
     prior_votes = %{
-      "player_1" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "yes"},
-      "player_2" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "yes"},
-      "player_3" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "yes"},
-      "player_4" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "yes"}
+      "player_1" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "yes",
+        "education" => "yes",
+        "environment" => "yes"
+      },
+      "player_2" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "yes",
+        "education" => "yes",
+        "environment" => "yes"
+      },
+      "player_3" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "yes",
+        "education" => "yes",
+        "environment" => "yes"
+      },
+      "player_4" => %{
+        "infrastructure" => "yes",
+        "healthcare" => "yes",
+        "defense" => "yes",
+        "education" => "yes",
+        "environment" => "yes"
+      }
     }
 
     already_voted = MapSet.new(["player_1", "player_2", "player_3", "player_4"])
 
     # Set session to max so this vote will end the game
-    state = new_state(%{
-      phase: "final_vote",
-      session: 3,
-      max_sessions: 3,
-      active_actor_id: "player_5",
-      votes_cast: already_voted,
-      vote_record: prior_votes,
-      scores: %{
-        "player_1" => 50,
-        "player_2" => 80,
-        "player_3" => 40,
-        "player_4" => 60,
-        "player_5" => 30
-      }
-    })
+    state =
+      new_state(%{
+        phase: "final_vote",
+        session: 3,
+        max_sessions: 3,
+        active_actor_id: "player_5",
+        votes_cast: already_voted,
+        vote_record: prior_votes,
+        scores: %{
+          "player_1" => 50,
+          "player_2" => 80,
+          "player_3" => 40,
+          "player_4" => 60,
+          "player_5" => 30
+        }
+      })
 
     final_vote = %{
       "infrastructure" => "yes",
@@ -469,13 +575,20 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   end
 
   test "rejects duplicate vote" do
-    state = new_state(%{
-      phase: "final_vote",
-      votes_cast: MapSet.new(["player_1"]),
-      vote_record: %{
-        "player_1" => %{"infrastructure" => "yes", "healthcare" => "yes", "defense" => "yes", "education" => "yes", "environment" => "yes"}
-      }
-    })
+    state =
+      new_state(%{
+        phase: "final_vote",
+        votes_cast: MapSet.new(["player_1"]),
+        vote_record: %{
+          "player_1" => %{
+            "infrastructure" => "yes",
+            "healthcare" => "yes",
+            "defense" => "yes",
+            "education" => "yes",
+            "environment" => "yes"
+          }
+        }
+      })
 
     assert {:ok, next_state, {:decide, msg}} =
              Updater.apply_event(

@@ -163,7 +163,11 @@ defmodule LemonSim.Examples.StartupIncubatorUpdaterTest do
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(
                state,
-               Events.answer_question("founder_1", "investor_1", "MRR is $50K and growing 20% MoM."),
+               Events.answer_question(
+                 "founder_1",
+                 "investor_1",
+                 "MRR is $50K and growing 20% MoM."
+               ),
                []
              )
 

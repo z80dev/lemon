@@ -157,7 +157,9 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
   defp safe_div(_a, 0), do: 0.0
   defp safe_div(a, b), do: Float.round(a / b, 3)
 
-  defp won?(winner, _is_mole, "mole"), do: winner == "mole" or is_binary(winner) and String.contains?(winner, "mole")
+  defp won?(winner, _is_mole, "mole"),
+    do: winner == "mole" or (is_binary(winner) and String.contains?(winner, "mole"))
+
   defp won?("loyalists", _is_mole, "operative"), do: true
   defp won?(_winner, _is_mole, _role), do: false
 
@@ -182,8 +184,7 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
          operations_performed: Enum.sum(Enum.map(metrics, &get(&1, :operations_performed, 0))),
          share_intel_count: Enum.sum(Enum.map(metrics, &get(&1, :share_intel_count, 0))),
          verify_agent_count: Enum.sum(Enum.map(metrics, &get(&1, :verify_agent_count, 0))),
-         report_suspicion_count:
-           Enum.sum(Enum.map(metrics, &get(&1, :report_suspicion_count, 0)))
+         report_suspicion_count: Enum.sum(Enum.map(metrics, &get(&1, :report_suspicion_count, 0)))
        }}
     end)
   end

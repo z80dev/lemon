@@ -43,7 +43,8 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   end
 
   defp run_loop(state, model, opts, turn, empty_retries) do
-    max_turns = Keyword.get(opts, :decision_max_turns, Keyword.get(opts, :max_turns, @default_max_turns))
+    max_turns =
+      Keyword.get(opts, :decision_max_turns, Keyword.get(opts, :max_turns, @default_max_turns))
 
     max_tool_calls_per_turn =
       Keyword.get(opts, :max_tool_calls_per_turn, @default_max_tool_calls_per_turn)

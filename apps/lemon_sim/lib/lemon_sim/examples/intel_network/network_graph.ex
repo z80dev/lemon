@@ -7,8 +7,14 @@ defmodule LemonSim.Examples.IntelNetwork.NetworkGraph do
   """
 
   @agent_codenames [
-    "CARDINAL", "FALCON", "RAVEN", "SPHINX", "VIPER", "LYNX",
-    "COBRA", "EAGLE"
+    "CARDINAL",
+    "FALCON",
+    "RAVEN",
+    "SPHINX",
+    "VIPER",
+    "LYNX",
+    "COBRA",
+    "EAGLE"
   ]
 
   @intel_fragments [

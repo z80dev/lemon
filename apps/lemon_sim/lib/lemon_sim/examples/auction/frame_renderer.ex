@@ -370,7 +370,14 @@ defmodule LemonSim.Examples.Auction.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, scores: scores, winner: winner, players: players}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         turn_order: turn_order,
+         scores: scores,
+         winner: winner,
+         players: players
+       }) do
     cx = @roster_w + div(w - @roster_w - @log_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -504,8 +511,16 @@ defmodule LemonSim.Examples.Auction.FrameRenderer do
   end
 
   defp render_active_auction(ctx) do
-    %{w: w, h: h, current_item: item, high_bid: high_bid, high_bidder: high_bidder,
-      active_bidders: active_bidders, bid_history: bid_history, turn_order: turn_order} = ctx
+    %{
+      w: w,
+      h: h,
+      current_item: item,
+      high_bid: high_bid,
+      high_bidder: high_bidder,
+      active_bidders: active_bidders,
+      bid_history: bid_history,
+      turn_order: turn_order
+    } = ctx
 
     cx = @roster_w + div(w - @roster_w - @log_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
@@ -704,6 +719,7 @@ defmodule LemonSim.Examples.Auction.FrameRenderer do
       has_event?(events, "item_won") ->
         ev = find_event(events, "item_won")
         p = get(ev, "payload", ev || %{})
+
         "#{format_player_name(get(p, "player_id", "?"))} wins #{get(p, "item", "?")} for #{get(p, "price", 0)} gold!"
 
       has_event?(events, "item_unsold") ->
@@ -714,11 +730,13 @@ defmodule LemonSim.Examples.Auction.FrameRenderer do
       has_event?(events, "auction_started") ->
         ev = find_event(events, "auction_started")
         p = get(ev, "payload", ev || %{})
+
         "Now auctioning: #{get(p, "item", "?")} (#{get(p, "category", "?")}, base value #{get(p, "base_value", 0)})"
 
       has_event?(events, "bid_accepted") ->
         ev = find_event(events, "bid_accepted")
         p = get(ev, "payload", ev || %{})
+
         "#{format_player_name(get(p, "player_id", "?"))} bids #{get(p, "amount", 0)} gold on #{get(p, "item", "?")}"
 
       has_event?(events, "player_passed") ->

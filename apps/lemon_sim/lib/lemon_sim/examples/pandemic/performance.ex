@@ -26,7 +26,9 @@ defmodule LemonSim.Examples.Pandemic.Performance do
     total_infected = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :infected, 0) end))
     total_recovered = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :recovered, 0) end))
     total_vaccinated = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :vaccinated, 0) end))
-    global_death_rate = if total_pop > 0, do: Float.round(total_dead / total_pop * 100, 2), else: 0.0
+
+    global_death_rate =
+      if total_pop > 0, do: Float.round(total_dead / total_pop * 100, 2), else: 0.0
 
     player_metrics =
       Enum.into(players, %{}, fn {governor_id, info} ->
@@ -66,7 +68,8 @@ defmodule LemonSim.Examples.Pandemic.Performance do
     disease = get(world, :disease, %{})
 
     %{
-      benchmark_focus: "cooperative pandemic containment, vaccination coverage, research investment",
+      benchmark_focus:
+        "cooperative pandemic containment, vaccination coverage, research investment",
       status: status,
       winner: winner,
       outcome_reason: outcome_reason,

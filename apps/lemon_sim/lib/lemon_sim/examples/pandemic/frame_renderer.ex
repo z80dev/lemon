@@ -467,7 +467,15 @@ defmodule LemonSim.Examples.Pandemic.FrameRenderer do
       events
       |> Enum.filter(fn ev ->
         kind = get(ev, "kind", get(ev, :kind, ""))
-        kind in ["spread_occurred", "deaths_recorded", "vaccinate", "quarantine_zone", "build_hospital", "fund_research"]
+
+        kind in [
+          "spread_occurred",
+          "deaths_recorded",
+          "vaccinate",
+          "quarantine_zone",
+          "build_hospital",
+          "fund_research"
+        ]
       end)
       |> Enum.take(10)
 

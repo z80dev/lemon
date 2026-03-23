@@ -46,7 +46,8 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
   defp move_tool(actor_id) do
     %AgentTool{
       name: "move_unit",
-      description: "Move #{actor_id} to an adjacent tile. Costs 1 AP (2 AP on water tiles). Cannot move onto walls.",
+      description:
+        "Move #{actor_id} to an adjacent tile. Costs 1 AP (2 AP on water tiles). Cannot move onto walls.",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -168,7 +169,8 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
   defp cover_tool(actor_id) do
     %AgentTool{
       name: "take_cover",
-      description: "Spend an action point to take cover with #{actor_id}. Reduces enemy hit chance by 20%.",
+      description:
+        "Spend an action point to take cover with #{actor_id}. Reduces enemy hit chance by 20%.",
       parameters: %{
         "type" => "object",
         "properties" => %{

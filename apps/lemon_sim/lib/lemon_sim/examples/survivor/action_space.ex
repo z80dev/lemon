@@ -29,21 +29,30 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         cond do
           # Jury members act during final tribal council
-          phase == "final_tribal_council" and actor_status == "eliminated" and get(actor, :jury_member) ->
+          phase == "final_tribal_council" and actor_status == "eliminated" and
+              get(actor, :jury_member) ->
             sub_phase = get(world, :ftc_sub_phase, "jury_statements")
-            {:ok, Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
+
+            {:ok,
+             Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
 
           # Finalists plead during final tribal council
           phase == "final_tribal_council" and actor_status == "alive" ->
             sub_phase = get(world, :ftc_sub_phase, "jury_statements")
-            {:ok, Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
+
+            {:ok,
+             Enum.map(tools_for_ftc(sub_phase, actor_id, players), &GameTools.add_thought_param/1)}
 
           # Normal phases require alive status
           actor_status != "alive" ->
             {:ok, []}
 
           true ->
-            {:ok, Enum.map(tools_for_phase(phase, actor_id, players, world), &GameTools.add_thought_param/1)}
+            {:ok,
+             Enum.map(
+               tools_for_phase(phase, actor_id, players, world),
+               &GameTools.add_thought_param/1
+             )}
         end
       end
     end
@@ -100,10 +109,13 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
         |> Enum.reject(fn id -> id == immune_player end)
         |> Enum.reject(fn id -> id == get(world, :idol_played_by) end)
 
-      [GameTools.vote_tool(actor_id, valid_targets,
-        include_skip: false,
-        description: "Vote to eliminate a player from the game. Valid targets: #{Enum.join(valid_targets, ", ")}"
-      )]
+      [
+        GameTools.vote_tool(actor_id, valid_targets,
+          include_skip: false,
+          description:
+            "Vote to eliminate a player from the game. Valid targets: #{Enum.join(valid_targets, ", ")}"
+        )
+      ]
     end
   end
 
@@ -202,8 +214,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
   defp skip_idol_tool(actor_id) do
     %AgentTool{
       name: "skip_idol",
-      description:
-        "Choose NOT to play an idol (or you don't have one). Proceed to voting.",
+      description: "Choose NOT to play an idol (or you don't have one). Proceed to voting.",
       parameters: %{
         "type" => "object",
         "properties" => %{},
@@ -325,5 +336,4 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
       end
     }
   end
-
 end

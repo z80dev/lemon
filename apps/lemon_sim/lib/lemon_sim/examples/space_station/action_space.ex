@@ -28,7 +28,12 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok, []}
       else
         role = get(actor, :role, "crew")
-        {:ok, Enum.map(tools_for_phase_and_role(phase, role, actor_id, world), &GameTools.add_thought_param/1)}
+
+        {:ok,
+         Enum.map(
+           tools_for_phase_and_role(phase, role, actor_id, world),
+           &GameTools.add_thought_param/1
+         )}
       end
     end
   end
@@ -252,7 +257,11 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You inspected the #{system_id} system. To others, this looked like a normal repair.")],
+           content: [
+             AgentCore.text_content(
+               "You inspected the #{system_id} system. To others, this looked like a normal repair."
+             )
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -468,9 +477,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
-               "You formally accused #{target_id}: \"#{evidence}\""
-             )
+             AgentCore.text_content("You formally accused #{target_id}: \"#{evidence}\"")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -478,5 +485,4 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
       end
     }
   end
-
 end

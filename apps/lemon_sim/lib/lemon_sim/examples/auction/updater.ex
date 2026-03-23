@@ -116,7 +116,10 @@ defmodule LemonSim.Examples.Auction.Updater do
       resolve_auction(state)
     else
       next_state = State.update_world(state, fn w -> Map.put(w, :active_actor_id, next_actor) end)
-      {:ok, next_state, {:decide, "#{next_actor}'s turn to bid (high bid: #{get(state.world, :high_bid, 0)} by #{high_bidder})"}}
+
+      {:ok, next_state,
+       {:decide,
+        "#{next_actor}'s turn to bid (high bid: #{get(state.world, :high_bid, 0)} by #{high_bidder})"}}
     end
   end
 
@@ -306,7 +309,9 @@ defmodule LemonSim.Examples.Auction.Updater do
       # No one can bid, skip this item
       resolve_auction_unsold(next_state)
     else
-      {:ok, next_state, {:decide, "#{first_bidder} opens bidding on #{item_name} (#{category}, base value: #{base_value})"}}
+      {:ok, next_state,
+       {:decide,
+        "#{first_bidder} opens bidding on #{item_name} (#{category}, base value: #{base_value})"}}
     end
   end
 
@@ -451,5 +456,4 @@ defmodule LemonSim.Examples.Auction.Updater do
   defp append_events(%State{} = state, events) do
     State.append_events(state, Enum.reject(events, &is_nil/1))
   end
-
 end

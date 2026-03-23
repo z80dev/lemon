@@ -90,9 +90,27 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
     state =
       base_state(%{
         players: %{
-          "agent_1" => %{codename: "CARDINAL", role: "operative", status: "active", intel_fragments: [], trust_level: 0.5},
-          "agent_2" => %{codename: "FALCON", role: "operative", status: "active", intel_fragments: [], trust_level: 0.5},
-          "agent_4" => %{codename: "SPHINX", role: "operative", status: "active", intel_fragments: [], trust_level: 0.5}
+          "agent_1" => %{
+            codename: "CARDINAL",
+            role: "operative",
+            status: "active",
+            intel_fragments: [],
+            trust_level: 0.5
+          },
+          "agent_2" => %{
+            codename: "FALCON",
+            role: "operative",
+            status: "active",
+            intel_fragments: [],
+            trust_level: 0.5
+          },
+          "agent_4" => %{
+            codename: "SPHINX",
+            role: "operative",
+            status: "active",
+            intel_fragments: [],
+            trust_level: 0.5
+          }
         },
         adjacency: %{
           "agent_1" => ["agent_2"],
@@ -164,7 +182,9 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
                []
              )
 
-    assert next_state.world.analysis_notes["agent_1"] == "FALCON seems trustworthy. RAVEN was quiet."
+    assert next_state.world.analysis_notes["agent_1"] ==
+             "FALCON seems trustworthy. RAVEN was quiet."
+
     assert MapSet.member?(next_state.world.analysis_done, "agent_1")
     assert next_state.world.phase == "analysis"
   end
@@ -268,9 +288,27 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
         active_actor_id: "agent_3",
         leaked_intel: ["f1", "f2", "f3", "f4"],
         players: %{
-          "agent_1" => %{codename: "CARDINAL", role: "operative", status: "active", intel_fragments: ["fragment_alpha"], trust_level: 0.5},
-          "agent_2" => %{codename: "FALCON", role: "operative", status: "active", intel_fragments: [], trust_level: 0.5},
-          "agent_3" => %{codename: "RAVEN", role: "mole", status: "active", intel_fragments: ["fragment_charlie"], trust_level: 0.5}
+          "agent_1" => %{
+            codename: "CARDINAL",
+            role: "operative",
+            status: "active",
+            intel_fragments: ["fragment_alpha"],
+            trust_level: 0.5
+          },
+          "agent_2" => %{
+            codename: "FALCON",
+            role: "operative",
+            status: "active",
+            intel_fragments: [],
+            trust_level: 0.5
+          },
+          "agent_3" => %{
+            codename: "RAVEN",
+            role: "mole",
+            status: "active",
+            intel_fragments: ["fragment_charlie"],
+            trust_level: 0.5
+          }
         }
       })
 

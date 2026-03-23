@@ -53,6 +53,7 @@ defmodule LemonSim.Examples.Skirmish.Visibility do
               enemies
               |> Enum.map(fn {_id, u} ->
                 epos = get(u, :pos, %{})
+
                 abs(get(unit_pos, :x, 0) - get(epos, :x, 0)) +
                   abs(get(unit_pos, :y, 0) - get(epos, :y, 0))
               end)
@@ -63,8 +64,11 @@ defmodule LemonSim.Examples.Skirmish.Visibility do
           enemies
           |> Enum.filter(fn {_id, u} ->
             epos = get(u, :pos, %{})
-            dist = abs(get(unit_pos, :x, 0) - get(epos, :x, 0)) +
-                     abs(get(unit_pos, :y, 0) - get(epos, :y, 0))
+
+            dist =
+              abs(get(unit_pos, :x, 0) - get(epos, :x, 0)) +
+                abs(get(unit_pos, :y, 0) - get(epos, :y, 0))
+
             dist <= attack_range
           end)
           |> Enum.map(fn {id, _u} -> id end)

@@ -79,7 +79,8 @@ defmodule LemonSim.Examples.Courtroom.Updater do
         |> State.append_events(advance_events)
 
       {:ok, next_state2,
-       {:decide, "#{player_id} made a statement, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
+       {:decide,
+        "#{player_id} made a statement, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
     else
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
@@ -153,7 +154,8 @@ defmodule LemonSim.Examples.Courtroom.Updater do
         |> State.append_events(advance_events)
 
       {:ok, next_state2,
-       {:decide, "#{asker_id} questioned #{target_id}, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
+       {:decide,
+        "#{asker_id} questioned #{target_id}, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
     else
       {:error, reason} ->
         reject_action(state, event, asker_id, reason)
@@ -275,8 +277,7 @@ defmodule LemonSim.Examples.Courtroom.Updater do
         |> State.update_world(fn _ -> next_world2 end)
         |> State.append_events(advance_events)
 
-      {:ok, next_state2,
-       {:decide, "#{player_id} challenged #{witness_id}'s testimony"}}
+      {:ok, next_state2, {:decide, "#{player_id} challenged #{witness_id}'s testimony"}}
     else
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
@@ -306,7 +307,8 @@ defmodule LemonSim.Examples.Courtroom.Updater do
         |> State.append_events(advance_events)
 
       {:ok, next_state2,
-       {:decide, "#{juror_id} discussed in deliberation, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
+       {:decide,
+        "#{juror_id} discussed in deliberation, next: #{MapHelpers.get_key(next_world2, :active_actor_id)}"}}
     else
       {:error, reason} ->
         reject_action(state, event, juror_id, reason)
@@ -386,8 +388,7 @@ defmodule LemonSim.Examples.Courtroom.Updater do
           |> State.update_world(fn _ -> next_world2 end)
           |> State.append_events(advance_events)
 
-        {:ok, next_state2,
-         {:decide, "#{juror_id} voted #{vote}, awaiting remaining jurors"}}
+        {:ok, next_state2, {:decide, "#{juror_id} voted #{vote}, awaiting remaining jurors"}}
       end
     else
       {:error, reason} ->
@@ -676,7 +677,10 @@ defmodule LemonSim.Examples.Courtroom.Updater do
   defp rejection_reason(:invalid_player), do: "invalid player id"
   defp rejection_reason(:not_a_witness), do: "that player is not a witness"
   defp rejection_reason(:not_a_juror), do: "that player is not a juror"
-  defp rejection_reason(:invalid_evidence), do: "that evidence item does not exist in the case file"
+
+  defp rejection_reason(:invalid_evidence),
+    do: "that evidence item does not exist in the case file"
+
   defp rejection_reason(:invalid_vote), do: "invalid vote (use guilty or not_guilty)"
   defp rejection_reason(:already_voted), do: "you have already cast your verdict"
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"

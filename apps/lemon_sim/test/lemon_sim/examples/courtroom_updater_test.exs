@@ -21,8 +21,16 @@ defmodule LemonSim.Examples.CourtroomUpdaterTest do
           "security_footage" => %{description: "Camera footage", incriminating: true}
         },
         witnesses: %{
-          "witness_1" => %{archetype: "eyewitness", testimony: "I saw someone.", knows_evidence: []},
-          "witness_2" => %{archetype: "expert", testimony: "Forensic analysis.", knows_evidence: []}
+          "witness_1" => %{
+            archetype: "eyewitness",
+            testimony: "I saw someone.",
+            knows_evidence: []
+          },
+          "witness_2" => %{
+            archetype: "expert",
+            testimony: "Forensic analysis.",
+            knows_evidence: []
+          }
         }
       },
       players: %{

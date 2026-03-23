@@ -122,7 +122,7 @@ defmodule LemonSim.Examples.Pandemic.DiseaseModel do
     # Step 2: cross-region travel spread
     {regions_after_travel, spread_events} =
       Enum.reduce(@travel_routes, {regions_after_local, []}, fn {from_id, neighbors},
-                                                                 {acc_regions, acc_events} ->
+                                                                {acc_regions, acc_events} ->
         from_region = Map.get(acc_regions, from_id, %{})
         from_infected = Map.get(from_region, :infected, 0)
         from_pop = Map.get(from_region, :population, 1)
@@ -155,9 +155,7 @@ defmodule LemonSim.Examples.Pandemic.DiseaseModel do
               combined_factor = travel_factor * receive_factor
 
               new_cases =
-                trunc(
-                  susceptible * spread_rate * infection_ratio * 0.3 * combined_factor
-                )
+                trunc(susceptible * spread_rate * infection_ratio * 0.3 * combined_factor)
 
               new_cases = min(new_cases, susceptible)
 
@@ -165,10 +163,10 @@ defmodule LemonSim.Examples.Pandemic.DiseaseModel do
                 updated_neighbor =
                   Map.update!(neighbor, :infected, &(&1 + new_cases))
 
-                event = Events.spread_occurred(neighbor_id, new_cases, neighbor_infected + new_cases)
+                event =
+                  Events.spread_occurred(neighbor_id, new_cases, neighbor_infected + new_cases)
 
-                {Map.put(inner_regions, neighbor_id, updated_neighbor),
-                 inner_events ++ [event]}
+                {Map.put(inner_regions, neighbor_id, updated_neighbor), inner_events ++ [event]}
               else
                 {inner_regions, inner_events}
               end
@@ -228,7 +226,8 @@ defmodule LemonSim.Examples.Pandemic.DiseaseModel do
     else
       susceptible = max(0, pop - infected - recovered - vaccinated)
 
-      effective_spread = if quarantined, do: spread_rate * @quarantine_spread_factor, else: spread_rate
+      effective_spread =
+        if quarantined, do: spread_rate * @quarantine_spread_factor, else: spread_rate
 
       infection_ratio = infected / pop
       new_cases = trunc(susceptible * effective_spread * infection_ratio)

@@ -75,7 +75,8 @@ defmodule LemonSim.Examples.Courtroom.CaseGenerator do
       incriminating: true
     },
     "witness_statement_prior" => %{
-      description: "A prior written statement from a witness that contradicts their current testimony",
+      description:
+        "A prior written statement from a witness that contradicts their current testimony",
       incriminating: false
     },
     "phone_records" => %{
@@ -83,11 +84,13 @@ defmodule LemonSim.Examples.Courtroom.CaseGenerator do
       incriminating: true
     },
     "medical_report" => %{
-      description: "Medical report documenting the victim's condition inconsistent with defendant's account",
+      description:
+        "Medical report documenting the victim's condition inconsistent with defendant's account",
       incriminating: true
     },
     "expert_analysis" => %{
-      description: "Forensic expert analysis casting doubt on the prosecution's physical evidence",
+      description:
+        "Forensic expert analysis casting doubt on the prosecution's physical evidence",
       incriminating: false
     },
     "motive_document" => %{

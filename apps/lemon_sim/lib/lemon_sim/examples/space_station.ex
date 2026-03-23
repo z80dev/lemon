@@ -538,8 +538,7 @@ defmodule LemonSim.Examples.SpaceStation do
       "your_location" => actor_location,
       location_label => co_located,
       "captain_lock" => captain_lock,
-      "last_round_report" =>
-        format_round_report(List.last(get(world, :round_reports, []))),
+      "last_round_report" => format_round_report(List.last(get(world, :round_reports, []))),
       "living_count" => length(Roles.living_players(players))
     }
 
@@ -731,7 +730,11 @@ defmodule LemonSim.Examples.SpaceStation do
         role = Map.get(payload, :role, Map.get(payload, "role", "unknown"))
 
         sanitized_payload =
-          Map.put(payload, "message", "#{player_id} has been ejected from the station. They were #{role}.")
+          Map.put(
+            payload,
+            "message",
+            "#{player_id} has been ejected from the station. They were #{role}."
+          )
 
         put_payload(event, sanitized_payload)
 

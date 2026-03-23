@@ -55,11 +55,14 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
   end
 
   test "bid rejected when amount exceeds player gold" do
-    state = base_state(%{players: %{
-      "player_1" => %{gold: 5, items: [], status: "active"},
-      "player_2" => %{gold: 100, items: [], status: "active"},
-      "player_3" => %{gold: 100, items: [], status: "active"}
-    }})
+    state =
+      base_state(%{
+        players: %{
+          "player_1" => %{gold: 5, items: [], status: "active"},
+          "player_2" => %{gold: 100, items: [], status: "active"},
+          "player_3" => %{gold: 100, items: [], status: "active"}
+        }
+      })
 
     assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(state, Events.place_bid("player_1", 10), [])
@@ -69,12 +72,13 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
 
   test "bid rejected when amount is below minimum increment" do
     # high_bid is 10, so min next bid is 12 (10 + 2)
-    state = base_state(%{
-      high_bid: 10,
-      high_bidder: "player_2",
-      active_bidders: ["player_1", "player_3"],
-      active_actor_id: "player_1"
-    })
+    state =
+      base_state(%{
+        high_bid: 10,
+        high_bidder: "player_2",
+        active_bidders: ["player_1", "player_3"],
+        active_actor_id: "player_1"
+      })
 
     assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(state, Events.place_bid("player_1", 11), [])
@@ -95,12 +99,13 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
   test "item won when remaining bidders pass after a high bid" do
     # player_1 already bid 10, player_2 is next, player_3 is left
     # active_bidders has only player_3; when player_3 passes, player_1 (high_bidder) wins
-    state = base_state(%{
-      high_bid: 10,
-      high_bidder: "player_1",
-      active_bidders: ["player_3"],
-      active_actor_id: "player_3"
-    })
+    state =
+      base_state(%{
+        high_bid: 10,
+        high_bidder: "player_1",
+        active_bidders: ["player_3"],
+        active_actor_id: "player_3"
+      })
 
     assert {:ok, next_state, _} =
              Updater.apply_event(state, Events.pass_auction("player_3"), [])
@@ -119,10 +124,11 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
   end
 
   test "item unsold when all players pass with no bids" do
-    state = base_state(%{
-      active_bidders: ["player_2", "player_3"],
-      active_actor_id: "player_2"
-    })
+    state =
+      base_state(%{
+        active_bidders: ["player_2", "player_3"],
+        active_actor_id: "player_2"
+      })
 
     # player_2 passes
     assert {:ok, state2, _} =
@@ -144,14 +150,15 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
   test "round advancement when all items in current round are exhausted" do
     # Round 1 has 1 item (items_per_round = [1,1,2,1,1,2,1,1])
     # After this item resolves, we should move to round 2
-    state = base_state(%{
-      high_bid: 10,
-      high_bidder: "player_1",
-      active_bidders: ["player_3"],
-      active_actor_id: "player_3",
-      current_round: 1,
-      current_item_index: 0
-    })
+    state =
+      base_state(%{
+        high_bid: 10,
+        high_bidder: "player_1",
+        active_bidders: ["player_3"],
+        active_actor_id: "player_3",
+        current_round: 1,
+        current_item_index: 0
+      })
 
     assert {:ok, next_state, {:decide, _}} =
              Updater.apply_event(state, Events.pass_auction("player_3"), [])
@@ -169,28 +176,29 @@ defmodule LemonSim.Examples.AuctionUpdaterTest do
     # Round 8 starts at schedule index 9 (last item)
     last_item = %{name: "Shadow Scroll", category: "scroll", base_value: 3}
 
-    state = base_state(%{
-      current_round: 8,
-      max_rounds: 8,
-      current_item_index: 0,
-      current_item: last_item,
-      high_bid: 5,
-      high_bidder: "player_1",
-      active_bidders: ["player_3"],
-      active_actor_id: "player_3",
-      auction_schedule: [
-        %{name: "Ruby", category: "gem", base_value: 10},
-        %{name: "Sapphire", category: "gem", base_value: 8},
-        %{name: "Emerald", category: "gem", base_value: 12},
-        %{name: "Crown", category: "artifact", base_value: 15},
-        %{name: "Scepter", category: "artifact", base_value: 12},
-        %{name: "Chalice", category: "artifact", base_value: 8},
-        %{name: "Fire Scroll", category: "scroll", base_value: 7},
-        %{name: "Ice Scroll", category: "scroll", base_value: 5},
-        %{name: "Lightning Scroll", category: "scroll", base_value: 10},
-        last_item
-      ]
-    })
+    state =
+      base_state(%{
+        current_round: 8,
+        max_rounds: 8,
+        current_item_index: 0,
+        current_item: last_item,
+        high_bid: 5,
+        high_bidder: "player_1",
+        active_bidders: ["player_3"],
+        active_actor_id: "player_3",
+        auction_schedule: [
+          %{name: "Ruby", category: "gem", base_value: 10},
+          %{name: "Sapphire", category: "gem", base_value: 8},
+          %{name: "Emerald", category: "gem", base_value: 12},
+          %{name: "Crown", category: "artifact", base_value: 15},
+          %{name: "Scepter", category: "artifact", base_value: 12},
+          %{name: "Chalice", category: "artifact", base_value: 8},
+          %{name: "Fire Scroll", category: "scroll", base_value: 7},
+          %{name: "Ice Scroll", category: "scroll", base_value: 5},
+          %{name: "Lightning Scroll", category: "scroll", base_value: 10},
+          last_item
+        ]
+      })
 
     assert {:ok, next_state, :skip} =
              Updater.apply_event(state, Events.pass_auction("player_3"), [])

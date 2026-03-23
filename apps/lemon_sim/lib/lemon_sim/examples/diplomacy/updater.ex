@@ -738,5 +738,4 @@ defmodule LemonSim.Examples.Diplomacy.Updater do
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
   # -- Utility --
-
 end

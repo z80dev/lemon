@@ -54,7 +54,13 @@ defmodule LemonSim.Examples.Skirmish.MapGenerator do
     |> Enum.take(count)
   end
 
-  @spec preset_maps() :: %{arena: map(), fortress: map(), wetlands: map(), alley: map(), crossroads: map()}
+  @spec preset_maps() :: %{
+          arena: map(),
+          fortress: map(),
+          wetlands: map(),
+          alley: map(),
+          crossroads: map()
+        }
   def preset_maps do
     %{
       arena: preset_arena(),

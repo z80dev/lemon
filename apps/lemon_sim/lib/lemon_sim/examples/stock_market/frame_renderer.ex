@@ -338,7 +338,14 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, players: players, stocks: %{} = stocks, winner: winner}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         turn_order: turn_order,
+         players: players,
+         stocks: %{} = stocks,
+         winner: winner
+       }) do
     cx = @roster_w + div(w - @roster_w - @ticker_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -409,7 +416,10 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
     end
   end
 
-  defp render_discussion_content(%{w: w, h: h, market_calls: market_calls, players: players, active_actor: active_actor} = _ctx) do
+  defp render_discussion_content(
+         %{w: w, h: h, market_calls: market_calls, players: players, active_actor: active_actor} =
+           _ctx
+       ) do
     cx = @roster_w + div(w - @roster_w - @ticker_w, 2)
     panel_y = @header_h + 10
     panel_h = h - @header_h - @footer_h - 20
@@ -473,7 +483,9 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
     ]
   end
 
-  defp render_trading_content(%{w: w, h: h, events: events, players: players, active_actor: active_actor} = _ctx) do
+  defp render_trading_content(
+         %{w: w, h: h, events: events, players: players, active_actor: active_actor} = _ctx
+       ) do
     cx = @roster_w + div(w - @roster_w - @ticker_w, 2)
     panel_y = @header_h + 10
     panel_h = h - @header_h - @footer_h - 20
@@ -580,17 +592,19 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
     change = Float.round((price - prev_price) * 1.0, 2)
     change_pct = if prev_price > 0, do: Float.round(change / prev_price * 100.0, 1), else: 0.0
 
-    price_color = cond do
-      change > 0 -> @green
-      change < 0 -> @red
-      true -> @text_secondary
-    end
+    price_color =
+      cond do
+        change > 0 -> @green
+        change < 0 -> @red
+        true -> @text_secondary
+      end
 
-    arrow = cond do
-      change > 0 -> "▲"
-      change < 0 -> "▼"
-      true -> "—"
-    end
+    arrow =
+      cond do
+        change > 0 -> "▲"
+        change < 0 -> "▼"
+        true -> "—"
+      end
 
     change_str = if change >= 0, do: "+#{change}", else: "#{change}"
     pct_str = if change_pct >= 0, do: "+#{change_pct}%", else: "#{change_pct}%"
@@ -723,12 +737,14 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
   defp phase_color(_), do: @text_secondary
 
   defp format_player_name(nil, _player), do: "?"
+
   defp format_player_name(_pid, player) when is_map(player) do
     case get(player, "name", get(player, :name, nil)) do
       nil -> "?"
       name -> name
     end
   end
+
   defp format_player_name(pid, _), do: pid
 
   defp has_event?(events, kind) when is_list(events) do

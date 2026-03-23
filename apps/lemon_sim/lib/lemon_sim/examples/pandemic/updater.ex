@@ -20,21 +20,50 @@ defmodule LemonSim.Examples.Pandemic.Updater do
     state = maybe_store_thought(state, event)
 
     case event.kind do
-      "check_region" -> apply_check_region(state, event)
-      "end_intelligence" -> apply_end_phase(state, event, "intelligence", "communication")
-      "share_data" -> apply_share_data(state, event)
-      "request_help" -> apply_request_help(state, event)
-      "end_communication" -> apply_end_phase(state, event, "communication", "resource_allocation")
-      "request_resources" -> apply_request_resources(state, event)
-      "donate_resources" -> apply_donate_resources(state, event)
-      "end_resource_allocation" -> apply_end_phase(state, event, "resource_allocation", "local_action")
-      "vaccinate" -> apply_vaccinate(state, event)
-      "quarantine_zone" -> apply_quarantine_zone(state, event)
-      "build_hospital" -> apply_build_hospital(state, event)
-      "fund_research" -> apply_fund_research(state, event)
-      "hoard_supplies" -> apply_hoard_supplies(state, event)
-      "end_local_action" -> apply_end_local_action(state, event)
-      _ -> {:error, {:invalid_event_kind, event.kind}}
+      "check_region" ->
+        apply_check_region(state, event)
+
+      "end_intelligence" ->
+        apply_end_phase(state, event, "intelligence", "communication")
+
+      "share_data" ->
+        apply_share_data(state, event)
+
+      "request_help" ->
+        apply_request_help(state, event)
+
+      "end_communication" ->
+        apply_end_phase(state, event, "communication", "resource_allocation")
+
+      "request_resources" ->
+        apply_request_resources(state, event)
+
+      "donate_resources" ->
+        apply_donate_resources(state, event)
+
+      "end_resource_allocation" ->
+        apply_end_phase(state, event, "resource_allocation", "local_action")
+
+      "vaccinate" ->
+        apply_vaccinate(state, event)
+
+      "quarantine_zone" ->
+        apply_quarantine_zone(state, event)
+
+      "build_hospital" ->
+        apply_build_hospital(state, event)
+
+      "fund_research" ->
+        apply_fund_research(state, event)
+
+      "hoard_supplies" ->
+        apply_hoard_supplies(state, event)
+
+      "end_local_action" ->
+        apply_end_local_action(state, event)
+
+      _ ->
+        {:error, {:invalid_event_kind, event.kind}}
     end
   end
 
@@ -153,7 +182,10 @@ defmodule LemonSim.Examples.Pandemic.Updater do
         state.world
         |> Map.put(:comm_inboxes, updated_inboxes)
         |> Map.put(:comm_sent_this_round, updated_sent)
-        |> Map.put(:comm_history, comm_history ++ [%{from: from_id, to: to_id, type: "data", round: round}])
+        |> Map.put(
+          :comm_history,
+          comm_history ++ [%{from: from_id, to: to_id, type: "data", round: round}]
+        )
 
       next_state =
         state
@@ -202,14 +234,18 @@ defmodule LemonSim.Examples.Pandemic.Updater do
         state.world
         |> Map.put(:comm_inboxes, updated_inboxes)
         |> Map.put(:comm_sent_this_round, updated_sent)
-        |> Map.put(:comm_history, comm_history ++ [%{from: from_id, to: to_id, type: "help_request", round: round}])
+        |> Map.put(
+          :comm_history,
+          comm_history ++ [%{from: from_id, to: to_id, type: "help_request", round: round}]
+        )
 
       next_state =
         state
         |> State.update_world(fn _ -> next_world end)
         |> State.append_event(event)
 
-      {:ok, next_state, {:decide, "#{from_id} requested help from #{to_id}, continue communication"}}
+      {:ok, next_state,
+       {:decide, "#{from_id} requested help from #{to_id}, continue communication"}}
     else
       {:error, reason} ->
         reject_action(state, event, from_id, reason)
@@ -251,15 +287,24 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:resource_pool, new_pool)
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
-        |> Map.put(:allocations, Map.put(allocations, governor_id, %{granted: %{vaccines: vaccines, funding: funding, medical_teams: medical_teams}}))
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
+        |> Map.put(
+          :allocations,
+          Map.put(allocations, governor_id, %{
+            granted: %{vaccines: vaccines, funding: funding, medical_teams: medical_teams}
+          })
+        )
 
       next_state =
         state
         |> State.update_world(fn _ -> next_world end)
         |> State.append_event(event)
 
-      {:ok, next_state, {:decide, "#{governor_id} received resources from pool, end your turn or donate"}}
+      {:ok, next_state,
+       {:decide, "#{governor_id} received resources from pool, end your turn or donate"}}
     else
       {:error, reason} ->
         reject_action(state, event, governor_id, reason)
@@ -365,7 +410,10 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:regions, Map.put(regions, region_id, new_region))
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
 
       next_state =
         state
@@ -392,7 +440,9 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       players = get(state.world, :players, %{})
       player = Map.get(players, governor_id, %{})
       resources = Map.get(player, :resources, %{})
-      new_resources = Map.update(resources, :medical_teams, 0, &max(0, &1 - @quarantine_team_cost))
+
+      new_resources =
+        Map.update(resources, :medical_teams, 0, &max(0, &1 - @quarantine_team_cost))
 
       regions = get(state.world, :regions, %{})
       region = Map.get(regions, region_id, %{})
@@ -401,7 +451,10 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:regions, Map.put(regions, region_id, new_region))
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
 
       next_state =
         state
@@ -435,7 +488,10 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:regions, Map.put(regions, region_id, new_region))
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
 
       next_state =
         state
@@ -468,7 +524,10 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:disease, updated_disease)
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
 
       next_state =
         state
@@ -514,8 +573,22 @@ defmodule LemonSim.Examples.Pandemic.Updater do
       next_world =
         state.world
         |> Map.put(:resource_pool, new_pool)
-        |> Map.put(:players, Map.put(players, governor_id, Map.put(player, :resources, new_resources)))
-        |> Map.put(:hoarding_log, hoarding_log ++ [%{governor: governor_id, round: round, vaccines: vaccines, medical_teams: medical_teams}])
+        |> Map.put(
+          :players,
+          Map.put(players, governor_id, Map.put(player, :resources, new_resources))
+        )
+        |> Map.put(
+          :hoarding_log,
+          hoarding_log ++
+            [
+              %{
+                governor: governor_id,
+                round: round,
+                vaccines: vaccines,
+                medical_teams: medical_teams
+              }
+            ]
+        )
 
       next_state =
         state
@@ -650,7 +723,8 @@ defmodule LemonSim.Examples.Pandemic.Updater do
         ]
 
         {next_world, events,
-         {:decide, "round #{next_round} begins, intelligence phase for #{List.first(get(next_world, :turn_order, []))}"}}
+         {:decide,
+          "round #{next_round} begins, intelligence phase for #{List.first(get(next_world, :turn_order, []))}"}}
     end
   end
 
@@ -848,8 +922,13 @@ defmodule LemonSim.Examples.Pandemic.Updater do
   defp rejection_reason(:not_active_actor), do: "not the active actor"
   defp rejection_reason(:invalid_governor), do: "invalid governor id"
   defp rejection_reason(:cannot_message_self), do: "cannot send message to yourself"
-  defp rejection_reason(:comm_quota_exceeded), do: "communication quota exceeded (max #{@comm_quota} per round)"
-  defp rejection_reason(:region_out_of_range), do: "region is out of range - can only check own region or neighbors"
+
+  defp rejection_reason(:comm_quota_exceeded),
+    do: "communication quota exceeded (max #{@comm_quota} per round)"
+
+  defp rejection_reason(:region_out_of_range),
+    do: "region is out of range - can only check own region or neighbors"
+
   defp rejection_reason(:already_allocated), do: "resources already allocated this round"
   defp rejection_reason(:insufficient_pool_vaccines), do: "not enough vaccines in shared pool"
   defp rejection_reason(:insufficient_pool_funding), do: "not enough funding in shared pool"

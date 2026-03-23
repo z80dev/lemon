@@ -113,7 +113,8 @@ defmodule LemonSim.Examples.SupplyChain.DemandModel do
   Returns nil if insufficient data.
   """
   @spec bullwhip_ratio([non_neg_integer()], [non_neg_integer()]) :: float() | nil
-  def bullwhip_ratio(order_history, demand_history) when length(order_history) >= 3 and length(demand_history) >= 3 do
+  def bullwhip_ratio(order_history, demand_history)
+      when length(order_history) >= 3 and length(demand_history) >= 3 do
     order_var = variance(order_history)
     demand_var = variance(demand_history)
 
@@ -140,6 +141,7 @@ defmodule LemonSim.Examples.SupplyChain.DemandModel do
   """
   @spec inventory_efficiency(float(), float()) :: float() | nil
   def inventory_efficiency(_avg_inventory, 0.0), do: nil
+
   def inventory_efficiency(avg_inventory, avg_demand) do
     Float.round(avg_inventory / avg_demand, 2)
   end

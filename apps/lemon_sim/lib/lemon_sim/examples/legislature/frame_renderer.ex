@@ -307,7 +307,14 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     ]
   end
 
-  defp render_game_over_card(%{w: w, h: h, turn_order: turn_order, scores: scores, winner: winner, players: players}) do
+  defp render_game_over_card(%{
+         w: w,
+         h: h,
+         turn_order: turn_order,
+         scores: scores,
+         winner: winner,
+         players: players
+       }) do
     cx = @roster_w + div(w - @roster_w - @bills_w, 2)
     cy = @header_h + div(h - @header_h - @footer_h, 2)
 
@@ -374,7 +381,10 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     end
   end
 
-  defp render_caucus_panel(%{w: w, h: h, message_history: message_history, turn_order: turn_order, players: players} = ctx) do
+  defp render_caucus_panel(
+         %{w: w, h: h, message_history: message_history, turn_order: turn_order, players: players} =
+           ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @bills_w - 20
@@ -434,7 +444,15 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     ]
   end
 
-  defp render_floor_debate_panel(%{w: w, h: h, floor_statements: floor_statements, turn_order: turn_order, players: players} = ctx) do
+  defp render_floor_debate_panel(
+         %{
+           w: w,
+           h: h,
+           floor_statements: floor_statements,
+           turn_order: turn_order,
+           players: players
+         } = ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @bills_w - 20
@@ -460,11 +478,16 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
           player_id = get(stmt, "player_id", "?")
           bill_id = get(stmt, "bill_id", "?")
           speech = get(stmt, "speech", "")
-          speech_preview = String.slice(speech, 0, 80) <> if String.length(speech) > 80, do: "...", else: ""
+
+          speech_preview =
+            String.slice(speech, 0, 80) <> if String.length(speech) > 80, do: "...", else: ""
 
           player_idx = Enum.find_index(turn_order, &(&1 == player_id)) || 0
           player_color = Enum.at(@player_colors, player_idx, @text_secondary)
-          faction = get(Map.get(players, player_id, %{}), "faction", format_player_name(player_id))
+
+          faction =
+            get(Map.get(players, player_id, %{}), "faction", format_player_name(player_id))
+
           bill_color = Map.get(@bill_colors, bill_id, @text_secondary)
 
           is_recent = idx >= length(recent_statements) - 2
@@ -485,7 +508,15 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     ]
   end
 
-  defp render_amendment_panel(%{w: w, h: h, proposed_amendments: proposed_amendments, turn_order: turn_order, players: players} = ctx) do
+  defp render_amendment_panel(
+         %{
+           w: w,
+           h: h,
+           proposed_amendments: proposed_amendments,
+           turn_order: turn_order,
+           players: players
+         } = ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @bills_w - 20
@@ -510,7 +541,9 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
           proposer = Map.get(amendment, :proposer_id, Map.get(amendment, "proposer_id", "?"))
           bill_id = Map.get(amendment, :bill_id, Map.get(amendment, "bill_id", "?"))
           text = Map.get(amendment, :amendment_text, Map.get(amendment, "amendment_text", ""))
-          text_preview = String.slice(text, 0, 70) <> if String.length(text) > 70, do: "...", else: ""
+
+          text_preview =
+            String.slice(text, 0, 70) <> if String.length(text) > 70, do: "...", else: ""
 
           proposer_idx = Enum.find_index(turn_order, &(&1 == proposer)) || 0
           proposer_color = Enum.at(@player_colors, proposer_idx, @text_secondary)
@@ -526,11 +559,26 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
           ]
         end)
       end,
-      render_active_player_bar(ctx, panel_x, panel_y, panel_w, panel_h, "is proposing amendments...")
+      render_active_player_bar(
+        ctx,
+        panel_x,
+        panel_y,
+        panel_w,
+        panel_h,
+        "is proposing amendments..."
+      )
     ]
   end
 
-  defp render_amendment_vote_panel(%{w: w, h: h, proposed_amendments: proposed_amendments, turn_order: turn_order, players: players} = ctx) do
+  defp render_amendment_vote_panel(
+         %{
+           w: w,
+           h: h,
+           proposed_amendments: proposed_amendments,
+           turn_order: turn_order,
+           players: players
+         } = ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @bills_w - 20
@@ -581,7 +629,14 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
           ~s[</text>\n]
         ]
       end),
-      render_active_player_bar(ctx, panel_x, panel_y, panel_w, panel_h, "is voting on amendments...")
+      render_active_player_bar(
+        ctx,
+        panel_x,
+        panel_y,
+        panel_w,
+        panel_h,
+        "is voting on amendments..."
+      )
     ]
   end
 
@@ -593,7 +648,9 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     end)
   end
 
-  defp render_final_vote_panel(%{w: w, h: h, vote_record: vote_record, turn_order: turn_order, players: players} = ctx) do
+  defp render_final_vote_panel(
+         %{w: w, h: h, vote_record: vote_record, turn_order: turn_order, players: players} = ctx
+       ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @bills_w - 20
@@ -650,7 +707,13 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
     if ctx.active_actor do
       actor_idx = Enum.find_index(ctx.turn_order, &(&1 == ctx.active_actor)) || 0
       actor_color = Enum.at(@player_colors, actor_idx, @text_secondary)
-      actor_faction = get(Map.get(ctx.players, ctx.active_actor, %{}), "faction", format_player_name(ctx.active_actor))
+
+      actor_faction =
+        get(
+          Map.get(ctx.players, ctx.active_actor, %{}),
+          "faction",
+          format_player_name(ctx.active_actor)
+        )
 
       [
         ~s[<rect x="#{panel_x + 10}" y="#{panel_y + panel_h - 42}" width="#{panel_w - 20}" height="28" ] <>

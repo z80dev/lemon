@@ -225,7 +225,8 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
           "status" => "countered"
         })
 
-      next_world = Map.put(state.world, :term_sheets, Map.put(term_sheets, sheet_key, updated_sheet))
+      next_world =
+        Map.put(state.world, :term_sheets, Map.put(term_sheets, sheet_key, updated_sheet))
 
       next_state =
         state
@@ -260,7 +261,10 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
       next_world =
         state.world
         |> close_deal(founder_id, investor_id, amount, equity_pct)
-        |> Map.put(:term_sheets, Map.put(term_sheets, sheet_key, Map.put(sheet, "status", "closed")))
+        |> Map.put(
+          :term_sheets,
+          Map.put(term_sheets, sheet_key, Map.put(sheet, "status", "closed"))
+        )
 
       next_state =
         state
@@ -478,8 +482,7 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
           |> Map.put(:phase_done, MapSet.new())
           |> Map.put(:active_actor_id, first)
 
-        {next_world,
-         "all done with #{current_phase}, now #{next_phase} phase for #{first}"}
+        {next_world, "all done with #{current_phase}, now #{next_phase} phase for #{first}"}
     end
   end
 
@@ -524,7 +527,9 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
     if next_round > max_rounds do
       # Game over — determine winner
       {final_world, _events} = determine_winner(world)
-      {final_world, "game over after #{round} rounds, winner: #{inspect(get(final_world, :winner))}"}
+
+      {final_world,
+       "game over after #{round} rounds, winner: #{inspect(get(final_world, :winner))}"}
     else
       turn_order = get(world, :turn_order, [])
       pitch_actors = active_actors_for_phase(world, "pitch")
@@ -558,10 +563,14 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
 
     # Update startup funding
     current_funding = Map.get(startup, :funding_raised, Map.get(startup, "funding_raised", 0))
+
     updated_startup =
       startup
       |> Map.put(:funding_raised, current_funding + amount)
-      |> Map.put(:cash_on_hand, Map.get(startup, :cash_on_hand, Map.get(startup, "cash_on_hand", 0)) + amount)
+      |> Map.put(
+        :cash_on_hand,
+        Map.get(startup, :cash_on_hand, Map.get(startup, "cash_on_hand", 0)) + amount
+      )
 
     # Update investor capital and portfolio
     remaining = Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0))
@@ -623,7 +632,10 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
     merged_b = Map.put(startup_b, :merged_into, founder_a_id)
 
     world
-    |> Map.put(:startups, startups |> Map.put(founder_a_id, merged_startup) |> Map.put(founder_b_id, merged_b))
+    |> Map.put(
+      :startups,
+      startups |> Map.put(founder_a_id, merged_startup) |> Map.put(founder_b_id, merged_b)
+    )
   end
 
   # ---------------------------------------------------------------------------
@@ -736,7 +748,10 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
       Enum.map(investors, fn {investor_id, investor} ->
         portfolio = Map.get(investor, :portfolio, Map.get(investor, "portfolio", []))
         fund_size = Map.get(investor, :fund_size, Map.get(investor, "fund_size", 1))
-        remaining = Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0))
+
+        remaining =
+          Map.get(investor, :remaining_capital, Map.get(investor, "remaining_capital", 0))
+
         deployed = fund_size - remaining
 
         total_portfolio_value =
@@ -750,7 +765,9 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
             acc + stake_value
           end)
 
-        return = if deployed > 0, do: (total_portfolio_value - deployed) / deployed * 100.0, else: 0.0
+        return =
+          if deployed > 0, do: (total_portfolio_value - deployed) / deployed * 100.0, else: 0.0
+
         {investor_id, round(return)}
       end)
 
@@ -842,8 +859,13 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
     sheet_key = "#{investor_id}->#{founder_id}"
 
     case Map.get(term_sheets, sheet_key) do
-      nil -> {:error, :no_offer}
-      sheet -> if Map.get(sheet, "status") in ["pending", "countered"], do: :ok, else: {:error, :no_active_offer}
+      nil ->
+        {:error, :no_offer}
+
+      sheet ->
+        if Map.get(sheet, "status") in ["pending", "countered"],
+          do: :ok,
+          else: {:error, :no_active_offer}
     end
   end
 
@@ -877,7 +899,10 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
   defp rejection_reason(:no_offer), do: "no offer exists from that investor"
   defp rejection_reason(:no_active_offer), do: "no active offer to respond to"
   defp rejection_reason(:already_merged), do: "that startup has already been merged"
-  defp rejection_reason(:invalid_allocation_type), do: "invalid allocation type (use growth/hiring/pivot/reserve)"
+
+  defp rejection_reason(:invalid_allocation_type),
+    do: "invalid allocation type (use growth/hiring/pivot/reserve)"
+
   defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
   # ---------------------------------------------------------------------------

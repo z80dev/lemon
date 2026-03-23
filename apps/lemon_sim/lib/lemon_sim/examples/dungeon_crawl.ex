@@ -35,25 +35,39 @@ defmodule LemonSim.Examples.DungeonCrawl do
   @traits ~w(reckless cautious glory_seeker protector scholar berserker compassionate tactical)
 
   @trait_descriptions %{
-    "reckless" => "You are RECKLESS — you charge in first, ask questions never. The thrill of combat drives you forward.",
-    "cautious" => "You are CAUTIOUS — you check every corner, test every floor tile, and never rush into a room.",
-    "glory_seeker" => "You are a GLORY SEEKER — you want the killing blow, the dramatic save, the story worth telling at the tavern.",
-    "protector" => "You are a PROTECTOR — your party members' safety comes before everything. You'll take a hit for anyone.",
-    "scholar" => "You are a SCHOLAR — you study your enemies, exploit weaknesses, and believe knowledge is the sharpest weapon.",
-    "berserker" => "You are a BERSERKER — when blood is drawn, something primal takes over. You attack the strongest enemy first, always.",
-    "compassionate" => "You are COMPASSIONATE — you heal before fighting, prioritize the wounded, and believe mercy is strength.",
-    "tactical" => "You are TACTICAL — you coordinate attacks, call targets, and think of the party as a single fighting unit."
+    "reckless" =>
+      "You are RECKLESS — you charge in first, ask questions never. The thrill of combat drives you forward.",
+    "cautious" =>
+      "You are CAUTIOUS — you check every corner, test every floor tile, and never rush into a room.",
+    "glory_seeker" =>
+      "You are a GLORY SEEKER — you want the killing blow, the dramatic save, the story worth telling at the tavern.",
+    "protector" =>
+      "You are a PROTECTOR — your party members' safety comes before everything. You'll take a hit for anyone.",
+    "scholar" =>
+      "You are a SCHOLAR — you study your enemies, exploit weaknesses, and believe knowledge is the sharpest weapon.",
+    "berserker" =>
+      "You are a BERSERKER — when blood is drawn, something primal takes over. You attack the strongest enemy first, always.",
+    "compassionate" =>
+      "You are COMPASSIONATE — you heal before fighting, prioritize the wounded, and believe mercy is strength.",
+    "tactical" =>
+      "You are TACTICAL — you coordinate attacks, call targets, and think of the party as a single fighting unit."
   }
 
   @connection_types ~w(sworn_oath tavern_debt old_quest siblings_in_arms rescued mentor_student)
 
   @connection_templates %{
-    "sworn_oath" => " swore a blood oath to protect each other after surviving a near-death encounter.",
-    "tavern_debt" => ": the first owes the second a considerable sum from a legendary night of gambling.",
-    "old_quest" => " adventured together before and know how the other fights. They can anticipate each other's moves.",
-    "siblings_in_arms" => " trained at the same academy and consider each other closer than family.",
-    "rescued" => ": the first once saved the second's life in a collapsing dungeon. The debt weighs heavily.",
-    "mentor_student" => ": the first taught the second their craft. Pride and protectiveness mix in equal measure."
+    "sworn_oath" =>
+      " swore a blood oath to protect each other after surviving a near-death encounter.",
+    "tavern_debt" =>
+      ": the first owes the second a considerable sum from a legendary night of gambling.",
+    "old_quest" =>
+      " adventured together before and know how the other fights. They can anticipate each other's moves.",
+    "siblings_in_arms" =>
+      " trained at the same academy and consider each other closer than family.",
+    "rescued" =>
+      ": the first once saved the second's life in a collapsing dungeon. The debt weighs heavily.",
+    "mentor_student" =>
+      ": the first taught the second their craft. Pride and protectiveness mix in equal measure."
   }
 
   @spec initial_world(keyword()) :: map()
