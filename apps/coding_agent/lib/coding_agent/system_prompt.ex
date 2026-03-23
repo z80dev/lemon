@@ -41,7 +41,7 @@ defmodule CodingAgent.SystemPrompt do
       build_runtime_section(session_scope),
       build_skills_section(cwd),
       build_memory_workflow_section(session_scope),
-      build_workspace_section(workspace_dir),
+      build_workspace_section(cwd, workspace_dir),
       build_workspace_context_section(bootstrap_files)
     ]
 
@@ -58,11 +58,13 @@ defmodule CodingAgent.SystemPrompt do
     PromptView.render_for_prompt(cwd)
   end
 
-  defp build_workspace_section(workspace_dir) do
+  defp build_workspace_section(cwd, workspace_dir) do
     """
-    ## Workspace
-    Your workspace directory is: #{workspace_dir}
-    Treat it as the persistent home for identity, memory, and operating notes.
+    ## Boundaries
+    Assistant home: #{workspace_dir}
+    Project root (cwd): #{cwd}
+    Use the assistant home for persistent identity, memory, and operating notes.
+    Use the project root for repo files, shell commands, and task execution.
     """
     |> String.trim()
   end
@@ -94,7 +96,8 @@ defmodule CodingAgent.SystemPrompt do
     - When creating a new topic file, follow the structure in `memory/topics/TEMPLATE.md`.
     - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
     - Use `search_memory` to recall prior run history (e.g. past bug fixes, commands run, earlier answers).
-      Prefer `scope: "session"` for recent context; use `scope: "agent"` for longer-term patterns.
+      Prefer `scope: "current"` to search both the project root and assistant home.
+      Use `scope: "project"` for repo-specific history, `scope: "home"` for assistant-home history, and `scope: "agent"` for longer-term patterns.
     - If confidence is still low after checking memory files, say so explicitly.
     """
     |> String.trim()

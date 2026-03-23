@@ -83,7 +83,7 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     assert String.contains?(prompt, "You are a personal assistant running inside Lemon.")
-    assert String.contains?(prompt, "## Workspace")
+    assert String.contains?(prompt, "## Boundaries")
     # SOUL.md is filtered out by subagent scope, so no persona instruction
     refute String.contains?(prompt, "embody its persona")
     # No real file content was written, so all entries are [MISSING] stubs
@@ -205,7 +205,7 @@ defmodule CodingAgent.SystemPromptTest do
   end
 
   @tag :tmp_dir
-  test "workspace section shows workspace dir", %{tmp_dir: tmp_dir} do
+  test "boundaries section shows assistant home and project root", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
     File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
@@ -216,8 +216,18 @@ defmodule CodingAgent.SystemPromptTest do
         session_scope: :main
       })
 
-    assert String.contains?(prompt, "## Workspace")
-    assert String.contains?(prompt, "Your workspace directory is: #{workspace_dir}")
-    assert String.contains?(prompt, "persistent home for identity, memory, and operating notes")
+    assert String.contains?(prompt, "## Boundaries")
+    assert String.contains?(prompt, "Assistant home: #{workspace_dir}")
+    assert String.contains?(prompt, "Project root (cwd): #{tmp_dir}")
+
+    assert String.contains?(
+             prompt,
+             "Use the assistant home for persistent identity, memory, and operating notes."
+           )
+
+    assert String.contains?(
+             prompt,
+             "Use the project root for repo files, shell commands, and task execution."
+           )
   end
 end

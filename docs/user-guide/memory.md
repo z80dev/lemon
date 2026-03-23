@@ -30,6 +30,20 @@ optionally `<cwd>/.lemon/memory.db` (project-scoped).
 
 The `search_memory` tool (available to agents) runs a full-text search over past runs.
 
+For coding sessions, Lemon distinguishes between:
+
+- **Project root (`cwd`)**: the active repo or directory where commands and file edits run
+- **Assistant home**: the persistent bootstrap home at `~/.lemon/agent/workspace`
+
+`search_memory` supports both boundaries:
+
+- `scope: "current"`: search project root plus assistant home
+- `scope: "project"`: search the active `cwd` only
+- `scope: "home"`: search the assistant home only
+- `scope: "session"` / `"agent"` / `"all"`: narrower or broader search across prior runs
+
+`scope: "workspace"` is kept as a compatibility alias for `current`.
+
 Enable it in your config:
 
 ```toml

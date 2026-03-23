@@ -155,8 +155,8 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.Compaction` | Context compaction engine -- finds valid cut points, generates LLM summaries, preserves file context |
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
-| `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from `~/.lemon/agent/workspace/` |
-| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (workspace files + skills list + memory workflow + runtime metadata) |
+| `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
+| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills list + memory workflow + runtime metadata) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mention sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd hierarchy up to root, then home directory; also loads prompts, themes, and skills |
 
@@ -317,6 +317,9 @@ Settings are loaded from TOML files and merged (global, then project):
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 ### Workspace Bootstrap Files
+
+`workspace_dir/0` is the assistant home bootstrap directory, not the active project root.
+The active project boundary remains `cwd`.
 
 Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/workspace/`):
 

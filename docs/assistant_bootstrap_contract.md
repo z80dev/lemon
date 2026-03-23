@@ -29,6 +29,10 @@ The composed prompt is refreshed before each user prompt so file edits in worksp
 
 Workspace bootstrap lives in `~/.lemon/agent/workspace` (or `:workspace_dir` override) and is auto-initialized on session startup.
 
+This directory is the assistant's persistent home for identity and long-lived notes.
+It is distinct from the active project root / `cwd` used for repo-local config discovery,
+shell execution, and session persistence.
+
 Canonical files:
 
 - `AGENTS.md`
@@ -49,7 +53,7 @@ Lemon uses four frozen memory scopes. New stores must be placed in one of these 
 | Scope | Owner store location | Lifetime | Description |
 | --- | --- | --- | --- |
 | `session` | `lemon_core` (run/session stores) | Single agent run | Per-run state: messages, tool calls, context window. Discarded when the run ends. |
-| `workspace` | `lemon_core` (workspace store) | Workspace lifetime | Project-level persistent memory tied to a workspace directory. Survives individual runs. |
+| `workspace` | `lemon_core` (workspace store) | Workspace lifetime | Durable memory keyed by a directory boundary. In practice this may be a project root (`cwd`) or the assistant home directory, depending on the feature. Survives individual runs. |
 | `agent` | `lemon_core` (agent memory store) | Agent lifetime | Cross-run memory for a specific agent identity. Shared across workspaces for the same agent. |
 | `global` | `lemon_core` (global store) | Installation lifetime | Installation-wide configuration and state. Shared across all agents and workspaces. |
 

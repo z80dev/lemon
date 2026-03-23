@@ -118,8 +118,8 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.Compaction` | Context compaction when conversations grow large |
 | `CodingAgent.CompactionHooks` | Hooks for compaction events |
 | `CodingAgent.ContextGuardrails` | Pre-LLM hard caps for large tool outputs/args with optional spill-to-disk references |
-| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from `~/.lemon/agent/workspace/` |
-| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (workspace files + skills) |
+| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the assistant home at `~/.lemon/agent/workspace/` |
+| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
@@ -770,7 +770,7 @@ Key config paths (via `CodingAgent.Config`):
 | `agent_dir/0` | `~/.lemon/agent` (override: `LEMON_AGENT_DIR`) |
 | `sessions_dir/1` | `~/.lemon/agent/sessions/{encoded-cwd}/` |
 | `extensions_dir/0` | `~/.lemon/agent/extensions/` |
-| `workspace_dir/0` | `~/.lemon/agent/workspace/` |
+| `workspace_dir/0` | `~/.lemon/agent/workspace/` (assistant home bootstrap dir, distinct from `cwd`) |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` |
 
 Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` with fixed precedence:
