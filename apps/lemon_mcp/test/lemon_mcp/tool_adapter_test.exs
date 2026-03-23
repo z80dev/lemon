@@ -82,4 +82,12 @@ defmodule LemonMCP.ToolAdapterTest do
     assert result.isError == false
     assert [%{type: "text", text: "hello from tool"}] = result.content
   end
+
+  test "builtin adapter inventory does not expose browser" do
+    adapter = ToolAdapter.new("/tmp")
+
+    refute ToolAdapter.has_tool?(adapter, "browser")
+    refute "browser" in ToolAdapter.tool_names(adapter)
+    assert ToolAdapter.has_tool?(adapter, "read")
+  end
 end

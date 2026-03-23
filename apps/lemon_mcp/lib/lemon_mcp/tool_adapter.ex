@@ -33,7 +33,6 @@ defmodule LemonMCP.ToolAdapter do
 
   # Mapping of tool names to their CodingAgent.Tools modules
   @builtin_tools %{
-    "browser" => CodingAgent.Tools.Browser,
     "read" => CodingAgent.Tools.Read,
     "write" => CodingAgent.Tools.Write,
     "edit" => CodingAgent.Tools.Edit,

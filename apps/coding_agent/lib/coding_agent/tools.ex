@@ -3,14 +3,13 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
+  - `coding_tools/2` - Full access tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
   - `read_only_tools/2` - Exploration tools (read only)
   - `all_tools/2` - All available tools as a map
   """
 
   alias CodingAgent.Tools.{
     Agent,
-    Browser,
     Read,
     Write,
     Edit,
@@ -33,7 +32,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
+  Get the default coding tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
 
   ## Options
   - Any options are passed through to individual tools
@@ -41,7 +40,6 @@ defmodule CodingAgent.Tools do
   @spec coding_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
   def coding_tools(cwd, opts \\ []) do
     [
-      Browser.tool(cwd, opts),
       Read.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
@@ -83,7 +81,6 @@ defmodule CodingAgent.Tools do
   @spec all_tools(String.t(), keyword()) :: %{String.t() => AgentCore.Types.AgentTool.t()}
   def all_tools(cwd, opts \\ []) do
     %{
-      "browser" => Browser.tool(cwd, opts),
       "read" => Read.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),

@@ -155,7 +155,7 @@ Two options:
 
 ```elixir
 defmodule MyApp.MCPProvider do
-  use LemonMCP.ToolAdapter, cwd: "/path/to/project", exclude_tools: ["browser"]
+  use LemonMCP.ToolAdapter, cwd: "/path/to/project", exclude_tools: ["bash"]
 end
 ```
 

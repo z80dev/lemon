@@ -101,7 +101,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (20 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (19 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
@@ -114,7 +114,7 @@ CodingAgent.Supervisor (one_for_one)
 |----------|-------|
 | File I/O | `read`, `write`, `edit`, `hashline_edit`, `patch`, `ls` |
 | Search | `grep`, `find` |
-| Execution | `bash`, `browser` |
+| Execution | `bash` |
 | Web | `websearch`, `webfetch` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo` |
 | Social | `post_to_x`, `get_x_mentions` |

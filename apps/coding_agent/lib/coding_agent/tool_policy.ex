@@ -38,7 +38,6 @@ defmodule CodingAgent.ToolPolicy do
     "grep",
     "find",
     "ls",
-    "browser",
     "webfetch",
     "websearch",
     "todo",
@@ -47,7 +46,7 @@ defmodule CodingAgent.ToolPolicy do
     "extensions_status"
   ]
 
-  @external_tools ["browser", "webfetch", "websearch"]
+  @external_tools ["webfetch", "websearch"]
 
   @dangerous_tools ["write", "edit", "patch", "bash", "exec", "process", "agent"]
 

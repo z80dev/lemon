@@ -6,7 +6,7 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 
 - `agent_core` - Core agent runtime, types, and event loop
 - `ai` - AI model providers and LLM integration
-- `lemon_core` - Shared primitives (sessions, storage, browser, bus, exec approvals)
+- `lemon_core` - Shared primitives (sessions, storage, bus, exec approvals)
 - `lemon_skills` - Skill discovery and loading
 
 ## Architecture Overview
@@ -61,13 +61,13 @@ When downstream store or agent processes time out, callers should log and contin
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (20 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (19 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
 | **File Operations** | `read`, `write`, `edit`, `patch`, `hashline_edit`, `ls` |
 | **Search** | `grep`, `find` |
-| **Execution** | `bash`, `browser` |
+| **Execution** | `bash` |
 | **Web** | `websearch`, `webfetch` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo` |
 | **Social** | `post_to_x`, `get_x_mentions` |
@@ -657,7 +657,7 @@ apps/coding_agent/
 |   |   |   +-- patch.ex, hashline_edit.ex, hashline.ex
 |   |   |   +-- bash.ex, exec.ex, process.ex, await.ex
 |   |   |   +-- grep.ex, find.ex, ls.ex, fuzzy.ex
-|   |   |   +-- browser.ex, webfetch.ex, websearch.ex, webdownload.ex
+|   |   |   +-- webfetch.ex, websearch.ex, webdownload.ex
 |   |   |   +-- web_cache.ex, web_guard.ex
 |   |   |   +-- todo.ex, todoread.ex, todowrite.ex
 |   |   |   +-- todo_store.ex, todo_store_owner.ex

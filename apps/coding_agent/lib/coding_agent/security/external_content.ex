@@ -20,13 +20,12 @@ defmodule CodingAgent.Security.ExternalContent do
     email: "Email",
     webhook: "Webhook",
     api: "API",
-    browser: "Browser",
     web_search: "Web Search",
     web_fetch: "Web Fetch",
     unknown: "External"
   }
 
-  @type source :: :email | :webhook | :api | :browser | :web_search | :web_fetch | :unknown
+  @type source :: :email | :webhook | :api | :web_search | :web_fetch | :unknown
   @type key_style :: :snake_case | :camel_case
   @type web_source :: :web_search | :web_fetch
 
@@ -132,7 +131,7 @@ defmodule CodingAgent.Security.ExternalContent do
   end
 
   defp normalize_source(source)
-       when source in [:email, :webhook, :api, :browser, :web_search, :web_fetch],
+       when source in [:email, :webhook, :api, :web_search, :web_fetch],
        do: source
 
   defp normalize_source(:unknown), do: :unknown
@@ -142,7 +141,6 @@ defmodule CodingAgent.Security.ExternalContent do
       "email" -> :email
       "webhook" -> :webhook
       "api" -> :api
-      "browser" -> :browser
       "web_search" -> :web_search
       "web-fetch" -> :web_fetch
       "web_fetch" -> :web_fetch
