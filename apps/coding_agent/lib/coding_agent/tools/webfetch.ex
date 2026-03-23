@@ -887,7 +887,8 @@ defmodule CodingAgent.Tools.WebFetch do
         _ -> nil
       end
 
-    firecrawl_api_key_secret = normalize_optional_string(get_map_value(firecrawl_cfg, :api_key_secret, nil))
+    firecrawl_api_key_secret =
+      normalize_optional_string(get_map_value(firecrawl_cfg, :api_key_secret, nil))
 
     firecrawl_api_key =
       normalize_optional_string(get_map_value(firecrawl_cfg, :api_key, nil)) ||

@@ -335,6 +335,8 @@ defmodule CodingAgent.Tools.Task.Async do
     end
   end
 
-  defp maybe_start_live_bridge(run_id) when is_binary(run_id), do: LiveBridge.start_for_child_run(run_id)
+  defp maybe_start_live_bridge(run_id) when is_binary(run_id),
+    do: LiveBridge.start_for_child_run(run_id)
+
   defp maybe_start_live_bridge(_), do: :ok
 end

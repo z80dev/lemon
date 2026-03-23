@@ -6,7 +6,13 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
   alias CodingAgent.TaskProgressBindingStore
   alias LemonCore.{Bus, Event}
 
-  @terminal_event_types [:run_completed, :task_completed, :task_error, :task_timeout, :task_aborted]
+  @terminal_event_types [
+    :run_completed,
+    :task_completed,
+    :task_error,
+    :task_timeout,
+    :task_aborted
+  ]
 
   def start_link(binding) when is_map(binding) do
     GenServer.start_link(__MODULE__, binding)
@@ -25,7 +31,10 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
   def start_for_child_run(child_run_id) when is_binary(child_run_id) do
     case TaskProgressBindingStore.get_by_child_run_id(child_run_id) do
       {:ok, binding} ->
-        case DynamicSupervisor.start_child(CodingAgent.Tools.Task.LiveBridgeSupervisor, {__MODULE__, binding}) do
+        case DynamicSupervisor.start_child(
+               CodingAgent.Tools.Task.LiveBridgeSupervisor,
+               {__MODULE__, binding}
+             ) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, reason} -> {:error, reason}
@@ -104,7 +113,10 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
   defp projected_action_id(child_run_id, kind, title_kind, title) do
     normalized_kind = kind |> to_string()
     normalized_title = (title || title_kind || "") |> to_string()
-    short_hash = :crypto.hash(:sha256, normalized_title) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+
+    short_hash =
+      :crypto.hash(:sha256, normalized_title) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+
     "taskproj:" <> child_run_id <> ":" <> normalized_kind <> ":" <> short_hash
   end
 end

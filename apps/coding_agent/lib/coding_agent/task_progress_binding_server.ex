@@ -66,7 +66,12 @@ defmodule CodingAgent.TaskProgressBindingServer do
   def init(_opts) do
     Process.flag(:trap_exit, true)
 
-    state = %{binding_table: @binding_table, task_index_table: @task_index_table, initialized: false}
+    state = %{
+      binding_table: @binding_table,
+      task_index_table: @task_index_table,
+      initialized: false
+    }
+
     state = ensure_state_tables(state)
     _ = do_cleanup(startup_ttl_seconds())
     schedule_cleanup()
@@ -256,6 +261,10 @@ defmodule CodingAgent.TaskProgressBindingServer do
   end
 
   defp startup_ttl_seconds do
-    Application.get_env(:coding_agent, :task_progress_binding_store_ttl_seconds, @default_ttl_seconds)
+    Application.get_env(
+      :coding_agent,
+      :task_progress_binding_store_ttl_seconds,
+      @default_ttl_seconds
+    )
   end
 end

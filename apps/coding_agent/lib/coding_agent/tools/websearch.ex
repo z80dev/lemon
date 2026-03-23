@@ -1082,7 +1082,8 @@ defmodule CodingAgent.Tools.WebSearch do
         secondary_provider: secondary_provider,
         enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
         api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
-        api_key_secret: normalize_optional_string(get_map_value(search_cfg, :api_key_secret, nil)),
+        api_key_secret:
+          normalize_optional_string(get_map_value(search_cfg, :api_key_secret, nil)),
         max_results: resolve_max_results(search_cfg),
         timeout_ms: cache_settings.timeout_ms,
         cache_ttl_ms: cache_settings.cache_ttl_ms,
@@ -1218,7 +1219,8 @@ defmodule CodingAgent.Tools.WebSearch do
     %{
       perplexity: %{
         api_key: normalize_optional_string(get_map_value(perplexity_cfg, :api_key, nil)),
-        api_key_secret: normalize_optional_string(get_map_value(perplexity_cfg, :api_key_secret, nil)),
+        api_key_secret:
+          normalize_optional_string(get_map_value(perplexity_cfg, :api_key_secret, nil)),
         base_url: normalize_optional_string(get_map_value(perplexity_cfg, :base_url, nil)),
         model:
           normalize_optional_string(

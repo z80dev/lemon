@@ -83,7 +83,9 @@ defmodule CodingAgent.Tools.Task.ExecutionTest do
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
-      assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(result.details.task_id)
+
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_task_id(result.details.task_id)
     end
   end
 end

@@ -143,7 +143,8 @@ defmodule Ai.Providers.OpenAICompletionsTest do
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+      {:ok, stream} =
+        OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
 
       assert_receive {:request_headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -176,12 +177,16 @@ defmodule Ai.Providers.OpenAICompletionsTest do
       }
 
       # Last message is assistant -> should be "agent"
-      context = Context.new(messages: [
-        %UserMessage{content: "Hi"},
-        %AssistantMessage{content: [%TextContent{text: "Hello!"}]}
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hi"},
+            %AssistantMessage{content: [%TextContent{text: "Hello!"}]}
+          ]
+        )
 
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+      {:ok, stream} =
+        OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
 
       assert_receive {:request_headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -210,7 +215,8 @@ defmodule Ai.Providers.OpenAICompletionsTest do
       image = %ImageContent{data: "AA==", mime_type: "image/png"}
       context = Context.new(messages: [%UserMessage{content: [image]}])
 
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+      {:ok, stream} =
+        OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
 
       assert_receive {:request_headers, headers}, 1000
       headers_map = Map.new(headers)

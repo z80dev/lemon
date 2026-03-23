@@ -109,7 +109,10 @@ defmodule Ai.Providers.AzureOpenAIResponses do
             LemonCore.ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, opts)
           rescue
             e ->
-              Logger.warning("Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}")
+              Logger.warning(
+                "Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}"
+              )
+
               %{}
           end
 
@@ -124,7 +127,8 @@ defmodule Ai.Providers.AzureOpenAIResponses do
           end
 
           # Build request
-          {url, headers, body} = build_request(model, context, opts, api_key, deployment_name, resolved)
+          {url, headers, body} =
+            build_request(model, context, opts, api_key, deployment_name, resolved)
 
           EventStream.push_async(stream, {:start, output})
 

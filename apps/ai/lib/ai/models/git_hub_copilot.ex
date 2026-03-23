@@ -255,7 +255,12 @@ defmodule Ai.Models.GitHubCopilot do
       api: :openai_responses,
       provider: :github_copilot,
       base_url: "https://api.individual.githubcopilot.com",
-      headers: %{"User-Agent" => "GitHubCopilotChat/0.35.0", "Editor-Version" => "vscode/1.107.0", "Editor-Plugin-Version" => "copilot-chat/0.35.0", "Copilot-Integration-Id" => "vscode-chat"},
+      headers: %{
+        "User-Agent" => "GitHubCopilotChat/0.35.0",
+        "Editor-Version" => "vscode/1.107.0",
+        "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+        "Copilot-Integration-Id" => "vscode-chat"
+      },
       reasoning: true,
       input: [:text, :image],
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
@@ -268,7 +273,12 @@ defmodule Ai.Models.GitHubCopilot do
       api: :openai_responses,
       provider: :github_copilot,
       base_url: "https://api.individual.githubcopilot.com",
-      headers: %{"User-Agent" => "GitHubCopilotChat/0.35.0", "Editor-Version" => "vscode/1.107.0", "Editor-Plugin-Version" => "copilot-chat/0.35.0", "Copilot-Integration-Id" => "vscode-chat"},
+      headers: %{
+        "User-Agent" => "GitHubCopilotChat/0.35.0",
+        "Editor-Version" => "vscode/1.107.0",
+        "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+        "Copilot-Integration-Id" => "vscode-chat"
+      },
       reasoning: true,
       input: [:text, :image],
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},

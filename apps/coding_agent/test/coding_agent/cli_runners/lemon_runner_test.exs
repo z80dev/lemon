@@ -360,7 +360,9 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     test "does not leak thinking when no visible text exists yet" do
-      msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
+      msg = %AssistantMessage{
+        content: [%ThinkingContent{thinking: "I should inspect the provider first."}]
+      }
 
       assert LemonRunner.text_delta_from_message_update(
                msg,
@@ -370,7 +372,9 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     test "does not emit thinking deltas to the user" do
-      msg = %AssistantMessage{content: [%ThinkingContent{thinking: "I should inspect the provider first."}]}
+      msg = %AssistantMessage{
+        content: [%ThinkingContent{thinking: "I should inspect the provider first."}]
+      }
 
       assert LemonRunner.text_delta_from_message_update(
                msg,

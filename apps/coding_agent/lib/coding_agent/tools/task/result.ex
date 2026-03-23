@@ -192,9 +192,16 @@ defmodule CodingAgent.Tools.Task.Result do
         run_id -> Map.put(details, :run_id, run_id)
       end
 
-    details = if is_map(current_action), do: Map.put(details, :current_action, current_action), else: details
-    details = if is_map(action_detail), do: Map.put(details, :action_detail, action_detail), else: details
-    details = if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
+    details =
+      if is_map(current_action),
+        do: Map.put(details, :current_action, current_action),
+        else: details
+
+    details =
+      if is_map(action_detail), do: Map.put(details, :action_detail, action_detail), else: details
+
+    details =
+      if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
 
     %AgentToolResult{content: content, details: details}
   end
@@ -219,7 +226,8 @@ defmodule CodingAgent.Tools.Task.Result do
       %{details: details} when is_map(details) ->
         Map.get(details, :current_action) || Map.get(details, "current_action")
 
-      _ -> nil
+      _ ->
+        nil
     end)
   end
 
@@ -233,7 +241,8 @@ defmodule CodingAgent.Tools.Task.Result do
       %{details: details} when is_map(details) ->
         details |> extract_action_detail() |> maybe_put_child_run_id(child_run_id)
 
-      _ -> nil
+      _ ->
+        nil
     end)
   end
 
@@ -247,7 +256,8 @@ defmodule CodingAgent.Tools.Task.Result do
       %{details: details} when is_map(details) ->
         Map.get(details, :engine) || Map.get(details, "engine")
 
-      _ -> nil
+      _ ->
+        nil
     end)
   end
 

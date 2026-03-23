@@ -102,6 +102,7 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   defp build_engine_label(nil, _model), do: ""
   defp build_engine_label("internal", _model), do: ""
+
   defp build_engine_label(engine, model) when is_binary(engine) do
     if is_binary(model) and model != "", do: "#{engine}/#{model}", else: engine
   end

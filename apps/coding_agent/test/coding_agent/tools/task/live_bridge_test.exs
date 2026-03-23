@@ -82,7 +82,9 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
         })
       )
 
-    assert_receive %Event{type: :task_projected_child_action, payload: projected, meta: meta}, 1_000
+    assert_receive %Event{type: :task_projected_child_action, payload: projected, meta: meta},
+                   1_000
+
     assert projected.engine == "codex"
     assert projected.phase == :started
     assert projected.action.id == "taskproj:" <> child_run_id <> ":child_action_1"
@@ -110,10 +112,16 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
     assert {:ok, pid} = LiveBridge.start_link(binding)
     ref = Process.monitor(pid)
 
-    :ok = Bus.broadcast(Bus.run_topic(binding.child_run_id), Event.new(:run_completed, %{completed: %{ok: true}}))
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(binding.child_run_id),
+        Event.new(:run_completed, %{completed: %{ok: true}})
+      )
 
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
-    assert {:error, :not_found} = TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
+
+    assert {:error, :not_found} =
+             TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
   end
 
   test "duplicate child action updates do not crash" do

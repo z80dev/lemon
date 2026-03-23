@@ -784,7 +784,8 @@ defmodule CodingAgent.Tools.Agent do
     model = normalize_optional_string(validated[:model])
     role = normalize_optional_string(validated[:role_id])
 
-    summary = if is_binary(description) and description != "", do: description, else: "delegated task"
+    summary =
+      if is_binary(description) and description != "", do: description, else: "delegated task"
 
     base = "[agent #{agent_id}] #{summary}"
 

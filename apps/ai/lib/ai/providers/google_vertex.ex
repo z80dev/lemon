@@ -97,7 +97,10 @@ defmodule Ai.Providers.GoogleVertex do
           LemonCore.ProviderConfigResolver.resolve_for_provider(:google_vertex, opts)
         rescue
           e ->
-            Logger.warning("Failed to resolve Google Vertex provider config: #{Exception.message(e)}")
+            Logger.warning(
+              "Failed to resolve Google Vertex provider config: #{Exception.message(e)}"
+            )
+
             %{}
         end
 

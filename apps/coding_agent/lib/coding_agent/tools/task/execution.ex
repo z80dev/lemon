@@ -8,7 +8,14 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Async, Followup, Runner}
 
-  @spec run(String.t() | nil, map(), reference() | nil, (term() -> :ok) | nil, String.t(), keyword()) ::
+  @spec run(
+          String.t() | nil,
+          map(),
+          reference() | nil,
+          (term() -> :ok) | nil,
+          String.t(),
+          keyword()
+        ) ::
           term()
   def run(tool_call_id, validated, signal, on_update, cwd, opts) do
     execution = build_execution_context(tool_call_id, validated, cwd, opts)
@@ -218,10 +225,15 @@ defmodule CodingAgent.Tools.Task.Execution do
   defp maybe_create_progress_binding(task_id, run_id, lifecycle_context) do
     with true <- is_binary(task_id) and task_id != "",
          true <- is_binary(run_id) and run_id != "",
-         true <- is_binary(lifecycle_context[:parent_run_id]) and lifecycle_context[:parent_run_id] != "",
-         true <- is_binary(lifecycle_context[:session_key]) and lifecycle_context[:session_key] != "",
+         true <-
+           is_binary(lifecycle_context[:parent_run_id]) and
+             lifecycle_context[:parent_run_id] != "",
+         true <-
+           is_binary(lifecycle_context[:session_key]) and lifecycle_context[:session_key] != "",
          true <- is_binary(lifecycle_context[:agent_id]) and lifecycle_context[:agent_id] != "",
-         true <- is_binary(lifecycle_context[:root_action_id]) and lifecycle_context[:root_action_id] != "",
+         true <-
+           is_binary(lifecycle_context[:root_action_id]) and
+             lifecycle_context[:root_action_id] != "",
          surface when not is_nil(surface) <- lifecycle_context[:surface] do
       TaskProgressBindingStore.new_binding(%{
         task_id: task_id,
