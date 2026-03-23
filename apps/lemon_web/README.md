@@ -1,6 +1,6 @@
 # LemonWeb
 
-Phoenix web interface for the Lemon platform. Provides a real-time dashboard for interacting with Lemon agents via LiveView, a games lobby and match spectator UI, and optional token-based access control.
+Phoenix web interface for the Lemon platform. Provides a real-time dashboard for interacting with Lemon agents via LiveView and optional token-based access control.
 
 ## Architecture Overview
 
@@ -47,15 +47,6 @@ All LiveView pages communicate over this socket. There are no custom Phoenix Cha
 
 ## Route Inventory
 
-### Public Browser Pipeline (`:public_browser`)
-
-No authentication required. Standard browser plugs (session, CSRF, secure headers).
-
-| Path | LiveView | Action | Description |
-|------|----------|--------|-------------|
-| `/games` | `GamesLobbyLive` | `:index` | Lists public game matches with live updates |
-| `/games/:id` | `GameMatchLive` | `:show` | Spectates a specific match with board state and event timeline |
-
 ### Authenticated Browser Pipeline (`:browser`)
 
 Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, requests must present a valid token.
@@ -100,22 +91,6 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 2. Files are persisted to the uploads directory with timestamped names
 3. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
 4. Response streams back through PubSub events
-
-### GamesLobbyLive (`/games`)
-
-Displays a live list of public game matches. Subscribes to `LemonGames.Bus` lobby events and refreshes the match list automatically when matches are created, updated, or expire. Each match entry shows game type, status badge, and a "Watch" link.
-
-### GameMatchLive (`/games/:id`)
-
-Spectator view for a single game match. Shows the current board state, match metadata, and a scrolling event timeline. Subscribes to per-match events via `LemonGames.Bus` and fetches incremental events in batches of 100.
-
-This route is intentionally spectator-only in the current release. Move submission remains an API/client responsibility.
-
-**Supported game types:**
-- `connect4` -- Rendered as a grid with colored chip indicators
-- `rock_paper_scissors` -- Shows player throws and winner
-- `tic_tac_toe` -- Rendered as a 3x3 board
-- `battleship` -- Rendered as placement/battle status plus shot grids
 
 ## Components
 
@@ -228,7 +203,6 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 | App | Purpose |
 |-----|---------|
 | `lemon_core` | PubSub (`LemonCore.Bus`), session keys (`LemonCore.SessionKey`), events (`LemonCore.Event`), map helpers |
-| `lemon_games` | Games bus (`LemonGames.Bus`), match service (`LemonGames.Matches.Service`) |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
 
 ### External Dependencies

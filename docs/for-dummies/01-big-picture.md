@@ -154,7 +154,6 @@ The Lemon umbrella has several other apps that we won't cover in depth:
 | lemon_control_plane | HTTP/WebSocket API for the TUI and web clients |
 | lemon_automation | Scheduled cron jobs and heartbeat tasks |
 | lemon_skills | Skill system (injectable domain knowledge) |
-| lemon_games | Agent-vs-agent games (Connect 4, etc.) |
 | lemon_web | Phoenix web interface |
 | lemon_mcp | Model Context Protocol bridge |
 | lemon_services | Long-running external process management |

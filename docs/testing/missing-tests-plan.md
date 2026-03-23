@@ -258,18 +258,7 @@ If the goal is fastest reduction of real production risk, start here:
 - Why it matters:
   - This is the persistence layer behind long-lived service definitions
 
-### 18. Games: visibility and spectator rules
-
-- Target: `apps/lemon_games/lib/lemon_games/matches/service.ex`
-- Suggested test file: extend `apps/lemon_games/test/lemon_games/matches/service_test.exs`
-- Scenario:
-  - Private matches hidden from non-participants
-  - Unlisted/private matches excluded from `list_lobby/0`
-  - `list_events/4` rejects unauthorized viewers but still allows participants
-- Why it matters:
-  - This is the privacy boundary for the games platform
-
-### 19. Telegram: message-buffer debounce semantics
+### 18. Telegram: message-buffer debounce semantics
 
 - Target: `apps/lemon_channels/lib/lemon_channels/adapters/telegram/transport/message_buffer.ex`
 - Suggested test file: `apps/lemon_channels/test/lemon_channels/adapters/telegram/message_buffer_test.exs`

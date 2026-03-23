@@ -1,6 +1,6 @@
 # LemonControlPlane
 
-HTTP and WebSocket control plane API server for the Lemon agent system. Provides a frame-based JSON protocol over WebSocket for real-time bidirectional communication, plus REST endpoints for the games platform.
+HTTP and WebSocket control plane API server for the Lemon agent system. Provides a frame-based JSON protocol over WebSocket for real-time bidirectional communication.
 
 ## Overview
 
@@ -19,9 +19,9 @@ The server runs on [Bandit](https://github.com/mtrudel/bandit) with [Plug](https
                     +--------------------------------+---------------------------+
                     |                 |               |                          |
              +------v------+  +------v------+  +-----v----------+  +-----------v---------+
-             |  /healthz   |  | /v1/games/* |  |     /ws        |  |  404 fallback       |
-             |  (GET JSON) |  | (REST API)  |  |  (WebSocket)   |  |                     |
-             +-------------+  +-------------+  +------+---------+  +---------------------+
+             |  /healthz   |  |     /ws        |  |  404 fallback       |
+             |  (GET JSON) |  |  (WebSocket)   |  |                     |
+             +-------------+  +------+---------+  +---------------------+
                                                       |
                       +-------------------------------+-------------------------------+
                       |                               |                               |
@@ -82,14 +82,6 @@ LemonControlPlane.Supervisor (one_for_one)
 |--------|------|-------------|
 | GET | `/healthz` | Health check, returns `{"ok": true}` |
 | GET | `/ws` | WebSocket upgrade endpoint |
-| GET | `/v1/games/lobby` | List active/recent public game matches |
-| GET | `/v1/games/matches/:id` | Get match state (redacted per viewer) |
-| GET | `/v1/games/matches/:id/events` | Poll match event feed |
-| POST | `/v1/games/matches` | Create a match challenge |
-| POST | `/v1/games/matches/:id/accept` | Accept a pending match |
-| POST | `/v1/games/matches/:id/moves` | Submit a turn move |
-
-The Games API endpoints use Bearer token authentication with scoped claims (e.g., `games:play`), validated through `LemonGames.Auth`.
 
 ## WebSocket Protocol
 
@@ -396,14 +388,6 @@ Each method declares required scopes. A connection must have at least one matchi
 | `events.subscriptions.list` | read | List current subscriptions |
 | `events.ingest` | write | Ingest external events |
 
-### Games Token Administration (JSON-RPC)
-
-| Method | Scope | Description |
-|--------|-------|-------------|
-| `games.token.issue` | admin | Issue a bearer token with `games:*` scopes |
-| `games.tokens.list` | admin | List issued game tokens (metadata only) |
-| `games.token.revoke` | admin | Revoke a game token by id |
-
 ### Voice / TTS (capability-gated)
 
 | Method | Scope | Description |
@@ -564,7 +548,6 @@ In test mode, the port defaults to `0` (OS-assigned) to avoid conflicts.
 | `lemon_core` | Store, secrets, event bus, idempotency, telemetry |
 | `lemon_router` | Run submission (`LemonRouter.submit/1`, `LemonRouter.RunOrchestrator`) |
 | `lemon_channels` | Channel backends, Outbox for `send` method |
-| `lemon_games` | Games platform match service, auth, rate limiting |
 | `lemon_skills` | Skill management |
 | `lemon_automation` | Cron manager, heartbeat features |
 | `coding_agent` | Compile-time only (not started at runtime) |

@@ -188,31 +188,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-  test "flags raw lemon_games store access outside app-local wrappers" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_games/lib/lemon_games/bad_game_state.ex",
-        """
-        defmodule LemonGames.BadGameState do
-          def bad(id), do: LemonCore.Store.get(:matches, id)
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
-      assert Enum.any?(report.issues, fn issue ->
-               issue.code == :games_raw_store_bypass and
-                 issue.path == "apps/lemon_games/lib/lemon_games/bad_game_state.ex"
-             end)
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
-
   test "flags raw generic shared-domain session store access" do
     tmp_dir = tmp_repo!()
 

@@ -22,15 +22,6 @@ defmodule Lemon.MixProject do
   # Release configuration for games.zeebot.xyz
   defp releases do
     [
-      games_platform: [
-        applications: [
-          lemon_core: :permanent,
-          lemon_games: :permanent,
-          lemon_web: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [:assemble, :tar]
-      ],
       sim_broadcast_platform: [
         applications: [
           lemon_core: :permanent,

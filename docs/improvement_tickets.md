@@ -84,16 +84,6 @@ Potential improvements brainstormed per app. Status: `[ ]` open, `[x]` done, `[-
 | CO-4 | Config validation caching with fingerprints | Cache validation results alongside config fingerprints so repeated loads of unchanged config skip validation. | `[ ]` |
 | CO-5 | Store wrapper generator macro | `LemonCore.Store.Wrapper.define/2` macro to auto-generate typed wrappers and eliminate identical boilerplate. | `[ ]` |
 
-## lemon_games
-
-| # | Ticket | Description | Status |
-|---|--------|-------------|--------|
-| LG-1 | Concurrent bot turn safety | Add locking or documented consistency guarantees for simultaneous bot moves (e.g., RPS where both players are bots). | `[ ]` |
-| LG-2 | EventLog deduplication via sequence numbers | Prevent duplicate event appends during idempotency-check races in `EventLog.append/4`. | `[ ]` |
-| LG-3 | Cursor validation on `list_events` | Return 400 with valid range when `after_seq` exceeds current sequence number instead of silent empty results. | `[ ]` |
-| LG-4 | Shared engine validation module | Extract duplicate constraints (board dimensions, piece limits) into `LemonGames.Games.Validator`. | `[ ]` |
-| LG-5 | Bot strategy telemetry | Emit `[:lemon, :games, :bot, :move_selected]` with candidate moves, chosen move, and strategy rationale. | `[ ]` |
-
 ## lemon_gateway
 
 | # | Ticket | Description | Status |

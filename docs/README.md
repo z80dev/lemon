@@ -58,7 +58,6 @@
 - [`docs/product/skill_synthesis_planning.md`](product/skill_synthesis_planning.md) - Current-state review and planning notes for adaptive skill synthesis and self-authored skills
 - [`docs/testing/missing-tests-plan.md`](testing/missing-tests-plan.md) - Ranked backlog of the highest-impact missing automated tests across the umbrella apps
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
-- [`docs/games-platform.md`](games-platform.md) - Agent-vs-Agent game platform (REST API + LiveView spectator)
 - [`docs/benchmarks.md`](benchmarks.md)
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)

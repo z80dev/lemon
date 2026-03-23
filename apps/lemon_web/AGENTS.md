@@ -1,6 +1,6 @@
 # lemon_web AGENTS.md
 
-Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashboard, a games lobby, and a game match spectator.
+Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashboard.
 
 ## Quick Orientation
 
@@ -20,8 +20,6 @@ Key entry points:
 - **File Uploads**: Multi-file uploads (up to 5 files, 20MB each) with progress tracking
 - **Message Display**: User messages, assistant responses, system notifications, tool calls
 - **Tool Call Visualization**: Collapsible `<details>` elements showing engine actions and results
-- **Games Lobby**: Live listing of public game matches with auto-refresh
-- **Game Spectator**: Real-time match viewer with board state and event timeline
 - **Authentication**: Optional access token protection via Bearer header, query param, or session
 
 ## Phoenix Architecture Overview
@@ -32,8 +30,7 @@ Key entry points:
 │  ├── Socket "/live" → Phoenix.LiveView.Socket                 │
 │  ├── Static assets                                            │
 │  └── Router (LemonWeb.Router)                                 │
-│       ├── Pipeline :browser → RequireAccessToken              │
-│       └── Pipeline :public_browser (for public /games pages)  │
+│       └── Pipeline :browser → RequireAccessToken              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,7 +38,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show), `/games` (lobby), `/games/:match_id` (spectator)
+- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show)
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -55,11 +52,6 @@ Key entry points:
 live "/", SessionLive, :index        # Generates a new isolated session key per tab
 live "/sessions/:session_key", SessionLive, :show  # Uses the provided session key
 ```
-
-### Games LiveViews
-
-- `LemonWeb.Games.LobbyLive` (`/games`) - Public spectator lobby powered by `LemonGames.Matches.Service.list_lobby/1`, subscribes to `LemonGames.Bus.lobby_topic/0`.
-- `LemonWeb.Games.MatchLive` (`/games/:match_id`) - Public match spectator page; renders board/timeline via `LemonGames.Matches.Service.get_match/2` and `list_events/4`, subscribes to `LemonGames.Bus.match_topic/1`.
 
 **Query params supported on `/`:**
 - `?agent_id=<id>` - Sets the agent for the isolated session (default: `"default"`)
@@ -81,11 +73,6 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - Subscribes to `LemonCore.Bus.session_topic(session_key)` on mount (only when `connected?/1`)
 - Receives events: `:run_started`, `:delta`, `:engine_action`, `:run_completed`
 - Unknown `%LemonCore.Event{}` types are silently ignored
-
-### Games LiveViews
-
-- `LemonWeb.GamesLobbyLive` (`/games`) shows public matches and live lobby refreshes via `LemonGames.Bus.subscribe_lobby/0`.
-- `LemonWeb.GameMatchLive` (`/games/:id`) renders match state + event timeline and subscribes to per-match events via `LemonGames.Bus.subscribe_match/1`.
 
 ### Message Structure
 
@@ -325,7 +312,7 @@ Calling `use LemonWeb, :live_view` in a LiveView module sets up:
 - `import Phoenix.HTML`
 - `import LemonWeb.CoreComponents` (all core components available as `<.button>` etc.)
 - `alias Phoenix.LiveView.JS`
-- `use Phoenix.VerifiedRoutes` (verified path helpers like `~p"/games/#{id}"`)
+- `use Phoenix.VerifiedRoutes` (verified path helpers like `~p"/sessions/#{session_key}"`)
 
 Other available macros: `:router`, `:controller`, `:live_component`, `:html`.
 
@@ -342,13 +329,12 @@ Other available macros: `:router`, `:controller`, `:live_component`, `:html`.
 mix test apps/lemon_web
 
 # Run a specific test file
-mix test apps/lemon_web/test/lemon_web/live/games_live_test.exs
+mix test apps/lemon_web/test/lemon_web/session_live_test.exs
 ```
 
 ### Existing Tests
 
 - `test/lemon_web_test.exs` -- Smoke tests: application starts, endpoint config present, router and SessionLive modules load
-- `test/lemon_web/live/games_live_test.exs` -- LiveView integration tests for games lobby and match pages using `Phoenix.LiveViewTest`
 
 ### Writing LiveView Tests
 
@@ -375,7 +361,6 @@ end
 - PubSub subscriptions are skipped when `connected?/1` is false (static render), so event handling requires a connected LiveView test
 - File upload testing uses `file_input/4` and `render_upload/3` from `Phoenix.LiveViewTest`
 - Session key is auto-generated per mount; use `/sessions/:session_key` route in tests to control it
-- Games tests depend on `LemonGames.Matches.Service` for creating test fixtures
 - The test endpoint runs on port 4082 with `server: false`
 
 ### Testing the Auth Plug
@@ -394,11 +379,6 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonCore.SessionKey` -- Session key generation and parsing: `channel_peer/1`, `valid?/1`, `agent_id/1`
 - `LemonCore.MapHelpers` -- `get_key/2` for atom-or-string map key access
 - `LemonCore.PubSub` -- The PubSub server process (configured as endpoint's `pubsub_server`)
-
-### lemon_games
-
-- `LemonGames.Bus` -- PubSub for games: `subscribe_lobby/0`, `subscribe_match/1`
-- `LemonGames.Matches.Service` -- Match CRUD: `list_lobby/0`, `get_match/2`, `list_events/4`, `create_match/2`
 
 ### lemon_router
 

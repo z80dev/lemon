@@ -33,7 +33,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_core: ["LemonCore"],
-    lemon_games: ["LemonGames"],
     lemon_gateway: ["LemonGateway"],
     lemon_mcp: ["LemonMCP"],
     lemon_router: ["LemonRouter"],

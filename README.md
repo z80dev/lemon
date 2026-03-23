@@ -165,7 +165,6 @@ enabled. Keep it aligned with the versions and dependency bootstrap steps in
 |---|---|
 | `lemon_runtime_min` | Headless / CI / embedded |
 | `lemon_runtime_full` | Local development |
-| `games_platform` | Public games web deployment |
 | `sim_broadcast_platform` | Public sim broadcast and replay deployment (`lemon_sim_ui`) |
 
 ```bash

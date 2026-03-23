@@ -136,7 +136,7 @@ The docs and the checker disagree.
 
 Examples:
 
-* `docs/architecture_boundaries.md:15` says `lemon_control_plane` may depend on `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_games`, `lemon_router`, `lemon_skills`
+* `docs/architecture_boundaries.md:15` says `lemon_control_plane` may depend on `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_router`, `lemon_skills`
 * but `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex:32-41` also allows `:lemon_gateway`
 
 Similarly:

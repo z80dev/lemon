@@ -42,7 +42,8 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     },
     %{
       code: :router_gateway_engine_registry_dependency,
-      message: "Router must validate engines through LemonCore.EngineCatalog, not gateway registry",
+      message:
+        "Router must validate engines through LemonCore.EngineCatalog, not gateway registry",
       files: ["apps/lemon_router/lib/**/*.ex"],
       patterns: ["LemonGateway.EngineRegistry"]
     },
@@ -413,18 +414,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.delete(:node_challenges",
         "LemonCore.Store.get(:node_invocations",
         "LemonCore.Store.put(:node_invocations"
-      ]
-    },
-    %{
-      code: :games_raw_store_bypass,
-      message: "LemonGames runtime modules must use app-local store wrappers",
-      files: ["apps/lemon_games/lib/**/*.ex"],
-      exclude: ["apps/lemon_games/lib/**/*store*.ex", "apps/lemon_core/lib/lemon_core/store.ex"],
-      patterns: [
-        "LemonCore.Store.get(",
-        "LemonCore.Store.put(",
-        "LemonCore.Store.delete(",
-        "LemonCore.Store.list("
       ]
     },
     %{

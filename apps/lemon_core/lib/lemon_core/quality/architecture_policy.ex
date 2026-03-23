@@ -24,13 +24,11 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_automation,
       :lemon_channels,
       :lemon_core,
-      :lemon_games,
       :lemon_gateway,
       :lemon_router,
       :lemon_skills
     ],
     lemon_core: [],
-    lemon_games: [:lemon_core],
     lemon_gateway: [
       :agent_core,
       :ai,
@@ -44,7 +42,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_sim: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core],
     lemon_services: [],
     lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    lemon_web: [:lemon_core, :lemon_games, :lemon_router],
+    lemon_web: [:lemon_core, :lemon_router],
     market_intel: [:agent_core, :lemon_channels, :lemon_core]
   }
 

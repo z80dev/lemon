@@ -1,6 +1,6 @@
 # Deployment Flows
 
-This document describes the three ways to run Lemon and when to use each.
+This document describes the supported ways to run Lemon and when to use each.
 
 ---
 
@@ -40,9 +40,6 @@ MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
 MIX_ENV=prod mix release lemon_runtime_full
-
-# Public games site
-MIX_ENV=prod mix release games_platform
 
 # Public sim broadcast site (dashboard + spectator UI)
 MIX_ENV=prod mix release sim_broadcast_platform
@@ -91,7 +88,6 @@ mix lemon.doctor --json
 |---|---|---|
 | `lemon_runtime_min` | gateway, router, channels, control-plane | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
-| `games_platform` | lemon_core, lemon_games, lemon_web | Public games web deployment |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 
 ---

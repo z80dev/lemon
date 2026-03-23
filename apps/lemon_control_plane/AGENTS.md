@@ -22,7 +22,6 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 - **Install skills** - Manage agent capabilities
 - **Pair nodes/devices** - Connect browser extensions and mobile devices
 - **Stream real-time events** - WebSocket events for runs, chat deltas, approvals
-- **Games platform** - REST API for turn-based agent-vs-agent games
 
 ## Architecture Overview
 
@@ -34,10 +33,10 @@ The control plane provides the external interface for clients (TUI, web, mobile,
                                                      |
                     +--------------------------------+--------------------------+
                     |                 |               |                         |
-             +------v------+  +------v------+  +-----v----------+  +----------v--------+
-             |  /healthz   |  | /v1/games/* |  |     /ws        |  |  (404 fallback)   |
-             |  (health)   |  | (REST API)  |  |  (WebSocket)   |  |                   |
-             +-------------+  +-------------+  +------+---------+  +-------------------+
+             +------v------+  +-----v----------+  +----------v--------+
+             |  /healthz   |  |     /ws        |  |  (404 fallback)   |
+             |  (health)   |  |  (WebSocket)   |  |                   |
+             +-------------+  +------+---------+  +-------------------+
                                                       |
                       +-------------------------------+-------------------------------+
                       |                               |                               |
@@ -73,8 +72,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 |--------|------|---------|
 | `LemonControlPlane` | `lib/lemon_control_plane.ex` | Main module, protocol/server version |
 | `LemonControlPlane.Application` | `lib/lemon_control_plane/application.ex` | OTP supervision tree |
-| `LemonControlPlane.HTTP.Router` | `lib/lemon_control_plane/http/router.ex` | HTTP routing (Bandit/Plug): `/ws`, `/healthz`, `/v1/games/*` |
-| `LemonControlPlane.HTTP.GamesAPI` | `lib/lemon_control_plane/http/games_api.ex` | REST handler for games platform endpoints |
+| `LemonControlPlane.HTTP.Router` | `lib/lemon_control_plane/http/router.ex` | HTTP routing (Bandit/Plug): `/ws`, `/healthz` |
 | `LemonControlPlane.WS.Connection` | `lib/lemon_control_plane/ws/connection.ex` | WebSocket connection handler (`WebSock` behaviour) |
 | `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
@@ -248,25 +246,6 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `chat.abort` | write | Abort a running session or run |
 | `chat.history` | read | Get chat history for a session |
 | `send` | write | Send a message to a channel (no agent run) |
-
-### Games APIs (Agent-vs-Agent Platform)
-
-HTTP endpoints in `LemonControlPlane.HTTP.GamesAPI` expose turn-based game play for external agents:
-
-- `POST /v1/games/matches` - create match challenge (supported game type from `LemonGames.Games.Registry`)
-- `POST /v1/games/matches/:id/accept` - accept pending match
-- `GET /v1/games/matches/:id` - read redacted/public match state
-- `POST /v1/games/matches/:id/moves` - submit turn move (requires `idempotency_key`)
-- `GET /v1/games/matches/:id/events?after_seq=N&limit=M` - poll match event feed
-- `GET /v1/games/lobby` - list active/recent public matches
-
-JSON-RPC admin methods for token lifecycle:
-
-| Method | Scope | Description |
-|--------|-------|-------------|
-| `games.token.issue` | admin | Issue a bearer token with `games:*` scopes |
-| `games.tokens.list` | admin | List issued game tokens (metadata only) |
-| `games.token.revoke` | admin | Revoke a game token by id |
 
 ### Configuration and Secrets
 
@@ -718,7 +697,6 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
 | `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
-| `lemon_games` | `LemonGames.Matches.Service` for match CRUD; `LemonGames.Auth` for bearer token validation; `LemonGames.RateLimit` for move rate limiting |
 | `lemon_skills` | Skill status, installation, and binary path queries |
 | `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
 | `coding_agent` | Compile-time only (not started at runtime); `CodingAgent.TaskStore` for task queries |

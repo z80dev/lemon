@@ -81,7 +81,7 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 18+ applications:
+The project is an Elixir umbrella with 17+ applications:
 
 | App | Role |
 |---|---|
@@ -97,7 +97,6 @@ The project is an Elixir umbrella with 18+ applications:
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
-| `lemon_games` | Agent-vs-Agent game platform |
 | `lemon_sim` | Simulation harness for development/testing |
 | `lemon_web` | React web frontend bridge |
 | `lemon_services` | Shared service infrastructure |
