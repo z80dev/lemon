@@ -8,8 +8,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
   """
 
   @type callbacks :: %{
+          optional(:execute_inbound_message) => (map(), map() -> map()),
           optional(:handle_inbound_message) => (map(), map() -> map()),
           optional(:handle_callback_query) => (map(), map() -> any()),
+          optional(:index_known_target) => (map(), map() -> map()),
           optional(:submit_buffer) => (map(), map() -> map()),
           optional(:process_media_group) => (map(), map() -> any()),
           optional(:send_approval_request) => (map(), map() -> any()),
@@ -24,13 +26,31 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
     end)
   end
 
+  defp run_action({:execute_inbound_message, inbound}, state, callbacks) do
+    callbacks.execute_inbound_message.(state, inbound)
+  end
+
   defp run_action({:handle_inbound_message, inbound}, state, callbacks) do
-    callbacks.handle_inbound_message.(state, inbound)
+    case Map.fetch(callbacks, :handle_inbound_message) do
+      {:ok, handler} when is_function(handler, 2) ->
+        handler.(state, inbound)
+
+      :error ->
+        if Map.has_key?(callbacks, :execute_inbound_message) do
+          callbacks.execute_inbound_message.(state, inbound)
+        else
+          state
+        end
+    end
   end
 
   defp run_action({:handle_callback_query, callback_query}, state, callbacks) do
     _ = callbacks.handle_callback_query.(state, callback_query)
     state
+  end
+
+  defp run_action({:index_known_target, update}, state, callbacks) do
+    callbacks.index_known_target.(state, update)
   end
 
   defp run_action({:submit_buffer, buffer}, state, callbacks) do

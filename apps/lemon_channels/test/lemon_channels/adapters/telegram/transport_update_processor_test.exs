@@ -149,6 +149,41 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     assert refreshed[:last_message_id] == 42
   end
 
+  test "maybe_index_known_target persists unchanged metadata only after write interval" do
+    state = %{account_id: "default"}
+    chat_id = System.unique_integer([:positive])
+    refresh_boundary = System.system_time(:millisecond) - 30_000
+
+    assert :ok ==
+             KnownTargetStore.put(
+               {"default", chat_id, nil},
+               %{
+                 channel_id: "telegram",
+                 account_id: "default",
+                 peer_kind: :dm,
+                 peer_id: Integer.to_string(chat_id),
+                 thread_id: nil,
+                 chat_id: chat_id,
+                 topic_id: nil,
+                 chat_type: "private",
+                 chat_title: "Lemon",
+                 chat_username: nil,
+                 chat_display_name: nil,
+                 topic_name: nil,
+                 updated_at_ms: refresh_boundary,
+                 first_seen_at_ms: refresh_boundary,
+                 last_message_id: 77
+               }
+             )
+
+    update = update_for_message(chat_id, "topic check", 88)
+    _state_after = UpdateProcessor.maybe_index_known_target(state, update)
+    refreshed = KnownTargetStore.get({"default", chat_id, nil})
+
+    assert refreshed[:updated_at_ms] >= refresh_boundary + 1
+    assert refreshed[:last_message_id] == 88
+  end
+
   defp transport_state do
     %{
       account_id: "default",

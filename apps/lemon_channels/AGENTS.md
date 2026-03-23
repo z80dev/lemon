@@ -85,7 +85,7 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
 | `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | Long-polling GenServer shell via getUpdates. Owns adapter lifecycle, polling, timer callbacks, and high-level delegation. |
+| `adapters/telegram/transport.ex` | Thin `getUpdates` GenServer shell. Owns lifecycle, polling, and timer receipt while delegating inbound normalization, authorization, buffering, and callback routing through local normalize/pipeline/action-runner helpers. |
 | `adapters/telegram/transport/normalize.ex` | Telegram-local normalization boundary for raw update and timer events into inbound context. |
 | `adapters/telegram/transport/pipeline.ex` | Telegram-local ingress coordinator for normalized events, authorization, dedupe, known-target refresh, buffer/media-group flush decisions, and action selection before transport-side execution. |
 | `adapters/telegram/transport/action_runner.ex` | Telegram-local executor for the small action vocabulary currently emitted by the pipeline; deeper Telegram UX logic still lives in transport helpers and command-specific modules. |
@@ -223,7 +223,7 @@ Defined in `LemonChannels.Capabilities`:
 ### Adding a new bot command (Telegram)
 
 1. Add command detection in `adapters/telegram/transport/commands.ex` (pure function, pattern match on message text)
-2. Add command handling in the Telegram pipeline/command-router helpers, not by expanding a monolithic `transport.ex` flow.
+2. Add command handling in the Telegram pipeline/command-router helpers, not by expanding a monolithic `transport.ex` flow. Inbound behavior should stay in local transport helpers (`normalize`, `pipeline`, `action_runner`, `update_processor`) rather than in the GenServer shell.
 3. If the command needs async work, spawn via `Telegram.AsyncSupervisor`
 4. For system messages, use `Telegram.Delivery.enqueue_send/3` (preferred Outbox path) with direct `Telegram.API` fallback
 

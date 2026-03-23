@@ -111,6 +111,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportMessageBufferTest do
     assert map_size(state.buffers) == 1
   end
 
+  test "drop_buffer_for is no-op when scope is not buffered" do
+    state = base_state()
+    inbound = inbound_message(700, 71, "nothing buffered")
+
+    assert MessageBuffer.drop_buffer_for(state, inbound) == state
+  end
+
   test "same chat but different topics buffer separately" do
     state = base_state()
     first_topic = inbound_message(700, 51, "topic one", thread_id: 111)

@@ -15,7 +15,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
   }
 
   @type action ::
-          {:handle_inbound_message, map()}
+          {:index_known_target, map()}
+          | {:execute_inbound_message, map()}
           | {:handle_callback_query, map()}
           | {:submit_buffer, map()}
           | {:process_media_group, map()}
@@ -55,29 +56,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
 
   def run(%InboundContext{kind: :callback_query, raw_update: update}, state)
       when is_map(update) do
-    state = UpdateProcessor.maybe_index_known_target(state, update)
     callback_query = update["callback_query"] || %{}
 
     if UpdateProcessor.authorized_callback_query?(state, callback_query) do
-      {state, [{:handle_callback_query, callback_query}]}
+      {state, [{:index_known_target, update}, {:handle_callback_query, callback_query}]}
     else
-      {state, []}
+      {state, [{:index_known_target, update}]}
     end
   end
 
   def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound}, state)
       when is_map(update) and is_map(inbound) do
-    state = UpdateProcessor.maybe_index_known_target(state, update)
-
     case UpdateProcessor.route_authorized_inbound_action(state, inbound) do
       {:ok, inbound} ->
-        {state, [{:handle_inbound_message, inbound}]}
+        {state, [{:index_known_target, update}, {:execute_inbound_message, inbound}]}
 
       {:drop, reason, inbound} ->
-        {state, [{:log_drop, inbound, reason}]}
+        {state, [{:index_known_target, update}, {:log_drop, inbound, reason}]}
 
       {:seen, inbound} ->
-        {state, [{:log_drop, inbound, :dedupe}]}
+        {state, [{:index_known_target, update}, {:log_drop, inbound, :dedupe}]}
     end
   end
 

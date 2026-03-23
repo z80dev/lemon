@@ -2,8 +2,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Telegram.Transport.{
+    ActionRunner,
     Normalize,
-    Pipeline
+    Pipeline,
+    UpdateProcessor
   }
 
   alias LemonChannels.Telegram.KnownTargetStore
@@ -14,7 +16,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     :ok
   end
 
-  test "callback queries refresh known targets through normalize and pipeline" do
+  test "callback queries refresh known targets through pipeline actions" do
     state = %{
       account_id: "default",
       allowed_chat_ids: nil,
@@ -50,9 +52,24 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     assert {:ok, context} = Normalize.event(state, update, 101)
     {state, actions} = Pipeline.run(context, state)
 
-    assert [{:handle_callback_query, callback_query}] = actions
+    assert [
+             {:index_known_target, ^update},
+             {:handle_callback_query, callback_query}
+           ] = actions
     assert callback_query["id"] == "cb-1"
     assert state.account_id == "default"
+
+    _ =
+      ActionRunner.run(state, actions, %{
+        execute_inbound_message: fn st, _inbound -> st end,
+        handle_callback_query: fn _st, _callback_query -> :ok end,
+        index_known_target: &UpdateProcessor.maybe_index_known_target/2,
+        maybe_log_drop: fn _st, _inbound, _reason -> :ok end,
+        process_media_group: fn _st, _group -> :ok end,
+        send_approval_request: fn _st, _payload -> :ok end,
+        start_async_task: fn _st, fun -> fun.() end,
+        submit_buffer: fn st, _buffer -> st end
+      })
 
     refreshed = KnownTargetStore.get(key)
     assert refreshed[:updated_at_ms] > stale_ts
@@ -66,6 +83,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     state = LemonChannels.Adapters.Telegram.Transport.MessageBuffer.enqueue_buffer(state, inbound)
     key = LemonChannels.Adapters.Telegram.Transport.Commands.scope_key(inbound)
     first_ref = state.buffers[key].debounce_ref
+    first_timer_ref = state.buffers[key].timer_ref
 
     state =
       LemonChannels.Adapters.Telegram.Transport.MessageBuffer.enqueue_buffer(
@@ -74,12 +92,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
       )
 
     current_ref = state.buffers[key].debounce_ref
+    current_timer_ref = state.buffers[key].timer_ref
     refute first_ref == current_ref
+    refute first_timer_ref == current_timer_ref
 
     assert {:ok, stale_context} = Normalize.event(state, {:debounce_flush, key, first_ref})
     {state_after_stale, stale_actions} = Pipeline.run(stale_context, state)
     assert stale_actions == []
     assert Map.has_key?(state_after_stale.buffers, key)
+    assert state_after_stale.buffers[key].debounce_ref == current_ref
+    assert :erlang.read_timer(current_timer_ref) > 0
 
     assert {:ok, current_context} =
              Normalize.event(state_after_stale, {:debounce_flush, key, current_ref})
@@ -89,6 +111,26 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     refute Map.has_key?(state_after_current.buffers, key)
     assert [{:submit_buffer, buffer}] = current_actions
     assert buffer.inbound.message.id == "62"
+  end
+
+  test "unauthorized callback query only refreshes known targets" do
+    state = %{
+      account_id: "default",
+      allowed_chat_ids: [99],
+      deny_unbound_chats: false,
+      buffers: %{},
+      media_groups: %{}
+    }
+
+    update = callback_update(200_004, "cb-2", "lemon:cancel")
+
+    assert {:ok, context} =
+             Normalize.event(%{state | buffers: %{}, media_groups: %{}}, update, 102)
+
+    {state_after, actions} = Pipeline.run(context, state)
+
+    assert state_after == state
+    assert actions == [{:index_known_target, update}]
   end
 
   defp callback_update(chat_id, callback_id, data) do

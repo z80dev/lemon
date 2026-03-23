@@ -12,7 +12,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   @type callbacks :: %{
           handle_callback_query: (map(), map() -> any()),
-          handle_inbound_message: (map(), map() -> map()),
+          execute_inbound_message: (map(), map() -> map()),
+          index_known_target: (map(), map() -> map()),
           maybe_log_drop: (map(), map(), term() -> any()),
           maybe_transcribe_voice: (map(), map() ->
                                      {:ok, map()} | {:error, term()} | {:skip, map()}),
