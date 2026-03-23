@@ -102,6 +102,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/pr3_execution_request_boundary.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-23],
+    max_age_days: 60
+  },
+  %{
     path: "docs/subagent-parent-questions.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-13],

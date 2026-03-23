@@ -47,6 +47,7 @@
 |-----|---------------|
 | [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill injection, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
+| [pr3_execution_request_boundary.md](pr3_execution_request_boundary.md) | Router/gateway boundary note for the ExecutionRequest-only PR3 simplification |
 | [remote-cli-task-execution-plan.md](remote-cli-task-execution-plan.md) | Planning note for remote `codex`/`claude` task execution over generic runner backends |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
