@@ -13,6 +13,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 
+  @type buffer :: %{
+          inbound: map(),
+          messages: [map()],
+          timer_ref: reference() | nil,
+          debounce_ref: reference()
+        }
+
   # ---------------------------------------------------------------------------
   # Public API
   # ---------------------------------------------------------------------------
@@ -73,18 +80,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
   """
   def submit_buffer(%{messages: messages, inbound: inbound_last}, submit_fn)
       when is_function(submit_fn, 1) do
-    {joined_text, last_id, last_reply_to_text, last_reply_to_id} =
+    submit_fn.(build_inbound(%{messages: messages, inbound: inbound_last}))
+  end
+
+  @doc """
+  Build the coalesced inbound payload for a buffered scope without performing
+  the submission side effect.
+  """
+  @spec build_inbound(buffer()) :: map()
+  def build_inbound(%{messages: messages, inbound: inbound_last})
+      when is_list(messages) and is_map(inbound_last) do
+    {joined_text, last_id, last_user_msg_id, last_reply_to_text, last_reply_to_id} =
       Commands.join_messages(Enum.reverse(messages))
 
-    inbound =
-      inbound_last
-      |> put_in([Access.key!(:message), :text], joined_text)
-      |> put_in([Access.key!(:message), :id], to_string(last_id))
-      |> put_in([Access.key!(:message), :reply_to_id], last_reply_to_id)
-      |> put_in([Access.key!(:meta), :user_msg_id], last_id)
-      |> put_in([Access.key!(:meta), :reply_to_text], last_reply_to_text)
-
-    submit_fn.(inbound)
+    inbound_last
+    |> put_in([Access.key!(:message), :text], joined_text)
+    |> put_in([Access.key!(:message), :id], to_string(last_id))
+    |> put_in([Access.key!(:message), :reply_to_id], last_reply_to_id)
+    |> put_in([Access.key!(:meta), :user_msg_id], last_user_msg_id)
+    |> put_in([Access.key!(:meta), :reply_to_text], last_reply_to_text)
   end
 
   @doc """

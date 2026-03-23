@@ -5,18 +5,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   require Logger
 
-  alias LemonChannels.Adapters.Telegram.Inbound
-  alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
+  alias LemonChannels.Adapters.Telegram.Transport.{ActionRunner, Normalize, Pipeline}
   alias LemonChannels.Telegram.PollerLock
 
   @webhook_clear_retry_ms 5 * 60 * 1000
 
   @type callbacks :: %{
-          authorized_callback_query?: (map(), map() -> boolean()),
           handle_callback_query: (map(), map() -> any()),
           handle_inbound_message: (map(), map() -> map()),
-          maybe_transcribe_voice: (map(), map() -> {:ok, map()} | {:error, term()}),
-          persist_offset: (map(), integer() -> any())
+          maybe_log_drop: (map(), map(), term() -> any()),
+          maybe_transcribe_voice: (map(), map() ->
+                                     {:ok, map()} | {:error, term()} | {:skip, map()}),
+          process_media_group: (map(), map() -> any()),
+          persist_offset: (map(), integer() -> any()),
+          send_approval_request: (map(), map() -> any()),
+          start_async_task: (map(), (-> any()) -> any()),
+          submit_buffer: (map(), map() -> map())
         }
 
   @spec poll_updates(map(), callbacks()) :: map()
@@ -56,30 +60,44 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
   defp handle_updates(state, updates, callbacks) do
     Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
       id = update["update_id"] || max_id
-      acc_state = UpdateProcessor.maybe_index_known_target(acc_state, update)
       acc_state = process_single_update(acc_state, update, id, callbacks)
       {acc_state, max(max_id, id)}
     end)
   end
 
-  defp process_single_update(state, %{"callback_query" => cb}, _id, callbacks) do
-    if callbacks.authorized_callback_query?.(state, cb) do
-      callbacks.handle_callback_query.(state, cb)
-    end
-
-    state
-  end
-
   defp process_single_update(state, update, id, callbacks) do
-    with {:ok, inbound} <- Inbound.normalize(update),
-         inbound <- UpdateProcessor.prepare_inbound(inbound, state, update, id),
-         {:ok, inbound} <- callbacks.maybe_transcribe_voice.(state, inbound) do
-      UpdateProcessor.route_authorized_inbound(state, inbound, callbacks.handle_inbound_message)
+    with {:ok, normalized} <- Normalize.event(state, update, id) do
+      case maybe_transcribe_event(state, normalized, callbacks) do
+        {:ok, normalized} ->
+          {state, actions} = Pipeline.run(normalized, state)
+          ActionRunner.run(state, actions, callbacks)
+
+        {:skip, new_state} ->
+          new_state
+
+        {:error, _reason} ->
+          state
+      end
     else
-      {:error, _reason} -> state
       {:skip, new_state} -> new_state
+      {:error, _reason} -> state
     end
   end
+
+  defp maybe_transcribe_event(state, %{kind: :message, inbound: inbound} = normalized, callbacks) do
+    case callbacks.maybe_transcribe_voice.(state, inbound) do
+      {:ok, inbound} ->
+        {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
+
+      {:skip, new_state} ->
+        {:skip, new_state}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_transcribe_event(_state, normalized, _callbacks), do: {:ok, normalized}
 
   defp maybe_log_poll_error(state, reason) do
     state = maybe_attempt_webhook_clear(state, reason)

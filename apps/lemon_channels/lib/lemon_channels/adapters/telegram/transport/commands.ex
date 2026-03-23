@@ -32,6 +32,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   def message_entry(inbound) do
     %{
       id: parse_int(inbound.message.id) || inbound.meta[:user_msg_id],
+      user_msg_id: inbound.meta[:user_msg_id] || parse_int(inbound.message.id),
       text: inbound.message.text || "",
       reply_to_text: inbound.meta[:reply_to_text],
       reply_to_id: inbound.message.reply_to_id
@@ -41,12 +42,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   @doc """
   Join a list of message entries (oldest-first) into a single text block.
 
-  Returns `{joined_text, last_id, last_reply_to_text, last_reply_to_id}`.
+  Returns `{joined_text, last_id, last_user_msg_id, last_reply_to_text, last_reply_to_id}`.
   """
   def join_messages(messages) do
     text = Enum.map_join(messages, "\n\n", & &1.text)
     last = List.last(messages)
-    {text, last.id, last.reply_to_text, last.reply_to_id}
+    {text, last.id, last.user_msg_id, last.reply_to_text, last.reply_to_id}
   end
 
   @doc """

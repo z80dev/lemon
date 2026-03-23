@@ -136,7 +136,8 @@ Use `LemonCore.EngineCatalog` for engine ID validation/normalization and `LemonC
 
 ### Change output behavior
 
-If the change is semantic, update router coalescers or `RunProcess.OutputTracker`.
+If the change is semantic, start with `LemonRouter.SurfaceManager`,
+`RunProcess.ArtifactTracker`, and the router coalescers.
 If the change is platform UX, change `lemon_channels` renderers instead.
 `ToolStatusRenderer` may use parent-child metadata already present in action `detail`
 such as Claude's `parent_tool_use_id`; preserve that metadata in upstream runners instead
@@ -144,7 +145,7 @@ of re-deriving hierarchy in channel adapters.
 `ToolStatusCoalescer` also expands embedded subagent progress from
 `detail.partial_result.details.current_action` into child actions so task-tool updates can show
 inner CLI steps over Telegram and similar channels.
-When a tool phase starts immediately after streamed assistant text, `RunProcess.OutputTracker`
+When a tool phase starts immediately after streamed assistant text, `SurfaceManager`
 hands the finalized `:answer` message over to the tool-status surface so the next status edits
 append under that assistant text instead of reusing an older standalone status message.
 `ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
@@ -153,9 +154,12 @@ Task roots use dedicated status surfaces keyed by task id, so child actions with
 `detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
 or unrelated top-level tool calls create newer answer/status turns.
 Async task followups (`task action=poll`) are also rebound onto the original task surface by
-`task_id` when upstream runners preserve that metadata in action `detail.result_meta`, so
+`task_id` when `SurfaceManager` preserves that metadata in action `detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
+Generated images and explicit file-send requests are tracked in
+`RunProcess.ArtifactTracker`; channels still receive them only through
+`auto_send_files` metadata on the answer finalization path.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize

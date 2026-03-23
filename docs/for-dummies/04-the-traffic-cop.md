@@ -117,7 +117,8 @@ When it's time to run, a `RunProcess` GenServer is created. It:
 
 ```
 RunProcess
-├── OutputTracker ──── feeds deltas to StreamCoalescer, handles files
+├── SurfaceManager ──── coordinates answer/status/task surfaces and fanout
+├── ArtifactTracker ── tracks generated files and answer file metadata
 ├── Watchdog ──── idle-run timer (prompts user if AI goes silent too long)
 ├── CompactionTrigger ── detects context-window overflow
 └── RetryHandler ──── auto-retries zero-answer failures
@@ -146,6 +147,11 @@ every fraction of a second with meaningful new text rather than letter by letter
 
 Similarly, the **ToolStatusCoalescer** handles tool-use events, producing
 updates like "Running `ls ~`..." that appear in Telegram while tools execute.
+`SurfaceManager` sits above both coalescers and decides when assistant text
+should hand off to a tool-status surface, when task-specific status messages
+should be reused, and when the final answer should be fanned out to secondary
+routes. `ArtifactTracker` keeps generated images and explicit file sends out of
+the channel layer until the final answer metadata is ready.
 
 Both coalescers emit **DeliveryIntents** rather than raw messages. A
 DeliveryIntent is a semantic description ("stream snapshot of text X for

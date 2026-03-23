@@ -17,7 +17,8 @@ defmodule LemonRouter.RunProcess do
   - `RunProcess.Watchdog` -- idle-run watchdog timer
   - `RunProcess.CompactionTrigger` -- context-overflow & compaction markers
   - `RunProcess.RetryHandler` -- zero-answer auto-retry
-  - `RunProcess.OutputTracker` -- delta ingestion, final output, fanout, file tracking
+  - `LemonRouter.SurfaceManager` -- semantic answer/status coordination and fanout
+  - `RunProcess.ArtifactTracker` -- generated file tracking and answer metadata enrichment
   """
 
   use GenServer
@@ -26,7 +27,8 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonGateway.ExecutionRequest
   alias LemonCore.{Bus, Introspection}
-  alias LemonRouter.RunProcess.{CompactionTrigger, OutputTracker, RetryHandler, Watchdog}
+  alias LemonRouter.SurfaceManager
+  alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
 
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
@@ -283,24 +285,26 @@ defmodule LemonRouter.RunProcess do
     # Mark any still-running tool calls as completed so the editable "Tool calls"
     # status message (Telegram) can't get stuck at [running] if a final action
     # completion event is missed/raced.
-    OutputTracker.finalize_tool_status(state, event)
+    SurfaceManager.finalize_status(state, event)
 
     # If we never streamed deltas, make sure any tool-status output is flushed
     # before we emit a single final answer chunk.
     if state.saw_delta == false do
-      OutputTracker.flush_tool_status(state)
+      SurfaceManager.flush_status(state)
     end
 
     unless retried? do
-      # Telegram: StreamCoalescer finalizes by sending/editing a dedicated answer message; the
-      # progress message is reserved for tool-call status + cancel UI and is never overwritten.
-      OutputTracker.maybe_finalize_stream_output(state, event)
+      extra_meta = ArtifactTracker.finalize_meta(state)
+
+      # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
+      # channels keep their dedicated final-answer behavior separate from tool status UI.
+      SurfaceManager.finalize_answer(state, event, extra_meta)
 
       # If no streaming deltas were emitted, emit a final output chunk so channels respond.
-      OutputTracker.maybe_emit_final_output(state, event)
+      SurfaceManager.maybe_seed_final_answer(state, event)
 
       # Optional fanout: forward the final answer text to additional destinations.
-      OutputTracker.maybe_fanout_final_output(state, event)
+      SurfaceManager.fanout_final_answer(state, event)
     end
 
     {:stop, :normal, %{state | completed: true}}
@@ -314,11 +318,11 @@ defmodule LemonRouter.RunProcess do
 
     # Finalize the previous tool-status segment before we start streaming a new answer chunk.
     if state.saw_delta == false do
-      OutputTracker.commit_tool_status_segment(state)
+      SurfaceManager.commit_status_segment(state, :status)
     end
 
-    # Also ingest into StreamCoalescer for channel delivery
-    OutputTracker.ingest_delta_to_coalescer(state, delta)
+    # Forward semantic answer text through the router surface façade.
+    SurfaceManager.ingest_answer_delta(state, delta)
 
     {:noreply, %{state | saw_delta: true}}
   end
@@ -327,11 +331,11 @@ defmodule LemonRouter.RunProcess do
     state = Watchdog.touch_run_watchdog(state)
 
     {state, tool_status_surface, capture_current_turn?} =
-      OutputTracker.prepare_tool_status_action(state, action_ev)
+      SurfaceManager.prepare_status_action(state, action_ev)
 
     state =
       if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
-        OutputTracker.handoff_stream_turn_to_tool_status(state, tool_status_surface)
+        SurfaceManager.handoff_answer_to_status(state, tool_status_surface)
         %{state | saw_delta: false}
       else
         state
@@ -340,11 +344,11 @@ defmodule LemonRouter.RunProcess do
     # Forward engine action events to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-    # Also ingest into ToolStatusCoalescer for channel delivery
-    OutputTracker.ingest_action_to_tool_status_coalescer(state, action_ev, tool_status_surface)
+    # Forward semantic status updates through the router surface façade.
+    SurfaceManager.ingest_status_action(state, action_ev, tool_status_surface)
 
-    state = OutputTracker.maybe_track_generated_images(state, action_ev)
-    state = OutputTracker.maybe_track_requested_send_files(state, action_ev)
+    state = ArtifactTracker.track_generated_images(state, action_ev)
+    state = ArtifactTracker.track_requested_send_files(state, action_ev)
 
     {:noreply, state}
   end
@@ -353,9 +357,9 @@ defmodule LemonRouter.RunProcess do
     state = Watchdog.touch_run_watchdog(state)
 
     {state, tool_status_surface, _capture_current_turn?} =
-      OutputTracker.prepare_tool_status_action(state, action_ev)
+      SurfaceManager.prepare_status_action(state, action_ev)
 
-    OutputTracker.ingest_projected_child_action_to_tool_status_coalescer(
+    SurfaceManager.ingest_projected_child_action(
       state,
       action_ev,
       tool_status_surface
@@ -655,7 +659,7 @@ defmodule LemonRouter.RunProcess do
     end
 
     # Flush any pending coalescer output
-    OutputTracker.flush_coalescer(state)
+    SurfaceManager.flush_all(state)
 
     # Unsubscribe control-plane EventBridge from run events
     unsubscribe_event_bridge(state.run_id)

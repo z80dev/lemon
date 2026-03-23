@@ -1540,6 +1540,132 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe "final answer fanout delivery" do
+    test "completion with tool actions but no streamed deltas flushes status before final answer" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ =
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      job =
+        make_test_request(run_id, %{
+          progress_msg_id: 111,
+          user_msg_id: 222
+        })
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      :ok =
+        LemonCore.Bus.broadcast(
+          LemonCore.Bus.run_topic(run_id),
+          LemonCore.Event.new(
+            :engine_action,
+            %{
+              engine: "lemon",
+              action: %{
+                id: "tool_1",
+                kind: "tool",
+                title: "Read: foo.txt",
+                detail: %{}
+              },
+              phase: :started
+            },
+            %{run_id: run_id, session_key: session_key}
+          )
+        )
+
+      :ok =
+        LemonCore.Bus.broadcast(
+          LemonCore.Bus.run_topic(run_id),
+          LemonCore.Event.new(
+            :run_completed,
+            %{completed: %{ok: true, answer: "Final answer"}},
+            %{run_id: run_id, session_key: session_key}
+          )
+        )
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: first_kind,
+                        content: first_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     1_500
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: second_kind,
+                        content: second_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     1_500
+
+      assert first_kind in [:text, :edit]
+      assert second_kind in [:text, :edit]
+
+      first_text =
+        case first_content do
+          %{text: text} -> text
+          text when is_binary(text) -> text
+        end
+
+      second_text =
+        case second_content do
+          %{text: text} -> text
+          text when is_binary(text) -> text
+        end
+
+      assert String.contains?(first_text, "Read: foo.txt")
+      refute String.contains?(first_text, "Final answer")
+      assert String.contains?(second_text, "Final answer")
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
     test "delivers final answer once per unique fanout route" do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
@@ -1638,6 +1764,121 @@ defmodule LemonRouter.RunProcessTest do
         |> Enum.sort()
 
       assert peer_ids == ["111", "222"]
+    end
+  end
+
+  describe "completion ordering without streamed deltas" do
+    test "flushes tool status output before the final answer" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ =
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      job =
+        make_test_request(
+          run_id,
+          %{progress_msg_id: 111, user_msg_id: 222},
+          %{session_key: session_key, conversation_key: {:session, session_key}}
+        )
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            action: %{
+              id: "tool_1",
+              kind: "tool",
+              title: "Read: AGENTS.md",
+              detail: %{}
+            },
+            phase: :started
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer without streamed deltas"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        meta: %{intent_kind: first_kind, run_id: ^run_id}
+                      }},
+                     3_000
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        meta: %{intent_kind: second_kind, run_id: ^run_id},
+                        content: second_content
+                      }},
+                     3_000
+
+      assert first_kind in [:tool_status_snapshot, :tool_status_finalize]
+      assert second_kind in [:stream_finalize, :final_text]
+
+      final_text =
+        case second_content do
+          %{text: text} -> text
+          text when is_binary(text) -> text
+        end
+
+      assert String.contains?(final_text, "Final answer without streamed deltas")
+      assert eventually(fn -> not Process.alive?(pid) end)
     end
   end
 
@@ -2464,6 +2705,133 @@ defmodule LemonRouter.RunProcessTest do
              end)
 
       GenServer.stop(pid)
+    end
+
+    test "delivers auto_send_files on the final answer channel path" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ =
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      cwd = Path.join(System.tmp_dir!(), "run-process-files-#{System.unique_integer([:positive])}")
+      file_path = Path.join(cwd, "workspace/image.png")
+      File.mkdir_p!(Path.dirname(file_path))
+      File.write!(file_path, "png-bytes")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      job =
+        make_test_request(
+          run_id,
+          %{progress_msg_id: 111, user_msg_id: 222},
+          %{cwd: cwd, session_key: session_key, conversation_key: {:session, session_key}}
+        )
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            phase: :completed,
+            ok: true,
+            action: %{
+              kind: "tool",
+              detail: %{
+                result_meta: %{
+                  auto_send_files: [
+                    %{path: "workspace/image.png", filename: "renamed.png", caption: "Generated"}
+                  ]
+                }
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer with file"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: text_kind,
+                        content: text_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     3_000
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: :file,
+                        content: %{path: delivered_path, filename: "renamed.png", caption: "Generated"},
+                        meta: %{run_id: ^run_id}
+                      }},
+                     3_000
+
+      assert text_kind in [:text, :edit]
+
+      delivered_text =
+        case text_content do
+          %{text: text} -> text
+          text when is_binary(text) -> text
+        end
+
+      assert String.contains?(delivered_text, "Final answer with file")
+      assert File.regular?(delivered_path)
+      assert String.ends_with?(delivered_path, "/workspace/image.png")
+      assert eventually(fn -> not Process.alive?(pid) end)
     end
   end
 

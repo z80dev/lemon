@@ -85,14 +85,18 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
 | `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | Long-polling GenServer shell via getUpdates. Coordinates polling, command dispatch, router forwarding, and high-level Telegram UX state. Router owns pending-compaction prompt rewriting; transport must not mutate inbound prompts for that concern. |
+| `adapters/telegram/transport.ex` | Long-polling GenServer shell via getUpdates. Owns adapter lifecycle, polling, timer callbacks, and high-level delegation. |
+| `adapters/telegram/transport/normalize.ex` | Telegram-local normalization boundary for raw update and timer events into inbound context. |
+| `adapters/telegram/transport/pipeline.ex` | Telegram-local ingress coordinator for normalized events, authorization, dedupe, known-target refresh, buffer/media-group flush decisions, and action selection before transport-side execution. |
+| `adapters/telegram/transport/action_runner.ex` | Telegram-local executor for the small action vocabulary currently emitted by the pipeline; deeper Telegram UX logic still lives in transport helpers and command-specific modules. |
+| `adapters/telegram/transport/runtime_state.ex` | Transport-local state helper for adapter-owned runtime data. |
 | `adapters/telegram/transport/poller.ex` | Poll loop + update dispatch extracted from `Transport`. Owns getUpdates cadence, webhook-conflict recovery, and callback/inbound fanout. |
 | `adapters/telegram/transport/command_router.ex` | Command/message decision tree extracted from `Transport`. Keeps command routing out of the GenServer shell. |
-| `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/3`, `join_messages/1`. No side effects. |
+| `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/1`, `join_messages/1`. No side effects. |
 | `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
 | `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
-| `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing. |
+| `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing, including timer replacement and merge semantics. |
 | `adapters/telegram/transport/model_preferences.ex` | Session/chat/topic model and thinking preference helpers. |
 | `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, resume index, and generation bookkeeping helpers. |
 | `adapters/telegram/transport/resume_selection.ex` | Explicit resume parsing, recent-session lookup, and resume formatting helpers. |
@@ -219,7 +223,7 @@ Defined in `LemonChannels.Capabilities`:
 ### Adding a new bot command (Telegram)
 
 1. Add command detection in `adapters/telegram/transport/commands.ex` (pure function, pattern match on message text)
-2. Add command handling in `adapters/telegram/transport.ex` (`handle_info` or the command dispatch section)
+2. Add command handling in the Telegram pipeline/command-router helpers, not by expanding a monolithic `transport.ex` flow.
 3. If the command needs async work, spawn via `Telegram.AsyncSupervisor`
 4. For system messages, use `Telegram.Delivery.enqueue_send/3` (preferred Outbox path) with direct `Telegram.API` fallback
 
@@ -261,7 +265,7 @@ Defined in `LemonChannels.Capabilities`:
 
 ### Modifying the `/model` picker (Telegram)
 
-- The picker state machine lives in `transport.ex` state
+- The picker state machine should be driven through the Telegram-local pipeline/command helpers and persisted in the existing Telegram model/session state modules, not in ad-hoc inline `transport.ex` branches.
 - Provider/model lists auto-detect from runtime config + secrets/env credentials
 - Pagination handled inline with `<< Prev` / `Next >>` keyboard buttons
 - Selection messages are intercepted and not routed as normal inbound prompts

@@ -1,10 +1,10 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   @moduledoc """
-  Update processing pipeline for the Telegram transport.
+  Focused Telegram inbound decision helpers used by the transport pipeline.
 
-  Handles the flow from raw Telegram updates through normalization,
-  authorization, deduplication, and routing. Also includes known-target
-  indexing for chat metadata tracking.
+  This module stays responsible for authorization, deduplication, known-target
+  indexing, reply-to preservation, and router-facing inbound enrichment without
+  performing Telegram API side effects itself.
   """
 
   require Logger
@@ -28,20 +28,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   `handle_inbound_message/2`.
   """
   def route_authorized_inbound(state, inbound, handle_fn) do
+    case route_authorized_inbound_action(state, inbound) do
+      {:ok, inbound} ->
+        handle_fn.(state, inbound)
+
+      {:drop, why, inbound} ->
+        maybe_log_drop(state, inbound, why)
+        state
+
+      {:seen, inbound} ->
+        maybe_log_drop(state, inbound, :dedupe)
+        state
+    end
+  end
+
+  @doc """
+  Return the authorized inbound routing decision without performing side effects.
+  """
+  @spec route_authorized_inbound_action(map(), map()) ::
+          {:ok, map()} | {:drop, term(), map()} | {:seen, map()}
+  def route_authorized_inbound_action(state, inbound) do
     inbound = enrich_for_router(inbound, state)
     key = TransportShared.inbound_message_dedupe_key(inbound)
 
     with :ok <- authorized_inbound_reason(state, inbound),
          :new <- TransportShared.check_and_mark_dedupe(:channels, key, state.dedupe_ttl_ms) do
-      handle_fn.(state, inbound)
+      {:ok, inbound}
     else
-      {:drop, why} ->
-        maybe_log_drop(state, inbound, why)
-        state
-
-      :seen ->
-        maybe_log_drop(state, inbound, :dedupe)
-        state
+      {:drop, why} -> {:drop, why, inbound}
+      :seen -> {:seen, inbound}
     end
   end
 
@@ -116,6 +131,41 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   end
 
   def maybe_index_known_target(state, _), do: state
+
+  @doc """
+  Authorization guard for Telegram callback queries.
+  """
+  @spec authorized_callback_query?(map(), map()) :: boolean()
+  def authorized_callback_query?(state, cb) when is_map(cb) do
+    msg = cb["message"] || %{}
+    chat_id = get_in(msg, ["chat", "id"])
+
+    cond do
+      not is_integer(chat_id) ->
+        false
+
+      not allowed_chat?(state.allowed_chat_ids, chat_id) ->
+        false
+
+      state.deny_unbound_chats ->
+        topic_id = msg["message_thread_id"]
+        scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: parse_int(topic_id)}
+        binding_exists?(scope)
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  def authorized_callback_query?(_state, _cb), do: false
+
+  @doc """
+  Emit the standard Telegram inbound drop log when enabled.
+  """
+  @spec log_drop(map(), map(), term()) :: :ok
+  def log_drop(state, inbound, reason), do: maybe_log_drop(state, inbound, reason)
 
   # ---------------------------------------------------------------------------
   # Message extraction helpers
