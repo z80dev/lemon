@@ -8,6 +8,7 @@ It turns normalized inbound requests into active runs, keeps one coordinator per
 It does:
 
 - normalize `LemonCore.RunRequest`
+- build router-owned `%LemonRouter.Submission{}` values that wrap gateway `%LemonGateway.ExecutionRequest{}`
 - resolve policy, model, engine, cwd, and structured resume
 - choose conversation keys
 - enforce queue semantics in `SessionCoordinator`
@@ -44,6 +45,7 @@ Inbound transport
 | `lib/lemon_router/router.ex` | inbound entrypoint, session-key resolution, pending-compaction rewrite path |
 | `lib/lemon_router/run_orchestrator.ex` | request normalization and submission building |
 | `lib/lemon_router/session_coordinator.ex` | queue semantics owner |
+| `lib/lemon_router/run_starter.ex` | shared child-start mechanics for prepared router submissions |
 | `lib/lemon_router/conversation_key.ex` | canonical conversation-key selection |
 | `lib/lemon_router/resume_resolver.ex` | structured resume resolution before gateway submission |
 | `lib/lemon_router/run_process.ex` | active-run lifecycle shell |

@@ -3,19 +3,14 @@ defmodule LemonRouter.SessionTransitions do
   Pure queue/state transitions for `LemonRouter.SessionCoordinator`.
   """
 
-  alias LemonRouter.SessionState
+  alias LemonCore.MapHelpers
+  alias LemonRouter.{QueueEffect, SessionState, Submission}
 
   @followup_debounce_ms 500
 
-  @type effect ::
-          :maybe_start_next
-          | {:cancel_active, term()}
-          | {:dispatch_steer, binary(), :steer | :steer_backlog, map(), :followup | :collect}
-          | :noop
-
-  @spec submit(SessionState.t(), map(), integer()) ::
-          {:ok, SessionState.t(), [effect()]}
-  def submit(%SessionState{} = state, submission, now_ms) when is_map(submission) do
+  @spec submit(SessionState.t(), Submission.t(), integer()) ::
+          {:ok, SessionState.t(), [QueueEffect.t()]}
+  def submit(%SessionState{} = state, %Submission{} = submission, now_ms) do
     submission =
       submission
       |> normalize_queue_mode()
@@ -27,7 +22,7 @@ defmodule LemonRouter.SessionTransitions do
     {:ok, state, effects}
   end
 
-  @spec cancel(SessionState.t(), term()) :: {:ok, SessionState.t(), [effect()]}
+  @spec cancel(SessionState.t(), term()) :: {:ok, SessionState.t(), [QueueEffect.t()]}
   def cancel(%SessionState{} = state, reason) do
     effects =
       if active?(state) do
@@ -40,7 +35,7 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   @spec cancel_session(SessionState.t(), binary(), term()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def cancel_session(%SessionState{} = state, session_key, reason) when is_binary(session_key) do
     effects =
       if active_session?(state.active, session_key) do
@@ -53,7 +48,7 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   @spec abort_session(SessionState.t(), binary(), term()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def abort_session(%SessionState{} = state, session_key, reason) when is_binary(session_key) do
     next_state =
       state
@@ -71,7 +66,7 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   @spec active_down(SessionState.t(), pid(), reference()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def active_down(%SessionState{active: %{pid: pid, mon_ref: mon_ref}} = state, pid, mon_ref)
       when is_pid(pid) do
     active_down(state, pid, mon_ref, state.last_followup_at_ms || 0)
@@ -80,7 +75,7 @@ defmodule LemonRouter.SessionTransitions do
   def active_down(%SessionState{} = state, _pid, _mon_ref), do: {:ok, state, [:noop]}
 
   @spec active_down(SessionState.t(), pid(), reference(), integer()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def active_down(
         %SessionState{active: %{pid: pid, mon_ref: mon_ref}} = state,
         pid,
@@ -98,20 +93,22 @@ defmodule LemonRouter.SessionTransitions do
 
   def active_down(%SessionState{} = state, _pid, _mon_ref, _now_ms), do: {:ok, state, [:noop]}
 
-  @spec steer_accepted(SessionState.t(), binary()) :: {:ok, SessionState.t(), [effect()]}
+  @spec steer_accepted(SessionState.t(), binary()) ::
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def steer_accepted(%SessionState{} = state, submission_run_id)
       when is_binary(submission_run_id) do
     {:ok, clear_pending_steer(state, submission_run_id), [:noop]}
   end
 
-  @spec steer_rejected(SessionState.t(), binary()) :: {:ok, SessionState.t(), [effect()]}
+  @spec steer_rejected(SessionState.t(), binary()) ::
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def steer_rejected(%SessionState{} = state, submission_run_id)
       when is_binary(submission_run_id) do
     steer_rejected(state, submission_run_id, state.last_followup_at_ms || 0)
   end
 
   @spec steer_rejected(SessionState.t(), binary(), integer()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def steer_rejected(%SessionState{} = state, submission_run_id, now_ms)
       when is_binary(submission_run_id) do
     next_state = fallback_pending_steer(state, submission_run_id, now_ms)
@@ -119,14 +116,14 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   @spec dispatch_steer_failed(SessionState.t(), binary()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def dispatch_steer_failed(%SessionState{} = state, submission_run_id)
       when is_binary(submission_run_id) do
     steer_rejected(state, submission_run_id)
   end
 
   @spec dispatch_steer_failed(SessionState.t(), binary(), integer()) ::
-          {:ok, SessionState.t(), [effect()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]}
   def dispatch_steer_failed(%SessionState{} = state, submission_run_id, now_ms)
       when is_binary(submission_run_id) do
     steer_rejected(state, submission_run_id, now_ms)
@@ -200,8 +197,8 @@ defmodule LemonRouter.SessionTransitions do
 
   defp maybe_promote_auto_followup(%{queue_mode: :followup, meta: meta} = submission, state)
        when not is_nil(state.active) do
-    if truthy?(fetch(meta || %{}, :task_auto_followup)) or
-         truthy?(fetch(meta || %{}, :delegated_auto_followup)) do
+    if truthy?(MapHelpers.get_key(meta || %{}, :task_auto_followup)) or
+         truthy?(MapHelpers.get_key(meta || %{}, :delegated_auto_followup)) do
       %{submission | queue_mode: :steer_backlog}
     else
       submission
@@ -257,10 +254,13 @@ defmodule LemonRouter.SessionTransitions do
       previous
       | run_id: current.run_id,
         session_key: current.session_key,
+        conversation_key: current.conversation_key,
         meta: meta,
+        current_phase: nil,
         execution_request: %{
           previous_request
           | run_id: current.run_id,
+            conversation_key: current.execution_request.conversation_key,
             prompt: merged_prompt,
             meta:
               merge_user_message_meta(
@@ -327,9 +327,11 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp enqueue_fallback(%SessionState{} = state, submission, :followup, now_ms) do
+    submission = suppress_router_phases(%{submission | queue_mode: :followup})
+
     case maybe_merge_followup(
            state.queue,
-           %{submission | queue_mode: :followup},
+           submission,
            state.last_followup_at_ms,
            now_ms
          ) do
@@ -339,14 +341,19 @@ defmodule LemonRouter.SessionTransitions do
       :no_merge ->
         %SessionState{
           state
-          | queue: state.queue ++ [%{submission | queue_mode: :followup}],
+          | queue: state.queue ++ [submission],
             last_followup_at_ms: now_ms
         }
     end
   end
 
   defp enqueue_fallback(%SessionState{} = state, submission, :collect, _now_ms) do
-    %SessionState{state | queue: state.queue ++ [%{submission | queue_mode: :collect}]}
+    submission =
+      submission
+      |> Map.put(:queue_mode, :collect)
+      |> suppress_router_phases()
+
+    %SessionState{state | queue: state.queue ++ [submission]}
   end
 
   defp active?(%SessionState{active: %{}}), do: true
@@ -384,7 +391,7 @@ defmodule LemonRouter.SessionTransitions do
   defp merge_prompt(left, right), do: left <> "\n" <> right
 
   defp merge_user_message_meta(left, right) when is_map(left) and is_map(right) do
-    right_user_msg_id = fetch(right, :user_msg_id)
+    right_user_msg_id = MapHelpers.get_key(right, :user_msg_id)
 
     if is_nil(right_user_msg_id) do
       Map.merge(left, right)
@@ -400,12 +407,12 @@ defmodule LemonRouter.SessionTransitions do
   defp merge_user_message_meta(_left, right) when is_map(right), do: right
   defp merge_user_message_meta(_left, _right), do: %{}
 
-  defp fetch(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
   defp truthy?(1), do: true
   defp truthy?(_value), do: false
+
+  defp suppress_router_phases(%Submission{} = submission) do
+    %{submission | meta: Map.put(submission.meta || %{}, :suppress_router_phase_events, true)}
+  end
 end

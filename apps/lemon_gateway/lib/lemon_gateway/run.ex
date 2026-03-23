@@ -322,7 +322,10 @@ defmodule LemonGateway.Run do
       Logger.error(
         "Gateway run engine start raised engine=#{inspect(engine && engine.id())} " <>
           "session_key=#{inspect(job.session_key)} error=" <>
-          truncate_for_log(Exception.format_banner(:error, error), @engine_start_error_banner_bytes)
+          truncate_for_log(
+            Exception.format_banner(:error, error),
+            @engine_start_error_banner_bytes
+          )
       )
 
       {:error, "engine_start_exception: " <> Exception.message(error)}

@@ -57,6 +57,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     def init(opts) do
       if is_pid(opts[:notify_pid]) do
         send(opts[:notify_pid], {:captured_job, opts[:execution_request]})
+        send(opts[:notify_pid], {:captured_run_opts, opts})
       end
 
       {:ok, opts, {:continue, :auto_stop}}
@@ -68,7 +69,71 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  defmodule PersistentCapturingRunProcess do
+    @moduledoc false
+    use GenServer
+
+    def child_spec(opts) do
+      run_id = opts[:run_id] || System.unique_integer([:positive])
+
+      %{
+        id: {__MODULE__, run_id},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary,
+        shutdown: 5_000
+      }
+    end
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      if is_pid(opts[:notify_pid]) do
+        send(opts[:notify_pid], {:captured_run_opts, opts})
+      end
+
+      {:ok, opts}
+    end
+  end
+
+  defmodule RunOrchestratorFailingRunProcess do
+    @moduledoc false
+
+    def start_link(_opts), do: {:error, :run_failed_to_start}
+
+    def child_spec(opts) do
+      run_id = opts[:run_id] || System.unique_integer([:positive])
+
+      %{
+        id: {__MODULE__, run_id},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary,
+        shutdown: 5_000
+      }
+    end
+  end
+
+  defmodule RunOrchestratorEventBridgeStub do
+    @moduledoc false
+
+    def subscribe_run(run_id), do: notify({:bridge_subscribed, run_id})
+    def unsubscribe_run(run_id), do: notify({:bridge_unsubscribed, run_id})
+
+    defp notify(message) do
+      case Application.get_env(:lemon_router, :event_bridge_test_pid) do
+        pid when is_pid(pid) -> send(pid, message)
+        _ -> :ok
+      end
+
+      :ok
+    end
+  end
+
   setup do
+    ensure_pubsub()
+
     {engine_registry_started_here?, engine_pid} =
       case Process.whereis(LemonGateway.EngineRegistry) do
         nil ->
@@ -78,6 +143,11 @@ defmodule LemonRouter.RunOrchestratorTest do
         existing_pid ->
           {false, existing_pid}
       end
+
+    original_bridge_impl = Application.get_env(:lemon_core, :event_bridge_impl)
+    original_bridge_test_pid = Application.get_env(:lemon_router, :event_bridge_test_pid)
+    Application.put_env(:lemon_router, :event_bridge_test_pid, self())
+    :ok = LemonCore.EventBridge.configure(RunOrchestratorEventBridgeStub)
 
     # Start RunOrchestrator if not running
     case Process.whereis(RunOrchestrator) do
@@ -95,6 +165,13 @@ defmodule LemonRouter.RunOrchestratorTest do
 
           :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_profiles_state end)
 
+          restore_event_bridge_impl(original_bridge_impl)
+
+          case original_bridge_test_pid do
+            nil -> Application.delete_env(:lemon_router, :event_bridge_test_pid)
+            bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
+          end
+
           if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
             GenServer.stop(engine_pid)
           end
@@ -111,6 +188,13 @@ defmodule LemonRouter.RunOrchestratorTest do
 
         on_exit(fn ->
           :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_profiles_state end)
+
+          restore_event_bridge_impl(original_bridge_impl)
+
+          case original_bridge_test_pid do
+            nil -> Application.delete_env(:lemon_router, :event_bridge_test_pid)
+            bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
+          end
 
           if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
             GenServer.stop(engine_pid)
@@ -238,6 +322,154 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert {:error, :run_capacity_reached} =
                RunOrchestrator.submit(orchestrator_pid, request(params_2))
+    end
+
+    test "idle start failure unsubscribes exactly once" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: RunOrchestratorFailingRunProcess
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:idle-fail:test:#{System.unique_integer([:positive])}",
+        agent_id: "test",
+        prompt: "fail immediately"
+      }
+
+      assert {:error, :run_failed_to_start} =
+               RunOrchestrator.submit(orchestrator_pid, request(params))
+
+      assert_receive {:bridge_subscribed, run_id}, 500
+      assert_receive {:bridge_unsubscribed, ^run_id}, 500
+      refute_receive {:bridge_unsubscribed, ^run_id}, 100
+    end
+  end
+
+  describe "start_run_process/4" do
+    test "merges orchestrator defaults before normalizing the submission" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self(), custom: :value}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = "agent:start-run:test:#{System.unique_integer([:positive])}"
+      conversation_key = {:session, session_key}
+
+      submission = %{
+        run_id: run_id,
+        session_key: session_key,
+        conversation_key: conversation_key,
+        queue_mode: :collect,
+        execution_request: %LemonGateway.ExecutionRequest{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: "start directly",
+          engine_id: "codex",
+          conversation_key: conversation_key,
+          meta: %{}
+        }
+      }
+
+      assert {:ok, pid} =
+               RunOrchestrator.start_run_process(
+                 orchestrator_pid,
+                 submission,
+                 self(),
+                 conversation_key
+               )
+
+      assert is_pid(pid)
+      assert_receive {:captured_run_opts, opts}, 500
+      assert opts[:run_id] == run_id
+      assert opts[:session_key] == session_key
+      assert opts[:conversation_key] == conversation_key
+      assert opts[:coordinator_pid] == self()
+      assert opts[:manage_session_registry?] == false
+      assert opts[:custom] == :value
+      assert opts[:execution_request].run_id == run_id
+    end
+
+    test "preserves caller-provided start fields instead of overwriting them with orchestrator defaults" do
+      orchestrator_run_supervisor =
+        start_supervised!(%{
+          id: :orchestrator_run_supervisor,
+          start: {DynamicSupervisor, :start_link, [[strategy: :one_for_one]]}
+        })
+
+      caller_run_supervisor =
+        start_supervised!(%{
+          id: :caller_run_supervisor,
+          start: {DynamicSupervisor, :start_link, [[strategy: :one_for_one]]}
+        })
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: orchestrator_run_supervisor,
+          run_process_module: BlockingRunProcess,
+          run_process_opts: %{notify_pid: self(), custom: :default}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = "agent:start-run:override:#{System.unique_integer([:positive])}"
+      conversation_key = {:session, session_key}
+
+      submission = %{
+        run_id: run_id,
+        session_key: session_key,
+        conversation_key: conversation_key,
+        queue_mode: :collect,
+        execution_request: %LemonGateway.ExecutionRequest{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: "start directly",
+          engine_id: "codex",
+          conversation_key: conversation_key,
+          meta: %{}
+        },
+        run_supervisor: caller_run_supervisor,
+        run_process_module: PersistentCapturingRunProcess,
+        run_process_opts: %{notify_pid: self(), custom: :caller}
+      }
+
+      assert {:ok, pid} =
+               RunOrchestrator.start_run_process(
+                 orchestrator_pid,
+                 submission,
+                 self(),
+                 conversation_key
+               )
+
+      assert is_pid(pid)
+      assert_receive {:captured_run_opts, opts}, 500
+      assert opts[:custom] == :caller
+      assert opts[:conversation_key] == conversation_key
+      assert opts[:manage_session_registry?] == false
+      assert %{active: 1} = DynamicSupervisor.count_children(caller_run_supervisor)
+      assert %{active: 0} = DynamicSupervisor.count_children(orchestrator_run_supervisor)
     end
   end
 
@@ -891,6 +1123,20 @@ defmodule LemonRouter.RunOrchestratorTest do
         model: model
       }
     }
+  end
+
+  defp ensure_pubsub do
+    if Process.whereis(LemonCore.PubSub) == nil do
+      start_supervised!({Phoenix.PubSub, name: LemonCore.PubSub})
+    end
+  end
+
+  defp restore_event_bridge_impl(nil) do
+    Application.delete_env(:lemon_core, :event_bridge_impl)
+  end
+
+  defp restore_event_bridge_impl(value) do
+    Application.put_env(:lemon_core, :event_bridge_impl, value)
   end
 
   describe "counts/0 non-placeholder behavior" do

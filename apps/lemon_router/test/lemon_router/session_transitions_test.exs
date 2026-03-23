@@ -2,9 +2,9 @@ defmodule LemonRouter.SessionTransitionsTest do
   use ExUnit.Case, async: true
 
   alias LemonGateway.ExecutionRequest
-  alias LemonRouter.{SessionState, SessionTransitions}
+  alias LemonRouter.{SessionState, SessionTransitions, Submission}
 
-  test "submit while idle queues work and requests start" do
+  test "idle submit queues work and requests start" do
     state = SessionState.new(conversation_key: {:session, "s1"})
     submission = submission("run1", "s1", :collect, "one")
 
@@ -15,7 +15,7 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert effects == [:maybe_start_next]
   end
 
-  test "submit while busy preserves active and queues the next run" do
+  test "busy submit preserves active and queues the next run" do
     state = %SessionState{
       conversation_key: {:session, "s1"},
       active: %{run_id: "run1", session_key: "s1"},
@@ -32,7 +32,7 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert effects == []
   end
 
-  test "cancel clears queue and pending steers and requests active cancellation" do
+  test "cancel clears queue and pending steers and emits cancel effect when active exists" do
     state = %SessionState{
       conversation_key: {:session, "s1"},
       active: %{run_id: "run1", session_key: "s1"},
@@ -48,7 +48,31 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert effects == [{:cancel_active, :user_requested}]
   end
 
-  test "abort_session only removes matching session work" do
+  test "cancel_session only cancels matching active session and preserves queued work" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "session-a"},
+      queue: [
+        submission("run2", "session-a", :collect, "two"),
+        submission("run3", "session-b", :collect, "three")
+      ],
+      last_followup_at_ms: nil,
+      pending_steers: %{
+        "run1" => [
+          {submission("run4", "session-a", :followup, "four"), :followup},
+          {submission("run5", "session-b", :collect, "five"), :collect}
+        ]
+      }
+    }
+
+    assert {:ok, next_state, effects} =
+             SessionTransitions.cancel_session(state, "session-a", :user_requested)
+
+    assert next_state == state
+    assert effects == [{:cancel_active, :user_requested}]
+  end
+
+  test "abort_session drops queued work and pending steers only for the matching session" do
     state = %SessionState{
       conversation_key: {:session, "s1"},
       active: %{run_id: "run1", session_key: "session-a"},
@@ -92,26 +116,66 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert next_state.active == nil
     assert Enum.map(next_state.queue, & &1.run_id) == ["run2", "run3"]
+    assert Enum.at(next_state.queue, 1).meta[:suppress_router_phase_events] == true
     assert effects == [:maybe_start_next]
   end
 
-  test "active_down with a different pid or monitor ref is a noop" do
+  test "interrupt prepends and emits interrupted cancellation when active exists" do
     state = %SessionState{
       conversation_key: {:session, "s1"},
-      active: %{run_id: "run1", session_key: "s1", pid: self(), mon_ref: make_ref()},
+      active: %{run_id: "run1", session_key: "s1"},
       queue: [submission("run2", "s1", :collect, "two")],
       last_followup_at_ms: nil,
       pending_steers: %{}
     }
 
-    assert {:ok, next_state, effects} = SessionTransitions.active_down(state, self(), make_ref())
+    interrupt = submission("run3", "s1", :interrupt, "urgent")
 
-    assert next_state == state
-    assert effects == [:noop]
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, interrupt, 100)
+
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run3", "run2"]
+    assert effects == [{:cancel_active, :interrupted}]
   end
 
-  test "rejected steer falls back into the queue and requests next start when idle" do
+  test "steer against an active run emits a typed dispatch_steer effect" do
     state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    steer = submission("run2", "s1", :steer, "two")
+
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, steer, 100)
+
+    assert next_state.pending_steers == %{"run1" => [{steer, :followup}]}
+    assert effects == [{:dispatch_steer, "run1", :steer, steer, :followup}]
+  end
+
+  test "steer_backlog against an active run emits collect fallback dispatch" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    steer_backlog = submission("run2", "s1", :steer_backlog, "two")
+
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, steer_backlog, 100)
+
+    assert next_state.pending_steers == %{"run1" => [{steer_backlog, :collect}]}
+
+    assert effects == [
+             {:dispatch_steer, "run1", :steer_backlog, steer_backlog, :collect}
+           ]
+  end
+
+  test "rejected steer fallback requeues and only requests start when resulting state is idle" do
+    idle_state = %SessionState{
       conversation_key: {:session, "s1"},
       active: nil,
       queue: [],
@@ -119,11 +183,27 @@ defmodule LemonRouter.SessionTransitionsTest do
       pending_steers: %{"run1" => [{submission("run2", "s1", :steer, "two"), :followup}]}
     }
 
-    assert {:ok, next_state, effects} = SessionTransitions.steer_rejected(state, "run2")
+    assert {:ok, idle_next_state, idle_effects} =
+             SessionTransitions.dispatch_steer_failed(idle_state, "run2", 100)
 
-    assert Enum.map(next_state.queue, & &1.run_id) == ["run2"]
-    assert next_state.pending_steers == %{}
-    assert effects == [:maybe_start_next]
+    assert Enum.map(idle_next_state.queue, & &1.run_id) == ["run2"]
+    assert hd(idle_next_state.queue).meta[:suppress_router_phase_events] == true
+    assert idle_next_state.pending_steers == %{}
+    assert idle_effects == [:maybe_start_next]
+
+    busy_state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run3", "s1", :steer, "three"), :followup}]}
+    }
+
+    assert {:ok, busy_next_state, busy_effects} =
+             SessionTransitions.dispatch_steer_failed(busy_state, "run3", 100)
+
+    assert Enum.map(busy_next_state.queue, & &1.run_id) == ["run3"]
+    assert busy_effects == []
   end
 
   defp submission(run_id, session_key, queue_mode, prompt) do
@@ -136,13 +216,14 @@ defmodule LemonRouter.SessionTransitionsTest do
       meta: %{}
     }
 
-    %{
+    Submission.new!(%{
       run_id: run_id,
       session_key: session_key,
+      conversation_key: {:session, session_key},
       queue_mode: queue_mode,
       execution_request: request,
       run_process_opts: %{},
       meta: %{}
-    }
+    })
   end
 end

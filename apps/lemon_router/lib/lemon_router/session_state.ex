@@ -3,26 +3,17 @@ defmodule LemonRouter.SessionState do
   Pure state container for router-owned per-conversation queue semantics.
   """
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonRouter.Submission
 
   @type active_run :: %{
           required(:run_id) => binary(),
           required(:session_key) => binary(),
           optional(:pid) => pid() | nil,
           optional(:mon_ref) => reference() | nil,
-          optional(:submission) => map()
+          optional(:submission) => Submission.t()
         }
 
-  @type queued_submission :: %{
-          required(:run_id) => binary(),
-          required(:session_key) => binary(),
-          required(:queue_mode) => atom(),
-          required(:execution_request) => ExecutionRequest.t(),
-          optional(:run_supervisor) => module() | pid() | atom(),
-          optional(:run_process_module) => module(),
-          optional(:run_process_opts) => map(),
-          optional(:meta) => map()
-        }
+  @type queued_submission :: Submission.t()
 
   @type pending_steer_entry :: {queued_submission(), atom()}
 

@@ -3,31 +3,50 @@ defmodule LemonRouter.SessionCoordinator do
   Router-owned owner of per-conversation queue semantics.
 
   Queue mode behavior is implemented here so gateway remains execution-only.
+  Reducer state changes live in `LemonRouter.SessionTransitions`; this module
+  interprets reducer effects, owns registry/process IO, and emits router phases.
+
+  `LemonRouter.RunOrchestrator` remains responsible for the initial
+  `LemonCore.EventBridge.subscribe_run/1` call on accepted router submissions.
+  This coordinator only cleans up event bridge subscriptions when queued or
+  pending submissions are later dropped from reducer state.
   """
 
   use GenServer
 
   require Logger
 
+  alias LemonCore.MapHelpers
   alias LemonGateway.ExecutionRequest
-  alias LemonRouter.{SessionState, SessionTransitions}
 
-  @type submission :: %{
-          required(:run_id) => binary(),
-          required(:session_key) => binary(),
-          required(:queue_mode) => atom(),
-          required(:execution_request) => ExecutionRequest.t(),
-          optional(:run_supervisor) => module() | pid() | atom(),
-          optional(:run_process_module) => module(),
-          optional(:run_process_opts) => map(),
-          optional(:meta) => map()
-        }
+  alias LemonRouter.{
+    PhasePublisher,
+    QueueEffect,
+    RunStarter,
+    SessionState,
+    SessionTransitions,
+    Submission
+  }
 
-  @spec submit(term(), submission(), keyword()) :: :ok | {:error, term()}
-  def submit(conversation_key, submission, opts \\ []) when is_map(submission) do
+  @doc """
+  Submit a prepared router submission into the per-conversation coordinator.
+
+  Orchestrator-facing code is expected to subscribe the run on
+  `LemonCore.EventBridge` before calling this function. The coordinator keeps
+  later queue cleanup consistent, but it does not claim initial subscription
+  ownership from the orchestrator boundary.
+  """
+  @spec submit(term(), Submission.t() | map() | keyword(), keyword()) :: :ok | {:error, term()}
+  def submit(conversation_key, submission, opts \\ [])
+
+  def submit(conversation_key, %Submission{} = submission, opts) do
     with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
       GenServer.call(pid, {:submit, submission}, 15_000)
     end
+  end
+
+  def submit(conversation_key, submission, opts) when is_map(submission) or is_list(submission) do
+    submit(conversation_key, Submission.new!(submission), opts)
   end
 
   @spec cancel(binary() | term(), term()) :: :ok
@@ -121,8 +140,6 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   def handle_call({:submit, submission}, _from, state) do
-    submission = normalize_submission(submission)
-
     {:reply, reply, next_state} =
       apply_transition(
         SessionTransitions.submit(state, submission, System.monotonic_time(:millisecond)),
@@ -130,7 +147,7 @@ defmodule LemonRouter.SessionCoordinator do
         reply?: true
       )
 
-    {:reply, reply, next_state}
+    {:reply, reply, maybe_emit_submit_phases(state, submission, next_state)}
   end
 
   @impl true
@@ -214,7 +231,7 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   def handle_info(:maybe_start_next, state) do
-    {next_state, _result} = maybe_start_next(state, return_result?: false)
+    {next_state, _result} = maybe_start_next(state, return_result?: false, emit_phase?: true)
     {:noreply, next_state}
   end
 
@@ -246,7 +263,9 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp apply_transition({:ok, transitioned_state, effects}, original_state, opts \\ []) do
-    {next_state, reply} = apply_effects(transitioned_state, effects, original_state, opts)
+    {next_state, reply} = apply_effects(transitioned_state, effects, opts)
+    maybe_emit_superseded_queue_phase(original_state, next_state)
+    maybe_cleanup_event_bridge_runs(original_state, next_state)
 
     if opts[:reply?] do
       {:reply, reply, next_state}
@@ -255,29 +274,34 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  defp apply_effects(state, effects, original_state, opts) do
+  @spec apply_effects(SessionState.t(), [QueueEffect.t()], keyword()) ::
+          {SessionState.t(), :ok | :started | :noop | {:error, term()}}
+  defp apply_effects(state, effects, opts) do
     Enum.reduce(effects, {state, :ok}, fn effect, {state_acc, reply_acc} ->
-      apply_effect(effect, state_acc, reply_acc, original_state, opts)
+      apply_effect(effect, state_acc, reply_acc, opts)
     end)
   end
 
-  defp apply_effect(:maybe_start_next, state, reply_acc, _original_state, opts) do
+  defp apply_effect(:maybe_start_next, state, reply_acc, opts) do
     {next_state, start_result} =
-      maybe_start_next(state, return_result?: Keyword.get(opts, :reply?, false))
+      maybe_start_next(
+        state,
+        return_result?: Keyword.get(opts, :reply?, false),
+        emit_phase?: not Keyword.get(opts, :reply?, false)
+      )
 
     {next_state, merge_reply(reply_acc, start_result)}
   end
 
-  defp apply_effect({:cancel_active, reason}, state, reply_acc, _original_state, _opts) do
+  defp apply_effect({:cancel_active, reason}, state, reply_acc, _opts) do
     {maybe_cancel_active(state, reason), reply_acc}
   end
 
   defp apply_effect(
-         {:dispatch_steer, active_run_id, steer_mode, submission, _fallback_mode},
+         {:dispatch_steer, active_run_id, steer_mode, %Submission{} = submission, _fallback_mode},
          state,
          reply_acc,
-         _original_state,
-         _opts
+         opts
        ) do
     case dispatch_steer(active_run_id, steer_mode, submission.execution_request) do
       :ok ->
@@ -291,12 +315,12 @@ defmodule LemonRouter.SessionCoordinator do
             System.monotonic_time(:millisecond)
           )
 
-        apply_effects(next_state, extra_effects, state, [])
+        apply_effects(next_state, extra_effects, opts)
         |> then(fn {resolved_state, _} -> {resolved_state, reply_acc} end)
     end
   end
 
-  defp apply_effect(:noop, state, reply_acc, _original_state, _opts), do: {state, reply_acc}
+  defp apply_effect(:noop, state, reply_acc, _opts), do: {state, reply_acc}
 
   defp merge_reply(:ok, :noop), do: :ok
   defp merge_reply(:ok, :started), do: :ok
@@ -306,41 +330,105 @@ defmodule LemonRouter.SessionCoordinator do
   defp merge_reply(reply, :started), do: reply
   defp merge_reply(reply, {:error, _reason}), do: reply
 
-  defp normalize_submission(submission) do
-    execution_request = fetch(submission, :execution_request)
+  defp maybe_emit_submit_phases(
+         _original_state,
+         %Submission{} = submission,
+         %SessionState{} = state
+       ) do
+    active_submission = active_submission(state)
 
-    execution_request =
-      if match?(%ExecutionRequest{}, execution_request) do
-        execution_request
-      else
-        raise ArgumentError, "session coordinator submission missing execution request"
-      end
+    cond do
+      active_submission_run_id(state) == submission.run_id and
+          phase_emission_enabled?(active_submission || submission) ->
+        active_submission =
+          (active_submission || submission)
+          |> PhasePublisher.emit(:accepted, nil)
+          |> PhasePublisher.emit(:waiting_for_slot, :accepted)
 
-    %{
-      run_id: fetch(submission, :run_id) || execution_request.run_id,
-      session_key: fetch(submission, :session_key) || execution_request.session_key,
-      queue_mode: fetch(submission, :queue_mode) || :collect,
-      execution_request: execution_request,
-      run_supervisor: fetch(submission, :run_supervisor) || LemonRouter.RunSupervisor,
-      run_process_module: fetch(submission, :run_process_module) || LemonRouter.RunProcess,
-      run_process_opts: normalize_run_process_opts(fetch(submission, :run_process_opts)),
-      meta: fetch(submission, :meta) || %{}
+        put_active_submission_phase(state, submission.run_id, active_submission.current_phase)
+
+      queued_submission?(state, submission.run_id) ->
+        queued_submission =
+          Enum.find(state.queue, &(&1.run_id == submission.run_id)) || submission
+
+        if phase_emission_enabled?(queued_submission) do
+          queued_submission =
+            queued_submission
+            |> PhasePublisher.emit(:accepted, nil)
+            |> PhasePublisher.emit(:queued_in_session, :accepted)
+
+          put_queued_submission_phase(state, submission.run_id, queued_submission.current_phase)
+        else
+          state
+        end
+
+      true ->
+        state
+    end
+  end
+
+  defp active_submission_run_id(%SessionState{
+         active: %{submission: %Submission{run_id: run_id}}
+       }),
+       do: run_id
+
+  defp active_submission_run_id(%SessionState{active: %{run_id: run_id}}), do: run_id
+  defp active_submission_run_id(_state), do: nil
+
+  defp active_submission(%SessionState{active: %{submission: %Submission{} = submission}}),
+    do: submission
+
+  defp active_submission(_state), do: nil
+
+  defp queued_submission?(%SessionState{queue: queue}, run_id) when is_binary(run_id) do
+    Enum.any?(queue, &(&1.run_id == run_id))
+  end
+
+  defp queued_submission?(_state, _run_id), do: false
+
+  defp put_queued_submission_phase(%SessionState{queue: queue} = state, run_id, phase)
+       when is_binary(run_id) do
+    %SessionState{
+      state
+      | queue:
+          Enum.map(queue, fn
+            %Submission{run_id: ^run_id} = submission -> Submission.put_phase(submission, phase)
+            submission -> submission
+          end)
     }
   end
 
+  defp put_queued_submission_phase(state, _run_id, _phase), do: state
+
+  defp put_active_submission_phase(
+         %SessionState{active: %{run_id: run_id, submission: %Submission{} = submission} = active} =
+           state,
+         run_id,
+         phase
+       ) do
+    %SessionState{state | active: %{active | submission: Submission.put_phase(submission, phase)}}
+  end
+
+  defp put_active_submission_phase(state, _run_id, _phase), do: state
+
   defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
-    case start_run_process(next, self(), state.conversation_key) do
+    case RunStarter.start(next, self(), state.conversation_key) do
       {:ok, pid} when is_pid(pid) ->
         mon_ref = Process.monitor(pid)
-        put_active_session_registry(next)
+
+        started_submission =
+          maybe_emit_waiting_for_slot(next, Keyword.get(opts, :emit_phase?, true))
+
+        put_active_session_registry(started_submission)
 
         next_state = %SessionState{
           state
           | active: %{
               pid: pid,
               mon_ref: mon_ref,
-              run_id: next.run_id,
-              session_key: next.session_key
+              run_id: started_submission.run_id,
+              session_key: started_submission.session_key,
+              submission: started_submission
             },
             queue: rest
         }
@@ -359,6 +447,91 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp maybe_start_next(state, _opts), do: {state, :noop}
+
+  defp maybe_emit_waiting_for_slot(%Submission{} = submission, true) do
+    if phase_emission_enabled?(submission) do
+      previous_phase = submission.current_phase || :accepted
+      PhasePublisher.emit(submission, :waiting_for_slot, previous_phase)
+    else
+      submission
+    end
+  end
+
+  defp maybe_emit_waiting_for_slot(%Submission{} = submission, false), do: submission
+
+  defp maybe_emit_superseded_queue_phase(
+         %SessionState{queue: original_queue},
+         %SessionState{queue: next_queue}
+       ) do
+    case {List.last(original_queue), List.last(next_queue)} do
+      {%Submission{queue_mode: :followup} = previous,
+       %Submission{queue_mode: :followup} = current}
+      when previous.run_id != current.run_id and length(original_queue) == length(next_queue) ->
+        if same_queue_prefix?(original_queue, next_queue) and phase_emission_enabled?(previous) do
+          previous_phase = previous.current_phase || :queued_in_session
+          _ = PhasePublisher.emit(previous, :aborted, previous_phase)
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_emit_superseded_queue_phase(_original_state, _next_state), do: :ok
+
+  defp same_queue_prefix?(original_queue, next_queue) do
+    original_prefix = Enum.drop(original_queue, -1)
+    next_prefix = Enum.drop(next_queue, -1)
+
+    Enum.map(original_prefix, & &1.run_id) == Enum.map(next_prefix, & &1.run_id)
+  end
+
+  defp phase_emission_enabled?(%Submission{} = submission) do
+    not truthy?(MapHelpers.get_key(submission.meta || %{}, :suppress_router_phase_events))
+  end
+
+  defp maybe_cleanup_event_bridge_runs(
+         %SessionState{} = original_state,
+         %SessionState{} = next_state
+       ) do
+    dropped_run_ids =
+      original_state
+      |> queued_or_pending_run_ids()
+      |> MapSet.difference(retained_run_ids(next_state))
+
+    Enum.each(dropped_run_ids, &LemonCore.EventBridge.unsubscribe_run/1)
+  end
+
+  defp retained_run_ids(%SessionState{} = state) do
+    state
+    |> queued_or_pending_run_ids()
+    |> maybe_put_active_run_id(active_submission_run_id(state))
+  end
+
+  defp queued_or_pending_run_ids(%SessionState{} = state) do
+    queue_run_ids = Enum.map(state.queue, & &1.run_id)
+
+    pending_run_ids =
+      state.pending_steers
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.map(fn
+        {%Submission{run_id: run_id}, _fallback_mode} -> run_id
+      end)
+
+    (queue_run_ids ++ pending_run_ids)
+    |> Enum.reduce(MapSet.new(), fn
+      run_id, acc when is_binary(run_id) and run_id != "" -> MapSet.put(acc, run_id)
+      _run_id, acc -> acc
+    end)
+  end
+
+  defp maybe_put_active_run_id(run_ids, run_id) when is_binary(run_id) and run_id != "",
+    do: MapSet.put(run_ids, run_id)
+
+  defp maybe_put_active_run_id(run_ids, _run_id), do: run_ids
 
   defp maybe_cancel_active(%SessionState{active: %{pid: pid}} = state, reason) when is_pid(pid) do
     LemonRouter.RunProcess.abort(pid, reason)
@@ -383,7 +556,7 @@ defmodule LemonRouter.SessionCoordinator do
     _ -> :error
   end
 
-  defp put_active_session_registry(%{session_key: session_key, run_id: run_id}) do
+  defp put_active_session_registry(%Submission{session_key: session_key, run_id: run_id}) do
     if is_binary(session_key) do
       _ = Registry.unregister(LemonRouter.SessionRegistry, session_key)
       _ = Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
@@ -448,8 +621,8 @@ defmodule LemonRouter.SessionCoordinator do
         {:resume, engine, token}
 
       %{} = state ->
-        engine = fetch(state, :last_engine)
-        token = fetch(state, :last_resume_token)
+        engine = MapHelpers.get_key(state, :last_engine)
+        token = MapHelpers.get_key(state, :last_resume_token)
 
         if is_binary(engine) and is_binary(token), do: {:resume, engine, token}, else: nil
 
@@ -460,51 +633,8 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp resume_conversation_key(_), do: nil
 
-  defp fetch(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp start_run_process(submission, coordinator_pid, conversation_key) do
-    run_id = submission.run_id
-    session_key = submission.session_key
-    execution_request = submission.execution_request
-
-    run_opts =
-      submission.run_process_opts
-      |> Map.merge(%{
-        run_id: run_id,
-        session_key: session_key,
-        queue_mode: submission.queue_mode,
-        execution_request: execution_request,
-        coordinator_pid: coordinator_pid,
-        conversation_key: conversation_key,
-        manage_session_registry?: false
-      })
-
-    spec = {submission.run_process_module, run_opts}
-
-    case DynamicSupervisor.start_child(submission.run_supervisor, spec) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, pid}} ->
-        {:ok, pid}
-
-      {:error, :max_children} ->
-        {:error, :run_capacity_reached}
-
-      {:error, {:noproc, _}} ->
-        {:error, :router_not_ready}
-
-      {:error, :noproc} ->
-        {:error, :router_not_ready}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp normalize_run_process_opts(opts) when is_map(opts), do: opts
-  defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)
-  defp normalize_run_process_opts(_), do: %{}
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_value), do: false
 end
