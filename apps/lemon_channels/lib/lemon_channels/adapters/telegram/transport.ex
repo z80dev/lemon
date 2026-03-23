@@ -35,6 +35,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.Adapters.Telegram.Transport.RuntimeState
+  alias LemonChannels.Adapters.Telegram.Transport.VoiceHandler
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
   alias LemonCore.Config
@@ -2954,131 +2955,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp extract_topic_error_description(_), do: nil
 
   defp maybe_transcribe_voice(state, inbound) do
-    voice = inbound.meta && inbound.meta[:voice]
-
-    cond do
-      not is_map(voice) or map_size(voice) == 0 ->
-        {:ok, inbound}
-
-      not state.voice_transcription ->
-        if is_binary(inbound.message.text) and inbound.message.text != "" do
-          {:ok, inbound}
-        else
-          _ = maybe_send_voice_error(state, inbound, "Voice transcription is disabled.")
-          {:skip, state}
-        end
-
-      not is_binary(state.voice_transcription_api_key) or state.voice_transcription_api_key == "" ->
-        _ = maybe_send_voice_error(state, inbound, "Voice transcription requires an API key.")
-        {:skip, state}
-
-      true ->
-        case transcribe_voice(state, inbound, voice) do
-          {:ok, transcript} ->
-            message = Map.put(inbound.message, :text, String.trim(transcript || ""))
-            meta = Map.put(inbound.meta || %{}, :voice_transcribed, true)
-            {:ok, %{inbound | message: message, meta: meta}}
-
-          {:error, reason} ->
-            _ = maybe_send_voice_error(state, inbound, format_voice_error(reason))
-            {:skip, state}
-        end
-    end
-  end
-
-  defp transcribe_voice(state, _inbound, voice) do
-    file_id = voice[:file_id] || voice["file_id"]
-    file_size = parse_int(voice[:file_size] || voice["file_size"])
-    max_bytes = parse_int(state.voice_max_bytes)
-
-    if is_integer(max_bytes) and is_integer(file_size) and file_size > max_bytes do
-      {:error, :voice_too_large}
-    else
-      ensure_httpc()
-
-      with {:ok, file_path} <- fetch_voice_file(state, file_id),
-           {:ok, audio_bytes} <- fetch_voice_bytes(state, file_path),
-           :ok <- enforce_voice_size(audio_bytes, max_bytes) do
-        transcriber = state.voice_transcriber
-        mime_type = voice[:mime_type] || voice["mime_type"]
-
-        transcriber.transcribe(%{
-          model: state.voice_transcription_model,
-          base_url: state.voice_transcription_base_url,
-          api_key: state.voice_transcription_api_key,
-          audio_bytes: audio_bytes,
-          mime_type: mime_type
-        })
-      end
-    end
-  end
-
-  defp fetch_voice_file(state, file_id) when is_binary(file_id) do
-    case state.api_mod.get_file(state.token, file_id) do
-      {:ok, %{"ok" => true, "result" => %{"file_path" => file_path}}} when is_binary(file_path) ->
-        {:ok, file_path}
-
-      {:ok, %{"result" => %{"file_path" => file_path}}} when is_binary(file_path) ->
-        {:ok, file_path}
-
-      other ->
-        {:error, {:telegram_file_lookup_failed, other}}
-    end
-  end
-
-  defp fetch_voice_file(_state, _file_id), do: {:error, :missing_file_id}
-
-  defp fetch_voice_bytes(state, file_path) do
-    case state.api_mod.download_file(state.token, file_path) do
-      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
-      other -> {:error, {:telegram_download_failed, other}}
-    end
-  end
-
-  defp enforce_voice_size(_bytes, max_bytes) when not is_integer(max_bytes), do: :ok
-
-  defp enforce_voice_size(bytes, max_bytes) when is_binary(bytes) do
-    if byte_size(bytes) > max_bytes do
-      {:error, :voice_too_large}
-    else
-      :ok
-    end
-  end
-
-  defp maybe_send_voice_error(state, inbound, text) when is_binary(text) do
-    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
-
-    if is_integer(chat_id) do
-      send_system_message(state, chat_id, thread_id, user_msg_id, text)
-    else
-      :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
-  defp format_voice_error(:voice_too_large), do: "Voice message is too large to transcribe."
-  defp format_voice_error(:missing_api_key), do: "Voice transcription requires an API key."
-
-  defp format_voice_error({:http_error, status, msg}) do
-    msg =
-      if is_binary(msg) and msg != "" do
-        String.slice(msg, 0, 200)
-      else
-        "request failed"
-      end
-
-    "Voice transcription failed (#{status}): #{msg}"
-  end
-
-  defp format_voice_error({:telegram_file_lookup_failed, _}), do: "Failed to fetch voice file."
-  defp format_voice_error({:telegram_download_failed, _}), do: "Failed to download voice file."
-  defp format_voice_error(other), do: "Voice transcription failed: #{inspect(other)}"
-
-  defp ensure_httpc do
-    _ = Application.ensure_all_started(:inets)
-    _ = Application.ensure_all_started(:ssl)
-    :ok
+    VoiceHandler.maybe_transcribe_voice(
+      state,
+      inbound,
+      &send_system_message/5,
+      &extract_message_ids/1
+    )
   end
 
   defp resolve_openai_provider do
