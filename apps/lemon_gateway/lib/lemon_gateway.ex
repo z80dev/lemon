@@ -9,6 +9,7 @@ defmodule LemonGateway do
   ## Usage
 
       request = %LemonGateway.ExecutionRequest{
+        run_id: "run_123",
         prompt: "Fix the failing test",
         engine_id: "lemon",
         session_key: "telegram:12345",

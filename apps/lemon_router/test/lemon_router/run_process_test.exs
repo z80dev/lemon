@@ -204,6 +204,34 @@ defmodule LemonRouter.RunProcessTest do
       assert is_pid(pid)
     end
 
+    test "uses normalized execution request session_key as authoritative state" do
+      run_id = "run_#{System.unique_integer()}"
+      request_session_key = SessionKey.main("request-agent")
+      init_session_key = SessionKey.main("init-agent")
+
+      request =
+        make_test_request(run_id, %{}, %{
+          session_key: request_session_key,
+          conversation_key: {:session, request_session_key}
+        })
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: init_session_key,
+                 execution_request: request,
+                 submit_to_gateway?: false
+               })
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+
+               state.session_key == request_session_key and
+                 state.execution_request.session_key == request_session_key and
+                 state.conversation_key == {:session, request_session_key}
+             end)
+    end
+
     test "rejects legacy job-only initialization" do
       run_id = "run_#{System.unique_integer()}"
       session_key = SessionKey.main("test-agent")
@@ -475,6 +503,7 @@ defmodule LemonRouter.RunProcessTest do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
       job = make_test_request(run_id)
+      conversation_key = {:session, "test:#{run_id}"}
 
       assert Process.whereis(TestScheduler) == nil
 
@@ -495,7 +524,12 @@ defmodule LemonRouter.RunProcessTest do
 
       {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
 
-      assert_receive {:test_scheduler_submit, %LemonGateway.ExecutionRequest{run_id: ^run_id}},
+      assert_receive {:test_scheduler_submit,
+                      %LemonGateway.ExecutionRequest{
+                        run_id: ^run_id,
+                        session_key: ^session_key,
+                        conversation_key: ^conversation_key
+                      }},
                      1_500
 
       refute_receive {:test_scheduler_submit, _job}, 300

@@ -99,7 +99,7 @@ defmodule LemonRouter.RunProcess do
   @impl true
   def init(opts) do
     run_id = opts[:run_id]
-    session_key = opts[:session_key]
+    init_session_key = opts[:session_key]
     gateway_scheduler = opts[:gateway_scheduler] || LemonGateway.Scheduler
     run_orchestrator = opts[:run_orchestrator] || LemonRouter.RunOrchestrator
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
@@ -109,10 +109,11 @@ defmodule LemonRouter.RunProcess do
          {:ok, execution_request} <-
            normalize_execution_request(
              request,
-             session_key,
+             init_session_key,
              opts[:conversation_key],
              run_id
            ) do
+      session_key = execution_request.session_key
       queue_mode = opts[:queue_mode] || :collect
 
       # For tests and partial-boot scenarios, allow skipping gateway submission.
@@ -149,9 +150,7 @@ defmodule LemonRouter.RunProcess do
         gateway_run_pid: nil,
         gateway_run_ref: nil,
         coordinator_pid: opts[:coordinator_pid],
-        conversation_key:
-          opts[:conversation_key] ||
-            match_conversation_key(execution_request),
+        conversation_key: execution_request.conversation_key,
         generated_image_paths: [],
         requested_send_files: [],
         task_status_surfaces: %{},
@@ -720,11 +719,6 @@ defmodule LemonRouter.RunProcess do
       :ok
     end
   end
-
-  defp match_conversation_key(%ExecutionRequest{conversation_key: conversation_key}),
-    do: conversation_key
-
-  defp match_conversation_key(_request), do: nil
 
   defp normalize_execution_request(
          %ExecutionRequest{} = request,
