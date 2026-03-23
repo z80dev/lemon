@@ -9,7 +9,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
 
   @type callbacks :: %{
           optional(:execute_inbound_message) => (map(), map() -> map()),
-          optional(:handle_inbound_message) => (map(), map() -> map()),
           optional(:handle_callback_query) => (map(), map() -> any()),
           optional(:index_known_target) => (map(), map() -> map()),
           optional(:submit_buffer) => (map(), map() -> map()),
@@ -28,20 +27,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
 
   defp run_action({:execute_inbound_message, inbound}, state, callbacks) do
     callbacks.execute_inbound_message.(state, inbound)
-  end
-
-  defp run_action({:handle_inbound_message, inbound}, state, callbacks) do
-    case Map.fetch(callbacks, :handle_inbound_message) do
-      {:ok, handler} when is_function(handler, 2) ->
-        handler.(state, inbound)
-
-      :error ->
-        if Map.has_key?(callbacks, :execute_inbound_message) do
-          callbacks.execute_inbound_message.(state, inbound)
-        else
-          state
-        end
-    end
   end
 
   defp run_action({:handle_callback_query, callback_query}, state, callbacks) do
