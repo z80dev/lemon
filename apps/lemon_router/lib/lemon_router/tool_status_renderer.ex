@@ -22,6 +22,9 @@ defmodule LemonRouter.ToolStatusRenderer do
     render(channel_id, actions, order, %{})
   end
 
+  @max_tool_lines 5
+  @keep_tail 4
+
   @doc """
   Render with opts map supporting `:elapsed_ms`, `:engine`, `:action_count`.
   """
@@ -32,11 +35,11 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   def render(channel_id, actions, order, opts) when is_map(actions) and is_list(order) do
     _channel_id = channel_id
-    display_order = order
-    omitted_count = 0
+    max_lines = max_tool_lines(channel_id)
 
-    lines =
-      Enum.map(display_order, fn id ->
+    # Build all lines first
+    all_lines =
+      Enum.map(order, fn id ->
         case Map.get(actions, id) do
           nil -> nil
           action -> format_action_line(action, actions)
@@ -44,19 +47,39 @@ defmodule LemonRouter.ToolStatusRenderer do
       end)
       |> Enum.reject(&is_nil/1)
 
+    # Truncate if needed
+    {omitted_count, display_lines} =
+      if length(all_lines) > max_lines do
+        {length(all_lines) - @keep_tail, Enum.take(all_lines, -@keep_tail)}
+      else
+        {0, all_lines}
+      end
+
     lines =
       case omitted_count do
         n when is_integer(n) and n > 0 ->
-          ["(#{n} #{tool_word(n)} omitted)" | lines]
+          ["(#{n} #{tool_word(n)} omitted)" | display_lines]
 
         _ ->
-          lines
+          display_lines
       end
 
     header = build_header(opts)
 
     Enum.join([header | lines], "\n")
   end
+
+  defp max_tool_lines(channel_id) when is_binary(channel_id) do
+    if String.starts_with?(channel_id, "telegram") or
+         String.starts_with?(channel_id, "whatsapp") do
+      @max_tool_lines
+    else
+      # No truncation for other channels (discord, web, etc.)
+      :infinity
+    end
+  end
+
+  defp max_tool_lines(_), do: :infinity
 
   defp build_header(opts) do
     elapsed_ms = Map.get(opts, :elapsed_ms)

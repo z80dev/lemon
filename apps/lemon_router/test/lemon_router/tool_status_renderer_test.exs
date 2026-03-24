@@ -38,7 +38,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
     refute String.contains?(text, "%AgentCore.Types.AgentToolResult")
   end
 
-  test "router renderer keeps full action list; channel-specific truncation is handled by channels" do
+  test "telegram truncates tool list when more than 5 tools, showing last 4 + omitted line" do
     actions =
       for i <- 1..7, into: %{} do
         id = "a#{i}"
@@ -56,10 +56,14 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     text = ToolStatusRenderer.render("telegram", actions, order)
 
-    refute String.contains?(text, "omitted")
-    assert String.contains?(text, "Tool 1")
-    assert String.contains?(text, "Tool 3")
+    # 7 tools total, keep last 4 (Tool 4-7), omit first 3
+    assert String.contains?(text, "(3 tools omitted)")
+    assert String.contains?(text, "Tool 4")
     assert String.contains?(text, "Tool 7")
+    # Tool 1-3 should NOT appear
+    refute String.contains?(text, "Tool 1")
+    refute String.contains?(text, "Tool 2")
+    refute String.contains?(text, "Tool 3")
   end
 
   test "non-telegram channels keep full tool call list" do
@@ -210,5 +214,61 @@ defmodule LemonRouter.ToolStatusRendererTest do
     text = ToolStatusRenderer.render("telegram", actions, ["a1"], opts)
 
     assert String.contains?(text, "2m 30s")
+  end
+
+  test "telegram with exactly 5 tools shows all, no omission" do
+    actions =
+      for i <- 1..5, into: %{} do
+        {"a#{i}", %{title: "Tool #{i}", phase: :completed, ok: true, detail: %{}}}
+      end
+
+    order = Enum.map(1..5, &"a#{&1}")
+    text = ToolStatusRenderer.render("telegram", actions, order)
+
+    refute String.contains?(text, "omitted")
+    for i <- 1..5, do: assert(String.contains?(text, "Tool #{i}"))
+  end
+
+  test "telegram with 6 tools omits first 2, keeps last 4" do
+    actions =
+      for i <- 1..6, into: %{} do
+        {"a#{i}", %{title: "Tool #{i}", phase: :completed, ok: true, detail: %{}}}
+      end
+
+    order = Enum.map(1..6, &"a#{&1}")
+    text = ToolStatusRenderer.render("telegram", actions, order)
+
+    assert String.contains?(text, "(2 tools omitted)")
+    assert String.contains?(text, "Tool 3")
+    assert String.contains?(text, "Tool 6")
+    refute String.contains?(text, "Tool 1")
+    refute String.contains?(text, "Tool 2")
+  end
+
+  test "whatsapp also truncates like telegram" do
+    actions =
+      for i <- 1..6, into: %{} do
+        {"a#{i}", %{title: "Tool #{i}", phase: :completed, ok: true, detail: %{}}}
+      end
+
+    order = Enum.map(1..6, &"a#{&1}")
+    text = ToolStatusRenderer.render("whatsapp:12345", actions, order)
+
+    assert String.contains?(text, "(2 tools omitted)")
+    refute String.contains?(text, "Tool 1")
+    assert String.contains?(text, "Tool 6")
+  end
+
+  test "nil channel_id does not truncate" do
+    actions =
+      for i <- 1..7, into: %{} do
+        {"a#{i}", %{title: "Tool #{i}", phase: :completed, ok: true, detail: %{}}}
+      end
+
+    order = Enum.map(1..7, &"a#{&1}")
+    text = ToolStatusRenderer.render(nil, actions, order)
+
+    refute String.contains?(text, "omitted")
+    for i <- 1..7, do: assert(String.contains?(text, "Tool #{i}"))
   end
 end
