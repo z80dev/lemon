@@ -24,6 +24,7 @@ defmodule Ai.Providers.Anthropic do
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
   alias LemonCore.Secrets
+  import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
     AssistantMessage,
@@ -62,28 +63,7 @@ defmodule Ai.Providers.Anthropic do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-
-    # Start EventStream with owner monitoring and timeout
-    stream_timeout = opts.stream_timeout || 300_000
-
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
-      )
-
-    # Start streaming task under supervision
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        do_stream(stream, model, context, opts)
-      end)
-
-    # Attach task to stream for lifecycle management
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -1254,26 +1234,6 @@ defmodule Ai.Providers.Anthropic do
   # ============================================================================
   # Usage & Cost Helpers
   # ============================================================================
-
-  defp init_assistant_message(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
-      },
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 
   defp update_usage(output, usage_data, model) do
     usage = output.usage

@@ -620,10 +620,7 @@ defmodule Ai.Providers.GoogleShared do
   def retryable_error?(status, _error_text) when status in [429, 500, 502, 503, 504], do: true
 
   def retryable_error?(_status, error_text) do
-    pattern =
-      ~r/resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed/i
-
-    Regex.match?(pattern, error_text)
+    Ai.Providers.RetryHelper.retryable_error_text?(error_text)
   end
 
   @doc """

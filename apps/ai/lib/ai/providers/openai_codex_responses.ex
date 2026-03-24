@@ -94,65 +94,52 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-    stream_timeout = opts.stream_timeout || 300_000
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+  end
 
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
-      )
+  defp do_stream(stream, model, context, opts) do
+    output = initial_output(model)
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        output = initial_output(model)
+    try do
+      api_key = opts.api_key || get_env_api_key()
 
-        try do
-          api_key = opts.api_key || get_env_api_key()
+      if !api_key || api_key == "" do
+        raise "ChatGPT token is required. Set OPENAI_CODEX_API_KEY / CHATGPT_TOKEN, or configure an OAuth api_key_secret."
+      end
 
-          if !api_key || api_key == "" do
-            raise "ChatGPT token is required. Set OPENAI_CODEX_API_KEY / CHATGPT_TOKEN, or configure an OAuth api_key_secret."
-          end
+      # Extract account ID from JWT
+      account_id = extract_account_id(api_key)
 
-          # Extract account ID from JWT
-          account_id = extract_account_id(api_key)
+      # Build request
+      body = build_request_body(model, context, opts)
+      headers = build_headers(model, opts, account_id, api_key)
 
-          # Build request
-          body = build_request_body(model, context, opts)
-          headers = build_headers(model, opts, account_id, api_key)
+      EventStream.push_async(stream, {:start, output})
 
-          EventStream.push_async(stream, {:start, output})
+      # Make streaming request with retries
+      case stream_with_retries(body, headers, @max_retries) do
+        {:ok, event_stream} ->
+          # Map codex events to standard OpenAI Responses events
+          mapped_events = map_codex_events(event_stream)
 
-          # Make streaming request with retries
-          case stream_with_retries(body, headers, @max_retries) do
-            {:ok, event_stream} ->
-              # Map codex events to standard OpenAI Responses events
-              mapped_events = map_codex_events(event_stream)
-
-              case OpenAIResponsesShared.process_stream(mapped_events, output, stream, model) do
-                {:ok, final_output} ->
-                  EventStream.complete(stream, final_output)
-
-                {:error, reason} ->
-                  output = %{output | stop_reason: :error, error_message: reason}
-                  EventStream.error(stream, output)
-              end
+          case OpenAIResponsesShared.process_stream(mapped_events, output, stream, model) do
+            {:ok, final_output} ->
+              EventStream.complete(stream, final_output)
 
             {:error, reason} ->
               output = %{output | stop_reason: :error, error_message: reason}
               EventStream.error(stream, output)
           end
-        rescue
-          e ->
-            output = %{output | stop_reason: :error, error_message: Exception.message(e)}
-            EventStream.error(stream, output)
-        end
-      end)
 
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+        {:error, reason} ->
+          output = %{output | stop_reason: :error, error_message: reason}
+          EventStream.error(stream, output)
+      end
+    rescue
+      e ->
+        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        EventStream.error(stream, output)
+    end
   end
 
   # ============================================================================
@@ -390,17 +377,12 @@ defmodule Ai.Providers.OpenAICodexResponses do
   end
 
   defp retry_delay_with_jitter(base_ms, attempt) do
-    base = (base_ms * :math.pow(2, attempt)) |> trunc()
-    half = max(div(base, 2), 1)
-    half + :rand.uniform(half)
+    Ai.Providers.RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
   end
 
   defp retryable_error?(status, error_text) do
-    status in [429, 500, 502, 503, 504] ||
-      Regex.match?(
-        ~r/rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i,
-        error_text
-      )
+    Ai.Providers.RetryHelper.retryable_http_status?(status, [429, 500, 502, 503, 504]) ||
+      Ai.Providers.RetryHelper.retryable_error_text?(error_text)
   end
 
   defp parse_error_response(status, raw) do
