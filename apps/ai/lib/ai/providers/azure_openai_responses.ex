@@ -57,6 +57,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
   alias Ai.Providers.SSEParser
+  import Ai.Providers.AssistantMessageHelper
   alias LemonCore.Secrets
 
   require Logger
@@ -110,7 +111,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
       end
 
     deployment_name = resolve_deployment_name(model, opts, resolved)
-    output = initial_output(model)
+    output = init_assistant_message(model, api_override: :azure_openai_responses)
 
     try do
       api_key = opts.api_key || Map.get(resolved, :api_key)
@@ -411,23 +412,4 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   # Helpers
   # ============================================================================
 
-  defp initial_output(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :azure_openai_responses,
-      provider: model.provider,
-      model: model.id,
-      usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
-      },
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 end

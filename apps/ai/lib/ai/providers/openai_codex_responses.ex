@@ -99,7 +99,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
   end
 
   defp do_stream(stream, model, context, opts) do
-    output = initial_output(model)
+    output = init_assistant_message(model, api_override: :openai_codex_responses)
 
     try do
       api_key = opts.api_key || get_env_api_key()

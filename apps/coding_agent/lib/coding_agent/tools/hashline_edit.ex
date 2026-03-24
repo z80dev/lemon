@@ -30,7 +30,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
   alias CodingAgent.Tools.Hashline
   alias CodingAgent.Tools.Hashline.HashlineMismatchError
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @doc """
   Returns the tool definition for the hashline_edit tool.
@@ -101,7 +101,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
-    if AbortSignal.aborted?(signal) do
+    if aborted?(signal) do
       {:error, "Operation aborted"}
     else
       do_execute(params, signal, cwd, opts)
