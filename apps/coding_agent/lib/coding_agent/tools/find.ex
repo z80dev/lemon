@@ -7,10 +7,11 @@ defmodule CodingAgent.Tools.Find do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
+
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @elixir_find_timeout_ms 30_000
@@ -503,18 +504,4 @@ defmodule CodingAgent.Tools.Find do
     end
   end
 
-  # ============================================================================
-  # Abort Signal Handling
-  # ============================================================================
-
-  defp aborted?(nil), do: false
-  defp aborted?(signal), do: AbortSignal.aborted?(signal)
-
-  defp check_abort(signal) do
-    if aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 end

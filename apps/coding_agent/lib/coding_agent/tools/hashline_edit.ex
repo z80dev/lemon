@@ -24,10 +24,13 @@ defmodule CodingAgent.Tools.HashlineEdit do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileFormatHelpers
+  alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.Hashline
   alias CodingAgent.Tools.Hashline.HashlineMismatchError
+
+  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @doc """
   Returns the tool definition for the hashline_edit tool.
@@ -110,17 +113,17 @@ defmodule CodingAgent.Tools.HashlineEdit do
     raw_edits = params["edits"]
 
     with :ok <- validate_params(path, raw_edits),
-         :ok <- check_aborted(signal),
+         :ok <- check_abort(signal),
          resolved_path <- resolve_path(path, cwd, opts),
          :ok <- check_file_access(resolved_path),
          {:ok, raw_content} <- File.read(resolved_path),
-         {bom, content} <- strip_bom(raw_content),
-         line_ending <- detect_line_ending(content),
-         normalized <- normalize_to_lf(content),
+         {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
+         line_ending <- FileFormatHelpers.detect_line_ending(content),
+         normalized <- FileFormatHelpers.normalize_to_lf(content),
          {:ok, edits} <- parse_edits(raw_edits),
          {:ok, result} <- Hashline.apply_edits(normalized, edits),
-         :ok <- check_aborted(signal),
-         final_content <- finalize_content(result.content, line_ending, bom),
+         :ok <- check_abort(signal),
+         final_content <- FileFormatHelpers.finalize_content(result.content, line_ending, bom),
          :ok <- File.write(resolved_path, final_content) do
       noop_count = if result.noop_edits, do: length(result.noop_edits), else: 0
       dedup_count = if result.deduplicated_edits, do: length(result.deduplicated_edits), else: 0
@@ -262,14 +265,6 @@ defmodule CodingAgent.Tools.HashlineEdit do
   # File Helpers
   # ============================================================================
 
-  defp check_aborted(nil), do: :ok
-
-  defp check_aborted(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal), do: {:error, "Operation aborted"}, else: :ok
-  end
-
-  defp check_aborted(_), do: :ok
-
   defp resolve_path(path, cwd, _opts) do
     if Path.type(path) == :absolute do
       path
@@ -278,34 +273,6 @@ defmodule CodingAgent.Tools.HashlineEdit do
     end
   end
 
-  defp check_file_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{access: access}} when access in [:read_write, :write] -> :ok
-      {:ok, %File.Stat{}} -> {:error, :eacces}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp check_file_access(path), do: FileValidation.check_write_access(path)
 
-  @utf8_bom <<0xEF, 0xBB, 0xBF>>
-
-  defp strip_bom(<<0xEF, 0xBB, 0xBF, rest::binary>>), do: {@utf8_bom, rest}
-  defp strip_bom(content), do: {nil, content}
-
-  defp detect_line_ending(content) do
-    if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
-  end
-
-  defp normalize_to_lf(text), do: String.replace(text, "\r\n", "\n")
-
-  defp finalize_content(content, "\r\n", bom) do
-    restored = content |> String.replace("\r\n", "\n") |> String.replace("\n", "\r\n")
-
-    case bom do
-      nil -> restored
-      b -> b <> restored
-    end
-  end
-
-  defp finalize_content(content, _, nil), do: content
-  defp finalize_content(content, _, bom), do: bom <> content
 end

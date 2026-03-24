@@ -17,6 +17,7 @@ defmodule CodingAgent.Tools.Edit do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 
@@ -95,10 +96,10 @@ defmodule CodingAgent.Tools.Edit do
     with :ok <- check_aborted(signal),
          :ok <- check_file_access(resolved_path),
          {:ok, raw_content} <- File.read(resolved_path),
-         {bom, content} <- strip_bom(raw_content),
-         line_ending <- detect_line_ending(content),
-         normalized_content <- normalize_to_lf(content),
-         normalized_old_text <- normalize_to_lf(old_text),
+         {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
+         line_ending <- FileFormatHelpers.detect_line_ending(content),
+         normalized_content <- FileFormatHelpers.normalize_to_lf(content),
+         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
          {:ok, match_index, match_length} <-
            fuzzy_find_text(normalized_content, normalized_old_text),
          :ok <-
@@ -107,7 +108,7 @@ defmodule CodingAgent.Tools.Edit do
            perform_replacement(normalized_content, match_index, match_length, new_text),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
-         final_content <- finalize_content(new_content, line_ending, bom),
+         final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
          :ok <- File.write(resolved_path, final_content) do
       diff = generate_diff(content, new_content)
       first_changed_line = find_first_changed_line(content, new_content)
@@ -172,51 +173,6 @@ defmodule CodingAgent.Tools.Edit do
 
   @spec check_file_access(String.t()) :: :ok | {:error, atom()}
   defp check_file_access(path), do: FileValidation.check_write_access(path)
-
-  # ============================================================================
-  # BOM Handling
-  # ============================================================================
-
-  @utf8_bom <<0xEF, 0xBB, 0xBF>>
-
-  @spec strip_bom(binary()) :: {binary() | nil, String.t()}
-  defp strip_bom(<<0xEF, 0xBB, 0xBF, rest::binary>>) do
-    {@utf8_bom, rest}
-  end
-
-  defp strip_bom(content) do
-    {nil, content}
-  end
-
-  # ============================================================================
-  # Line Ending Detection & Normalization
-  # ============================================================================
-
-  @spec detect_line_ending(String.t()) :: String.t()
-  defp detect_line_ending(content) do
-    if String.contains?(content, "\r\n") do
-      "\r\n"
-    else
-      "\n"
-    end
-  end
-
-  @spec normalize_to_lf(String.t()) :: String.t()
-  defp normalize_to_lf(text) do
-    String.replace(text, "\r\n", "\n")
-  end
-
-  @spec restore_line_endings(String.t(), String.t()) :: String.t()
-  defp restore_line_endings(text, "\r\n") do
-    # First normalize to LF to avoid double CRLF, then convert to CRLF
-    text
-    |> String.replace("\r\n", "\n")
-    |> String.replace("\n", "\r\n")
-  end
-
-  defp restore_line_endings(text, _) do
-    text
-  end
 
   # ============================================================================
   # Text Matching
@@ -439,7 +395,7 @@ defmodule CodingAgent.Tools.Edit do
           {:ok, String.t()}
   defp perform_replacement(content, match_index, match_length, new_text) do
     # Normalize new_text to LF as well
-    normalized_new_text = normalize_to_lf(new_text)
+    normalized_new_text = FileFormatHelpers.normalize_to_lf(new_text)
 
     before = :binary.part(content, 0, match_index)
 
@@ -459,16 +415,6 @@ defmodule CodingAgent.Tools.Edit do
       {:error, :no_change}
     else
       :ok
-    end
-  end
-
-  @spec finalize_content(String.t(), String.t(), binary() | nil) :: binary()
-  defp finalize_content(content, line_ending, bom) do
-    content_with_endings = restore_line_endings(content, line_ending)
-
-    case bom do
-      nil -> content_with_endings
-      bom_bytes -> bom_bytes <> content_with_endings
     end
   end
 

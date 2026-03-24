@@ -34,10 +34,11 @@ defmodule CodingAgent.Tools.Patch do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
+
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   # Maximum file size to process (10 MB)
   @max_file_size 10 * 1024 * 1024
@@ -766,16 +767,6 @@ defmodule CodingAgent.Tools.Patch do
     text
     |> String.split(~r/\r?\n/, trim: false)
     |> length()
-  end
-
-  defp check_abort(nil), do: :ok
-
-  defp check_abort(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
   end
 
   defp format_error(reason, _path) when is_binary(reason), do: reason
