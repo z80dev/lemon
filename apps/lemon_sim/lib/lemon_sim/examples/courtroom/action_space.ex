@@ -465,7 +465,9 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
     get(case_file, :evidence_list, [])
   end
 
-  defp get(map, key, default \\ nil) when is_map(map) and is_atom(key) do
+  defp get(map, key, default \\ nil)
+
+  defp get(map, key, default) when is_map(map) and is_atom(key) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))
   end
 

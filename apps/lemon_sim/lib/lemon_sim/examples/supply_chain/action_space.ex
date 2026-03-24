@@ -69,7 +69,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
   # -- Communicate phase tools --
 
-  defp communicate_tools(world, actor_id) do
+  defp communicate_tools(_world, actor_id) do
     adjacent = adjacent_tiers(actor_id)
     existing_tiers = @tier_order
 

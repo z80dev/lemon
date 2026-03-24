@@ -499,7 +499,7 @@ defmodule LemonSimUi.Live.Components.LegislatureBoard do
               <%= for s <- 1..@max_sessions do %>
                 <div
                   class="flex-1 h-2 rounded-sm"
-                  style={"background: #{if s < @session, do: "rgba(245, 158, 11, 0.6)", else: if s == @session, do: "rgba(245, 158, 11, 0.3)", else: "rgba(71, 85, 105, 0.2)"}; border: 1px solid #{if s <= @session, do: "rgba(245, 158, 11, 0.3)", else: "rgba(71, 85, 105, 0.1)"};"}
+                  style={"background: #{if s < @session, do: "rgba(245, 158, 11, 0.6)", else: if(s == @session, do: "rgba(245, 158, 11, 0.3)", else: "rgba(71, 85, 105, 0.2)")}; border: 1px solid #{if s <= @session, do: "rgba(245, 158, 11, 0.3)", else: "rgba(71, 85, 105, 0.1)"};"}
                 ></div>
               <% end %>
             </div>
@@ -548,7 +548,7 @@ defmodule LemonSimUi.Live.Components.LegislatureBoard do
   defp bill_color(_), do: "#94a3b8"
 
   defp bill_bg(color, "passed"), do: "#{color}18"
-  defp bill_bg(color, "failed"), do: "rgba(239, 68, 68, 0.05)"
+  defp bill_bg(_color, "failed"), do: "rgba(239, 68, 68, 0.05)"
   defp bill_bg(color, _), do: "#{color}08"
 
   defp bill_status_class("passed"), do: "bg-green-900/60 text-green-300"

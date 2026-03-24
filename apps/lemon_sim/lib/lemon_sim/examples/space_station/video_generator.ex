@@ -184,19 +184,4 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
   defp format_file_size(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1024, 1)} KB"
   defp format_file_size(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
 
-  defp get(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
-      nil ->
-        try do
-          Map.get(map, String.to_existing_atom(key), default)
-        rescue
-          ArgumentError -> default
-        end
-
-      val ->
-        val
-    end
-  end
-
-  defp get(_, _, default), do: default
 end

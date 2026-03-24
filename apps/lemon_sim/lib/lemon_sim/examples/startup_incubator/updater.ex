@@ -10,9 +10,6 @@ defmodule LemonSim.Examples.StartupIncubator.Updater do
   alias LemonSim.State
   alias LemonSim.Examples.StartupIncubator.{Events, Market}
 
-  # Phases in order within a round
-  @phases ~w(pitch due_diligence negotiation market_event operations)
-
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)

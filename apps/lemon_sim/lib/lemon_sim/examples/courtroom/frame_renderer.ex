@@ -134,8 +134,7 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
   # ---------------------------------------------------------------------------
 
   defp render_header_bar(%{w: w, type: type} = ctx) do
-    title_text =
-      case_file_title = get(ctx.case_file, "title", get(ctx.case_file, :title, "Courtroom Trial"))
+    title_text = get(ctx.case_file, "title", get(ctx.case_file, :title, "Courtroom Trial"))
 
     phase_text =
       if type not in ["init", "verdict"] do

@@ -576,7 +576,7 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
            h: h,
            proposed_amendments: proposed_amendments,
            turn_order: turn_order,
-           players: players
+           players: _players
          } = ctx
        ) do
     panel_x = @roster_w + 10
@@ -649,7 +649,7 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
   end
 
   defp render_final_vote_panel(
-         %{w: w, h: h, vote_record: vote_record, turn_order: turn_order, players: players} = ctx
+         %{w: w, h: h, vote_record: vote_record, turn_order: _turn_order, players: _players} = ctx
        ) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10

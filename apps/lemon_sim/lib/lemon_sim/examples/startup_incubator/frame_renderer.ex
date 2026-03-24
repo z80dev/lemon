@@ -236,7 +236,7 @@ defmodule LemonSim.Examples.StartupIncubator.FrameRenderer do
     ]
   end
 
-  defp render_founder_card(pid, player, idx, color, y, is_winner, ctx) do
+  defp render_founder_card(pid, _player, idx, color, y, is_winner, ctx) do
     startup = Map.get(ctx.startups, pid, %{})
     sector = get(startup, "sector", get(startup, :sector, "unknown"))
     valuation = get(startup, "valuation", get(startup, :valuation, 0))

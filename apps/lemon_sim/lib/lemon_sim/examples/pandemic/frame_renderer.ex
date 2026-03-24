@@ -218,8 +218,6 @@ defmodule LemonSim.Examples.Pandemic.FrameRenderer do
     funding = get(resources, "funding", 0)
     medical_teams = get(resources, "medical_teams", 0)
     is_active = ctx.active_actor == gid
-    is_winner = ctx.winner == gid or ctx.winner == "team"
-
     region = Map.get(ctx.regions, region_id, %{})
     pop = get(region, "population", 1)
     dead = get(region, "dead", 0)

@@ -200,8 +200,6 @@ defmodule LemonSim.Examples.SupplyChain do
           actor_id = MapHelpers.get_key(frame.world, :active_actor_id)
           demand_history = get(frame.world, :demand_history, [])
           consumer_demand = get(frame.world, :consumer_demand, 0)
-          tiers = get(frame.world, :tiers, %{})
-
           # Retailer sees current consumer demand; others only see aggregates
           demand_info =
             if actor_id == "retailer" do

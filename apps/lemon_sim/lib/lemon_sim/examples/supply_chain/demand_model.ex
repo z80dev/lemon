@@ -140,7 +140,7 @@ defmodule LemonSim.Examples.SupplyChain.DemandModel do
   Values near 1.0 are optimal. Much higher means excess stock, lower means stockouts.
   """
   @spec inventory_efficiency(float(), float()) :: float() | nil
-  def inventory_efficiency(_avg_inventory, 0.0), do: nil
+  def inventory_efficiency(_avg_inventory, avg_demand) when avg_demand == 0.0, do: nil
 
   def inventory_efficiency(avg_inventory, avg_demand) do
     Float.round(avg_inventory / avg_demand, 2)

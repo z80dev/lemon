@@ -101,9 +101,9 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
     end
   end
 
-  defp compute_detection_accuracy(suspicion_board, nil, _players), do: 0.0
+  defp compute_detection_accuracy(_suspicion_board, nil, _players), do: 0.0
 
-  defp compute_detection_accuracy(suspicion_board, mole_id, players) do
+  defp compute_detection_accuracy(suspicion_board, mole_id, _players) do
     total_reports =
       suspicion_board
       |> Map.values()
@@ -115,7 +115,7 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
     if total_reports == 0, do: 0.0, else: Float.round(mole_reports / total_reports, 3)
   end
 
-  defp compute_propagation_efficiency(players, intel_pool) when length(intel_pool) == 0, do: 0.0
+  defp compute_propagation_efficiency(_players, intel_pool) when length(intel_pool) == 0, do: 0.0
 
   defp compute_propagation_efficiency(players, intel_pool) do
     loyal_players =

@@ -21,7 +21,7 @@ defmodule LemonSkills.Sources.Registry do
 
   require Logger
 
-  alias LemonSkills.{Entry, HttpClient, Manifest}
+  alias LemonSkills.{Entry, HttpClient}
 
   @default_registry_url "https://skills.lemon.agent"
   @user_agent "LemonAgent/1.0"

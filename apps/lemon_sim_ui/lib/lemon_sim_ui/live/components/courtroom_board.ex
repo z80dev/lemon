@@ -2,7 +2,6 @@ defmodule LemonSimUi.Live.Components.CourtroomBoard do
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
-  alias Phoenix.LiveView.JS
 
   attr :world, :map, required: true
   attr :interactive, :boolean, default: false
@@ -391,7 +390,7 @@ defmodule LemonSimUi.Live.Components.CourtroomBoard do
 
   defp participant_card(assigns) do
     ~H"""
-    <div style={"margin: 2px 8px; padding: 8px 10px; border-radius: 6px; border: 1px solid #{if @is_winner, do: "#d4af37", else: if @is_active, do: role_color(@role), else: "transparent"}; background: #{if @is_winner, do: "rgba(212,175,55,0.07)", else: if @is_active, do: "rgba(30,40,60,0.8)", else: "transparent"};"}>
+    <div style={"margin: 2px 8px; padding: 8px 10px; border-radius: 6px; border: 1px solid #{if @is_winner, do: "#d4af37", else: if(@is_active, do: role_color(@role), else: "transparent")}; background: #{if @is_winner, do: "rgba(212,175,55,0.07)", else: if(@is_active, do: "rgba(30,40,60,0.8)", else: "transparent")};"}>
       <div style="display: flex; align-items: center; gap: 6px;">
         <span style={"width: 8px; height: 8px; border-radius: 50%; background: #{role_color(@role)}; flex-shrink: 0;"}></span>
         <span style={"font-size: 11px; font-weight: 700; color: #{role_color(@role)};"}><%= role_label(@role) %></span>

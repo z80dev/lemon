@@ -250,11 +250,6 @@ defmodule LemonCore.MemoryStore do
     )
   """
 
-  @fts_prune_session_sql """
-  DELETE FROM memory_fts
-  WHERE doc_id NOT IN (SELECT doc_id FROM memory_documents)
-  """
-
   # ── Public API ────────────────────────────────────────────────────────────────
 
   def start_link(opts \\ []) do

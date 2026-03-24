@@ -308,7 +308,7 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
         do: put_default_thinking_preference(account_id, chat_id, thread_id, level)
 
       @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
-      def clear_default_thinking_preference(account_id, chat_id, thread_id) do
+      def clear_default_thinking_preference(account_id, chat_id, thread_id) when is_binary(account_id) do
         account_id = account_id || "default"
         had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
 

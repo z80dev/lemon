@@ -21,7 +21,6 @@ defmodule LemonSim.Examples.SupplyChain.FrameRenderer do
   # Layout constants
   @header_h 60
   @footer_h 70
-  @chain_panel_w 480
   @side_panel_w 260
 
   # ---------------------------------------------------------------------------

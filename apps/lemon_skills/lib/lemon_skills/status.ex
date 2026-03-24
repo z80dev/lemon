@@ -250,8 +250,6 @@ defmodule LemonSkills.Status do
   # ============================================================================
 
   defp check_requirements(%Entry{} = entry) do
-    manifest = entry.manifest || %{}
-
     platform_ok = platform_compatible?(entry)
     missing_bins = missing_binaries(entry)
     missing_cfg = missing_config(entry)

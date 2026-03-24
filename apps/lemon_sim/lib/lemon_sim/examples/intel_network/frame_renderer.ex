@@ -388,7 +388,7 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
         ~s[fill="#{@text_secondary}">Leaked Intel: #{length(ctx.leaked_intel)}/5</text>\n],
       sorted
       |> Enum.with_index()
-      |> Enum.map(fn {{pid, fragments, role}, rank} ->
+      |> Enum.map(fn {{pid, fragments, _role}, rank} ->
         sy = cy - div(card_h, 2) + 96 + rank * 48
         is_mole_player = pid == mole_id
         display_color = if is_mole_player, do: @mole_color, else: @cyan
@@ -597,7 +597,7 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
     ]
   end
 
-  defp render_mole_action_panel(%{w: w, h: h, leaked_intel: leaked_intel} = ctx) do
+  defp render_mole_action_panel(%{w: w, h: h, leaked_intel: leaked_intel} = _ctx) do
     panel_x = @roster_w + 10
     panel_y = @header_h + 10
     panel_w = w - @roster_w - @net_w - 20

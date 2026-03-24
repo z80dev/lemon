@@ -10,8 +10,6 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
   alias LemonSim.State
   alias LemonSim.Examples.MurderMystery.Events
 
-  @phases ~w(investigation interrogation discussion killer_action deduction_vote)
-
   @impl true
   def apply_event(%State{} = state, raw_event, _opts) do
     event = Events.normalize(raw_event)
@@ -291,7 +289,6 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
     clue_type = fetch(event.payload, :clue_type, "clue_type", "fingerprint")
 
     players = get(state.world, :players, %{})
-    player = Map.get(players, player_id, %{})
 
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase(state.world, "killer_action"),
@@ -543,7 +540,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
     end
   end
 
-  defp advance_interrogation(world, last_asker_id) do
+  defp advance_interrogation(world, _last_asker_id) do
     turn_order = get(world, :turn_order, [])
     asked_this_round = get(world, :asked_this_round, MapSet.new())
 
@@ -636,7 +633,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
         {next_world, "round #{new_round} begins - investigation phase"}
       end
     else
-      next_player = next_in_turn_order(turn_order, current_player_id)
+      _next_player = next_in_turn_order(turn_order, current_player_id)
 
       remaining =
         turn_order
@@ -702,7 +699,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
       else: :ok
   end
 
-  defp ensure_pending_question(world, player_id) do
+  defp ensure_pending_question(world, _player_id) do
     pending = get(world, :pending_question, nil)
 
     if is_nil(pending),
