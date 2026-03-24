@@ -1244,7 +1244,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp strip_engine_directive(text) when is_binary(text) do
     text = String.trim(text)
 
-    case Regex.run(~r{^/(lemon|codex|claude|opencode|pi|echo|kimi)\b\s*(.*)$}is, text) do
+    case Regex.run(~r{^/(lemon|echo)\b\s*(.*)$}is, text) do
       [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
       _ -> {nil, text}
     end

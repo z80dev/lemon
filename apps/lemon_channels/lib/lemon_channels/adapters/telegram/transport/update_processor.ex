@@ -365,7 +365,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   defp strip_engine_directive(text) when is_binary(text) do
     trimmed = String.trim(text)
 
-    case Regex.run(~r{^/(lemon|codex|claude|opencode|pi|echo|kimi)\b\s*(.*)$}is, trimmed) do
+    case Regex.run(~r{^/(lemon|echo)\b\s*(.*)$}is, trimmed) do
       [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
       _ -> {nil, trimmed}
     end
