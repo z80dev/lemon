@@ -529,8 +529,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp transient_reason?(_), do: false
 
   defp transient_backoff_ms(attempt) when is_integer(attempt) and attempt >= 0 do
-    multiplier = trunc(:math.pow(2, attempt))
-    @default_transient_backoff_ms * max(multiplier, 1)
+    LemonCore.Retry.exponential_backoff(@default_transient_backoff_ms, attempt)
   end
 
   defp maybe_sleep(ms) when is_integer(ms) and ms > 0 do

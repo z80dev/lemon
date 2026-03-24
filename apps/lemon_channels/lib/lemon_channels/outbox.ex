@@ -649,7 +649,7 @@ defmodule LemonChannels.Outbox do
 
   defp exponential_retry_delay(attempt) do
     # Exponential backoff: 1s, 2s, 4s
-    :math.pow(2, attempt - 1) |> round() |> Kernel.*(1000)
+    LemonCore.Retry.exponential_backoff(1000, max(attempt - 1, 0))
   end
 
   defp retry_after_ms({:http_error, 429, body}) do
@@ -662,40 +662,7 @@ defmodule LemonChannels.Outbox do
 
   defp retry_after_ms(_reason), do: 0
 
-  defp parse_retry_after_ms(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} ->
-        parse_retry_after_ms(decoded)
-
-      _ ->
-        parse_retry_after_ms_from_text(body)
-    end
-  end
-
-  defp parse_retry_after_ms(body) when is_map(body) do
-    with params when is_map(params) <- body["parameters"] || body[:parameters],
-         seconds when is_number(seconds) <- params["retry_after"] || params[:retry_after],
-         true <- seconds > 0 do
-      trunc(seconds * 1000)
-    else
-      _ -> 0
-    end
-  end
-
-  defp parse_retry_after_ms(_body), do: 0
-
-  defp parse_retry_after_ms_from_text(body) do
-    case Regex.run(~r/retry after (\d+(?:\.\d+)?)/i, body, capture: :all_but_first) do
-      [seconds] ->
-        case Float.parse(seconds) do
-          {value, _} when value > 0 -> trunc(value * 1000)
-          _ -> 0
-        end
-
-      _ ->
-        0
-    end
-  end
+  defp parse_retry_after_ms(body), do: LemonCore.Retry.parse_retry_after(body)
 
   defp finalize_failure_reason(reason) do
     case retry_after_ms(reason) do

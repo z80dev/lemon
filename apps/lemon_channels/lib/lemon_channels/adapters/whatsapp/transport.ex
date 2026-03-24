@@ -703,10 +703,13 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   end
 
   defp backoff_delay(attempt) do
-    base = @reconnect_initial_ms * :math.pow(@reconnect_factor, attempt)
-    capped = min(base, @reconnect_max_ms)
-    jitter = capped * @reconnect_jitter * (:rand.uniform() * 2 - 1)
-    round(capped + jitter)
+    LemonCore.Retry.capped_backoff(
+      @reconnect_initial_ms,
+      attempt,
+      @reconnect_max_ms,
+      factor: @reconnect_factor,
+      jitter: @reconnect_jitter
+    )
   end
 
   defp cancel_timer(nil), do: nil
