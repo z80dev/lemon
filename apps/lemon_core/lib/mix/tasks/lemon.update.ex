@@ -153,10 +153,10 @@ defmodule Mix.Tasks.Lemon.Update do
 
       Code.ensure_loaded?(LemonSkills.BuiltinSeeder) ->
         shell.info("Skill sync: refreshing bundled skills ...")
-        LemonSkills.BuiltinSeeder.seed!()
+        apply(LemonSkills.BuiltinSeeder, :seed!, [])
 
         if Code.ensure_loaded?(LemonSkills.Migrator) do
-          case LemonSkills.Migrator.migrate() do
+          case apply(LemonSkills.Migrator, :migrate, []) do
             {:ok, %{classified: n}} when n > 0 ->
               shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
 

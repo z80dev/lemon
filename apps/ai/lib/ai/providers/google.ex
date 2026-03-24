@@ -29,7 +29,6 @@ defmodule Ai.Providers.Google do
   alias LemonCore.Secrets
 
   alias Ai.Types.{
-    AssistantMessage,
     Context,
     Cost,
     Model,

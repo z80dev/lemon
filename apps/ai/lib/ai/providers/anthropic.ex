@@ -29,14 +29,12 @@ defmodule Ai.Providers.Anthropic do
   alias Ai.Types.{
     AssistantMessage,
     Context,
-    Cost,
     Model,
     StreamOptions,
     TextContent,
     ThinkingContent,
     ToolCall,
-    ToolResultMessage,
-    Usage
+    ToolResultMessage
   }
 
   @api_base_url "https://api.anthropic.com"

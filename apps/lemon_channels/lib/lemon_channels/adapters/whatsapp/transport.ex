@@ -330,7 +330,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       state
   end
 
-  defp build_callbacks(state) do
+  defp build_callbacks(_state) do
     %{
       handle_new_session: fn state, inbound, _args ->
         state = MessageBuffer.drop_buffer_for(state, inbound)

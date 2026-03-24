@@ -167,6 +167,9 @@ defmodule LemonCore.MemoryDocument do
     binary_part(text, 0, cut) <> "...[truncated]"
   end
 
+  defp truncate(text) when is_binary(text), do: text
+  defp truncate(_), do: ""
+
   # Walk back up to 3 bytes to avoid splitting a multibyte UTF-8 codepoint.
   defp utf8_safe_boundary(binary, pos) when pos > 0 do
     if String.valid?(binary_part(binary, 0, pos)) do
@@ -177,9 +180,6 @@ defmodule LemonCore.MemoryDocument do
   end
 
   defp utf8_safe_boundary(_, 0), do: 0
-
-  defp truncate(text) when is_binary(text), do: text
-  defp truncate(_), do: ""
 
   defp normalize_id(id) when is_binary(id), do: id
   defp normalize_id(ref) when is_reference(ref), do: inspect(ref)

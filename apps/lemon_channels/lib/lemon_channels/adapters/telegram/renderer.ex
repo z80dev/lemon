@@ -84,7 +84,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   end
 
   # Backward-compat: single-chunk path (same as original send_text)
-  defp send_text(intent, route, state, surface, seq, text_hash, text) do
+  defp send_text(intent, route, state, surface, _seq, text_hash, text) do
     reply_markup = status_reply_markup(intent)
     meta = intent_meta(intent, reply_markup)
     send_text_single(intent, route, state, surface, text_hash, text, meta)

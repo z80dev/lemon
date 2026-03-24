@@ -35,12 +35,9 @@ defmodule Ai.Providers.OpenAIResponses do
   @behaviour Ai.Provider
 
   alias Ai.Types.{
-    AssistantMessage,
     Context,
-    Cost,
     Model,
-    StreamOptions,
-    Usage
+    StreamOptions
   }
 
   alias Ai.EventStream

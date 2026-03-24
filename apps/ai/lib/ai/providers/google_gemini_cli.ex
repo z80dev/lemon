@@ -28,7 +28,6 @@ defmodule Ai.Providers.GoogleGeminiCli do
   import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
-    AssistantMessage,
     Context,
     Cost,
     Model,

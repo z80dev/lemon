@@ -20,8 +20,6 @@ defmodule LemonCore.Update.ConfigMigrator do
       :ok = ConfigMigrator.migrate!(path)
   """
 
-  alias LemonCore.Config.Modular
-
   @type issue :: String.t()
 
   @doc """
