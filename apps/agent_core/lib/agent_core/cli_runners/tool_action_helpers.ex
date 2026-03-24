@@ -171,7 +171,14 @@ defmodule AgentCore.CliRunners.ToolActionHelpers do
 
       name_lower in ["task", "agent"] ->
         desc = Map.get(input, "description") || Map.get(input, "prompt")
-        {:subagent, to_string(desc || name)}
+        model = Map.get(input, "model")
+        base_title = to_string(desc || name)
+
+        if is_binary(model) and model != "" do
+          {:subagent, "#{base_title} (#{model})"}
+        else
+          {:subagent, base_title}
+        end
 
       true ->
         {:tool, name}

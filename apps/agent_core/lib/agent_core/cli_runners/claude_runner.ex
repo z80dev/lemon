@@ -457,7 +457,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
          state,
          parent_tool_use_id
        ) do
-    {kind, title} = tool_kind_and_title(name, input)
+    {kind, title} = ToolActionHelpers.tool_kind_and_title(name, input, path_keys: ["file_path"])
 
     detail = %{
       name: name,
@@ -531,51 +531,6 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   # ============================================================================
   # Helpers
   # ============================================================================
-
-  defp tool_kind_and_title(name, input) do
-    case name do
-      "Bash" ->
-        command = Map.get(input, "command", "")
-        title = String.slice(command, 0, 60)
-        {:command, title}
-
-      "Read" ->
-        path = Map.get(input, "file_path", "")
-        {:tool, "Read: #{Path.basename(path)}"}
-
-      "Write" ->
-        path = Map.get(input, "file_path", "")
-        {:file_change, "Write: #{Path.basename(path)}"}
-
-      "Edit" ->
-        path = Map.get(input, "file_path", "")
-        {:file_change, "Edit: #{Path.basename(path)}"}
-
-      "Glob" ->
-        pattern = Map.get(input, "pattern", "")
-        {:tool, "Glob: #{pattern}"}
-
-      "Grep" ->
-        pattern = Map.get(input, "pattern", "")
-        {:tool, "Grep: #{pattern}"}
-
-      "WebSearch" ->
-        query = Map.get(input, "query", "")
-        {:web_search, query}
-
-      "WebFetch" ->
-        url = Map.get(input, "url", "")
-        {:tool, "Fetch: #{url}"}
-
-      "Task" ->
-        prompt = Map.get(input, "prompt", "")
-        title = String.slice(prompt, 0, 40)
-        {:subagent, "Task: #{title}"}
-
-      _ ->
-        {:tool, name}
-    end
-  end
 
   defp extract_error(%StreamResultMessage{is_error: true, result: result})
        when is_binary(result) do

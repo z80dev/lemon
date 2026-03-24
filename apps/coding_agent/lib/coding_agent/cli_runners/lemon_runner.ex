@@ -834,7 +834,13 @@ defmodule CodingAgent.CliRunners.LemonRunner do
             _ -> ""
           end
 
-        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
+        model_suffix =
+          case a["model"] do
+            model when is_binary(model) and model != "" -> " [#{model}]"
+            _ -> ""
+          end
+
+        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}#{model_suffix}"
 
       "agent" ->
         "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
