@@ -7,7 +7,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   Telegram adapter.
   """
 
-  alias LemonChannels.Adapters.Telegram.Delivery
+  alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.CallbackHandler
   alias LemonChannels.Adapters.Telegram.Transport.Commands
