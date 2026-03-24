@@ -46,6 +46,7 @@ defmodule Ai.Providers.OpenAIResponses do
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
   alias Ai.Providers.OpenAIResponsesShared
+  alias Ai.Providers.SSEParser
   alias LemonCore.Secrets
 
   # Providers that use OpenAI-style tool call IDs
@@ -504,7 +505,7 @@ defmodule Ai.Providers.OpenAIResponses do
           message ->
             case normalize_sse_message(message) do
               {:data, chunk} ->
-                {events, new_buffer} = parse_sse_chunk(state.buffer <> chunk)
+                {events, new_buffer} = SSEParser.parse_sse_chunk(state.buffer <> chunk)
                 {events, %{state | buffer: new_buffer}}
 
               :done ->
@@ -553,37 +554,6 @@ defmodule Ai.Providers.OpenAIResponses do
     end
   end
 
-  defp parse_sse_chunk(buffer) do
-    # Split by double newlines (SSE event delimiter)
-    parts = String.split(buffer, "\n\n")
-
-    # Last part might be incomplete
-    {complete_parts, [incomplete]} =
-      if length(parts) > 1 do
-        Enum.split(parts, -1)
-      else
-        {[], parts}
-      end
-
-    events =
-      complete_parts
-      |> Enum.flat_map(fn part ->
-        part
-        |> String.split("\n")
-        |> Enum.filter(&String.starts_with?(&1, "data:"))
-        |> Enum.map(&String.trim_leading(&1, "data:"))
-        |> Enum.map(&String.trim/1)
-        |> Enum.reject(&(&1 == "" || &1 == "[DONE]"))
-        |> Enum.flat_map(fn data ->
-          case Jason.decode(data) do
-            {:ok, event} -> [event]
-            _ -> []
-          end
-        end)
-      end)
-
-    {events, incomplete}
-  end
 
   # ============================================================================
   # Helpers
