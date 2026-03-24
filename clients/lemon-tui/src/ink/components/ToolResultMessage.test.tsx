@@ -18,9 +18,9 @@ function makeToolResultMessage(overrides: Partial<{
   toolCallId: string;
   toolName: string;
   content: string;
-  images: Array<{ type: string; data: string }>;
+  images: Array<{ mimeType: string; data: string }>;
   trust: 'trusted' | 'untrusted';
-  trustMetadata: unknown;
+  trustMetadata: null;
   isTrusted: boolean;
   isError: boolean;
   timestamp: number;
@@ -64,7 +64,7 @@ describe('ToolResultMessage', () => {
     const longContent = 'Z'.repeat(1200);
     const message = makeToolResultMessage({ content: longContent });
     const { lastFrame } = renderWithTheme(<ToolResultMessage message={message} />);
-    const frame = lastFrame();
+    const frame = lastFrame()!;
     const joined = frame.replace(/\n/g, '');
     // Should not contain the full 1200-char string
     expect(joined).not.toContain(longContent);
@@ -103,7 +103,7 @@ describe('ToolResultMessage', () => {
 
   it('should show image count for single image', () => {
     const message = makeToolResultMessage({
-      images: [{ type: 'image/png', data: 'base64data' }],
+      images: [{ mimeType: 'image/png', data: 'base64data' }],
     });
     const { lastFrame } = renderWithTheme(<ToolResultMessage message={message} />);
     const frame = lastFrame();
@@ -115,9 +115,9 @@ describe('ToolResultMessage', () => {
   it('should show image count for multiple images (plural)', () => {
     const message = makeToolResultMessage({
       images: [
-        { type: 'image/png', data: 'base64data1' },
-        { type: 'image/png', data: 'base64data2' },
-        { type: 'image/png', data: 'base64data3' },
+        { mimeType: 'image/png', data: 'base64data1' },
+        { mimeType: 'image/png', data: 'base64data2' },
+        { mimeType: 'image/png', data: 'base64data3' },
       ],
     });
     const { lastFrame } = renderWithTheme(<ToolResultMessage message={message} />);

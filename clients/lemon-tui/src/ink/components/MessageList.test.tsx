@@ -173,7 +173,7 @@ describe('MessageList', () => {
     const frame = lastFrame();
     expect(frame).toContain('truncated');
     // Should not contain the full 1200 chars
-    expect(frame.length).toBeLessThan(longContent.length);
+    expect(frame!.length).toBeLessThan(longContent.length);
   });
 
   it('should show multiple messages in order', () => {

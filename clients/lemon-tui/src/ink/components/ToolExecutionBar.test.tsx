@@ -63,7 +63,7 @@ describe('ToolExecutionBar', () => {
     const frame = lastFrame();
     // Should contain one of the braille spinner frames
     const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    const hasSpinner = spinnerFrames.some((f) => frame.includes(f));
+    const hasSpinner = spinnerFrames.some((f) => frame!.includes(f));
     expect(hasSpinner).toBe(true);
   });
 });

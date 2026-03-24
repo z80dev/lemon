@@ -46,7 +46,7 @@ describe('UserMessage', () => {
     const { lastFrame } = renderWithTheme(<UserMessage message={message} />);
     const frame = lastFrame();
     // ink-testing-library wraps lines, so join all lines to check full content
-    const joined = frame.replace(/\n/g, '');
+    const joined = frame!.replace(/\n/g, '');
     expect(joined).toContain(longContent);
   });
 });

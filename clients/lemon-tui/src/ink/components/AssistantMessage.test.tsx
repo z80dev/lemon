@@ -17,7 +17,7 @@ function makeAssistantMessage(overrides: Partial<{
   type: 'assistant';
   textContent: string;
   thinkingContent: string;
-  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   provider: string;
   model: string;
   usage: { inputTokens: number; outputTokens: number };
@@ -67,7 +67,7 @@ describe('AssistantMessage', () => {
     const longThinking = 'X'.repeat(300);
     const message = makeAssistantMessage({ thinkingContent: longThinking });
     const { lastFrame } = renderWithTheme(<AssistantMessage message={message} />);
-    const frame = lastFrame();
+    const frame = lastFrame()!;
     // ink-testing-library wraps lines, so join all lines to check content
     const joined = frame.replace(/\n/g, '');
     // Should not contain the full 300-char string
@@ -79,7 +79,7 @@ describe('AssistantMessage', () => {
   it('should render tool calls with -> prefix and tool name', () => {
     const message = makeAssistantMessage({
       toolCalls: [
-        { id: 'tc-1', name: 'read_file', input: { path: '/test.txt' } },
+        { id: 'tc-1', name: 'read_file', arguments: { path: '/test.txt' } },
       ],
     });
     const { lastFrame } = renderWithTheme(<AssistantMessage message={message} />);
