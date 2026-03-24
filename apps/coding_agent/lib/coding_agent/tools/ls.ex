@@ -16,6 +16,8 @@ defmodule CodingAgent.Tools.Ls do
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+
   @default_max_entries 500
 
   @doc """
@@ -424,18 +426,4 @@ defmodule CodingAgent.Tools.Ls do
     "#{r}#{w}#{x}"
   end
 
-  # ============================================================================
-  # Abort Signal Handling
-  # ============================================================================
-
-  defp aborted?(nil), do: false
-  defp aborted?(signal), do: AgentCore.AbortSignal.aborted?(signal)
-
-  defp check_abort(signal) do
-    if aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 end

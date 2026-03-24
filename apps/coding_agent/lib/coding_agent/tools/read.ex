@@ -14,6 +14,8 @@ defmodule CodingAgent.Tools.Read do
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+
   @default_max_lines 2000
   @default_max_bytes 50 * 1024
   @workspace_bootstrap_fallback_files MapSet.new(["SOUL.md", "USER.md"])
@@ -436,18 +438,4 @@ defmodule CodingAgent.Tools.Read do
     |> Enum.join("\n")
   end
 
-  # ============================================================================
-  # Abort Signal Handling
-  # ============================================================================
-
-  defp aborted?(nil), do: false
-  defp aborted?(signal), do: AgentCore.AbortSignal.aborted?(signal)
-
-  defp check_abort(signal) do
-    if aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 end

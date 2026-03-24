@@ -5,11 +5,12 @@ defmodule CodingAgent.Tools.WebSearch do
   Supports Brave Search API (default) and Perplexity Sonar (direct/OpenRouter).
   """
 
-  alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias LemonCore.Secrets
+
+  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_search_count 5
   @max_search_count 10
@@ -807,15 +808,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_query(_), do: {:error, "Query is required"}
 
-  defp check_abort(nil), do: :ok
-
-  defp check_abort(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 
   defp enforce_rate_limit do
     ensure_rate_limit_table()

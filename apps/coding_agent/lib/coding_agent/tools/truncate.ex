@@ -14,6 +14,8 @@ defmodule CodingAgent.Tools.Truncate do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
 
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1]
+
   @default_max_chars 50_000
   @default_strategy "smart"
   @default_preserve_structure true
@@ -500,10 +502,4 @@ defmodule CodingAgent.Tools.Truncate do
     }
   end
 
-  # ============================================================================
-  # Abort Signal Handling
-  # ============================================================================
-
-  defp aborted?(nil), do: false
-  defp aborted?(signal), do: AgentCore.AbortSignal.aborted?(signal)
 end

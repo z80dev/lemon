@@ -6,13 +6,14 @@ defmodule CodingAgent.Tools.WebFetch do
   optional Firecrawl fallback, and structured JSON output.
   """
 
-  alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
   alias LemonCore.Secrets
+
+  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
@@ -820,15 +821,6 @@ defmodule CodingAgent.Tools.WebFetch do
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_reason(reason), do: inspect(reason)
 
-  defp check_abort(nil), do: :ok
-
-  defp check_abort(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 
   defp json_result(payload) do
     ExternalContent.untrusted_json_result(payload)

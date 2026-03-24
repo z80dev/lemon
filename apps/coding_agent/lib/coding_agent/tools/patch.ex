@@ -103,7 +103,7 @@ defmodule CodingAgent.Tools.Patch do
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
-    if AbortSignal.aborted?(signal) do
+    if aborted?(signal) do
       {:error, "Operation aborted"}
     else
       with {:ok, patch_text} <- get_patch_text(params),
@@ -512,7 +512,7 @@ defmodule CodingAgent.Tools.Patch do
   defp apply_operations(operations, cwd, signal, opts) do
     result =
       Enum.reduce_while(operations, %{changed: [], additions: 0, removals: 0}, fn op, acc ->
-        if AbortSignal.aborted?(signal) do
+        if aborted?(signal) do
           {:halt, {:error, "Operation aborted"}}
         else
           case apply_operation(op, cwd, signal, opts) do
@@ -622,7 +622,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp safe_write_file(path, content, signal) do
     # Check abort before write
-    if AbortSignal.aborted?(signal) do
+    if aborted?(signal) do
       {:error, "Operation aborted"}
     else
       case File.write(path, content) do
@@ -653,7 +653,7 @@ defmodule CodingAgent.Tools.Patch do
 
     result =
       Enum.reduce_while(hunks, {lines, 0, 0}, fn hunk, {acc_lines, acc_adds, acc_removes} ->
-        if AbortSignal.aborted?(signal) do
+        if aborted?(signal) do
           {:halt, {:error, "Operation aborted"}}
         else
           case apply_hunk(acc_lines, hunk) do
