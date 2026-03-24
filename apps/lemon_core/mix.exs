@@ -18,7 +18,7 @@ defmodule LemonCore.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :public_key],
       mod: {LemonCore.Application, []}
     ]
   end

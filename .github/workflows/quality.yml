@@ -42,6 +42,9 @@ jobs:
       - name: Run WASM runtime tests
         run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
 
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
       - name: Install deps
         run: mix deps.get
 
@@ -110,6 +113,9 @@ jobs:
           key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-mix-test-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
 
       - name: Install deps
         run: mix deps.get

@@ -128,6 +128,13 @@ defmodule LemonCore.ConfigReloader.Watcher do
           )
 
           state
+
+        :ignore ->
+          Logger.warning(
+            "[ConfigReloader.Watcher] Native watcher unavailable (inotify-tools missing?), using polling"
+          )
+
+          state
       end
     else
       Logger.info("[ConfigReloader.Watcher] file_system not available, using polling")

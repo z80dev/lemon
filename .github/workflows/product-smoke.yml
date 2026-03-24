@@ -62,6 +62,9 @@ jobs:
             ${{ runner.os }}-mix-product-smoke-${{ hashFiles('mix.lock') }}-
             ${{ runner.os }}-mix-product-smoke-
 
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
       - name: Install deps
         run: mix deps.get --only prod
 

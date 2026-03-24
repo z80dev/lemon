@@ -1,15 +1,7 @@
 defmodule Ai.Integration.OpenAICodexOAuthLiveTest do
   use ExUnit.Case, async: false
 
-  @live System.get_env("LEMON_CODEX_LIVE_TEST") == "1"
-
   @moduletag :integration
-  @moduletag skip:
-               if(@live,
-                 do: false,
-                 else:
-                   "Set LEMON_CODEX_LIVE_TEST=1 to run (requires llm_openai_codex_api_key OAuth secret)."
-               )
   @moduletag timeout: 180_000
 
   alias Ai.Auth.OpenAICodexOAuth
