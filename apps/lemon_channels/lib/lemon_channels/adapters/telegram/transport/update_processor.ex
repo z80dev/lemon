@@ -344,34 +344,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     queue_mode = override_mode || base_queue_mode || :collect
     text_after_queue = if override_mode, do: stripped_after_override, else: inbound.message.text
 
-    {directive_engine, text_after_directive} = strip_engine_directive(text_after_queue)
-
-    engine_id = directive_engine || extract_command_hint(text_after_directive)
+    engine_id = extract_command_hint(text_after_queue)
 
     meta =
       (inbound.meta || %{})
       |> Map.put(:agent_id, agent_id || (inbound.meta && inbound.meta[:agent_id]) || "default")
       |> Map.put(:queue_mode, queue_mode)
       |> Map.put(:engine_id, engine_id)
-      |> Map.put(:directive_engine, directive_engine)
       |> Map.put(:topic_id, topic_id)
       |> maybe_put(:cwd, cwd)
 
-    message = Map.put(inbound.message, :text, text_after_directive)
+    message = Map.put(inbound.message, :text, text_after_queue)
 
     %{inbound | message: message, meta: meta}
   end
 
-  defp strip_engine_directive(text) when is_binary(text) do
-    trimmed = String.trim(text)
-
-    case Regex.run(~r{^/(lemon|echo)\b\s*(.*)$}is, trimmed) do
-      [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
-      _ -> {nil, trimmed}
-    end
-  end
-
-  defp strip_engine_directive(_), do: {nil, ""}
 
   defp parse_queue_override(text, allow_override) do
     if allow_override do

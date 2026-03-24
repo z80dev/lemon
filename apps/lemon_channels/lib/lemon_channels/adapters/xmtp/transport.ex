@@ -359,8 +359,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     scope = %ChatScope{transport: :xmtp, chat_id: normalized.wallet_address, topic_id: nil}
     agent_id = BindingResolver.resolve_agent_id(scope)
 
-    {engine_hint, stripped_prompt} = strip_engine_directive(normalized.prompt)
-    engine_id = BindingResolver.resolve_engine(scope, engine_hint, nil)
+    engine_id = BindingResolver.resolve_engine(scope, nil, nil)
     queue_mode = BindingResolver.resolve_queue_mode(scope) || :collect
     cwd = BindingResolver.resolve_cwd(scope)
 
@@ -370,7 +369,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
         engine_id: engine_id,
         queue_mode: queue_mode,
         cwd: cwd,
-        prompt: stripped_prompt
+        prompt: normalized.prompt
       })
 
     Logger.info(
@@ -1240,17 +1239,6 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       Logger.warning("Failed to route xmtp inbound message: #{inspect(error)}")
       :ok
   end
-
-  defp strip_engine_directive(text) when is_binary(text) do
-    text = String.trim(text)
-
-    case Regex.run(~r{^/(lemon|echo)\b\s*(.*)$}is, text) do
-      [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
-      _ -> {nil, text}
-    end
-  end
-
-  defp strip_engine_directive(_), do: {nil, ""}
 
   defp outbound_payload(%OutboundPayload{kind: :text} = payload) do
     text =
