@@ -27,6 +27,7 @@ defmodule Ai.Providers.GoogleVertex do
 
   alias Ai.EventStream
   alias Ai.Providers.GoogleShared
+  import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
     AssistantMessage,
@@ -63,24 +64,7 @@ defmodule Ai.Providers.GoogleVertex do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-    stream_timeout = opts.stream_timeout || 300_000
-
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
-      )
-
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        do_stream(stream, model, context, opts)
-      end)
-
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -88,7 +72,7 @@ defmodule Ai.Providers.GoogleVertex do
   # ============================================================================
 
   defp do_stream(stream, model, context, opts) do
-    output = init_output(model)
+    output = init_assistant_message(model, api_override: :google_vertex)
 
     try do
       # Resolve provider config from canonical config + env + secrets
@@ -125,18 +109,6 @@ defmodule Ai.Providers.GoogleVertex do
     end
   end
 
-  defp init_output(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :google_vertex,
-      provider: model.provider,
-      model: model.id,
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 
   defp resolve_project(opts, resolved) do
     project = Map.get(opts, :project) || Map.get(resolved, :project)

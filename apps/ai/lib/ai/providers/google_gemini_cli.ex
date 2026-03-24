@@ -25,6 +25,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
   alias Ai.EventStream
   alias Ai.Providers.GoogleShared
+  import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
     AssistantMessage,
@@ -97,7 +98,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
   # ============================================================================
 
   defp do_stream(stream, model, context, opts) do
-    output = init_output(model)
+    output = init_assistant_message(model, api_override: :google_gemini_cli)
 
     try do
       {access_token, project_id} = parse_credentials(opts.api_key, opts.project)
@@ -122,18 +123,6 @@ defmodule Ai.Providers.GoogleGeminiCli do
     end
   end
 
-  defp init_output(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :google_gemini_cli,
-      provider: model.provider,
-      model: model.id,
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 
   defp parse_credentials(nil, _project_override) do
     raise "Google Cloud Code Assist requires OAuth authentication. Use /login to authenticate."

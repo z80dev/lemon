@@ -47,6 +47,7 @@ defmodule Ai.Providers.OpenAIResponses do
   alias Ai.Providers.HttpTrace
   alias Ai.Providers.OpenAIResponsesShared
   alias Ai.Providers.SSEParser
+  import Ai.Providers.AssistantMessageHelper
   alias LemonCore.Secrets
 
   # Providers that use OpenAI-style tool call IDs
@@ -69,72 +70,51 @@ defmodule Ai.Providers.OpenAIResponses do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-    stream_timeout = opts.stream_timeout || 300_000
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+  end
 
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
+  defp do_stream(stream, model, context, opts) do
+    output = init_assistant_message(model, api_override: :openai_responses)
+    trace_id = HttpTrace.new_trace_id("openai-responses")
+
+    try do
+      api_key = get_api_key(model, opts)
+
+      if !api_key || api_key == "" do
+        raise missing_api_key_error(model.provider)
+      end
+
+      # Build request
+      {url, headers, body} = build_request(model, context, opts, api_key)
+
+      HttpTrace.log(
+        "openai-responses",
+        "request_start",
+        summarize_http_request(trace_id, model, context, opts, url, body)
       )
 
-    # Start streaming task under supervision
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        output = initial_output(model)
-        trace_id = HttpTrace.new_trace_id("openai-responses")
+      EventStream.push_async(stream, {:start, output})
 
-        try do
-          api_key = get_api_key(model, opts)
-
-          if !api_key || api_key == "" do
-            raise missing_api_key_error(model.provider)
-          end
-
-          # Build request
-          {url, headers, body} = build_request(model, context, opts, api_key)
-
-          HttpTrace.log(
-            "openai-responses",
-            "request_start",
-            summarize_http_request(trace_id, model, context, opts, url, body)
-          )
-
-          EventStream.push_async(stream, {:start, output})
-
-          # Make streaming request
-          case stream_request(url, headers, body, trace_id) do
-            {:ok, event_stream} ->
-              # Process stream events
-              case OpenAIResponsesShared.process_stream(
-                     event_stream,
-                     output,
-                     stream,
-                     model,
-                     %{
-                       service_tier: parse_service_tier(opts),
-                       apply_service_tier_pricing:
-                         &OpenAIResponsesShared.apply_service_tier_pricing/2
-                     }
-                   ) do
-                {:ok, final_output} ->
-                  EventStream.complete(stream, final_output)
-
-                {:error, reason} ->
-                  HttpTrace.log_error("openai-responses", "stream_processing_error", %{
-                    trace_id: trace_id,
-                    error: reason,
-                    model: model.id,
-                    session_id: opts.session_id
-                  })
-
-                  output = %{output | stop_reason: :error, error_message: reason}
-                  EventStream.error(stream, output)
-              end
+      # Make streaming request
+      case stream_request(url, headers, body, trace_id) do
+        {:ok, event_stream} ->
+          # Process stream events
+          case OpenAIResponsesShared.process_stream(
+                 event_stream,
+                 output,
+                 stream,
+                 model,
+                 %{
+                   service_tier: parse_service_tier(opts),
+                   apply_service_tier_pricing:
+                     &OpenAIResponsesShared.apply_service_tier_pricing/2
+                 }
+               ) do
+            {:ok, final_output} ->
+              EventStream.complete(stream, final_output)
 
             {:error, reason} ->
-              HttpTrace.log_error("openai-responses", "request_error", %{
+              HttpTrace.log_error("openai-responses", "stream_processing_error", %{
                 trace_id: trace_id,
                 error: reason,
                 model: model.id,
@@ -144,25 +124,31 @@ defmodule Ai.Providers.OpenAIResponses do
               output = %{output | stop_reason: :error, error_message: reason}
               EventStream.error(stream, output)
           end
-        rescue
-          e ->
-            HttpTrace.log_error("openai-responses", "stream_exception", %{
-              trace_id: trace_id,
-              error: Exception.message(e),
-              exception: inspect(e, limit: 20, printable_limit: 2_000),
-              model: model.id,
-              session_id: opts.session_id
-            })
 
-            output = %{output | stop_reason: :error, error_message: Exception.message(e)}
-            EventStream.error(stream, output)
-        end
-      end)
+        {:error, reason} ->
+          HttpTrace.log_error("openai-responses", "request_error", %{
+            trace_id: trace_id,
+            error: reason,
+            model: model.id,
+            session_id: opts.session_id
+          })
 
-    # Attach task to stream for lifecycle management
-    EventStream.attach_task(stream, task_pid)
+          output = %{output | stop_reason: :error, error_message: reason}
+          EventStream.error(stream, output)
+      end
+    rescue
+      e ->
+        HttpTrace.log_error("openai-responses", "stream_exception", %{
+          trace_id: trace_id,
+          error: Exception.message(e),
+          exception: inspect(e, limit: 20, printable_limit: 2_000),
+          model: model.id,
+          session_id: opts.session_id
+        })
 
-    {:ok, stream}
+        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        EventStream.error(stream, output)
+    end
   end
 
   defp get_api_key(model, opts) do
@@ -559,23 +545,4 @@ defmodule Ai.Providers.OpenAIResponses do
   # Helpers
   # ============================================================================
 
-  defp initial_output(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :openai_responses,
-      provider: model.provider,
-      model: model.id,
-      usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
-      },
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 end

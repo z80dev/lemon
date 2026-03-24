@@ -92,73 +92,60 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-    stream_timeout = opts.stream_timeout || 300_000
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
+  end
 
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
-      )
+  defp do_stream(stream, model, context, opts) do
+    # Resolve provider config from canonical config + env + secrets
+    resolved =
+      try do
+        LemonCore.ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, opts)
+      rescue
+        e ->
+          Logger.warning(
+            "Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}"
+          )
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        # Resolve provider config from canonical config + env + secrets
-        resolved =
-          try do
-            LemonCore.ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, opts)
-          rescue
-            e ->
-              Logger.warning(
-                "Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}"
-              )
+          %{}
+      end
 
-              %{}
-          end
+    deployment_name = resolve_deployment_name(model, opts, resolved)
+    output = initial_output(model)
 
-        deployment_name = resolve_deployment_name(model, opts, resolved)
-        output = initial_output(model)
+    try do
+      api_key = opts.api_key || Map.get(resolved, :api_key)
 
-        try do
-          api_key = opts.api_key || Map.get(resolved, :api_key)
+      if !api_key || api_key == "" do
+        raise "Azure OpenAI API key is required. Configure providers.azure_openai_responses or pass it in stream options."
+      end
 
-          if !api_key || api_key == "" do
-            raise "Azure OpenAI API key is required. Configure providers.azure_openai_responses or pass it in stream options."
-          end
+      # Build request
+      {url, headers, body} =
+        build_request(model, context, opts, api_key, deployment_name, resolved)
 
-          # Build request
-          {url, headers, body} =
-            build_request(model, context, opts, api_key, deployment_name, resolved)
+      EventStream.push_async(stream, {:start, output})
 
-          EventStream.push_async(stream, {:start, output})
-
-          # Make streaming request
-          case stream_request(url, headers, body) do
-            {:ok, event_stream} ->
-              case OpenAIResponsesShared.process_stream(event_stream, output, stream, model) do
-                {:ok, final_output} ->
-                  EventStream.complete(stream, final_output)
-
-                {:error, reason} ->
-                  output = %{output | stop_reason: :error, error_message: reason}
-                  EventStream.error(stream, output)
-              end
+      # Make streaming request
+      case stream_request(url, headers, body) do
+        {:ok, event_stream} ->
+          case OpenAIResponsesShared.process_stream(event_stream, output, stream, model) do
+            {:ok, final_output} ->
+              EventStream.complete(stream, final_output)
 
             {:error, reason} ->
               output = %{output | stop_reason: :error, error_message: reason}
               EventStream.error(stream, output)
           end
-        rescue
-          e ->
-            output = %{output | stop_reason: :error, error_message: Exception.message(e)}
-            EventStream.error(stream, output)
-        end
-      end)
 
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+        {:error, reason} ->
+          output = %{output | stop_reason: :error, error_message: reason}
+          EventStream.error(stream, output)
+      end
+    rescue
+      e ->
+        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        EventStream.error(stream, output)
+    end
   end
 
   # ============================================================================

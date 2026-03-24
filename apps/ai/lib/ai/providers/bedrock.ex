@@ -26,6 +26,7 @@ defmodule Ai.Providers.Bedrock do
 
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
+  import Ai.Providers.AssistantMessageHelper
   alias Ai.Types.{AssistantMessage, Context, Cost, Model, StreamOptions, Usage}
   alias Ai.Types.{TextContent, ThinkingContent, ToolCall}
   alias Ai.Types.{UserMessage, ToolResultMessage}
@@ -50,24 +51,7 @@ defmodule Ai.Providers.Bedrock do
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
-    owner = self()
-    stream_timeout = opts.stream_timeout || 300_000
-
-    {:ok, stream} =
-      EventStream.start_link(
-        owner: owner,
-        max_queue: 10_000,
-        timeout: stream_timeout
-      )
-
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-        do_stream(stream, model, context, opts)
-      end)
-
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+    Ai.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
 
   # ============================================================================
@@ -75,7 +59,7 @@ defmodule Ai.Providers.Bedrock do
   # ============================================================================
 
   defp do_stream(stream, model, context, opts) do
-    output = init_output(model)
+    output = init_assistant_message(model, api_override: :bedrock_converse_stream, provider_override: model.provider || :amazon)
     trace_id = HttpTrace.new_trace_id("bedrock")
 
     # Resolve provider config from canonical config + env + secrets
@@ -176,25 +160,6 @@ defmodule Ai.Providers.Bedrock do
     end
   end
 
-  defp init_output(model) do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :bedrock_converse_stream,
-      provider: model.provider || :amazon,
-      model: model.id,
-      usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{}
-      },
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
 
   # ============================================================================
   # AWS Configuration
