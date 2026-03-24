@@ -191,3 +191,7 @@ Skill library bootstrapped from [Hermes Agent](https://github.com/NousResearch/h
 
 Built with [Elixir](https://elixir-lang.org/) and the BEAM.
 TUI powered by [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/lemon)
