@@ -9,6 +9,8 @@ defmodule CodingAgent.Tools.Find do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
 
   @default_max_results 100
   @elixir_find_timeout_ms 30_000
@@ -136,26 +138,7 @@ defmodule CodingAgent.Tools.Find do
   defp resolve_path(".", cwd), do: {:ok, cwd}
 
   defp resolve_path(path, cwd) do
-    expanded =
-      path
-      |> expand_home()
-      |> resolve_relative(cwd)
-
-    {:ok, expanded}
-  end
-
-  defp expand_home("~" <> rest) do
-    Path.expand("~") <> rest
-  end
-
-  defp expand_home(path), do: path
-
-  defp resolve_relative(path, cwd) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      Path.join(cwd, path) |> Path.expand()
-    end
+    {:ok, PathHelpers.resolve_path(path, cwd)}
   end
 
   # ============================================================================
@@ -163,21 +146,9 @@ defmodule CodingAgent.Tools.Find do
   # ============================================================================
 
   defp check_directory(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :directory}} ->
-        :ok
-
-      {:ok, %File.Stat{}} ->
-        {:error, "Path is not a directory: #{path}"}
-
-      {:error, :enoent} ->
-        {:error, "Directory not found: #{path}"}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, reason} ->
-        {:error, "Cannot access directory: #{path} (#{reason})"}
+    case FileValidation.check_path_access(path, [:directory]) do
+      {:ok, _stat} -> :ok
+      {:error, _} = error -> error
     end
   end
 

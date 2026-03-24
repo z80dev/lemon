@@ -10,6 +10,7 @@ defmodule CodingAgent.Tools.Write do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
   alias CodingAgent.Tools.LspFormatter
+  alias CodingAgent.Tools.PathHelpers
 
   @doc """
   Returns the write file tool definition.
@@ -127,41 +128,7 @@ defmodule CodingAgent.Tools.Write do
   @doc false
   @spec resolve_path(path :: String.t(), cwd :: String.t(), opts :: keyword()) :: String.t()
   defp resolve_path(path, cwd, opts) do
-    path
-    |> expand_home()
-    |> make_absolute(cwd, opts)
-  end
-
-  defp expand_home("~" <> rest) do
-    Path.expand("~") <> rest
-  end
-
-  defp expand_home(path), do: path
-
-  defp make_absolute(path, cwd, opts) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      workspace_dir = Keyword.get(opts, :workspace_dir)
-
-      if prefer_workspace_for_path?(path, workspace_dir) do
-        Path.join(workspace_dir, path)
-      else
-        Path.join(cwd, path)
-      end
-    end
-  end
-
-  defp prefer_workspace_for_path?(path, workspace_dir) do
-    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
-      not explicit_relative?(path) and
-      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
-         String.starts_with?(path, "memory\\"))
-  end
-
-  defp explicit_relative?(path) when is_binary(path) do
-    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
-      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
+    PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :expand, false))
   end
 
   defp write_file(path, content, signal, format?, cwd, opts) do

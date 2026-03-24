@@ -13,6 +13,8 @@ defmodule CodingAgent.Tools.Ls do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
 
   @default_max_entries 500
 
@@ -125,53 +127,14 @@ defmodule CodingAgent.Tools.Ls do
   defp resolve_path("", cwd), do: {:ok, cwd}
 
   defp resolve_path(path, cwd) do
-    expanded =
-      path
-      |> expand_home()
-      |> resolve_relative(cwd)
-
-    {:ok, expanded}
-  end
-
-  defp expand_home("~" <> rest) do
-    Path.expand("~") <> rest
-  end
-
-  defp expand_home(path), do: path
-
-  defp resolve_relative(path, cwd) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      Path.join(cwd, path) |> Path.expand()
-    end
+    {:ok, PathHelpers.resolve_path(path, cwd)}
   end
 
   # ============================================================================
   # Directory Access Check
   # ============================================================================
 
-  defp check_directory_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :directory} = stat} ->
-        {:ok, stat}
-
-      {:ok, %File.Stat{type: :regular}} ->
-        {:error, "Path is a file, not a directory: #{path}"}
-
-      {:ok, %File.Stat{type: type}} ->
-        {:error, "Path is not a directory (#{type}): #{path}"}
-
-      {:error, :enoent} ->
-        {:error, "Directory not found: #{path}"}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, reason} ->
-        {:error, "Cannot access directory: #{path} (#{reason})"}
-    end
-  end
+  defp check_directory_access(path), do: FileValidation.check_path_access(path, [:directory])
 
   # ============================================================================
   # Directory Listing

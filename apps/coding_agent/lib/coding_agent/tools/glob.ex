@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.Glob do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.PathHelpers
 
   @default_max_results 100
 
@@ -124,18 +125,7 @@ defmodule CodingAgent.Tools.Glob do
     end
   end
 
-  defp resolve_path(path, cwd) do
-    expanded = expand_home(path)
-
-    if Path.type(expanded) == :absolute do
-      expanded
-    else
-      Path.join(cwd, expanded) |> Path.expand()
-    end
-  end
-
-  defp expand_home("~" <> rest), do: Path.expand("~") <> rest
-  defp expand_home(path), do: path
+  defp resolve_path(path, cwd), do: PathHelpers.resolve_path(path, cwd)
 
   defp file_mtime(path) do
     case File.stat(path) do

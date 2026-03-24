@@ -8,11 +8,13 @@ defmodule CodingAgent.Tools.WebDownload do
   not appropriate.
   """
 
-  alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
+  alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
+
+  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @default_timeout_seconds 60
   @default_max_redirects 3
@@ -269,23 +271,7 @@ defmodule CodingAgent.Tools.WebDownload do
 
   defp sanitize_filename(_), do: ""
 
-  defp resolve_path(path, cwd) do
-    path
-    |> expand_home()
-    |> make_absolute(cwd)
-    |> Path.expand()
-  end
-
-  defp expand_home("~" <> rest), do: Path.expand("~") <> rest
-  defp expand_home(path), do: path
-
-  defp make_absolute(path, cwd) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      Path.join(cwd, path)
-    end
-  end
+  defp resolve_path(path, cwd), do: PathHelpers.resolve_path(path, cwd)
 
   defp sha256_hex(binary) do
     :crypto.hash(:sha256, binary) |> Base.encode16(case: :lower)
@@ -298,15 +284,6 @@ defmodule CodingAgent.Tools.WebDownload do
 
   defp elapsed_ms(started_ms), do: System.monotonic_time(:millisecond) - started_ms
 
-  defp check_abort(nil), do: :ok
-
-  defp check_abort(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 
   defp json_result(payload) do
     ExternalContent.untrusted_json_result(payload)

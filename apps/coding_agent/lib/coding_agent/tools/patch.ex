@@ -36,6 +36,8 @@ defmodule CodingAgent.Tools.Patch do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
 
   # Maximum file size to process (10 MB)
   @max_file_size 10 * 1024 * 1024
@@ -738,18 +740,7 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp resolve_path(path, cwd) do
-    expanded = expand_home(path)
-
-    if Path.type(expanded) == :absolute do
-      expanded
-    else
-      Path.join(cwd, expanded) |> Path.expand()
-    end
-  end
-
-  defp expand_home("~" <> rest), do: Path.expand("~") <> rest
-  defp expand_home(path), do: path
+  defp resolve_path(path, cwd), do: PathHelpers.resolve_path(path, cwd)
 
   defp ensure_parent_dir(path) do
     dir = Path.dirname(path)
@@ -769,24 +760,7 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp file_exists?(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :regular}} ->
-        {:ok, true}
-
-      {:ok, %File.Stat{type: type}} ->
-        {:error, "Path is not a regular file (is #{type}): #{path}"}
-
-      {:error, :enoent} ->
-        {:ok, false}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, reason} ->
-        {:error, "Failed to check file: #{inspect(reason)}"}
-    end
-  end
+  defp file_exists?(path), do: FileValidation.file_exists?(path)
 
   defp count_lines(text) when is_binary(text) do
     text

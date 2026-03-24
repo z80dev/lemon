@@ -17,8 +17,11 @@ defmodule CodingAgent.Tools.Grep do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
+
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @default_max_results 100
   @default_context_lines 0
@@ -208,62 +211,13 @@ defmodule CodingAgent.Tools.Grep do
   defp resolve_path("", cwd, _opts), do: {:ok, cwd}
 
   defp resolve_path(path, cwd, opts) do
-    expanded =
-      path
-      |> expand_home()
-      |> resolve_relative(cwd, opts)
-
-    {:ok, expanded}
-  end
-
-  defp expand_home("~" <> rest) do
-    Path.expand("~") <> rest
-  end
-
-  defp expand_home(path), do: path
-
-  defp resolve_relative(path, cwd, opts) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      workspace_dir = Keyword.get(opts, :workspace_dir)
-
-      if prefer_workspace_for_path?(path, workspace_dir) do
-        Path.join(workspace_dir, path) |> Path.expand()
-      else
-        Path.join(cwd, path) |> Path.expand()
-      end
-    end
-  end
-
-  defp prefer_workspace_for_path?(path, workspace_dir) do
-    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
-      not explicit_relative?(path) and
-      (path == "MEMORY.md" or path == "memory" or String.starts_with?(path, "memory/") or
-         String.starts_with?(path, "memory\\"))
-  end
-
-  defp explicit_relative?(path) when is_binary(path) do
-    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
-      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
+    {:ok, PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :include_bare_memory, true))}
   end
 
   defp check_path_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: type}} when type in [:regular, :directory] ->
-        :ok
-
-      {:ok, %File.Stat{type: type}} ->
-        {:error, "Path is not a file or directory (#{type}): #{path}"}
-
-      {:error, :enoent} ->
-        {:error, "Path not found: #{path}"}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, reason} ->
-        {:error, "Cannot access path: #{path} (#{reason})"}
+    case FileValidation.check_path_access(path, [:regular, :directory]) do
+      {:ok, _stat} -> :ok
+      {:error, _} = error -> error
     end
   end
 
@@ -591,18 +545,4 @@ defmodule CodingAgent.Tools.Grep do
     "#{file}:\n#{context}"
   end
 
-  # ============================================================================
-  # Abort Signal Handling
-  # ============================================================================
-
-  defp aborted?(nil), do: false
-  defp aborted?(signal), do: AbortSignal.aborted?(signal)
-
-  defp check_abort(signal) do
-    if aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      :ok
-    end
-  end
 end

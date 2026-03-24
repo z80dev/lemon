@@ -11,6 +11,8 @@ defmodule CodingAgent.Tools.Read do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{TextContent, ImageContent}
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
 
   @default_max_lines 2000
   @default_max_bytes 50 * 1024
@@ -156,7 +158,7 @@ defmodule CodingAgent.Tools.Read do
       Path.type(path) == :absolute ->
         :no_fallback
 
-      explicit_relative?(path) ->
+      PathHelpers.explicit_relative?(path) ->
         :no_fallback
 
       Path.dirname(path) != "." ->
@@ -247,71 +249,14 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp resolve_path(path, cwd, opts) do
-    expanded =
-      path
-      |> expand_home()
-      |> resolve_relative(cwd, opts)
-
-    {:ok, expanded}
-  end
-
-  defp expand_home("~" <> rest) do
-    Path.expand("~") <> rest
-  end
-
-  defp expand_home(path), do: path
-
-  defp resolve_relative(path, cwd, opts) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      workspace_dir = Keyword.get(opts, :workspace_dir)
-
-      if prefer_workspace_for_path?(path, workspace_dir) do
-        Path.join(workspace_dir, path) |> Path.expand()
-      else
-        Path.join(cwd, path) |> Path.expand()
-      end
-    end
-  end
-
-  defp prefer_workspace_for_path?(path, workspace_dir) do
-    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
-      not explicit_relative?(path) and
-      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
-         String.starts_with?(path, "memory\\"))
-  end
-
-  defp explicit_relative?(path) when is_binary(path) do
-    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
-      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
+    {:ok, PathHelpers.resolve_path(path, cwd, opts)}
   end
 
   # ============================================================================
   # File Access Check
   # ============================================================================
 
-  defp check_file_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :regular} = stat} ->
-        {:ok, stat}
-
-      {:ok, %File.Stat{type: :directory}} ->
-        {:error, "Path is a directory, not a file: #{path}"}
-
-      {:ok, %File.Stat{type: type}} ->
-        {:error, "Path is not a regular file (#{type}): #{path}"}
-
-      {:error, :enoent} ->
-        {:error, "File not found: #{path}"}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, reason} ->
-        {:error, "Cannot access file: #{path} (#{reason})"}
-    end
-  end
+  defp check_file_access(path), do: FileValidation.check_path_access(path, [:regular])
 
   # ============================================================================
   # MIME Type Detection

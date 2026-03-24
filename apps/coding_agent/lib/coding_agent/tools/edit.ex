@@ -16,8 +16,11 @@ defmodule CodingAgent.Tools.Edit do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.PathHelpers
+
+  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
 
   @doc """
   Returns the tool definition for the edit tool.
@@ -64,7 +67,7 @@ defmodule CodingAgent.Tools.Edit do
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
-    if AbortSignal.aborted?(signal) do
+    if aborted?(signal) do
       {:error, "Operation aborted"}
     else
       path = params["path"]
@@ -157,70 +160,18 @@ defmodule CodingAgent.Tools.Edit do
   defp validate_required_param(_value, _param_name), do: :ok
 
   # ============================================================================
-  # Abort Handling
-  # ============================================================================
-
-  @spec check_aborted(reference() | nil) :: :ok | {:error, :aborted}
-  defp check_aborted(nil), do: :ok
-
-  defp check_aborted(signal) when is_reference(signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, :aborted}
-    else
-      :ok
-    end
-  end
-
-  defp check_aborted(_), do: :ok
-
-  # ============================================================================
   # Path Resolution
   # ============================================================================
 
   @spec resolve_path(String.t(), String.t(), keyword()) :: String.t()
-  defp resolve_path(path, cwd, opts) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      workspace_dir = Keyword.get(opts, :workspace_dir)
-
-      if prefer_workspace_for_path?(path, workspace_dir) do
-        Path.join(workspace_dir, path) |> Path.expand()
-      else
-        Path.join(cwd, path) |> Path.expand()
-      end
-    end
-  end
-
-  defp prefer_workspace_for_path?(path, workspace_dir) do
-    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
-      not explicit_relative?(path) and
-      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
-         String.starts_with?(path, "memory\\"))
-  end
-
-  defp explicit_relative?(path) when is_binary(path) do
-    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
-      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
-  end
+  defp resolve_path(path, cwd, opts), do: PathHelpers.resolve_path(path, cwd, opts)
 
   # ============================================================================
   # File Access
   # ============================================================================
 
   @spec check_file_access(String.t()) :: :ok | {:error, atom()}
-  defp check_file_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{access: access}} when access in [:read_write, :write] ->
-        :ok
-
-      {:ok, %File.Stat{}} ->
-        {:error, :eacces}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+  defp check_file_access(path), do: FileValidation.check_write_access(path)
 
   # ============================================================================
   # BOM Handling
