@@ -252,6 +252,18 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     _ -> [text]
   end
 
+  defp normalize_text(%DeliveryIntent{kind: kind}, text)
+       when kind in [:stream_snapshot, :tool_status_snapshot] do
+    # Streaming snapshots edit a single message in-place. If we split into
+    # multiple chunks here, send_text_chunks will create NEW follow-up messages
+    # for the overflow on every snapshot — producing a spam of progressively
+    # longer messages. Truncate to a single message instead; the finalize
+    # intent will split properly.
+    [Truncate.truncate_for_telegram(text)]
+  rescue
+    _ -> [text]
+  end
+
   defp normalize_text(_intent, text) do
     Truncate.split_messages(text)
   rescue

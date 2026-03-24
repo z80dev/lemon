@@ -138,7 +138,7 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   defp build_run_fun(execution, signal, on_update, opts) do
     fn ->
-      on_update_safe = Async.wrap_on_update(execution.task_id, on_update)
+      on_update_safe = Async.wrap_on_update(execution.task_id, execution.lifecycle_context, on_update)
       run_override = Keyword.get(opts, :run_override)
 
       cond do
@@ -185,7 +185,8 @@ defmodule CodingAgent.Tools.Task.Execution do
                 execution.description,
                 signal,
                 on_update_safe,
-                execution.role_id
+                execution.role_id,
+                execution.engine || "internal"
               )
           end
       end

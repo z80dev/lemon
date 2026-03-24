@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.Task.Async do
   alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Followup, LiveBridge}
+  alias CodingAgent.Tools.Task.{Followup, LiveBridge, Projection}
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.Introspection
 
@@ -43,22 +43,50 @@ defmodule CodingAgent.Tools.Task.Async do
     end
   end
 
-  @spec wrap_on_update(String.t() | nil, (AgentToolResult.t() -> :ok) | nil) ::
+  @spec wrap_on_update(String.t() | nil, map(), (AgentToolResult.t() -> :ok) | nil) ::
           (AgentToolResult.t() -> :ok) | nil
-  def wrap_on_update(nil, on_update), do: on_update
+  def wrap_on_update(nil, _lifecycle_context, on_update), do: on_update
 
-  def wrap_on_update(task_id, nil) do
-    fn result ->
+  def wrap_on_update(task_id, lifecycle_context, on_update) do
+    fn %AgentToolResult{} = result ->
       TaskStore.append_event(task_id, result)
-      :ok
+      maybe_emit_child_engine_action(result, lifecycle_context)
+
+      if is_function(on_update, 1) do
+        on_update.(result)
+      else
+        :ok
+      end
     end
   end
 
-  def wrap_on_update(task_id, on_update) do
-    fn result ->
-      TaskStore.append_event(task_id, result)
-      on_update.(result)
+  defp maybe_emit_child_engine_action(%AgentToolResult{} = result, lifecycle_context) do
+    with {:ok, payload} <-
+           Projection.engine_action_from_update(result, lifecycle_context) do
+      event =
+        LemonCore.Event.new(
+          :engine_action,
+          payload,
+          %{
+            run_id: lifecycle_context[:run_id],
+            parent_run_id: lifecycle_context[:parent_run_id],
+            session_key: lifecycle_context[:session_key],
+            agent_id: lifecycle_context[:agent_id],
+            task_id: lifecycle_context[:task_id]
+          }
+        )
+
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(lifecycle_context[:run_id]),
+        event
+      )
+    else
+      _ -> :ok
     end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp safe_run(task_id, run_id, run_fun, lifecycle_context) do

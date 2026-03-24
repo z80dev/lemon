@@ -98,6 +98,8 @@ defmodule LemonRouter.SurfaceManager do
 
   @spec ingest_status_action(map(), map(), term()) :: :ok
   def ingest_status_action(state, action_event, surface) do
+    _ = maybe_start_async_task_surface_subscriber(state, action_event, surface)
+
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ToolStatusCoalescer.ingest_action(
         state.session_key,
@@ -161,7 +163,7 @@ defmodule LemonRouter.SurfaceManager do
           _ -> false
         end
 
-      Enum.each(active_status_surfaces(state), fn surface ->
+      Enum.each(finalizable_status_surfaces(state), fn surface ->
         ToolStatusCoalescer.finalize_run(
           state.session_key,
           channel_id,
@@ -320,6 +322,39 @@ defmodule LemonRouter.SurfaceManager do
   defp active_status_surfaces(state) do
     [:status | Map.values(Map.get(state, :task_status_surfaces, %{}))]
     |> Enum.uniq()
+  end
+
+  defp finalizable_status_surfaces(state) do
+    active_status_surfaces(state)
+    |> Enum.reject(&async_task_surface_running?(state, &1))
+  end
+
+  defp async_task_surface_running?(_state, {:status_task, _root_action_id} = surface) do
+    any_live_subscriber_for_surface?(surface)
+  end
+
+  defp async_task_surface_running?(_state, _surface), do: false
+
+  defp any_live_subscriber_for_surface?(surface) do
+    entries =
+      Registry.select(LemonRouter.AsyncTaskSurfaceRegistry, [
+        {{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}
+      ])
+
+    Enum.any?(entries, fn {_child_run_id, pid} ->
+      Process.alive?(pid) and subscriber_owns_surface?(pid, surface)
+    end)
+  rescue
+    _ -> false
+  end
+
+  defp subscriber_owns_surface?(pid, surface) when is_pid(pid) do
+    try do
+      state = :sys.get_state(pid)
+      state.binding.surface == surface
+    catch
+      _, _ -> false
+    end
   end
 
   defp task_surface(task_id), do: {:status_task, task_id}
@@ -518,5 +553,54 @@ defmodule LemonRouter.SurfaceManager do
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
+  end
+
+  # ---- Async task surface subscriber wiring ----
+
+  defp maybe_start_async_task_surface_subscriber(state, action_event, surface) do
+    with {:ok, child_run_id, task_id, root_action_id} <-
+           async_task_child_binding_fields(action_event) do
+      fallback_binding = %{
+        task_id: task_id,
+        child_run_id: child_run_id,
+        parent_run_id: state.run_id,
+        parent_session_key: state.session_key,
+        parent_agent_id: Map.get(state, :agent_id, "default"),
+        root_action_id: root_action_id,
+        surface: surface
+      }
+
+      LemonRouter.AsyncTaskSurfaceSubscriber.start_for_child_run(
+        child_run_id,
+        fallback_binding: fallback_binding,
+        meta: coalescer_meta(state)
+      )
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp async_task_child_binding_fields(action_event) do
+    action = MapHelpers.get_key(action_event, :action) || %{}
+    detail = MapHelpers.get_key(action, :detail) || %{}
+    result_meta = MapHelpers.get_key(detail, :result_meta) || %{}
+
+    with true <- task_root_action?(action),
+         phase when phase in [:completed, "completed"] <-
+           MapHelpers.get_key(action_event, :phase),
+         status when status in ["queued", :queued] <-
+           MapHelpers.get_key(result_meta, :status),
+         task_id when is_binary(task_id) and task_id != "" <-
+           MapHelpers.get_key(result_meta, :task_id),
+         child_run_id when is_binary(child_run_id) and child_run_id != "" <-
+           MapHelpers.get_key(result_meta, :run_id),
+         root_action_id when is_binary(root_action_id) and root_action_id != "" <-
+           MapHelpers.get_key(action, :id) do
+      {:ok, child_run_id, task_id, root_action_id}
+    else
+      _ -> :error
+    end
   end
 end

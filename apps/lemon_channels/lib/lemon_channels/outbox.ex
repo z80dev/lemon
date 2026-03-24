@@ -346,29 +346,6 @@ defmodule LemonChannels.Outbox do
           chunk_payload
         end
       end)
-      |> Enum.with_index()
-      |> Enum.map(fn {chunk_content, index} ->
-        chunk_payload = %OutboundPayload{
-          payload
-          | content: chunk_content,
-            # Only use idempotency key for first chunk
-            idempotency_key: if(index == 0, do: payload.idempotency_key, else: nil),
-            # Add chunk metadata
-            meta:
-              Map.merge(payload.meta || %{}, %{
-                chunk_index: index,
-                chunk_count: length(chunks),
-                is_continuation: index > 0
-              })
-        }
-
-        # For continuation chunks, remove reply_to to avoid threading issues
-        if index > 0 do
-          %{chunk_payload | reply_to: nil}
-        else
-          chunk_payload
-        end
-      end)
     end
   end
 

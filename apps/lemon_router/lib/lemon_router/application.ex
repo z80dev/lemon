@@ -22,6 +22,9 @@ defmodule LemonRouter.Application do
         {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},
         # Tool status coalescer registry
         {Registry, keys: :unique, name: LemonRouter.ToolStatusRegistry},
+        # Async task surface subscriber registry + supervisor
+        {Registry, keys: :unique, name: LemonRouter.AsyncTaskSurfaceRegistry},
+        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.AsyncTaskSurfaceSupervisor},
         # Run supervisor (DynamicSupervisor for run processes)
         {
           DynamicSupervisor,

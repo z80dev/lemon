@@ -55,7 +55,8 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
 
   @impl true
   def handle_info(%Event{type: :engine_action, payload: payload}, state) when is_map(payload) do
-    projected_payload = project_action_payload(payload, state.binding)
+    projected_payload =
+      CodingAgent.Tools.Task.Projection.project_child_payload(payload, state.binding)
 
     event =
       Event.new(:task_projected_child_action, projected_payload, %{
@@ -77,46 +78,4 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
-
-  defp project_action_payload(payload, binding) do
-    action = Map.get(payload, :action) || %{}
-    detail = Map.get(action, :detail) || %{}
-    child_action_id = Map.get(action, :id)
-    kind = Map.get(action, :kind)
-    title = Map.get(action, :title)
-
-    %{
-      engine: Map.get(payload, :engine),
-      phase: Map.get(payload, :phase),
-      ok: Map.get(payload, :ok),
-      message: Map.get(payload, :message),
-      level: Map.get(payload, :level),
-      action: %{
-        id: projected_action_id(binding.child_run_id, child_action_id, kind, title),
-        kind: kind,
-        title: title,
-        detail:
-          detail
-          |> Map.put(:parent_tool_use_id, binding.root_action_id)
-          |> Map.put(:task_id, binding.task_id)
-          |> Map.put(:child_run_id, binding.child_run_id)
-          |> Map.put(:projected_from, :child_run)
-      }
-    }
-  end
-
-  defp projected_action_id(child_run_id, child_action_id, _kind, _title)
-       when is_binary(child_action_id) and child_action_id != "" do
-    "taskproj:" <> child_run_id <> ":" <> child_action_id
-  end
-
-  defp projected_action_id(child_run_id, kind, title_kind, title) do
-    normalized_kind = kind |> to_string()
-    normalized_title = (title || title_kind || "") |> to_string()
-
-    short_hash =
-      :crypto.hash(:sha256, normalized_title) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-
-    "taskproj:" <> child_run_id <> ":" <> normalized_kind <> ":" <> short_hash
-  end
 end

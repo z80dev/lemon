@@ -224,9 +224,10 @@ defmodule CodingAgent.Tools.Task.Runner do
           String.t(),
           reference() | nil,
           (AgentToolResult.t() -> :ok) | nil,
+          String.t() | nil,
           String.t() | nil
         ) :: AgentToolResult.t() | {:error, String.t()}
-  def start_session_with_prompt(start_opts, prompt, description, signal, on_update, role_id) do
+  def start_session_with_prompt(start_opts, prompt, description, signal, on_update, role_id, engine \\ "internal") do
     with {:ok, session} <- CodingAgent.start_session(start_opts) do
       session_id = Session.get_stats(session).session_id
       unsubscribe = Session.subscribe(session)
@@ -242,7 +243,8 @@ defmodule CodingAgent.Tools.Task.Runner do
                    description,
                    "",
                    "",
-                   role_id
+                   role_id,
+                   engine
                  ) do
               {:ok, %{text: text, thinking: thinking}} ->
                 %AgentToolResult{
@@ -251,7 +253,8 @@ defmodule CodingAgent.Tools.Task.Runner do
                     session_id: session_id,
                     description: description,
                     status: "completed",
-                    role: role_id
+                    role: role_id,
+                    engine: engine
                   }
                 }
 
@@ -379,9 +382,88 @@ defmodule CodingAgent.Tools.Task.Runner do
          description,
          last_text,
          last_thinking,
-         role_id
+         role_id,
+         engine
        ) do
     receive do
+      {:session_event, ^session_id, {:tool_execution_start, _id, name, args}} ->
+        kind = internal_tool_kind(name)
+        title = internal_tool_title(name, args)
+
+        maybe_emit_action_update(
+          on_update,
+          description,
+          engine,
+          title,
+          kind,
+          "started",
+          args
+        )
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id,
+          engine
+        )
+
+      {:session_event, ^session_id, {:tool_execution_update, _id, name, args, _partial_result}} ->
+        kind = internal_tool_kind(name)
+        title = internal_tool_title(name, args)
+
+        maybe_emit_action_update(
+          on_update,
+          description,
+          engine,
+          title,
+          kind,
+          "updated",
+          args
+        )
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id,
+          engine
+        )
+
+      {:session_event, ^session_id, {:tool_execution_end, _id, name, result, _is_error}} ->
+        kind = internal_tool_kind(name)
+        title = internal_tool_title(name, %{})
+
+        maybe_emit_action_update(
+          on_update,
+          description,
+          engine,
+          "Completed: #{title}",
+          kind,
+          "completed",
+          %{name: name, result: result}
+        )
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id,
+          engine
+        )
+
       {:session_event, ^session_id, {:message_update, %Ai.Types.AssistantMessage{} = msg, _event}} ->
         text = Ai.get_text(msg)
         thinking = Ai.get_thinking(msg)
@@ -406,7 +488,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          role_id
+          role_id,
+          engine
         )
 
       {:session_event, ^session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
@@ -433,7 +516,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          role_id
+          role_id,
+          engine
         )
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
@@ -451,7 +535,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          role_id
+          role_id,
+          engine
         )
     after
       200 ->
@@ -467,10 +552,41 @@ defmodule CodingAgent.Tools.Task.Runner do
             description,
             last_text,
             last_thinking,
-            role_id
+            role_id,
+            engine
           )
         end
     end
+  end
+
+  defp maybe_emit_action_update(nil, _description, _engine, _text, _kind, _phase, _detail) do
+    :ok
+  end
+
+  defp maybe_emit_action_update(on_update, description, engine, text, kind, phase, detail) do
+    extra_details = %{
+      current_action: %{title: text, kind: to_string(kind), phase: phase}
+    }
+
+    extra_details =
+      if is_map(detail) and map_size(detail) > 0 do
+        Map.put(extra_details, :action_detail, detail)
+      else
+        extra_details
+      end
+
+    result = %AgentToolResult{
+      content: [%TextContent{text: text}],
+      details:
+        %{
+          description: description,
+          status: "running",
+          engine: engine
+        }
+        |> Map.merge(extra_details)
+    }
+
+    on_update.(result)
   end
 
   defp maybe_emit_update(
@@ -524,6 +640,108 @@ defmodule CodingAgent.Tools.Task.Runner do
 
     :ok
   end
+
+  defp internal_tool_kind(name) do
+    case String.downcase(name || "") do
+      "bash" -> :command
+      "read" -> :tool
+      "write" -> :file_change
+      "edit" -> :file_change
+      "hashline_edit" -> :file_change
+      "glob" -> :tool
+      "grep" -> :tool
+      "websearch" -> :web_search
+      "webfetch" -> :web_search
+      "task" -> :subagent
+      "agent" -> :subagent
+      "cron" -> :subagent
+      _ -> :tool
+    end
+  end
+
+  defp internal_tool_title(name, args) do
+    a = stringify_keys(args)
+
+    case String.downcase(name || "") do
+      "bash" ->
+        cmd = a["command"] || ""
+        cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
+        "`#{cmd_preview}`"
+
+      "read" ->
+        path = a["path"] || a["file_path"] || ""
+        "read: `#{path_label(path)}`"
+
+      "write" ->
+        path = a["path"] || a["file_path"] || ""
+        "write: `#{path_label(path)}`"
+
+      "edit" ->
+        path = a["path"] || a["file_path"] || ""
+        "edit: `#{path_label(path)}`"
+
+      "hashline_edit" ->
+        path = a["path"] || a["file_path"] || ""
+        "edit: `#{path_label(path)}`"
+
+      "glob" ->
+        "glob: `#{a["pattern"] || ""}`"
+
+      "grep" ->
+        pattern = String.slice(a["pattern"] || "", 0, 30)
+        path = a["path"]
+
+        if is_binary(path) and path != "" do
+          "grep: `#{pattern}` in #{path_label(path)}"
+        else
+          "grep: `#{pattern}`"
+        end
+
+      "websearch" ->
+        "search: #{String.slice(a["query"] || "", 0, 50)}"
+
+      "webfetch" ->
+        "fetch: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "task" ->
+        engine_suffix =
+          case a["engine"] do
+            engine when is_binary(engine) and engine not in ["", "internal"] -> "(#{engine})"
+            _ -> ""
+          end
+
+        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
+
+      "agent" ->
+        "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
+
+      "cron" ->
+        "cron: #{String.slice(a["prompt"] || "", 0, 50)}"
+
+      n ->
+        n
+    end
+  end
+
+  defp path_label(path) when is_binary(path) do
+    parts = Path.split(path)
+
+    case length(parts) do
+      n when n > 2 -> Path.join(Enum.take(parts, -2))
+      _ -> path
+    end
+  end
+
+  defp path_label(other), do: inspect(other)
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp stringify_keys(_), do: %{}
 
   defp format_cli_error(reason) when is_binary(reason), do: reason
   defp format_cli_error(reason), do: inspect(reason)

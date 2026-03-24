@@ -98,13 +98,16 @@ defmodule LemonSimUi.SimManager do
     # the manager terminates.
     Process.flag(:trap_exit, true)
 
-    # Schedule boot auto-loop after deps have started
-    case Application.get_env(:lemon_sim_ui, :auto_loop) do
-      config when is_list(config) and config != [] ->
-        Process.send_after(self(), {:boot_auto_loop, config}, 5_000)
+    # Schedule boot auto-loop after deps have started.
+    # Prefer env-var config (backward compat), fall back to TOML [[sim.loop]].
+    auto_loop_config =
+      case Application.get_env(:lemon_sim_ui, :auto_loop) do
+        config when is_list(config) and config != [] -> config
+        _ -> load_sim_loop_config()
+      end
 
-      _ ->
-        :ok
+    if is_list(auto_loop_config) and auto_loop_config != [] do
+      Process.send_after(self(), {:boot_auto_loop, auto_loop_config}, 5_000)
     end
 
     {:ok,
@@ -1183,6 +1186,53 @@ defmodule LemonSimUi.SimManager do
 
   defp load_project_config do
     LemonCore.Config.Modular.load(project_dir: ProjectRoot.resolve(__DIR__))
+  end
+
+  # Reads [[sim.loop]] entries from .lemon/config.toml and converts them
+  # to the [{domain_atom, opts_keyword}] format expected by boot_auto_loop.
+  # Uses raw TOML parsing (not Config.Modular) because the struct doesn't
+  # preserve unknown sections like [sim].
+  defp load_sim_loop_config do
+    project_dir = ProjectRoot.resolve(__DIR__)
+    toml_path = Path.join([project_dir, ".lemon", "config.toml"])
+
+    case File.read(toml_path) do
+      {:ok, content} ->
+        case Toml.decode(content) do
+          {:ok, raw} ->
+            raw
+            |> get_in(["sim", "loop"])
+            |> case do
+              entries when is_list(entries) and entries != [] ->
+                Enum.map(entries, &parse_sim_loop_entry/1)
+
+              _ ->
+                []
+            end
+
+          {:error, reason} ->
+            Logger.warning("[SimManager] Failed to parse sim loop config: #{inspect(reason)}")
+            []
+        end
+
+      {:error, :enoent} ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("[SimManager] Failed to read sim loop config: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp parse_sim_loop_entry(entry) when is_map(entry) do
+    domain = Map.fetch!(entry, "domain") |> String.to_existing_atom()
+
+    opts =
+      entry
+      |> Map.drop(["domain"])
+      |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
+
+    {domain, opts}
   end
 
   # -- Error logging helpers --
