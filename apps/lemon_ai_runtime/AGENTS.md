@@ -17,6 +17,7 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 - Do not move provider protocol implementations into `apps/lemon_ai_runtime` beyond this slice.
 - Do not add broad catch-all runtime option modules; keep narrow credential and stream-option boundaries.
 - No new external app should introduce new direct `Ai.Auth.*` usage; migrate through `LemonAiRuntime.Auth.*`.
+- Callers that only need Codex auth availability should use `LemonAiRuntime.Auth.OpenAICodexOAuth.available?/0`.
 - Prefer new Lemon-owned callers to use `LemonAiRuntime` for provider credential checks and stream option shaping.
 - This app should stay intentionally thin and composable, deferring larger ownership moves to later slices.
 

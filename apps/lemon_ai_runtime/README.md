@@ -12,6 +12,11 @@ Current scope:
   provider availability checks.
 - `LemonAiRuntime.StreamOptions` owns Lemon-facing stream option shaping for
   providers like Vertex, Azure, Bedrock, and Gemini CLI.
+- Lemon apps should stop depending on `Ai.Auth.*` directly and use
+  `LemonAiRuntime.Auth.*` instead.
+- Callers that only need to know whether Codex OAuth is available should check
+  `LemonAiRuntime.Auth.OpenAICodexOAuth.available?/0` instead of reaching into
+  `Ai.Auth.*` or handling access tokens directly.
 - External callers should treat `LemonAiRuntime` as the migration boundary for
   Lemon-owned auth/config/runtime concerns.
 

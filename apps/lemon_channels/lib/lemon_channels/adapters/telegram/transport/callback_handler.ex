@@ -11,6 +11,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.MapHelpers
@@ -691,20 +692,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
   defp provider_aliases(_provider), do: []
 
-  defp openai_codex_auth_available? do
-    mod = :"Elixir.Ai.Auth.OpenAICodexOAuth"
-
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :get_api_key, 0) do
-      case apply(mod, :get_api_key, []) do
-        value when is_binary(value) -> String.trim(value) != ""
-        _ -> false
-      end
-    else
-      false
-    end
-  rescue
-    _ -> false
-  end
+  defp openai_codex_auth_available?, do: OpenAICodexOAuth.available?()
 
   defp default_model_preference(state, chat_id, thread_id) do
     ModelPolicyAdapter.default_model_preference(state.account_id || "default", chat_id, thread_id)
