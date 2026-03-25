@@ -535,6 +535,44 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
+    test "same session id under a different cwd starts fresh", %{tmp_dir: tmp_dir} do
+      agent_dir = Path.join(tmp_dir, "agent_home")
+      original_agent_dir = System.get_env("LEMON_AGENT_DIR")
+      System.put_env("LEMON_AGENT_DIR", agent_dir)
+
+      on_exit(fn ->
+        if original_agent_dir do
+          System.put_env("LEMON_AGENT_DIR", original_agent_dir)
+        else
+          System.delete_env("LEMON_AGENT_DIR")
+        end
+      end)
+
+      cwd_a = Path.join(tmp_dir, "project_a")
+      cwd_b = Path.join(tmp_dir, "project_b")
+      File.mkdir_p!(cwd_a)
+      File.mkdir_p!(cwd_b)
+
+      original_session = start_session(cwd: cwd_a)
+      :ok = Session.prompt(original_session, "remember this async followup")
+      wait_for_streaming_complete(original_session)
+      :ok = Session.save(original_session)
+
+      original_state = Session.get_state(original_session)
+      session_id = original_state.session_manager.header.id
+      assert File.exists?(original_state.session_file)
+      GenServer.stop(original_session)
+
+      resumed_elsewhere = start_session(cwd: cwd_b, session_id: session_id)
+      resumed_state = Session.get_state(resumed_elsewhere)
+
+      assert resumed_state.session_manager.header.id == session_id
+      assert resumed_state.session_manager.header.cwd == cwd_b
+      assert Session.get_messages(resumed_elsewhere) == []
+      refute File.exists?(Path.join(Config.sessions_dir(cwd_b), "#{session_id}.jsonl"))
+    end
+
+    @tag :tmp_dir
     test "creates new session if file is invalid", %{tmp_dir: tmp_dir} do
       invalid_file = Path.join(tmp_dir, "invalid.jsonl")
       File.write!(invalid_file, "not valid json")

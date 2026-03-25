@@ -141,7 +141,8 @@ defmodule CodingAgent.Tools.Task.Followup do
     session_pid = Map.get(followup_context, :session_pid)
 
     if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :follow_up, 2) do
+         function_exported?(session_module, :follow_up, 2) and
+         live_session_streaming?(session_module, session_pid) do
       case session_module.follow_up(session_pid, text) do
         :ok -> true
         {:error, _reason} -> false
@@ -154,10 +155,32 @@ defmodule CodingAgent.Tools.Task.Followup do
     _ -> false
   end
 
+  defp live_session_streaming?(session_module, session_pid) do
+    cond do
+      function_exported?(session_module, :get_state, 1) ->
+        case session_module.get_state(session_pid) do
+          %{is_streaming: true} -> true
+          _ -> false
+        end
+
+      function_exported?(session_module, :health_check, 1) ->
+        case session_module.health_check(session_pid) do
+          %{is_streaming: true} -> true
+          _ -> false
+        end
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
   defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
     parent_session_key = Map.get(followup_context, :parent_session_key)
     queue_mode = Map.get(followup_context, :queue_mode, :followup)
     extra_meta = Map.get(followup_context, :meta, %{})
+    cwd = Map.get(followup_context, :cwd)
 
     if is_binary(parent_session_key) and parent_session_key != "" do
       parent_agent_id =
@@ -175,6 +198,7 @@ defmodule CodingAgent.Tools.Task.Followup do
           agent_id: parent_agent_id,
           prompt: text,
           queue_mode: queue_mode,
+          cwd: cwd,
           meta:
             Map.merge(extra_meta, %{
               task_auto_followup: true,
