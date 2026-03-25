@@ -34,4 +34,20 @@ defmodule LemonAiRuntime.Auth.OpenAICodexOAuthTest do
 
     refute OpenAICodexOAuth.available?()
   end
+
+  test "available?/0 returns false when Codex auth env is absent" do
+    previous = System.get_env("OPENAI_CODEX_API_KEY")
+
+    on_exit(fn ->
+      if previous do
+        System.put_env("OPENAI_CODEX_API_KEY", previous)
+      else
+        System.delete_env("OPENAI_CODEX_API_KEY")
+      end
+    end)
+
+    System.delete_env("OPENAI_CODEX_API_KEY")
+
+    refute OpenAICodexOAuth.available?()
+  end
 end
