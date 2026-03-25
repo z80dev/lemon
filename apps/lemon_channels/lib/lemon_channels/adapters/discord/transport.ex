@@ -9,6 +9,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Discord.{FileOperations, Inbound, ModelPolicyAdapter, Outbound, StatusRenderer, TriggerMode}
+  alias LemonAiRuntime
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
@@ -1965,10 +1966,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp provider_has_credentials?(provider, configured) do
-    provider_cfg = Map.get(configured, provider, %{})
-    present_value?(map_get(provider_cfg, :api_key)) or
-      secret_present?(map_get(provider_cfg, :api_key_secret)) or
-      present_value?(map_get(provider_cfg, :base_url))
+    LemonAiRuntime.provider_has_credentials?(provider, configured)
   rescue
     _ -> false
   end
@@ -1976,17 +1974,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp normalize_provider_name(name) when is_binary(name), do: String.downcase(String.trim(name))
   defp normalize_provider_name(name) when is_atom(name), do: name |> Atom.to_string() |> normalize_provider_name()
   defp normalize_provider_name(_), do: ""
-
-  defp present_value?(v) when is_binary(v) and v != "", do: true
-  defp present_value?(_), do: false
-
-  defp secret_present?(name) when is_binary(name) and name != "" do
-    (LemonCore.Secrets.fetch_value(name) || System.get_env(name)) != nil
-  rescue
-    _ -> false
-  end
-
-  defp secret_present?(_), do: false
 
   # ============================================================================
   # Discord API Helpers

@@ -7,6 +7,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   """
 
   alias LemonChannels.BindingResolver
+  alias LemonAiRuntime
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
@@ -656,76 +657,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp provider_enabled?(_provider, _configured, _defaults), do: false
 
   defp provider_has_credentials?(provider, aliases, configured) do
-    configured_has_value? =
-      Enum.any?(aliases, fn alias_name ->
-        provider_cfg = Map.get(configured, alias_name, %{})
-
-        present_value?(map_get(provider_cfg, :api_key)) or
-          secret_present?(map_get(provider_cfg, :api_key_secret)) or
-          present_value?(map_get(provider_cfg, :base_url))
-      end)
-
-    env_or_store_has_key? =
-      provider_secret_candidates(provider, aliases)
-      |> Enum.any?(&secret_present?/1)
-
-    configured_has_value? or env_or_store_has_key?
-  end
-
-  defp provider_secret_candidates(provider, aliases) do
-    generated =
-      aliases
-      |> Enum.map(&provider_to_env_prefix/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.flat_map(fn prefix ->
-        ["#{prefix}_API_KEY", "#{prefix}_TOKEN"]
-      end)
-
-    explicit =
-      case provider do
-        "anthropic" ->
-          ["ANTHROPIC_API_KEY"]
-
-        "openai" ->
-          ["OPENAI_API_KEY"]
-
-        "openai-codex" ->
-          ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
-
-        "opencode" ->
-          ["OPENCODE_API_KEY"]
-
-        "google" ->
-          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
-
-        "google-antigravity" ->
-          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
-
-        "google-gemini-cli" ->
-          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
-
-        "google-vertex" ->
-          ["GOOGLE_APPLICATION_CREDENTIALS"]
-
-        "amazon-bedrock" ->
-          ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE"]
-
-        "kimi" ->
-          ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
-
-        "kimi-coding" ->
-          ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
-
-        "azure-openai-responses" ->
-          ["AZURE_OPENAI_API_KEY"]
-
-        _ ->
-          []
-      end
-
-    (generated ++ explicit)
-    |> Enum.flat_map(fn name -> [name, String.downcase(name)] end)
-    |> Enum.uniq()
+    LemonAiRuntime.provider_has_credentials?(provider, configured) or
+      Enum.any?(aliases, &LemonAiRuntime.provider_has_credentials?(&1, configured))
   end
 
   defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()
@@ -757,18 +690,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   end
 
   defp provider_aliases(_provider), do: []
-
-  defp provider_to_env_prefix(provider) when is_binary(provider) do
-    provider
-    |> String.upcase()
-    |> String.replace("-", "_")
-    |> String.replace(~r/[^A-Z0-9_]/, "_")
-    |> String.trim("_")
-  rescue
-    _ -> ""
-  end
-
-  defp provider_to_env_prefix(_provider), do: ""
 
   defp openai_codex_auth_available? do
     mod = :"Elixir.Ai.Auth.OpenAICodexOAuth"
