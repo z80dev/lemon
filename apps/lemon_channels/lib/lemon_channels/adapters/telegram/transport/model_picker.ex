@@ -13,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.MapHelpers
@@ -980,15 +981,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp present_value?(_), do: false
 
   defp openai_codex_auth_available? do
-    mod = :"Elixir.Ai.Auth.OpenAICodexOAuth"
-
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :get_api_key, 0) do
-      case apply(mod, :get_api_key, []) do
-        value when is_binary(value) -> String.trim(value) != ""
-        _ -> false
-      end
-    else
-      false
+    case OpenAICodexOAuth.resolve_access_token() do
+      value when is_binary(value) -> String.trim(value) != ""
+      _ -> false
     end
   rescue
     _ -> false
