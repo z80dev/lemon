@@ -24,8 +24,8 @@ defmodule LemonAiRuntime.MixProject do
 
   defp deps do
     [
-      {:ai, in_umbrella: true}
+      {:ai, in_umbrella: true},
+      {:lemon_core, in_umbrella: true}
     ]
   end
 end
-

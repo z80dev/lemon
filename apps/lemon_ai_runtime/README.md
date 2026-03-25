@@ -1,17 +1,19 @@
 # LemonAiRuntime
 
-`LemonAiRuntime` is the Lemon-owned AI runtime/config boundary for auth and
-runtime option handling during the AI extraction.
+`LemonAiRuntime` is the Lemon-owned AI runtime/config boundary for auth,
+credential resolution, and provider-specific runtime option handling during the
+AI extraction.
 
-This first slice is intentionally façade-only:
+Current scope:
 
 - `LemonAiRuntime.Auth.*` modules currently delegate to existing `Ai.Auth.*`
-  modules and perform no additional logic.
-- Lemon apps should stop depending on `Ai.Auth.*` directly and use
-  `LemonAiRuntime.Auth.*` instead.
+  modules.
+- `LemonAiRuntime.Credentials` owns Lemon-facing provider API key resolution and
+  provider availability checks.
+- `LemonAiRuntime.StreamOptions` owns Lemon-facing stream option shaping for
+  providers like Vertex, Azure, Bedrock, and Gemini CLI.
 - External callers should treat `LemonAiRuntime` as the migration boundary for
   Lemon-owned auth/config/runtime concerns.
 
-Later slices will move storage-backed secret resolution and runtime ownership
-from `apps/ai` into this app.
-
+Provider protocol implementations still live in `apps/ai`; later slices will
+move more ownership into this app.

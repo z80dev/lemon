@@ -293,7 +293,8 @@ defmodule Ai.Types do
             project: String.t() | nil,
             location: String.t() | nil,
             access_token: String.t() | nil,
-            service_account_json: String.t() | nil
+            service_account_json: String.t() | nil,
+            provider_options: map()
           }
     defstruct temperature: nil,
               max_tokens: nil,
@@ -308,6 +309,7 @@ defmodule Ai.Types do
               project: nil,
               location: nil,
               access_token: nil,
-              service_account_json: nil
+              service_account_json: nil,
+              provider_options: %{}
   end
 end
