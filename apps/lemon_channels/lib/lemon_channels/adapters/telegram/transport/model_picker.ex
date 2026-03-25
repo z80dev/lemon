@@ -13,7 +13,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
-  alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonAiRuntime
   alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
