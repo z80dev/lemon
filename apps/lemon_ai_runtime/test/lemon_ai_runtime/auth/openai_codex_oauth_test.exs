@@ -3,7 +3,7 @@ defmodule LemonAiRuntime.Auth.OpenAICodexOAuthTest do
 
   alias LemonAiRuntime.Auth.OpenAICodexOAuth
 
-  test "resolve_access_token exposes Codex auth availability through the runtime boundary" do
+  test "available?/0 exposes Codex auth availability through the runtime boundary" do
     previous = System.get_env("OPENAI_CODEX_API_KEY")
 
     on_exit(fn ->
@@ -16,6 +16,22 @@ defmodule LemonAiRuntime.Auth.OpenAICodexOAuthTest do
 
     System.put_env("OPENAI_CODEX_API_KEY", "runtime-boundary-token")
 
-    assert OpenAICodexOAuth.resolve_access_token() == "runtime-boundary-token"
+    assert OpenAICodexOAuth.available?()
+  end
+
+  test "available?/0 returns false when Codex auth is unavailable" do
+    previous = System.get_env("OPENAI_CODEX_API_KEY")
+
+    on_exit(fn ->
+      if previous do
+        System.put_env("OPENAI_CODEX_API_KEY", previous)
+      else
+        System.delete_env("OPENAI_CODEX_API_KEY")
+      end
+    end)
+
+    System.put_env("OPENAI_CODEX_API_KEY", "   ")
+
+    refute OpenAICodexOAuth.available?()
   end
 end

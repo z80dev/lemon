@@ -980,14 +980,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_value?(_), do: false
 
-  defp openai_codex_auth_available? do
-    case OpenAICodexOAuth.resolve_access_token() do
-      value when is_binary(value) -> String.trim(value) != ""
-      _ -> false
-    end
-  rescue
-    _ -> false
-  end
+  defp openai_codex_auth_available?, do: OpenAICodexOAuth.available?()
 
   defp session_model_override(session_key),
     do: ModelPolicyAdapter.session_model_override(session_key)

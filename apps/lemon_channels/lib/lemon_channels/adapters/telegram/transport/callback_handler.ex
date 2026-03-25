@@ -771,14 +771,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
   defp provider_to_env_prefix(_provider), do: ""
 
-  defp openai_codex_auth_available? do
-    case OpenAICodexOAuth.resolve_access_token() do
-      value when is_binary(value) -> String.trim(value) != ""
-      _ -> false
-    end
-  rescue
-    _ -> false
-  end
+  defp openai_codex_auth_available?, do: OpenAICodexOAuth.available?()
 
   defp default_model_preference(state, chat_id, thread_id) do
     ModelPolicyAdapter.default_model_preference(state.account_id || "default", chat_id, thread_id)
