@@ -4,18 +4,22 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 
 ## Scope (current slice)
 
-- This app is **facade-only** for this extraction slice.
+- This app now owns Lemon-facing runtime credential lookup and provider-specific
+  stream option shaping in addition to the auth facade.
 - It exposes `LemonAiRuntime.Auth.*` modules that delegate to `Ai.Auth.*`.
+- It exposes `LemonAiRuntime.Credentials`, `LemonAiRuntime.ProviderNames`, and
+  `LemonAiRuntime.StreamOptions` for Lemon-owned callers.
 - It has no OTP application callback or supervision tree.
-- Provider behavior and OAuth protocol implementations remain in `apps/ai` for now.
+- Provider protocol implementations remain in `apps/ai` for now.
 
 ## Migration Rules
 
-- Do not move provider auth/config/storage behavior into `apps/lemon_ai_runtime` beyond this slice.
-- Do not add `LemonAiRuntime.Options` in this phase.
+- Do not move provider protocol implementations into `apps/lemon_ai_runtime` beyond this slice.
+- Do not add broad catch-all runtime option modules; keep narrow credential and stream-option boundaries.
 - No new external app should introduce new direct `Ai.Auth.*` usage; migrate through `LemonAiRuntime.Auth.*`.
 - Callers that only need Codex auth availability should use `LemonAiRuntime.Auth.OpenAICodexOAuth.available?/0`.
-- This app should stay intentionally thin and composable, deferring real ownership moves to later slices.
+- Prefer new Lemon-owned callers to use `LemonAiRuntime` for provider credential checks and stream option shaping.
+- This app should stay intentionally thin and composable, deferring larger ownership moves to later slices.
 
 ## Ownership and dependencies
 

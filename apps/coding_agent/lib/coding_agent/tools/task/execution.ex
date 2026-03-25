@@ -107,6 +107,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     followup_context = %{
       auto_followup: validated.auto_followup,
       description: description,
+      cwd: cwd,
       parent_session_key: parent_session_key,
       parent_agent_id: parent_agent_id,
       queue_mode: validated.queue_mode,

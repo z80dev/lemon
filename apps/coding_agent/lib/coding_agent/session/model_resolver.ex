@@ -23,7 +23,7 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   def resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
-    case resolve_explicit_model(model_spec) do
+    case resolve_explicit_model(model_spec, settings) do
       %Ai.Types.Model{} = model ->
         apply_provider_base_url(model, settings)
 
@@ -34,34 +34,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec resolve_explicit_model(term()) :: Ai.Types.Model.t() | nil
   def resolve_explicit_model(spec) when is_binary(spec) do
-    trimmed = String.trim(spec)
-
-    cond do
-      trimmed == "" ->
-        nil
-
-      true ->
-        case String.split(trimmed, ":", parts: 2) do
-          [model_id] ->
-            # Prefer exact model-id lookup first so slash-style provider-scoped IDs
-            # (for example "google/gemini-3.1-pro-preview") continue to resolve as-is.
-            lookup_model(nil, non_empty_string(model_id)) ||
-              resolve_slash_model_spec(model_id)
-
-          [provider, model_id] ->
-            provider = non_empty_string(provider)
-            model_id = non_empty_string(model_id)
-
-            if model_id do
-              lookup_model(provider, model_id)
-            else
-              nil
-            end
-
-          _ ->
-            nil
-        end
-    end
+    resolve_explicit_model(spec, nil)
   end
 
   def resolve_explicit_model(spec) when is_map(spec) do
@@ -75,6 +48,53 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   def resolve_explicit_model(_), do: nil
+
+  # Settings-aware overload: for bare model names (no provider prefix),
+  # prefer providers that are configured with API keys in the user's settings.
+  @spec resolve_explicit_model(term(), CodingAgent.SettingsManager.t() | nil) ::
+          Ai.Types.Model.t() | nil
+  defp resolve_explicit_model(spec, settings) when is_binary(spec) do
+    trimmed = String.trim(spec)
+    if trimmed == "", do: nil, else: resolve_model_spec(trimmed, settings)
+  end
+
+  defp resolve_explicit_model(spec, _settings) do
+    resolve_explicit_model(spec)
+  end
+
+  defp resolve_model_spec(spec, settings) do
+    case String.split(spec, ":", parts: 2) do
+      [model_id] ->
+        bare_id = non_empty_string(model_id)
+
+        find_model_prefer_configured(bare_id, settings) ||
+          resolve_slash_model_spec(model_id)
+
+      [provider, model_id] ->
+        provider = non_empty_string(provider)
+        model_id = non_empty_string(model_id)
+        if model_id, do: lookup_model(provider, model_id)
+
+      _ ->
+        nil
+    end
+  end
+
+  # When multiple providers offer the same model_id, prefer one that has
+  # an API key configured in the user's settings.
+  defp find_model_prefer_configured(nil, _settings), do: nil
+
+  defp find_model_prefer_configured(model_id, %CodingAgent.SettingsManager{} = settings) do
+    configured = configured_provider_atoms(settings)
+
+    Enum.find_value(configured, fn provider ->
+      Ai.Models.get_model(provider, model_id)
+    end) || Ai.Models.find_by_id(model_id)
+  end
+
+  defp find_model_prefer_configured(model_id, _settings) do
+    Ai.Models.find_by_id(model_id)
+  end
 
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
@@ -93,6 +113,19 @@ defmodule CodingAgent.Session.ModelResolver do
       case provider do
         nil ->
           Ai.Models.find_by_id(model_id)
+
+        provider_atom when is_atom(provider_atom) ->
+          # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
+          # then strip the provider prefix for a direct registry lookup.
+          Ai.Models.get_model(provider_atom, model_id) ||
+            (case model_id && String.split(model_id, ":", parts: 2) do
+               [_prefix, bare_id] when bare_id != "" ->
+                 Ai.Models.get_model(provider_atom, bare_id)
+
+               _ ->
+                 nil
+             end) ||
+            Ai.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
           provider_atom =
@@ -305,6 +338,26 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   defp lookup_model(_provider, _model_id), do: nil
+
+  # Extract provider atoms from the settings' configured providers map.
+  # Only returns providers that have some form of API key configured.
+  defp configured_provider_atoms(%CodingAgent.SettingsManager{providers: providers})
+       when is_map(providers) do
+    providers
+    |> Enum.filter(fn {_name, cfg} ->
+      is_map(cfg) and has_api_key_config?(cfg)
+    end)
+    |> Enum.map(fn {name, _cfg} -> provider_to_atom(to_string(name)) end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp configured_provider_atoms(_), do: []
+
+  defp has_api_key_config?(cfg) do
+    Map.has_key?(cfg, :api_key) or Map.has_key?(cfg, :api_key_secret) or
+      Map.has_key?(cfg, :oauth_secret) or Map.has_key?(cfg, "api_key") or
+      Map.has_key?(cfg, "api_key_secret") or Map.has_key?(cfg, "oauth_secret")
+  end
 
   @spec provider_to_atom(String.t()) :: atom() | nil
   defp provider_to_atom(provider) when is_binary(provider) do

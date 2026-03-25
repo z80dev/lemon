@@ -36,6 +36,21 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       send(pid, {:session_follow_up, text})
       :ok
     end
+
+    def get_state(_pid) do
+      %{is_streaming: true}
+    end
+  end
+
+  defmodule TaskAsyncIdleSessionSpy do
+    def follow_up(pid, text) do
+      send(pid, {:session_follow_up, text})
+      :ok
+    end
+
+    def get_state(_pid) do
+      %{is_streaming: false}
+    end
   end
 
   setup do
@@ -100,6 +115,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       ref = Process.monitor(dead_pid)
       assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
 
+      parent_cwd = "/tmp/task_async_parent"
+
       result =
         Task.execute(
           "call_router_followup",
@@ -111,7 +128,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           },
           nil,
           nil,
-          "/tmp",
+          parent_cwd,
           run_override: fn _on_update, _signal ->
             %AgentCore.Types.AgentToolResult{
               content: [%Ai.Types.TextContent{text: "router output"}],
@@ -131,8 +148,46 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.session_key == "agent:main:main"
       assert followup.agent_id == "main"
+      assert followup.cwd == parent_cwd
       assert followup.prompt =~ "Router followup task"
       assert followup.prompt =~ "router output"
+    end
+
+    test "falls back to router followup when session pid is alive but idle" do
+      result =
+        Task.execute(
+          "call_idle_followup",
+          %{
+            "description" => "Idle followup task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp/task_async_idle_parent",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "idle output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncIdleSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      refute_receive {:session_follow_up, _text}, 150
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
+      assert followup.session_key == "agent:main:main"
+      assert followup.agent_id == "main"
+      assert followup.prompt =~ "Idle followup task"
+      assert followup.prompt =~ "idle output"
     end
 
     test "uses task-level routing overrides for async followup fallback" do
