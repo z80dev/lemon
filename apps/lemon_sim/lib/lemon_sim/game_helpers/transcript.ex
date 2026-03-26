@@ -29,6 +29,8 @@ defmodule LemonSim.GameHelpers.Transcript do
         {id, %{role: get(p, :role), model: model_name, name: get(p, :name)}}
       end)
 
+    world_summary = sanitize_for_json(world)
+
     entry =
       Map.merge(
         %{
@@ -36,12 +38,12 @@ defmodule LemonSim.GameHelpers.Transcript do
           timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
           player_count: map_size(players),
           players: player_info,
-          world: world
+          world: world_summary
         },
         extra
       )
 
-    IO.puts(log, Jason.encode!(entry))
+    IO.puts(log, encode_safe(entry))
     log
   end
 
@@ -63,14 +65,14 @@ defmodule LemonSim.GameHelpers.Transcript do
       model: model_name
     }
 
-    IO.puts(log, Jason.encode!(entry))
+    IO.puts(log, encode_safe(entry))
   end
 
   @doc """
   Logs a prebuilt transcript entry.
   """
   def log_entry(log, entry) when is_map(entry) do
-    IO.puts(log, Jason.encode!(entry))
+    IO.puts(log, encode_safe(entry))
   end
 
   @doc """
@@ -90,7 +92,7 @@ defmodule LemonSim.GameHelpers.Transcript do
       status: get(world, :status)
     }
 
-    IO.puts(log, Jason.encode!(entry))
+    IO.puts(log, encode_safe(entry))
   end
 
   @doc """
@@ -123,8 +125,29 @@ defmodule LemonSim.GameHelpers.Transcript do
         extra
       )
 
-    IO.puts(log, Jason.encode!(entry))
+    IO.puts(log, encode_safe(entry))
   end
 
   defp default_detail(_world), do: %{}
+
+  @doc false
+  def sanitize_for_json(value, max_depth \\ 5)
+
+  def sanitize_for_json(value, _depth) when is_struct(value) do
+    value |> Map.from_struct() |> sanitize_for_json(0)
+  end
+
+  def sanitize_for_json(value, depth) when is_map(value) and depth > 0 do
+    Map.new(value, fn {k, v} -> {k, sanitize_for_json(v, depth - 1)} end)
+  end
+
+  def sanitize_for_json(value, depth) when is_list(value) and depth > 0 do
+    Enum.map(value, &sanitize_for_json(&1, depth - 1))
+  end
+
+  def sanitize_for_json(value, _depth), do: value
+
+  defp encode_safe(data) do
+    data |> sanitize_for_json() |> Jason.encode!()
+  end
 end

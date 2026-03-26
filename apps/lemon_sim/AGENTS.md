@@ -10,6 +10,8 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 
 - `LemonSim.Examples.TicTacToe` is the smallest end-to-end example.
 - `LemonSim.Examples.Skirmish` is the preferred dogfood case for more complex sims. It adds deterministic combat resolution, derived events, AP-based turn continuation, and turn advancement without making the core harness domain-specific.
+- `LemonSim.Examples.Poker` is a multi-hand no-limit hold'em example built around a pure table engine. It is the current reference for wrapping an existing deterministic game engine with LemonSim action-space/updater glue, private per-seat notes, visibility-aware projections, and benchmark-oriented performance summaries.
+- `LemonSim.Examples.Poker` also supports optional per-hand blind schedules, so short tournament-style runs can raise pressure without changing the core harness.
 
 ## Key Files
 
@@ -78,3 +80,5 @@ mix test apps/lemon_sim
 ```
 
 Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the skirmish example's action space/updater/RNG path.
+
+Poker coverage also exercises side pots, heads-up blind/button rules, multi-hand progression, rejection fallback auto-folding, and projection privacy boundaries.

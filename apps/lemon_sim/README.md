@@ -26,12 +26,18 @@ Phase 1 adds:
 - `LemonSim.Examples.Skirmish` is the main dogfood example for richer sims: it
   exercises phase advancement, derived updater events, deterministic RNG, and a
   larger tactical action space.
+- `LemonSim.Examples.Poker` wraps a pure no-limit hold'em engine in the
+  LemonSim harness: legal action tools, updater-driven hand progression,
+  visibility-aware projections, private note journaling, per-street hand
+  history, optional per-hand blind schedules for tournament-style runs, and
+  multi-hand chip-stack victory with benchmark stats.
 
 Run them with:
 
 ```bash
 mix lemon.sim.tic_tac_toe
 mix lemon.sim.skirmish
+mix lemon.sim.poker
 ```
 
 ## Module Inventory

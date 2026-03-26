@@ -23,6 +23,7 @@ defmodule LemonSim.Examples.Poker.Engine.HandRank do
           best_five: [Card.t()]
         }
 
+  @derive Jason.Encoder
   defstruct [:category, :category_value, :tiebreaker, :best_five]
 
   @category_values %{

@@ -21,6 +21,7 @@ defmodule LemonSim.Examples.Poker.Engine.Card do
   @type t :: %__MODULE__{rank: rank(), suit: suit()}
 
   @enforce_keys [:rank, :suit]
+  @derive Jason.Encoder
   defstruct [:rank, :suit]
 
   @ranks [

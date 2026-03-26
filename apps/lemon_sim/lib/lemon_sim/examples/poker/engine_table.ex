@@ -18,6 +18,7 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
 
   defmodule SeatPlayer do
     @moduledoc false
+    @derive Jason.Encoder
     @enforce_keys [:seat, :player_id, :stack]
     defstruct [:seat, :player_id, :stack, status: :active]
 
@@ -31,6 +32,7 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
 
   defmodule HandPlayer do
     @moduledoc false
+    @derive Jason.Encoder
     @enforce_keys [:seat, :player_id, :stack]
     defstruct [
       :seat,
@@ -59,6 +61,7 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
 
   defmodule SidePot do
     @moduledoc false
+    @derive Jason.Encoder
     @enforce_keys [:amount, :eligible_seats]
     defstruct [:amount, :eligible_seats]
 
@@ -70,6 +73,7 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
 
   defmodule Hand do
     @moduledoc false
+    @derive Jason.Encoder
     @enforce_keys [
       :id,
       :button_seat,
@@ -132,6 +136,7 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
         }
 
   @enforce_keys [:id, :max_seats, :small_blind, :big_blind]
+  @derive Jason.Encoder
   defstruct [
     :id,
     :max_seats,
@@ -202,6 +207,29 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
       :error -> {:error, :seat_not_found}
     end
   end
+
+  @doc """
+  Updates table blind amounts between hands.
+  """
+  @spec set_blinds(t(), pos_integer(), pos_integer()) :: {:ok, t()} | {:error, atom()}
+  def set_blinds(%__MODULE__{hand: %Hand{}}, _small_blind, _big_blind),
+    do: {:error, :hand_in_progress}
+
+  def set_blinds(%__MODULE__{} = table, small_blind, big_blind)
+      when is_integer(small_blind) and is_integer(big_blind) do
+    cond do
+      small_blind <= 0 or big_blind <= 0 ->
+        {:error, :invalid_blinds}
+
+      big_blind < small_blind ->
+        {:error, :invalid_blinds}
+
+      true ->
+        {:ok, %{table | small_blind: small_blind, big_blind: big_blind}}
+    end
+  end
+
+  def set_blinds(_table, _small_blind, _big_blind), do: {:error, :invalid_blinds}
 
   @doc """
   Starts a new hand and posts blinds.
@@ -343,6 +371,47 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
            bet: bet_spec,
            raise: raise_spec
          }}
+    end
+  end
+
+  @doc """
+  Returns the standard position label for a seat in the current hand.
+  """
+  @spec position_label(
+          pos_integer(),
+          pos_integer() | nil,
+          pos_integer() | nil,
+          pos_integer() | nil,
+          [pos_integer()]
+        ) :: String.t() | nil
+  def position_label(seat, button_seat, sb_seat, bb_seat, active_seats)
+      when is_integer(seat) and is_list(active_seats) do
+    ordered_seats = Enum.sort(active_seats)
+
+    cond do
+      seat not in ordered_seats ->
+        nil
+
+      length(ordered_seats) == 2 and seat == button_seat and seat == sb_seat ->
+        "BTN/SB"
+
+      seat == button_seat ->
+        "BTN"
+
+      seat == sb_seat ->
+        "SB"
+
+      seat == bb_seat ->
+        "BB"
+
+      true ->
+        ordered_seats
+        |> positions_after_blinds(button_seat, sb_seat, bb_seat)
+        |> Enum.zip(position_names(length(ordered_seats) - 3))
+        |> Enum.find_value(fn
+          {^seat, label} -> label
+          _other -> nil
+        end)
     end
   end
 
@@ -1004,4 +1073,34 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
 
   defp maybe_add(list, value, true), do: list ++ [value]
   defp maybe_add(list, _value, false), do: list
+
+  defp positions_after_blinds([], _button_seat, _sb_seat, _bb_seat), do: []
+
+  defp positions_after_blinds(ordered_seats, button_seat, sb_seat, bb_seat) do
+    first = next_in_ring(ordered_seats, bb_seat || button_seat || hd(ordered_seats))
+
+    ordered_seats
+    |> rotate_from(first)
+    |> Enum.reject(&(&1 in [button_seat, sb_seat, bb_seat]))
+  end
+
+  defp position_names(count) when count <= 0, do: []
+  defp position_names(1), do: ["UTG"]
+  defp position_names(2), do: ["UTG", "CO"]
+  defp position_names(3), do: ["UTG", "MP", "CO"]
+
+  defp position_names(count) do
+    middle_count = count - 3
+
+    ["UTG", "UTG+1"] ++ mp_labels(middle_count) ++ ["CO"]
+  end
+
+  defp mp_labels(1), do: ["MP"]
+
+  defp mp_labels(count) when count > 1 do
+    Enum.map(0..(count - 1), fn
+      0 -> "MP"
+      index -> "MP+#{index}"
+    end)
+  end
 end
