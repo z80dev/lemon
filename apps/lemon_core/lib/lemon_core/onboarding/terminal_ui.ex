@@ -35,6 +35,13 @@ defmodule LemonCore.Onboarding.TerminalUI do
         {:error, :not_available}
 
       true ->
+        # Drain any stale bytes left in stdin from the previous cooked-mode
+        # prompt (e.g. IO.gets for the API key).  Without this, the first
+        # arrow-key press in the TUI can be mis-parsed: the Erlang IO group
+        # leader may still hold partial data that splits the escape sequence,
+        # causing e.g. "\e[B" (down-arrow) to arrive as a bare "B" character.
+        flush_stdin()
+
         owner = self()
         ref = make_ref()
 
@@ -73,6 +80,23 @@ defmodule LemonCore.Onboarding.TerminalUI do
 
   defp test_env?,
     do: Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test
+
+  # After a cooked-mode IO prompt (IO.gets for the API key), the Erlang IO
+  # group leader may hold residual state that causes the first escape sequence
+  # in the subsequent raw-mode TUI to be mis-parsed.  For example, pressing
+  # the down arrow sends "\e[B", but the ESC and "[" bytes get swallowed by
+  # the group leader's stale cooked-mode handler, leaving only "B" to arrive
+  # as a printable character.
+  #
+  # Resetting the group leader with :io.setopts forces it to drop any
+  # buffered line-editing state, and a brief yield lets the IO system
+  # complete the transition before the TUI's InputReader starts reading.
+  defp flush_stdin do
+    :io.setopts(:standard_io, binary: true)
+    Process.sleep(10)
+  rescue
+    _ -> :ok
+  end
 
   defmodule Root do
     @moduledoc false

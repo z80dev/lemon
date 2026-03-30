@@ -8,6 +8,8 @@ defmodule LemonAiRuntime.CredentialsTest do
     OPENAI_CODEX_API_KEY
     CHATGPT_TOKEN
     ANTHROPIC_API_KEY
+    ANTHROPIC_TOKEN
+    CLAUDE_CODE_OAUTH_TOKEN
     OPENCODE_API_KEY
     GITHUB_COPILOT_API_KEY
     GOOGLE_GEMINI_CLI_API_KEY
@@ -124,6 +126,32 @@ defmodule LemonAiRuntime.CredentialsTest do
            ) == ""
   end
 
+  test "anthropic oauth auth_source resolves oauth payload secret" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "anthropic_oauth",
+        "access_token" => "anthropic-oauth-token",
+        "refresh_token" => "anthropic-refresh-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      })
+
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", oauth_secret)
+
+    providers = %{"anthropic" => %{auth_source: "oauth", oauth_secret: "llm_anthropic_api_key"}}
+
+    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+             "anthropic-oauth-token"
+  end
+
+  test "anthropic oauth auth_source resolves ambient Claude token env" do
+    System.put_env("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env-token")
+
+    providers = %{"anthropic" => %{auth_source: "oauth"}}
+
+    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+             "sk-ant-oat01-env-token"
+  end
+
   test "anthropic rejects oauth payload secret for raw api key resolution" do
     oauth_secret =
       Jason.encode!(%{
@@ -222,6 +250,12 @@ defmodule LemonAiRuntime.CredentialsTest do
              )
 
     assert LemonAiRuntime.resolve_secret_api_key(secret_name) == "copilot-access-token"
+  end
+
+  test "unknown providers do not raise during credential checks" do
+    assert LemonAiRuntime.ProviderNames.canonical_name("opencode-go") == nil
+    assert LemonAiRuntime.provider_has_credentials?("opencode-go", %{}) == false
+    assert LemonAiRuntime.provider_has_credentials?("vercel-ai-gateway", %{}) == false
   end
 
   defp clear_secrets_table do

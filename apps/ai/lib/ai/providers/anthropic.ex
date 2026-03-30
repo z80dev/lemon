@@ -888,17 +888,26 @@ defmodule Ai.Providers.Anthropic do
   # ============================================================================
 
   @copilot_providers [:github_copilot, :"github-copilot"]
+  @default_beta_features ["fine-grained-tool-streaming-2025-05-14"]
 
   defp build_headers(api_key, model_headers, opts_headers, provider) do
-    beta_features = ["fine-grained-tool-streaming-2025-05-14"]
-
     is_copilot = provider in @copilot_providers
 
+    is_anthropic_oauth =
+      anthropic_oauth_provider?(provider) and Ai.Auth.AnthropicOAuth.oauth_token?(api_key)
+
     auth_header =
-      if is_copilot do
+      if is_copilot or is_anthropic_oauth do
         {"authorization", "Bearer #{api_key}"}
       else
         {"x-api-key", api_key}
+      end
+
+    beta_features =
+      if is_anthropic_oauth do
+        @default_beta_features ++ Ai.Auth.AnthropicOAuth.oauth_beta_features()
+      else
+        @default_beta_features
       end
 
     base_headers = [
@@ -921,13 +930,24 @@ defmodule Ai.Providers.Anthropic do
         []
       end
 
+    anthropic_oauth_headers =
+      if is_anthropic_oauth do
+        Ai.Auth.AnthropicOAuth.oauth_headers()
+      else
+        []
+      end
+
     # Merge model and options headers
     extra_headers =
       Map.merge(model_headers || %{}, opts_headers || %{})
       |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
 
-    base_headers ++ copilot_headers ++ extra_headers
+    base_headers ++ copilot_headers ++ anthropic_oauth_headers ++ extra_headers
   end
+
+  defp anthropic_oauth_provider?(:anthropic), do: true
+  defp anthropic_oauth_provider?("anthropic"), do: true
+  defp anthropic_oauth_provider?(_), do: false
 
   defp build_request_body(model, context, opts) do
     {history_messages, history_info} = limit_history_for_provider(context.messages || [], model)

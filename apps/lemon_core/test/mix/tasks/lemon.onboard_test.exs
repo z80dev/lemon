@@ -17,6 +17,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_claude_path = System.get_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -27,6 +28,10 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
       if original_master_key,
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      if original_claude_path,
+        do: System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", original_claude_path),
+        else: System.delete_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -39,7 +44,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
 
   test "interactive provider picker supports api-key providers", %{tmp_dir: tmp_dir} do
     config_path = Path.join(tmp_dir, "config.toml")
-    io = build_io(self(), ["1", "n"], ["anthropic-token-123"])
+    io = build_io(self(), ["1", "2", "n"], ["anthropic-token-123"])
 
     Onboard.run_with_io(["--config-path", config_path], io)
 
@@ -51,6 +56,29 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
+             "llm_anthropic_api_key"
+  end
+
+  test "interactive provider picker supports anthropic oauth", %{tmp_dir: tmp_dir} do
+    config_path = Path.join(tmp_dir, "config.toml")
+    System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", write_fake_claude_cli(tmp_dir))
+
+    io = build_io(self(), [], [], [Providers.fetch!("anthropic"), :oauth, false])
+
+    Onboard.run_with_io(["--config-path", config_path], io)
+
+    assert {:ok, secret_value} =
+             Secrets.get("llm_anthropic_api_key", prefer_env: false, env_fallback: false)
+
+    assert {:ok, secret} = Jason.decode(secret_value)
+    assert secret["type"] == "anthropic_oauth"
+    assert secret["access_token"] == "sk-ant-oat01-cli-token"
+
+    {:ok, config_map} = Toml.decode_file(config_path)
+
+    assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "oauth"
+
+    assert get_in(config_map, ["providers", "anthropic", "oauth_secret"]) ==
              "llm_anthropic_api_key"
   end
 
@@ -229,5 +257,26 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Secrets.table()
     |> LemonCore.Store.list()
     |> Enum.each(fn {key, _} -> LemonCore.Store.delete(Secrets.table(), key) end)
+  end
+
+  defp write_fake_claude_cli(tmp_dir) do
+    bin_dir = Path.join(tmp_dir, "bin")
+    File.mkdir_p!(bin_dir)
+    script_path = Path.join(bin_dir, "claude")
+
+    File.write!(
+      script_path,
+      """
+      #!/bin/sh
+      mkdir -p "$HOME/.claude"
+      cat > "$HOME/.claude/.credentials.json" <<'EOF'
+      {"claudeAiOauth":{"accessToken":"sk-ant-oat01-cli-token","refreshToken":"refresh-token","expiresAt":4102444800000}}
+      EOF
+      exit 0
+      """
+    )
+
+    File.chmod!(script_path, 0o755)
+    script_path
   end
 end

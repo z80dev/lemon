@@ -193,6 +193,9 @@ defmodule LemonAiRuntime.Credentials do
 
   defp resolve_anthropic_api_key(provider_cfg) do
     case normalize_auth_source(provider_cfg) do
+      :oauth ->
+        resolve_anthropic_oauth_key(provider_cfg) || ""
+
       :api_key ->
         resolve_anthropic_raw_api_key(provider_cfg) ||
           resolve_raw_secret_api_key(@raw_anthropic_secret) ||
@@ -203,19 +206,51 @@ defmodule LemonAiRuntime.Credentials do
           resolve_raw_secret_api_key(@raw_anthropic_secret) ||
           ""
 
-      :oauth ->
-        Logger.warning(
-          "providers.anthropic.auth_source=\"oauth\" is not supported; use API key auth for provider \"anthropic\" or the \"claude\" CLI runner for OAuth-backed usage"
-        )
-
-        ""
-
       {:invalid, value} ->
         Logger.warning(
-          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected api_key when set"
+          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected oauth or api_key when set"
         )
 
         ""
+    end
+  end
+
+  defp resolve_anthropic_oauth_key(provider_cfg) do
+    secret_name =
+      first_non_empty_binary([
+        provider_config_value(provider_cfg, :oauth_secret),
+        provider_config_value(provider_cfg, :api_key_secret),
+        ProviderNames.default_secret_name("anthropic")
+      ])
+
+    if(present_value?(secret_name), do: resolve_anthropic_oauth_secret(secret_name)) ||
+      LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+  end
+
+  defp resolve_anthropic_oauth_secret(secret_name) do
+    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} ->
+        case LemonAiRuntime.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value) do
+          {:ok, resolved_api_key} ->
+            resolved_api_key
+
+          :ignore ->
+            Logger.warning(
+              "Anthropic OAuth secret #{secret_name} is not a recognized Anthropic OAuth payload"
+            )
+
+            nil
+
+          {:error, reason} ->
+            Logger.warning(
+              "Failed to resolve Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
+            )
+
+            nil
+        end
+
+      _ ->
+        nil
     end
   end
 

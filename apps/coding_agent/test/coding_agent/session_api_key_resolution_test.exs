@@ -14,6 +14,8 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     System.delete_env("OPENAI_CODEX_API_KEY")
     System.delete_env("CHATGPT_TOKEN")
     System.delete_env("ANTHROPIC_API_KEY")
+    System.delete_env("ANTHROPIC_TOKEN")
+    System.delete_env("CLAUDE_CODE_OAUTH_TOKEN")
     System.delete_env("OPENCODE_API_KEY")
     System.delete_env("GITHUB_COPILOT_API_KEY")
     System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
@@ -32,6 +34,8 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
       System.delete_env("ANTHROPIC_API_KEY")
+      System.delete_env("ANTHROPIC_TOKEN")
+      System.delete_env("CLAUDE_CODE_OAUTH_TOKEN")
       System.delete_env("OPENCODE_API_KEY")
       System.delete_env("GITHUB_COPILOT_API_KEY")
       System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
@@ -190,8 +194,18 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "anthropic rejects oauth auth_source even when env key exists" do
-    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", "anthropic-from-secret")
+  test "anthropic oauth auth_source resolves oauth payload secret and ignores raw api key env" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "anthropic_oauth",
+        "refresh_token" => "anthropic-refresh-token",
+        "access_token" => "sk-ant-oat01-secret-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", oauth_secret)
     System.put_env("ANTHROPIC_API_KEY", "anthropic-from-env")
 
     settings =
@@ -199,14 +213,31 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "anthropic" => %{
           auth_source: "oauth",
           api_key: "anthropic-from-plain",
-          api_key_secret: "llm_anthropic_api_key"
+          oauth_secret: "llm_anthropic_api_key"
         }
       })
 
     session = start_session(self(), settings, mock_model(:anthropic))
     assert :ok = Session.prompt(session, "hello")
 
-    assert_receive {:stream_api_key, ""}, 1_000
+    assert_receive {:stream_api_key, "sk-ant-oat01-secret-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic oauth auth_source resolves ambient Claude token env" do
+    System.put_env("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env-token")
+
+    settings =
+      settings(%{
+        "anthropic" => %{
+          auth_source: "oauth"
+        }
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "sk-ant-oat01-env-token"}, 1_000
     GenServer.stop(session)
   end
 

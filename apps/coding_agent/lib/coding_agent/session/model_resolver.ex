@@ -118,13 +118,13 @@ defmodule CodingAgent.Session.ModelResolver do
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
           Ai.Models.get_model(provider_atom, model_id) ||
-            (case model_id && String.split(model_id, ":", parts: 2) do
-               [_prefix, bare_id] when bare_id != "" ->
-                 Ai.Models.get_model(provider_atom, bare_id)
+            case model_id && String.split(model_id, ":", parts: 2) do
+              [_prefix, bare_id] when bare_id != "" ->
+                Ai.Models.get_model(provider_atom, bare_id)
 
-               _ ->
-                 nil
-             end) ||
+              _ ->
+                nil
+            end ||
             Ai.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
@@ -450,6 +450,9 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp resolve_anthropic_api_key(provider_cfg) do
     case normalize_auth_source(provider_cfg) do
+      :oauth ->
+        resolve_anthropic_oauth_key(provider_cfg) || ""
+
       :api_key ->
         resolve_anthropic_raw_api_key(provider_cfg) ||
           resolve_raw_secret_api_key("llm_anthropic_api_key_raw") ||
@@ -460,19 +463,53 @@ defmodule CodingAgent.Session.ModelResolver do
           resolve_raw_secret_api_key("llm_anthropic_api_key_raw") ||
           ""
 
-      :oauth ->
-        Logger.warning(
-          "providers.anthropic.auth_source=\"oauth\" is not supported; use API key auth for provider \"anthropic\" or the \"claude\" CLI runner for OAuth-backed usage"
-        )
-
-        ""
-
       {:invalid, value} ->
         Logger.warning(
-          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected api_key when set"
+          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected oauth or api_key when set"
         )
 
         ""
+    end
+  end
+
+  defp resolve_anthropic_oauth_key(provider_cfg) do
+    secret_name =
+      first_non_empty_binary([
+        provider_config_value(provider_cfg, :oauth_secret),
+        provider_config_value(provider_cfg, :api_key_secret),
+        "llm_anthropic_api_key"
+      ])
+
+    if(is_binary(secret_name) and secret_name != "",
+      do: resolve_anthropic_oauth_secret(secret_name)
+    ) ||
+      LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+  end
+
+  defp resolve_anthropic_oauth_secret(secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} ->
+        case LemonAiRuntime.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value) do
+          {:ok, resolved_api_key} ->
+            resolved_api_key
+
+          :ignore ->
+            Logger.warning(
+              "Anthropic OAuth secret #{secret_name} is not a recognized Anthropic OAuth payload"
+            )
+
+            nil
+
+          {:error, reason} ->
+            Logger.warning(
+              "Failed to resolve Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
+            )
+
+            nil
+        end
+
+      _ ->
+        nil
     end
   end
 
@@ -634,6 +671,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_secret_api_key(_, _), do: nil
 
   @oauth_secret_fallback_resolvers [
+    LemonAiRuntime.Auth.AnthropicOAuth,
     LemonAiRuntime.Auth.GitHubCopilotOAuth,
     LemonAiRuntime.Auth.GoogleAntigravityOAuth,
     LemonAiRuntime.Auth.GoogleGeminiCliOAuth,

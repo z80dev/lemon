@@ -381,5 +381,44 @@ defmodule Ai.Providers.AnthropicTest do
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
+
+    test "uses Bearer auth and Claude-compatible headers for Anthropic OAuth tokens" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 128_000,
+        max_tokens: 32_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "sk-ant-oat01-test-token"})
+
+      assert_receive {:request_headers, headers}, 1000
+      headers_map = Map.new(headers)
+
+      assert headers_map["authorization"] == "Bearer sk-ant-oat01-test-token"
+      refute Map.has_key?(headers_map, "x-api-key")
+      assert headers_map["x-app"] == "cli"
+      assert headers_map["user-agent"] =~ "claude-cli/"
+      assert headers_map["anthropic-beta"] =~ "claude-code-20250219"
+      assert headers_map["anthropic-beta"] =~ "oauth-2025-04-20"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
   end
 end

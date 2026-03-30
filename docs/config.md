@@ -17,6 +17,10 @@ model/thinking values override config defaults at runtime, but they are not pers
 [providers.anthropic]
 api_key_secret = "ANTHROPIC_API_KEY"
 
+# Claude Max / Claude Code subscription auth
+# auth_source = "oauth"
+# oauth_secret = "llm_anthropic_api_key"
+
 [providers.openai]
 api_key_secret = "OPENAI_API_KEY"
 
@@ -328,11 +332,25 @@ mix lemon.onboard zai --token <token> --set-default --model glm-5
 mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 ```
 
-Anthropic provider auth is API key based. Store your key in secrets:
+Anthropic provider auth supports either API keys or Claude subscription OAuth.
+
+API key flow:
 
 ```bash
 mix lemon.secrets.set llm_anthropic_api_key <token>
 ```
+
+OAuth flow:
+
+```toml
+[providers.anthropic]
+auth_source = "oauth"
+oauth_secret = "llm_anthropic_api_key" # optional if this secret stores an Anthropic OAuth payload
+```
+
+When `auth_source = "oauth"`, Lemon will also use ambient Claude Code credentials from
+`~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_TOKEN`.
+You can also create/store that payload through onboarding with `mix lemon.onboard anthropic --auth oauth`.
 
 ## Web Tools (`websearch` / `webfetch`)
 
