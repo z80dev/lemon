@@ -127,6 +127,13 @@ defmodule LemonAiRuntime.ProviderNames do
       default_secret_name: "llm_minimax_cn_api_key",
       aliases: ["minimax-cn"]
     },
+    "fireworks" => %{
+      config_name: "fireworks",
+      atom_name: :fireworks,
+      env_vars: ["FIREWORKS_API_KEY"],
+      default_secret_name: "llm_fireworks_api_key",
+      aliases: ["fireworks_ai", "fireworks-ai"]
+    },
     "openrouter" => %{
       config_name: "openrouter",
       atom_name: :openrouter,
@@ -155,7 +162,7 @@ defmodule LemonAiRuntime.ProviderNames do
         normalized
 
       true ->
-        Enum.find_value(@providers, normalized, fn {canonical, meta} ->
+        Enum.find_value(@providers, fn {canonical, meta} ->
           names =
             [canonical, meta.config_name, dashed_name(canonical) | Map.get(meta, :aliases, [])]
             |> Enum.map(&normalize_candidate/1)

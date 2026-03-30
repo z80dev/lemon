@@ -7,12 +7,14 @@ defmodule LemonCore.Onboarding.Providers do
     %Provider{
       id: "anthropic",
       display_name: "Anthropic",
-      description: "Claude API key",
+      description: "Claude Code OAuth or API key",
       provider_table: "providers.anthropic",
       default_secret_name: "llm_anthropic_api_key",
       api_key_secret_provider: "onboarding_anthropic",
-      auth_modes: [:api_key],
-      default_auth_mode: :api_key,
+      oauth_secret_provider: "onboarding_anthropic_oauth",
+      oauth_module: Module.concat([:"Elixir.Ai", :Auth, :AnthropicOAuth]),
+      auth_modes: [:oauth, :api_key],
+      default_auth_mode: :oauth,
       preferred_models: [
         "claude-sonnet-4-20250514",
         "claude-sonnet-4-5-20250929",
@@ -21,7 +23,12 @@ defmodule LemonCore.Onboarding.Providers do
       aliases: ["claude"],
       api_key_prompt: "Enter your Anthropic API key: ",
       api_key_choice_label: "Paste API key",
-      auth_source_by_mode: %{api_key: "api_key"}
+      oauth_choice_label: "Claude Code login (OAuth)",
+      oauth_failure_label: "Anthropic Claude OAuth login failed",
+      token_resolution_hint:
+        "Anthropic OAuth flow did not return credentials. Retry and complete `claude setup-token`, or pass --token for API-key mode.",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "oauth_secret"}
     },
     %Provider{
       id: "openai",
@@ -139,6 +146,25 @@ defmodule LemonCore.Onboarding.Providers do
       preferred_models: ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"],
       aliases: ["mini-max", "minimax-m2"],
       api_key_prompt: "Enter your MiniMax API key: ",
+      api_key_choice_label: "Paste API key",
+      auth_source_by_mode: %{api_key: "api_key"}
+    },
+    %Provider{
+      id: "fireworks",
+      display_name: "Fireworks AI",
+      description: "Fireworks API key for open-weight models",
+      provider_table: "providers.fireworks",
+      default_secret_name: "llm_fireworks_api_key",
+      api_key_secret_provider: "onboarding_fireworks",
+      auth_modes: [:api_key],
+      default_auth_mode: :api_key,
+      preferred_models: [
+        "accounts/fireworks/routers/kimi-k2p5-turbo",
+        "accounts/fireworks/models/deepseek-v3p2",
+        "accounts/fireworks/models/glm-4p7"
+      ],
+      aliases: ["fireworks-ai", "fireworks_ai"],
+      api_key_prompt: "Enter your Fireworks API key: ",
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
     },

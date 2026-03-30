@@ -83,6 +83,7 @@ defmodule Ai.Models do
     :groq => Ai.Models.Groq.models(),
     :huggingface => Ai.Models.HuggingFace.models(),
     :minimax_cn => Ai.Models.MiniMaxCN.models(),
+    :fireworks => Ai.Models.Fireworks.models(),
     :openrouter => Ai.Models.OpenRouter.models(),
     :vercel_ai_gateway => Ai.Models.VercelAIGateway.models()
   }
@@ -115,6 +116,7 @@ defmodule Ai.Models do
     :groq,
     :huggingface,
     :minimax_cn,
+    :fireworks,
     :openrouter,
     :vercel_ai_gateway
   ]
