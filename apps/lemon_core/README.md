@@ -253,6 +253,8 @@ LemonCore.ConfigReloader.reload/1
 | `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` |
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
+| `ANTHROPIC_TOKEN` | Ambient Anthropic OAuth token when `providers.anthropic.auth_source = "oauth"` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Ambient Claude Code OAuth token when `providers.anthropic.auth_source = "oauth"` |
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
 | `OPENAI_CODEX_API_KEY` | `providers.openai-codex.api_key` |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |

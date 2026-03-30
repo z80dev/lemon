@@ -14,7 +14,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
   alias LemonCore.Config
-  alias LemonCore.MapHelpers
   alias LemonCore.SessionKey
   alias LemonCore.Secrets
 
@@ -600,12 +599,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   end
 
   defp maybe_fallback_to_default_providers([], model_maps) when is_list(model_maps) do
-    cfg = Config.cached()
-    defaults = default_provider_hints(cfg)
-
-    Enum.filter(model_maps, fn model ->
-      normalize_provider_name(model.provider) in defaults
-    end)
+    []
   end
 
   defp maybe_fallback_to_default_providers(filtered, _model_maps), do: filtered
@@ -613,14 +607,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp enabled_model_provider_names(model_maps) when is_list(model_maps) do
     cfg = Config.cached()
     configured = configured_provider_index(cfg)
-    defaults = default_provider_hints(cfg)
 
     model_maps
     |> Enum.map(&normalize_provider_name(&1.provider))
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
     |> Enum.filter(fn provider ->
-      provider_enabled?(provider, configured, defaults)
+      provider_enabled?(provider, configured)
     end)
   end
 
@@ -632,30 +625,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     end)
   end
 
-  defp default_provider_hints(cfg) do
-    agent = map_get(cfg, :agent) || %{}
-    provider = map_get(agent, :default_provider)
-    model = map_get(agent, :default_model)
-    {model_provider, _model_id} = split_model_hint(model)
-
-    [provider, model_provider]
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> Enum.map(&normalize_provider_name/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp provider_enabled?(provider, configured, defaults)
-       when is_binary(provider) and is_map(configured) and is_list(defaults) do
+  defp provider_enabled?(provider, configured)
+       when is_binary(provider) and is_map(configured) do
     aliases = provider_aliases(provider)
 
-    Enum.any?(aliases, &Map.has_key?(configured, &1)) or
-      provider_has_credentials?(provider, aliases, configured) or
-      Enum.any?(aliases, &(&1 in defaults)) or
+    provider_has_credentials?(provider, aliases, configured) or
       provider_special_enabled?(provider)
   end
 
-  defp provider_enabled?(_provider, _configured, _defaults), do: false
+  defp provider_enabled?(_provider, _configured), do: false
 
   defp provider_has_credentials?(provider, aliases, configured) do
     LemonAiRuntime.provider_has_credentials?(provider, configured) or
@@ -680,7 +658,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
         "kimi-coding" -> [provider, "kimi"]
         "amazon-bedrock" -> [provider, "bedrock", "aws"]
         "azure-openai-responses" -> [provider, "azure-openai", "azure-openai-responses"]
-        "minimax-cn" -> [provider, "minimax"]
         other -> [other]
       end
 
@@ -723,17 +700,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp peer_kind_from_chat_type("supergroup"), do: :group
   defp peer_kind_from_chat_type("channel"), do: :channel
   defp peer_kind_from_chat_type(_), do: :unknown
-
-  defp split_model_hint(model_hint) when is_binary(model_hint) and model_hint != "" do
-    case String.split(model_hint, ":", parts: 2) do
-      [provider, model_id] when provider != "" and model_id != "" -> {provider, model_id}
-      _ -> {nil, model_hint}
-    end
-  end
-
-  defp split_model_hint(_), do: {nil, nil}
-
-  defp map_get(map, key), do: MapHelpers.get_key(map, key)
 
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_value?(_), do: false

@@ -128,6 +128,18 @@ defmodule Ai.Models.ZAI do
       cost: %ModelCost{input: 1.2, output: 4.0, cache_read: 0.24, cache_write: 0.0},
       context_window: 200_000,
       max_tokens: 131_072
+    },
+    "glm-5.1" => %Model{
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/coding/paas/v4",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 1.0, output: 3.2, cache_read: 0.2, cache_write: 0.0},
+      context_window: 204_800,
+      max_tokens: 131_072
     }
   }
 

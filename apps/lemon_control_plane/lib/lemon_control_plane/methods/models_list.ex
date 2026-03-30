@@ -40,9 +40,9 @@ defmodule LemonControlPlane.Methods.ModelsList do
       "provider" => to_string(model.provider),
       "name" => model.name || model.id,
       "contextWindow" => model.context_window,
-      "maxOutput" => model.max_output,
-      "supportsThinking" => model.supports_thinking || false,
-      "supportsStreaming" => model.supports_streaming || true
+      "maxOutput" => model.max_tokens,
+      "supportsThinking" => model.reasoning || false,
+      "supportsStreaming" => true
     }
   end
 
@@ -52,8 +52,12 @@ defmodule LemonControlPlane.Methods.ModelsList do
       "provider" => to_string(model[:provider] || model["provider"]),
       "name" => model[:name] || model["name"] || model[:id] || model["id"],
       "contextWindow" => model[:context_window] || model["contextWindow"],
-      "maxOutput" => model[:max_output] || model["maxOutput"],
-      "supportsThinking" => model[:supports_thinking] || model["supportsThinking"] || false,
+      "maxOutput" =>
+        model[:max_tokens] || model["max_tokens"] || model[:max_output] ||
+          model["maxOutput"],
+      "supportsThinking" =>
+        model[:reasoning] || model["reasoning"] ||
+          model[:supports_thinking] || model["supportsThinking"] || false,
       "supportsStreaming" => model[:supports_streaming] || model["supportsStreaming"] || true
     }
   end

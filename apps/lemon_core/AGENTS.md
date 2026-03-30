@@ -476,7 +476,7 @@ mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
 ```
 
-Anthropic provider auth is API-key based; use `mix lemon.onboard anthropic` or `mix lemon.secrets.set llm_anthropic_api_key <token>` and set `providers.anthropic.api_key_secret` accordingly.
+Anthropic provider auth supports API keys or Claude subscription OAuth. API-key flow still uses `mix lemon.onboard anthropic` or `mix lemon.secrets.set llm_anthropic_api_key <token>` with `providers.anthropic.api_key_secret`. OAuth-backed Claude Max usage can now be bootstrapped with `mix lemon.onboard anthropic --auth oauth`, which runs the Claude Code login flow and stores an OAuth payload secret, or configured manually with `providers.anthropic.auth_source = "oauth"` plus ambient Claude Code credentials in `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_TOKEN`.
 
 ### Quality Tasks
 

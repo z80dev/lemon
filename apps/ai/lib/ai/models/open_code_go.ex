@@ -21,6 +21,18 @@ defmodule Ai.Models.OpenCodeGo do
       context_window: 204_800,
       max_tokens: 131_072
     },
+    "glm-5.1" => %Model{
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      api: :openai_completions,
+      provider: :opencode_go,
+      base_url: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 1.0, output: 3.2, cache_read: 0.2, cache_write: 0.0},
+      context_window: 204_800,
+      max_tokens: 131_072
+    },
     "kimi-k2.5" => %Model{
       id: "kimi-k2.5",
       name: "Kimi K2.5",

@@ -195,6 +195,7 @@ _PROVIDER_ENV_PREFIXES: dict[str, str] = {
     "together": "TOGETHER",
     "deepseek": "DEEPSEEK",
     "xai": "XAI",
+    "fireworks": "FIREWORKS",
 }
 
 
