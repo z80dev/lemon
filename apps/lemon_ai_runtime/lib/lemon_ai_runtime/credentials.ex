@@ -220,6 +220,7 @@ defmodule LemonAiRuntime.Credentials do
       first_non_empty_binary([
         provider_config_value(provider_cfg, :oauth_secret),
         provider_config_value(provider_cfg, :api_key_secret),
+        ProviderNames.oauth_default_secret_name("anthropic"),
         ProviderNames.default_secret_name("anthropic")
       ])
 

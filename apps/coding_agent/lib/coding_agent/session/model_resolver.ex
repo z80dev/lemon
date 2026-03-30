@@ -409,6 +409,8 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp provider_default_secret_name(nil), do: nil
 
+  defp provider_default_secret_name("anthropic"), do: "llm_anthropic_api_key_raw"
+
   defp provider_default_secret_name(provider_name) when is_binary(provider_name) do
     sanitized =
       provider_name
@@ -477,7 +479,7 @@ defmodule CodingAgent.Session.ModelResolver do
       first_non_empty_binary([
         provider_config_value(provider_cfg, :oauth_secret),
         provider_config_value(provider_cfg, :api_key_secret),
-        "llm_anthropic_api_key"
+        provider_oauth_default_secret_name("anthropic")
       ])
 
     if(is_binary(secret_name) and secret_name != "",
@@ -485,6 +487,9 @@ defmodule CodingAgent.Session.ModelResolver do
     ) ||
       LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
   end
+
+  defp provider_oauth_default_secret_name("anthropic"), do: "llm_anthropic_api_key"
+  defp provider_oauth_default_secret_name(_provider_name), do: nil
 
   defp resolve_anthropic_oauth_secret(secret_name) do
     case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do

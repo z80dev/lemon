@@ -51,6 +51,12 @@ defmodule Ai.ModelsTest do
       assert model.context_window == 200_000
       assert model.max_tokens == 64_000
     end
+
+    test "Claude 4.6 model lookups use Anthropic API IDs" do
+      assert Models.get_model(:anthropic, "claude-sonnet-4-6").id == "claude-sonnet-4-6"
+      assert Models.get_model(:anthropic, "claude-opus-4-6").id == "claude-opus-4-6"
+      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking").id == "claude-opus-4-6"
+    end
   end
 
   # ============================================================================
@@ -120,13 +126,6 @@ defmodule Ai.ModelsTest do
     test "every model is a Model struct" do
       models = Models.list_models()
       assert Enum.all?(models, &match?(%Model{}, &1))
-    end
-  end
-
-  describe "all/0 (deprecated)" do
-    test "returns the same result as list_models/0" do
-      # Call via apply/3 to avoid compile-time deprecation warnings in tests.
-      assert apply(Models, :all, []) == Models.list_models()
     end
   end
 

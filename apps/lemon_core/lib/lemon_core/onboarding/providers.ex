@@ -10,6 +10,10 @@ defmodule LemonCore.Onboarding.Providers do
       description: "Claude Code OAuth or API key",
       provider_table: "providers.anthropic",
       default_secret_name: "llm_anthropic_api_key",
+      default_secret_name_by_mode: %{
+        api_key: "llm_anthropic_api_key_raw",
+        oauth: "llm_anthropic_api_key"
+      },
       api_key_secret_provider: "onboarding_anthropic",
       oauth_secret_provider: "onboarding_anthropic_oauth",
       oauth_module: Module.concat([:"Elixir.Ai", :Auth, :AnthropicOAuth]),

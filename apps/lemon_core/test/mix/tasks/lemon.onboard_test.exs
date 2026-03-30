@@ -49,14 +49,14 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Onboard.run_with_io(["--config-path", config_path], io)
 
     assert {:ok, "anthropic-token-123"} =
-             Secrets.get("llm_anthropic_api_key", prefer_env: false, env_fallback: false)
+             Secrets.get("llm_anthropic_api_key_raw", prefer_env: false, env_fallback: false)
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
     assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
-             "llm_anthropic_api_key"
+             "llm_anthropic_api_key_raw"
   end
 
   test "interactive provider picker supports anthropic oauth", %{tmp_dir: tmp_dir} do

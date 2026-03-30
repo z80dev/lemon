@@ -82,7 +82,7 @@ defmodule Ai.Models.Anthropic do
       max_tokens: 64_000
     },
     "claude-sonnet-4-6" => %Model{
-      id: "claude-sonnet-4.6",
+      id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       api: :anthropic_messages,
       provider: :anthropic,
@@ -94,7 +94,7 @@ defmodule Ai.Models.Anthropic do
       max_tokens: 64_000
     },
     "claude-opus-4-6" => %Model{
-      id: "claude-opus-4.6",
+      id: "claude-opus-4-6",
       name: "Claude Opus 4.6",
       api: :anthropic_messages,
       provider: :anthropic,
@@ -106,7 +106,7 @@ defmodule Ai.Models.Anthropic do
       max_tokens: 128_000
     },
     "claude-opus-4-6-thinking" => %Model{
-      id: "claude-opus-4-6-thinking",
+      id: "claude-opus-4-6",
       name: "Claude Opus 4.6 (Thinking)",
       api: :anthropic_messages,
       provider: :anthropic,

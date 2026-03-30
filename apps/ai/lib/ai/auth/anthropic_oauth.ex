@@ -96,9 +96,11 @@ defmodule Ai.Auth.AnthropicOAuth do
 
   @spec resolve_access_token() :: String.t() | nil
   def resolve_access_token do
-    resolve_env_token() ||
+    claude_code_secret = current_claude_code_secret()
+
+    resolve_env_token(claude_code_secret) ||
       resolve_default_secret_token() ||
-      resolve_claude_code_credentials_token()
+      access_token_from_secret(claude_code_secret)
   end
 
   @spec oauth_token?(String.t() | nil) :: boolean()
@@ -234,12 +236,22 @@ defmodule Ai.Auth.AnthropicOAuth do
     end
   end
 
-  defp resolve_env_token do
+  defp resolve_env_token(claude_code_secret \\ nil) do
     Enum.find_value(@oauth_env_vars, fn env_var ->
       case System.get_env(env_var) do
         value when is_binary(value) and value != "" ->
           trimmed = String.trim(value)
-          if oauth_token?(trimmed), do: trimmed, else: nil
+
+          cond do
+            not oauth_token?(trimmed) ->
+              nil
+
+            preferred = prefer_refreshable_claude_code_token(trimmed, claude_code_secret) ->
+              preferred
+
+            true ->
+              trimmed
+          end
 
         _ ->
           nil
@@ -263,14 +275,10 @@ defmodule Ai.Auth.AnthropicOAuth do
   end
 
   defp existing_login_secret do
-    with {:ok, secret} <- read_claude_code_credentials(),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret) do
-      if changed? do
-        persist_claude_code_credentials(refreshed_secret)
-      end
+    case current_claude_code_secret() do
+      %{} = secret ->
+        secret
 
-      refreshed_secret
-    else
       _ ->
         case resolve_env_token() do
           token when is_binary(token) and token != "" -> build_secret(token)
@@ -279,20 +287,49 @@ defmodule Ai.Auth.AnthropicOAuth do
     end
   end
 
-  defp resolve_claude_code_credentials_token do
+  defp current_claude_code_secret do
     with {:ok, secret} <- read_claude_code_credentials(),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
-         access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]) do
+         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret) do
       if changed? do
         persist_claude_code_credentials(refreshed_secret)
       end
 
-      access_token
+      refreshed_secret
     else
       _ -> nil
     end
   end
+
+  defp access_token_from_secret(%{} = secret) do
+    non_empty_binary(secret["access_token"])
+  end
+
+  defp access_token_from_secret(_), do: nil
+
+  defp prefer_refreshable_claude_code_token(env_token, %{} = claude_code_secret) do
+    refresh_token = non_empty_binary(claude_code_secret["refresh_token"])
+    access_token = access_token_from_secret(claude_code_secret)
+
+    cond do
+      is_nil(refresh_token) ->
+        nil
+
+      is_nil(access_token) ->
+        nil
+
+      access_token == env_token ->
+        nil
+
+      true ->
+        Logger.debug(
+          "Preferring refreshable Claude Code credentials over static Anthropic OAuth env token"
+        )
+
+        access_token
+    end
+  end
+
+  defp prefer_refreshable_claude_code_token(_env_token, _claude_code_secret), do: nil
 
   defp read_claude_code_credentials do
     path = claude_credentials_path()

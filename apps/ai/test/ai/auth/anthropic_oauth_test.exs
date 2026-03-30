@@ -60,6 +60,26 @@ defmodule Ai.Auth.AnthropicOAuthTest do
     assert AnthropicOAuth.resolve_access_token() == "sk-ant-oat01-file-token"
   end
 
+  test "resolve_access_token prefers refreshable Claude Code credentials over static env token" do
+    path = Path.join([System.fetch_env!("HOME"), ".claude", ".credentials.json"])
+    File.mkdir_p!(Path.dirname(path))
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "claudeAiOauth" => %{
+          "accessToken" => "sk-ant-oat01-refreshable-token",
+          "refreshToken" => "refresh-token",
+          "expiresAt" => System.system_time(:millisecond) + 3_600_000
+        }
+      })
+    )
+
+    System.put_env("ANTHROPIC_TOKEN", "sk-ant-oat01-static-token")
+
+    assert AnthropicOAuth.resolve_access_token() == "sk-ant-oat01-refreshable-token"
+  end
+
   test "login_device_flow runs claude setup-token and returns Claude credential payload" do
     script_path =
       write_fake_claude_cli(

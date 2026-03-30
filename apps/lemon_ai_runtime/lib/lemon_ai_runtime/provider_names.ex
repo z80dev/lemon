@@ -12,7 +12,8 @@ defmodule LemonAiRuntime.ProviderNames do
       config_name: "anthropic",
       atom_name: :anthropic,
       env_vars: ["ANTHROPIC_API_KEY"],
-      default_secret_name: "llm_anthropic_api_key",
+      default_secret_name: "llm_anthropic_api_key_raw",
+      oauth_default_secret_name: "llm_anthropic_api_key",
       aliases: ["claude"]
     },
     "openai" => %{
@@ -212,6 +213,14 @@ defmodule LemonAiRuntime.ProviderNames do
     case canonical_name(provider) do
       nil -> nil
       canonical -> Map.get(provider_meta(canonical), :default_secret_name)
+    end
+  end
+
+  @spec oauth_default_secret_name(atom() | String.t() | nil) :: String.t() | nil
+  def oauth_default_secret_name(provider) do
+    case canonical_name(provider) do
+      nil -> nil
+      canonical -> Map.get(provider_meta(canonical), :oauth_default_secret_name)
     end
   end
 

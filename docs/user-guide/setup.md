@@ -111,13 +111,14 @@ Create `~/.lemon/config.toml` (or run `mix lemon.setup config`):
 ```toml
 # Provider keys (pick one or more)
 [providers.anthropic]
-api_key_secret = "llm_anthropic_api_key"
+api_key_secret = "llm_anthropic_api_key_raw"
 
 # Or, for Claude Max / Claude Code subscription auth:
 # auth_source = "oauth"
 # oauth_secret = "llm_anthropic_api_key" # optional if this secret stores an Anthropic OAuth payload
 # Lemon also detects ambient Claude Code credentials from ~/.claude/.credentials.json
 # and CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_TOKEN when auth_source = "oauth".
+# Refreshable Claude Code credentials win over a static env setup token.
 
 [providers.openai]
 api_key_secret = "llm_openai_api_key"
@@ -245,14 +246,15 @@ API keys are stored in an encrypted keychain, not in `config.toml` in plaintext.
 
 ```bash
 # Write a secret
-mix lemon.setup secrets set llm_anthropic_api_key "sk-ant-..."
+mix lemon.setup secrets set llm_anthropic_api_key_raw "sk-ant-..."
 
 # List stored secrets
 mix lemon.setup secrets list
 ```
 
 Config references secrets by name via `api_key_secret = "key_name"`.
-Anthropic OAuth-backed plans use `auth_source = "oauth"` and optionally `oauth_secret = "key_name"`.
+Anthropic raw API keys should live in `llm_anthropic_api_key_raw`.
+Anthropic OAuth-backed plans use `auth_source = "oauth"` and optionally `oauth_secret = "llm_anthropic_api_key"`.
 `mix lemon.onboard anthropic --auth oauth` now runs the Claude Code login flow and writes the matching `oauth_secret` config for you.
 
 ---

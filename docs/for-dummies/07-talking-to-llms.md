@@ -305,9 +305,9 @@ multiple sources:
     ↓ if not set
 3. Encrypted secret in LemonCore.Secrets (via secret_ref in config)
     ↓ if not set
-4. Default secret name convention (llm_anthropic_api_key)
+4. Default secret name convention (`llm_<provider>_api_key`, except Anthropic raw API keys use `llm_anthropic_api_key_raw`)
     ↓ if not set
-5. OAuth token (for GitHub Copilot, Google Gemini CLI, OpenAI Codex)
+5. OAuth token (for Anthropic Claude Code, GitHub Copilot, Google Gemini CLI, OpenAI Codex)
 ```
 
 OAuth tokens are automatically refreshed when they expire, and the refreshed

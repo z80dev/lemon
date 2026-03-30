@@ -61,7 +61,7 @@ defmodule LemonCore.Onboarding.Runner do
 
     secret_name =
       require_non_empty!(
-        cli_opts[:secret_name] || spec.default_secret_name,
+        cli_opts[:secret_name] || default_secret_name(spec, auth_mode),
         "Invalid secret name."
       )
 
@@ -568,6 +568,18 @@ defmodule LemonCore.Onboarding.Runner do
 
   defp secret_config_key(%Provider{} = spec, auth_mode) do
     Map.get(spec.secret_config_key_by_mode, auth_mode, "api_key_secret")
+  end
+
+  defp default_secret_name(%Provider{} = spec, auth_mode) do
+    spec.default_secret_name_by_mode
+    |> case do
+      %{} = names -> Map.get(names, auth_mode)
+      _ -> nil
+    end
+    |> case do
+      value when is_binary(value) and value != "" -> value
+      _ -> spec.default_secret_name
+    end
   end
 
   defp maybe_set_defaults(content, nil, _spec), do: content

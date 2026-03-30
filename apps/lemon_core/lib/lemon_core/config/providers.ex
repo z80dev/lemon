@@ -11,7 +11,7 @@ defmodule LemonCore.Config.Providers do
   Configuration is loaded from the TOML config file under `[providers]`:
 
       [providers.anthropic]
-      api_key_secret = "llm_anthropic_api_key"
+      api_key_secret = "llm_anthropic_api_key_raw"
       base_url = "https://api.anthropic.com"
 
       [providers.openai]
@@ -31,10 +31,13 @@ defmodule LemonCore.Config.Providers do
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
 
-  For providers that support OAuth payloads (`openai-codex`, `google_gemini_cli`),
-  set `auth_source = "oauth"` to resolve credential payloads from encrypted
-  secrets. `google_gemini_cli` stores its OAuth payload in `api_key_secret`
-  because the runtime provider expects a JSON `{"token","projectId"}` value.
+  For providers that support OAuth payloads (`anthropic`, `openai-codex`,
+  `google_gemini_cli`), set `auth_source = "oauth"` to resolve credential
+  payloads from encrypted secrets. Anthropic keeps raw API keys in
+  `llm_anthropic_api_key_raw` and Claude Code OAuth payloads in
+  `llm_anthropic_api_key` to avoid mixing header modes. `google_gemini_cli`
+  stores its OAuth payload in `api_key_secret` because the runtime provider
+  expects a JSON `{"token","projectId"}` value.
   """
 
   alias LemonCore.Config.Helpers

@@ -8,8 +8,19 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   setup do
     clear_secrets_table()
 
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "coding_agent_session_api_key_resolution_#{System.unique_integer([:positive])}"
+      )
+
+    home_dir = Path.join(tmp_dir, "home")
+    File.mkdir_p!(home_dir)
+
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
+    original_home = System.get_env("HOME")
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
+    System.put_env("HOME", home_dir)
     System.delete_env("OPENAI_API_KEY")
     System.delete_env("OPENAI_CODEX_API_KEY")
     System.delete_env("CHATGPT_TOKEN")
@@ -30,6 +41,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     on_exit(fn ->
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
       System.delete_env("OPENAI_API_KEY")
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
@@ -46,6 +58,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       System.delete_env("ANTHROPIC_API_KEY")
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
+      File.rm_rf!(tmp_dir)
     end)
 
     :ok
@@ -238,6 +251,52 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "sk-ant-oat01-env-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic oauth auth_source prefers refreshable Claude credentials over static env token" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "coding_agent_anthropic_oauth_#{System.unique_integer([:positive])}"
+      )
+
+    home_dir = Path.join(tmp_dir, "home")
+    credentials_path = Path.join([home_dir, ".claude", ".credentials.json"])
+    original_home = System.get_env("HOME")
+
+    File.mkdir_p!(Path.dirname(credentials_path))
+
+    File.write!(
+      credentials_path,
+      Jason.encode!(%{
+        "claudeAiOauth" => %{
+          "accessToken" => "sk-ant-oat01-refreshable-token",
+          "refreshToken" => "refresh-token",
+          "expiresAt" => System.system_time(:millisecond) + 3_600_000
+        }
+      })
+    )
+
+    System.put_env("HOME", home_dir)
+    System.put_env("ANTHROPIC_TOKEN", "sk-ant-oat01-static-token")
+
+    on_exit(fn ->
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
+      File.rm_rf!(tmp_dir)
+    end)
+
+    settings =
+      settings(%{
+        "anthropic" => %{
+          auth_source: "oauth"
+        }
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "sk-ant-oat01-refreshable-token"}, 1_000
     GenServer.stop(session)
   end
 

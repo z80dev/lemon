@@ -37,16 +37,29 @@ defmodule LemonAiRuntime.CredentialsTest do
   setup do
     clear_secrets_table()
 
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_ai_runtime_credentials_test_#{System.unique_integer([:positive])}"
+      )
+
+    home_dir = Path.join(tmp_dir, "home")
+    File.mkdir_p!(home_dir)
+
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
+    original_home = System.get_env("HOME")
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
+    System.put_env("HOME", home_dir)
     Enum.each(@env_keys, &System.delete_env/1)
     Application.delete_env(:lemon_ai_runtime, :oauth_secret_resolver_module)
 
     on_exit(fn ->
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
       Enum.each(@env_keys, &System.delete_env/1)
       Application.delete_env(:lemon_ai_runtime, :oauth_secret_resolver_module)
+      File.rm_rf!(tmp_dir)
     end)
 
     :ok
@@ -150,6 +163,44 @@ defmodule LemonAiRuntime.CredentialsTest do
 
     assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
              "sk-ant-oat01-env-token"
+  end
+
+  test "anthropic oauth auth_source prefers refreshable Claude credentials over static env token" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_ai_runtime_anthropic_oauth_#{System.unique_integer([:positive])}"
+      )
+
+    home_dir = Path.join(tmp_dir, "home")
+    credentials_path = Path.join([home_dir, ".claude", ".credentials.json"])
+    original_home = System.get_env("HOME")
+
+    File.mkdir_p!(Path.dirname(credentials_path))
+
+    File.write!(
+      credentials_path,
+      Jason.encode!(%{
+        "claudeAiOauth" => %{
+          "accessToken" => "sk-ant-oat01-refreshable-token",
+          "refreshToken" => "refresh-token",
+          "expiresAt" => System.system_time(:millisecond) + 3_600_000
+        }
+      })
+    )
+
+    System.put_env("HOME", home_dir)
+    System.put_env("ANTHROPIC_TOKEN", "sk-ant-oat01-static-token")
+
+    on_exit(fn ->
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
+      File.rm_rf!(tmp_dir)
+    end)
+
+    providers = %{"anthropic" => %{auth_source: "oauth"}}
+
+    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+             "sk-ant-oat01-refreshable-token"
   end
 
   test "anthropic rejects oauth payload secret for raw api key resolution" do

@@ -7,7 +7,7 @@ defmodule Ai.Providers.AnthropicTest do
 
   alias Ai.Providers.Anthropic
   alias Ai.EventStream
-  alias Ai.Types.{Context, Model, StreamOptions, UserMessage}
+  alias Ai.Types.{Context, Model, StreamOptions, Tool, UserMessage}
 
   setup do
     previous_defaults = Req.default_options()
@@ -415,8 +415,89 @@ defmodule Ai.Providers.AnthropicTest do
       refute Map.has_key?(headers_map, "x-api-key")
       assert headers_map["x-app"] == "cli"
       assert headers_map["user-agent"] =~ "claude-cli/"
+      assert headers_map["anthropic-beta"] =~ "interleaved-thinking-2025-05-14"
       assert headers_map["anthropic-beta"] =~ "claude-code-20250219"
       assert headers_map["anthropic-beta"] =~ "oauth-2025-04-20"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "uses Claude Code request shape for Anthropic OAuth on Claude 4.6 models" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_headers, conn.req_headers})
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          system_prompt: "You are Lemon.",
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [
+            %Tool{
+              name: "read_file",
+              description: "Read a file",
+              parameters: %{"properties" => %{}, "required" => []}
+            }
+          ]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{
+          api_key: "sk-ant-oat01-test-token",
+          reasoning: :medium
+        })
+
+      assert_receive {:request_headers, headers}, 1000
+      assert_receive {:request_body, body}, 1000
+
+      headers_map = Map.new(headers)
+
+      assert headers_map["authorization"] == "Bearer sk-ant-oat01-test-token"
+      assert headers_map["anthropic-beta"] =~ "interleaved-thinking-2025-05-14"
+
+      assert body["system"] == [
+               %{
+                 "type" => "text",
+                 "text" => "You are Claude Code, Anthropic's official CLI for Claude."
+               },
+               %{
+                 "type" => "text",
+                 "text" => "You are Lemon.",
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
+      assert body["tools"] == [
+               %{
+                 "name" => "mcp_read_file",
+                 "description" => "Read a file",
+                 "input_schema" => %{
+                   "type" => "object",
+                   "properties" => %{},
+                   "required" => []
+                 }
+               }
+             ]
+
+      assert body["thinking"] == %{"type" => "adaptive"}
+      assert body["output_config"] == %{"effort" => "medium"}
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end

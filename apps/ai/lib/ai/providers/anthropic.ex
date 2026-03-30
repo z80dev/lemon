@@ -88,7 +88,7 @@ defmodule Ai.Providers.Anthropic do
       url = "#{base_url}/v1/messages"
 
       headers = build_headers(api_key, model.headers, opts.headers, model.provider)
-      {body, history_info} = build_request_body(model, context, opts)
+      {body, history_info} = build_request_body(model, context, opts, api_key)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
 
@@ -208,7 +208,15 @@ defmodule Ai.Providers.Anthropic do
         api_key
 
       true ->
-        ""
+        maybe_oauth_key(model.provider)
+    end
+  end
+
+  defp maybe_oauth_key(provider) do
+    if anthropic_oauth_provider?(provider) do
+      Ai.Auth.AnthropicOAuth.resolve_access_token() || ""
+    else
+      ""
     end
   end
 
@@ -888,7 +896,19 @@ defmodule Ai.Providers.Anthropic do
   # ============================================================================
 
   @copilot_providers [:github_copilot, :"github-copilot"]
-  @default_beta_features ["fine-grained-tool-streaming-2025-05-14"]
+  @common_beta_features [
+    "interleaved-thinking-2025-05-14",
+    "fine-grained-tool-streaming-2025-05-14"
+  ]
+  @claude_code_system_prefix "You are Claude Code, Anthropic's official CLI for Claude."
+  @oauth_tool_prefix "mcp_"
+  @adaptive_thinking_effort_map %{
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "max"
+  }
 
   defp build_headers(api_key, model_headers, opts_headers, provider) do
     is_copilot = provider in @copilot_providers
@@ -905,9 +925,9 @@ defmodule Ai.Providers.Anthropic do
 
     beta_features =
       if is_anthropic_oauth do
-        @default_beta_features ++ Ai.Auth.AnthropicOAuth.oauth_beta_features()
+        @common_beta_features ++ Ai.Auth.AnthropicOAuth.oauth_beta_features()
       else
-        @default_beta_features
+        @common_beta_features
       end
 
     base_headers = [
@@ -949,28 +969,25 @@ defmodule Ai.Providers.Anthropic do
   defp anthropic_oauth_provider?("anthropic"), do: true
   defp anthropic_oauth_provider?(_), do: false
 
-  defp build_request_body(model, context, opts) do
+  defp build_request_body(model, context, opts, api_key) do
     {history_messages, history_info} = limit_history_for_provider(context.messages || [], model)
+    oauth_request? = anthropic_oauth_request?(model.provider, api_key)
 
     body = %{
       "model" => model.id,
-      "messages" => convert_messages(history_messages, model),
+      "messages" => convert_messages(history_messages, model, oauth_request?: oauth_request?),
       "max_tokens" => opts.max_tokens || div(model.max_tokens, 3),
       "stream" => true
     }
 
     # Add system prompt (skip if empty to avoid API errors on some providers)
     body =
-      if context.system_prompt && String.trim(context.system_prompt) != "" do
-        Map.put(body, "system", [
-          %{
-            "type" => "text",
-            "text" => context.system_prompt,
-            "cache_control" => %{"type" => "ephemeral"}
-          }
-        ])
-      else
-        body
+      case build_system_prompt(context.system_prompt, oauth_request?) do
+        nil ->
+          body
+
+        system_prompt ->
+          Map.put(body, "system", system_prompt)
       end
 
     # Add temperature
@@ -984,14 +1001,26 @@ defmodule Ai.Providers.Anthropic do
     # Add tools
     body =
       if context.tools && length(context.tools) > 0 do
-        Map.put(body, "tools", convert_tools(context.tools))
+        Map.put(body, "tools", convert_tools(context.tools, oauth_request?: oauth_request?))
       else
         body
       end
 
     # Add thinking/extended thinking if model supports reasoning
     body =
-      if model.reasoning && opts.reasoning do
+      if model.reasoning && opts.reasoning && adaptive_thinking_model?(model.id) do
+        Map.merge(body, %{
+          "thinking" => %{"type" => "adaptive"},
+          "output_config" => %{
+            "effort" => Map.get(@adaptive_thinking_effort_map, opts.reasoning, "medium")
+          }
+        })
+      else
+        body
+      end
+
+    body =
+      if model.reasoning && opts.reasoning && not adaptive_thinking_model?(model.id) do
         thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
 
         Map.put(body, "thinking", %{
@@ -1062,14 +1091,15 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_messages(messages, model) do
+  defp convert_messages(messages, model, opts) do
     messages
-    |> Enum.map(fn msg -> convert_message(msg, model) end)
+    |> Enum.map(fn msg -> convert_message(msg, model, opts) end)
     |> Enum.reject(&is_nil/1)
     |> add_cache_control_to_last_user_message()
   end
 
-  defp convert_message(%Ai.Types.UserMessage{content: content}, _model) when is_binary(content) do
+  defp convert_message(%Ai.Types.UserMessage{content: content}, _model, _opts)
+       when is_binary(content) do
     if String.trim(content) != "" do
       %{
         "role" => "user",
@@ -1080,7 +1110,8 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_message(%Ai.Types.UserMessage{content: content}, model) when is_list(content) do
+  defp convert_message(%Ai.Types.UserMessage{content: content}, model, _opts)
+       when is_list(content) do
     blocks =
       content
       |> Enum.map(&convert_user_content_block(&1, model))
@@ -1096,10 +1127,12 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_message(%AssistantMessage{content: content}, _model) do
+  defp convert_message(%AssistantMessage{content: content}, _model, opts) do
+    oauth_request? = Keyword.get(opts, :oauth_request?, false)
+
     blocks =
       content
-      |> Enum.map(&convert_assistant_content_block/1)
+      |> Enum.map(&convert_assistant_content_block(&1, oauth_request?))
       |> Enum.reject(&is_nil/1)
 
     if length(blocks) > 0 do
@@ -1112,7 +1145,7 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_message(%Ai.Types.ToolResultMessage{} = msg, _model) do
+  defp convert_message(%Ai.Types.ToolResultMessage{} = msg, _model, _opts) do
     content = convert_tool_result_content(msg.content)
 
     %{
@@ -1128,7 +1161,7 @@ defmodule Ai.Providers.Anthropic do
     }
   end
 
-  defp convert_message(_, _), do: nil
+  defp convert_message(_, _, _), do: nil
 
   defp convert_user_content_block(%TextContent{text: text}, _model) do
     if String.trim(text) != "" do
@@ -1155,7 +1188,7 @@ defmodule Ai.Providers.Anthropic do
 
   defp convert_user_content_block(_, _), do: nil
 
-  defp convert_assistant_content_block(%TextContent{text: text}) do
+  defp convert_assistant_content_block(%TextContent{text: text}, _oauth_request?) do
     if String.trim(text) != "" do
       %{"type" => "text", "text" => text}
     else
@@ -1163,10 +1196,13 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_assistant_content_block(%ThinkingContent{
-         thinking: thinking,
-         thinking_signature: sig
-       }) do
+  defp convert_assistant_content_block(
+         %ThinkingContent{
+           thinking: thinking,
+           thinking_signature: sig
+         },
+         _oauth_request?
+       ) do
     if String.trim(thinking) != "" do
       # If signature is missing, convert to plain text
       if sig && String.trim(sig) != "" do
@@ -1183,16 +1219,19 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_assistant_content_block(%ToolCall{id: id, name: name, arguments: args}) do
+  defp convert_assistant_content_block(
+         %ToolCall{id: id, name: name, arguments: args},
+         oauth_request?
+       ) do
     %{
       "type" => "tool_use",
       "id" => id,
-      "name" => name,
+      "name" => maybe_prefix_oauth_tool_name(name, oauth_request?),
       "input" => args
     }
   end
 
-  defp convert_assistant_content_block(_), do: nil
+  defp convert_assistant_content_block(_, _oauth_request?), do: nil
 
   defp convert_tool_result_content(content) when is_list(content) do
     text_parts =
@@ -1235,10 +1274,12 @@ defmodule Ai.Providers.Anthropic do
 
   defp add_cache_control_to_message(msg), do: msg
 
-  defp convert_tools(tools) do
+  defp convert_tools(tools, opts) do
+    oauth_request? = Keyword.get(opts, :oauth_request?, false)
+
     Enum.map(tools, fn tool ->
       %{
-        "name" => tool.name,
+        "name" => maybe_prefix_oauth_tool_name(tool.name, oauth_request?),
         "description" => tool.description,
         "input_schema" => %{
           "type" => "object",
@@ -1290,6 +1331,70 @@ defmodule Ai.Providers.Anthropic do
   defp map_stop_reason("stop_sequence"), do: :stop
   defp map_stop_reason("sensitive"), do: :error
   defp map_stop_reason(_), do: :stop
+
+  defp anthropic_oauth_request?(provider, api_key) do
+    anthropic_oauth_provider?(provider) and Ai.Auth.AnthropicOAuth.oauth_token?(api_key)
+  end
+
+  defp adaptive_thinking_model?(model_id) when is_binary(model_id) do
+    normalized = String.downcase(model_id)
+
+    String.contains?(normalized, "claude-opus-4-6") or
+      String.contains?(normalized, "claude-sonnet-4-6") or
+      String.contains?(normalized, "claude-opus-4.6") or
+      String.contains?(normalized, "claude-sonnet-4.6")
+  end
+
+  defp adaptive_thinking_model?(_), do: false
+
+  defp build_system_prompt(system_prompt, true) do
+    cc_block = %{"type" => "text", "text" => @claude_code_system_prefix}
+
+    case system_prompt do
+      prompt when is_binary(prompt) ->
+        if String.trim(prompt) != "" do
+          [
+            cc_block,
+            %{
+              "type" => "text",
+              "text" => prompt,
+              "cache_control" => %{"type" => "ephemeral"}
+            }
+          ]
+        else
+          [cc_block]
+        end
+
+      _ ->
+        [cc_block]
+    end
+  end
+
+  defp build_system_prompt(system_prompt, false) when is_binary(system_prompt) do
+    if String.trim(system_prompt) != "" do
+      [
+        %{
+          "type" => "text",
+          "text" => system_prompt,
+          "cache_control" => %{"type" => "ephemeral"}
+        }
+      ]
+    else
+      nil
+    end
+  end
+
+  defp build_system_prompt(_, false), do: nil
+
+  defp maybe_prefix_oauth_tool_name(name, true) when is_binary(name) do
+    if String.starts_with?(name, @oauth_tool_prefix) do
+      name
+    else
+      @oauth_tool_prefix <> name
+    end
+  end
+
+  defp maybe_prefix_oauth_tool_name(name, _), do: name
 
   defp get_thinking_budget(reasoning_level, budgets) do
     default_budgets = %{

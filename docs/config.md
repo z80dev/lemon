@@ -15,7 +15,7 @@ model/thinking values override config defaults at runtime, but they are not pers
 
 ```toml
 [providers.anthropic]
-api_key_secret = "ANTHROPIC_API_KEY"
+api_key_secret = "llm_anthropic_api_key_raw"
 
 # Claude Max / Claude Code subscription auth
 # auth_source = "oauth"
@@ -337,7 +337,7 @@ Anthropic provider auth supports either API keys or Claude subscription OAuth.
 API key flow:
 
 ```bash
-mix lemon.secrets.set llm_anthropic_api_key <token>
+mix lemon.secrets.set llm_anthropic_api_key_raw <token>
 ```
 
 OAuth flow:
@@ -350,6 +350,8 @@ oauth_secret = "llm_anthropic_api_key" # optional if this secret stores an Anthr
 
 When `auth_source = "oauth"`, Lemon will also use ambient Claude Code credentials from
 `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_TOKEN`.
+If both a static env token and refreshable Claude Code credentials exist, Lemon prefers the
+refreshable Claude Code credentials.
 You can also create/store that payload through onboarding with `mix lemon.onboard anthropic --auth oauth`.
 
 ## Web Tools (`websearch` / `webfetch`)

@@ -59,14 +59,14 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     assert output =~ "Anthropic onboarding complete."
 
     assert {:ok, "anthropic-token-123"} =
-             Secrets.get("llm_anthropic_api_key", prefer_env: false, env_fallback: false)
+             Secrets.get("llm_anthropic_api_key_raw", prefer_env: false, env_fallback: false)
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
     assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
-             "llm_anthropic_api_key"
+             "llm_anthropic_api_key_raw"
 
     refute Map.has_key?(config_map, "defaults")
   end
@@ -91,7 +91,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     assert get_in(config_map, ["providers", "anthropic", "auth_source"]) == "api_key"
 
     assert get_in(config_map, ["providers", "anthropic", "api_key_secret"]) ==
-             "llm_anthropic_api_key"
+             "llm_anthropic_api_key_raw"
 
     assert get_in(config_map, ["defaults", "provider"]) == "anthropic"
     assert get_in(config_map, ["defaults", "model"]) == "anthropic:claude-sonnet-4-20250514"

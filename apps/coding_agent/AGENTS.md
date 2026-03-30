@@ -777,9 +777,9 @@ Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` wi
 1. Provider env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
 2. Plain `providers.<name>.api_key`
 3. `providers.<name>.api_key_secret` from `LemonCore.Secrets`
-4. Default secret name `llm_<provider>_api_key`
+4. Default secret name `llm_<provider>_api_key` (Anthropic raw API keys use `llm_anthropic_api_key_raw`; Claude OAuth uses `llm_anthropic_api_key`)
 
-When a secret value is an OAuth payload, `LemonAiRuntime.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
+When a secret value is an OAuth payload, `LemonAiRuntime.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Anthropic, Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
 If the central resolver module is unavailable at runtime (mixed-version or partial deploy), `ModelResolver` falls back to calling provider-specific resolver modules directly so secret resolution does not crash.
 
 ## Testing Guidelines
