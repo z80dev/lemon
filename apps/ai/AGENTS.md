@@ -70,8 +70,9 @@ Ai (main API)
   - Includes async HTTP error-body normalization for streaming calls so provider errors
     surface real upstream JSON messages (not `Req.Response.Async` struct dumps)
 - `Ai.Providers.Anthropic` - Anthropic Messages provider, including Claude Code-compatible
-  OAuth request shaping for Claude subscription auth (`anthropic-beta` headers, Claude Code
-  system identity, `mcp_` tool names, and adaptive thinking on Claude 4.6)
+  OAuth request/response shaping for Claude subscription auth (`anthropic-beta` headers,
+  dynamic Claude CLI version detection, Claude Code system identity, OAuth-only system prompt
+  sanitization, `mcp_` tool name normalization/prefixing/stripping, and adaptive thinking on Claude 4.6)
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
@@ -111,7 +112,7 @@ Ai (main API)
   reasoning: :minimal | :low | :medium | :high | :xhigh | nil,
   thinking_budgets: map(),   # per-model reasoning budget overrides
   stream_timeout: timeout(), # default 300_000ms
-  tool_choice: atom() | nil,
+  tool_choice: atom() | String.t() | nil,
   project: String.t() | nil,   # GCP project for Vertex
   location: String.t() | nil,  # GCP location for Vertex
   access_token: String.t() | nil,  # OAuth token for Vertex/GeminiCli

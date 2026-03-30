@@ -289,7 +289,7 @@ defmodule Ai.Types do
             reasoning: thinking_level() | nil,
             thinking_budgets: map(),
             stream_timeout: timeout(),
-            tool_choice: atom() | nil,
+            tool_choice: atom() | String.t() | nil,
             project: String.t() | nil,
             location: String.t() | nil,
             access_token: String.t() | nil,

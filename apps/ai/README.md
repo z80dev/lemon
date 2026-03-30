@@ -329,7 +329,7 @@ All types are defined in `Ai.Types`:
   reasoning: :minimal | :low | :medium | :high | :xhigh | nil,
   thinking_budgets: map(),
   stream_timeout: timeout(),        # default 300_000ms
-  tool_choice: atom() | nil,
+  tool_choice: atom() | String.t() | nil,
   project: String.t() | nil,        # GCP project for Vertex
   location: String.t() | nil,       # GCP location for Vertex
   access_token: String.t() | nil,   # OAuth token for Vertex/GeminiCli

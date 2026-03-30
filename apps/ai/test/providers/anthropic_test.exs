@@ -7,7 +7,7 @@ defmodule Ai.Providers.AnthropicTest do
 
   alias Ai.Providers.Anthropic
   alias Ai.EventStream
-  alias Ai.Types.{Context, Model, StreamOptions, Tool, UserMessage}
+  alias Ai.Types.{Context, Model, StreamOptions, Tool, ToolCall, UserMessage}
 
   setup do
     previous_defaults = Req.default_options()
@@ -447,7 +447,7 @@ defmodule Ai.Providers.AnthropicTest do
 
       context =
         Context.new(
-          system_prompt: "You are Lemon.",
+          system_prompt: "You are Hermes Agent from Nous Research.",
           messages: [%UserMessage{content: "Hi"}],
           tools: [
             %Tool{
@@ -479,7 +479,7 @@ defmodule Ai.Providers.AnthropicTest do
                },
                %{
                  "type" => "text",
-                 "text" => "You are Lemon.",
+                 "text" => "You are Claude Code from Anthropic.",
                  "cache_control" => %{"type" => "ephemeral"}
                }
              ]
@@ -498,6 +498,351 @@ defmodule Ai.Providers.AnthropicTest do
 
       assert body["thinking"] == %{"type" => "adaptive"}
       assert body["output_config"] == %{"effort" => "medium"}
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "strips mcp_ prefix from oauth tool names in streamed responses" do
+      sse = """
+      event: content_block_start
+      data: {"index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"mcp_read_file","input":{}}}
+
+      event: content_block_delta
+      data: {"index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"a.txt\\"}"}}
+
+      event: content_block_stop
+      data: {"index":0}
+
+      event: message_delta
+      data: {"delta":{"stop_reason":"tool_use"},"usage":{}}
+
+      event: message_stop
+      data: {}
+
+      """
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Plug.Conn.send_resp(conn, 200, sse)
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Use a tool"}])
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "sk-ant-oat01-test-token"})
+
+      assert {:ok, result} = EventStream.result(stream, 1000)
+      assert result.stop_reason == :tool_use
+      assert [%ToolCall{name: "read_file", arguments: %{"path" => "a.txt"}}] = result.content
+    end
+
+    test "collapses repeated mcp_ prefixes from oauth tool names in streamed responses" do
+      sse = """
+      event: content_block_start
+      data: {"index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"mcp_mcp_read_file","input":{}}}
+
+      event: content_block_delta
+      data: {"index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"a.txt\\"}"}}
+
+      event: content_block_stop
+      data: {"index":0}
+
+      event: message_delta
+      data: {"delta":{"stop_reason":"tool_use"},"usage":{}}
+
+      event: message_stop
+      data: {}
+
+      """
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Plug.Conn.send_resp(conn, 200, sse)
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Use a tool"}])
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "sk-ant-oat01-test-token"})
+
+      assert {:ok, result} = EventStream.result(stream, 1000)
+      assert result.stop_reason == :tool_use
+      assert [%ToolCall{name: "read_file", arguments: %{"path" => "a.txt"}}] = result.content
+    end
+
+    test "manual thinking models force valid max_tokens and temperature" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-3-7-sonnet-20250219",
+        name: "Claude Sonnet 3.7",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 64_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{
+          api_key: "test-key",
+          reasoning: :medium,
+          max_tokens: 1024
+        })
+
+      assert_receive {:request_body, body}, 1000
+      assert body["thinking"] == %{"type" => "enabled", "budget_tokens" => 10_000}
+      assert body["temperature"] == 1
+      assert body["max_tokens"] == 14_096
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "maps tool_choice :auto to Anthropic auto mode" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [%Tool{name: "read_file", description: "Read a file", parameters: %{}}]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "test-key", tool_choice: :auto})
+
+      assert_receive {:request_body, body}, 1000
+      assert body["tool_choice"] == %{"type" => "auto"}
+      assert body["tools"] != nil
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "maps tool_choice :any to Anthropic any mode" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [%Tool{name: "read_file", description: "Read a file", parameters: %{}}]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "test-key", tool_choice: :any})
+
+      assert_receive {:request_body, body}, 1000
+      assert body["tool_choice"] == %{"type" => "any"}
+      assert body["tools"] != nil
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "maps tool_choice :none by omitting Anthropic tools entirely" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [%Tool{name: "read_file", description: "Read a file", parameters: %{}}]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{api_key: "test-key", tool_choice: :none})
+
+      assert_receive {:request_body, body}, 1000
+      refute Map.has_key?(body, "tools")
+      refute Map.has_key?(body, "tool_choice")
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "maps specific OAuth tool_choice names with mcp_ prefix" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [%Tool{name: "read_file", description: "Read a file", parameters: %{}}]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{
+          api_key: "sk-ant-oat01-test-token",
+          tool_choice: "read_file"
+        })
+
+      assert_receive {:request_body, body}, 1000
+      assert body["tool_choice"] == %{"type" => "tool", "name" => "mcp_read_file"}
+
+      assert body["tools"] == [
+               %{
+                 "name" => "mcp_read_file",
+                 "description" => "Read a file",
+                 "input_schema" => %{
+                   "type" => "object",
+                   "properties" => %{},
+                   "required" => []
+                 }
+               }
+             ]
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "keeps oauth MCP tool names at a single mcp_ prefix" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw_body)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        api: :anthropic_messages,
+        provider: :anthropic,
+        base_url: "https://example.test",
+        reasoning: true,
+        input: [:text],
+        cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 128_000
+      }
+
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [%Tool{name: "mcp_github_search", description: "Search GitHub", parameters: %{}}]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(model, context, %StreamOptions{
+          api_key: "sk-ant-oat01-test-token",
+          tool_choice: "mcp_github_search"
+        })
+
+      assert_receive {:request_body, body}, 1000
+      assert body["tool_choice"] == %{"type" => "tool", "name" => "mcp_github_search"}
+
+      assert body["tools"] == [
+               %{
+                 "name" => "mcp_github_search",
+                 "description" => "Search GitHub",
+                 "input_schema" => %{
+                   "type" => "object",
+                   "properties" => %{},
+                   "required" => []
+                 }
+               }
+             ]
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end

@@ -126,7 +126,8 @@ defmodule Ai.Providers.Anthropic do
           stream: stream,
           blocks: [],
           sse_buffer: "",
-          model: model
+          model: model,
+          oauth_request?: anthropic_oauth_request?(model.provider, api_key)
         }
 
         result = stream_request_with_retries(url, headers, body, initial_state, trace_id)
@@ -574,7 +575,7 @@ defmodule Ai.Providers.Anthropic do
         tool_call = %ToolCall{
           type: :tool_call,
           id: block["id"] || "",
-          name: block["name"] || "",
+          name: maybe_strip_oauth_tool_name(block["name"] || "", state.oauth_request?),
           arguments: %{}
         }
 
@@ -909,6 +910,7 @@ defmodule Ai.Providers.Anthropic do
     high: "high",
     xhigh: "max"
   }
+  @manual_thinking_min_output_tokens 4096
 
   defp build_headers(api_key, model_headers, opts_headers, provider) do
     is_copilot = provider in @copilot_providers
@@ -1006,6 +1008,8 @@ defmodule Ai.Providers.Anthropic do
         body
       end
 
+    body = maybe_apply_tool_choice(body, opts.tool_choice, oauth_request?)
+
     # Add thinking/extended thinking if model supports reasoning
     body =
       if model.reasoning && opts.reasoning && adaptive_thinking_model?(model.id) do
@@ -1023,10 +1027,16 @@ defmodule Ai.Providers.Anthropic do
       if model.reasoning && opts.reasoning && not adaptive_thinking_model?(model.id) do
         thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
 
-        Map.put(body, "thinking", %{
+        body
+        |> Map.put("thinking", %{
           "type" => "enabled",
           "budget_tokens" => thinking_budget
         })
+        |> Map.put("temperature", 1)
+        |> Map.update!(
+          "max_tokens",
+          &max(&1, thinking_budget + @manual_thinking_min_output_tokens)
+        )
       else
         body
       end
@@ -1357,7 +1367,7 @@ defmodule Ai.Providers.Anthropic do
             cc_block,
             %{
               "type" => "text",
-              "text" => prompt,
+              "text" => sanitize_oauth_system_prompt(prompt),
               "cache_control" => %{"type" => "ephemeral"}
             }
           ]
@@ -1387,14 +1397,68 @@ defmodule Ai.Providers.Anthropic do
   defp build_system_prompt(_, false), do: nil
 
   defp maybe_prefix_oauth_tool_name(name, true) when is_binary(name) do
-    if String.starts_with?(name, @oauth_tool_prefix) do
-      name
-    else
-      @oauth_tool_prefix <> name
-    end
+    @oauth_tool_prefix <> strip_all_oauth_tool_prefixes(name)
   end
 
   defp maybe_prefix_oauth_tool_name(name, _), do: name
+
+  defp maybe_apply_tool_choice(body, nil, _oauth_request?), do: body
+
+  defp maybe_apply_tool_choice(body, :none, _oauth_request?) when is_map(body) do
+    body
+    |> Map.delete("tools")
+    |> Map.delete("tool_choice")
+  end
+
+  defp maybe_apply_tool_choice(body, tool_choice, oauth_request?) when is_map(body) do
+    case normalize_tool_choice(tool_choice, oauth_request?) do
+      nil ->
+        body
+
+      value ->
+        Map.put(body, "tool_choice", value)
+    end
+  end
+
+  defp normalize_tool_choice(:auto, _oauth_request?), do: %{"type" => "auto"}
+  defp normalize_tool_choice(:any, _oauth_request?), do: %{"type" => "any"}
+
+  defp normalize_tool_choice(tool_name, oauth_request?) when is_binary(tool_name) do
+    %{"type" => "tool", "name" => maybe_prefix_oauth_tool_name(tool_name, oauth_request?)}
+  end
+
+  defp normalize_tool_choice(tool_name, oauth_request?)
+       when is_atom(tool_name) and not is_nil(tool_name) do
+    tool_name
+    |> Atom.to_string()
+    |> normalize_tool_choice(oauth_request?)
+  end
+
+  defp normalize_tool_choice(_, _oauth_request?), do: nil
+
+  defp maybe_strip_oauth_tool_name(name, true) when is_binary(name) do
+    strip_all_oauth_tool_prefixes(name)
+  end
+
+  defp maybe_strip_oauth_tool_name(name, _), do: name
+
+  defp strip_all_oauth_tool_prefixes(name) when is_binary(name) do
+    if String.starts_with?(name, @oauth_tool_prefix) do
+      name
+      |> String.replace_prefix(@oauth_tool_prefix, "")
+      |> strip_all_oauth_tool_prefixes()
+    else
+      name
+    end
+  end
+
+  defp sanitize_oauth_system_prompt(text) when is_binary(text) do
+    text
+    |> String.replace("Hermes Agent", "Claude Code")
+    |> String.replace("Hermes agent", "Claude Code")
+    |> String.replace("hermes-agent", "claude-code")
+    |> String.replace("Nous Research", "Anthropic")
+  end
 
   defp get_thinking_budget(reasoning_level, budgets) do
     default_budgets = %{

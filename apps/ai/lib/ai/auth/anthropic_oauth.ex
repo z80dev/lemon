@@ -504,22 +504,42 @@ defmodule Ai.Auth.AnthropicOAuth do
   defp oauth_secret_type?(_), do: false
 
   defp claude_code_version do
-    case System.cmd("claude", ["--version"], stderr_to_stdout: true) do
+    detect_claude_code_version(["claude", "claude-code"])
+  end
+
+  defp detect_claude_code_version([]), do: @claude_code_version_fallback
+
+  defp detect_claude_code_version([cmd | rest]) do
+    case System.cmd(cmd, ["--version"], stderr_to_stdout: true) do
       {output, 0} ->
-        output
-        |> String.trim()
-        |> String.split()
-        |> List.first()
-        |> case do
+        case parse_claude_code_version(output) do
           version when is_binary(version) and version != "" -> version
-          _ -> @claude_code_version_fallback
+          _ -> detect_claude_code_version(rest)
         end
 
       _ ->
-        @claude_code_version_fallback
+        detect_claude_code_version(rest)
     end
   rescue
-    _ -> @claude_code_version_fallback
+    _ -> detect_claude_code_version(rest)
+  end
+
+  defp parse_claude_code_version(output) when is_binary(output) do
+    output
+    |> String.trim()
+    |> String.split()
+    |> List.first()
+    |> case do
+      version when is_binary(version) and version != "" ->
+        if String.match?(version, ~r/^\d/) do
+          version
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   defp non_empty_binary(value) when is_binary(value) do

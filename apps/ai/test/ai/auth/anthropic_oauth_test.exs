@@ -18,6 +18,7 @@ defmodule Ai.Auth.AnthropicOAuthTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_path = System.get_env("PATH")
 
     System.put_env("HOME", home_dir)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -31,6 +32,8 @@ defmodule Ai.Auth.AnthropicOAuthTest do
       if original_master_key,
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      if original_path, do: System.put_env("PATH", original_path), else: System.delete_env("PATH")
 
       System.delete_env("ANTHROPIC_TOKEN")
       System.delete_env("CLAUDE_CODE_OAUTH_TOKEN")
@@ -97,6 +100,28 @@ defmodule Ai.Auth.AnthropicOAuthTest do
     assert secret["type"] == "anthropic_oauth"
     assert secret["access_token"] == "sk-ant-oat01-cli-token"
     assert secret["refresh_token"] == "refresh-token"
+  end
+
+  test "oauth_headers detects claude-code version from PATH when claude is unavailable" do
+    bin_dir = Path.join(System.fetch_env!("HOME"), "bin")
+    File.mkdir_p!(bin_dir)
+    script_path = Path.join(bin_dir, "claude-code")
+
+    File.write!(
+      script_path,
+      """
+      #!/bin/sh
+      echo "9.9.9 (Claude Code)"
+      """
+    )
+
+    File.chmod!(script_path, 0o755)
+    System.put_env("PATH", bin_dir)
+
+    headers = Map.new(AnthropicOAuth.oauth_headers())
+
+    assert headers["user-agent"] == "claude-cli/9.9.9 (external, cli)"
+    assert headers["x-app"] == "cli"
   end
 
   defp clear_secrets_table do
