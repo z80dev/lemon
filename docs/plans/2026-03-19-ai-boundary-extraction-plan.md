@@ -1,8 +1,8 @@
 # AI Boundary Extraction Plan
 
-Status: planning
+Status: in-progress
 
-Last reviewed: 2026-03-19
+Last reviewed: 2025-07-14
 
 ## Summary
 
@@ -75,16 +75,31 @@ These rules should be treated as the target architecture.
 - stream lifecycle handling
 - provider-local retry and protocol normalization
 - model capability metadata and cost calculations
+- OAuth protocol logic (token refresh HTTP calls, PKCE, etc.) — generic and
+  reusable, but refresh functions must **return** new tokens/payloads, not
+  persist them
 
 ### What Lemon should own
 
 - secret lookup from `LemonCore.Secrets`
 - provider config lookup from canonical Lemon config
 - OAuth login flows and token persistence
-- OAuth secret payload decoding and refresh persistence
+- persistence of refreshed OAuth tokens (the caller in `lemon_ai_runtime`
+  stores the result returned by `Ai.Auth.*` refresh functions)
 - provider-specific runtime credential assembly
 - prompt diagnostics persistence and introspection
 - telemetry routing policy
+
+### The core rule
+
+**`apps/ai` must not import or call any `LemonCore.*` module.** No
+`LemonCore.Secrets`, no `LemonCore.ProviderConfigResolver`, no
+`LemonCore.Onboarding`, no `LemonCore.Introspection`. If `Ai` needs
+something Lemon-specific, the caller must resolve it first and pass it in.
+
+OAuth refresh protocol logic (HTTP calls, PKCE helpers) can stay in
+`Ai.Auth.*` — that's generic. But the persistence side (reading/writing
+secrets) must live in `lemon_ai_runtime`.
 
 ### Allowed data crossing into `Ai`
 
@@ -242,54 +257,65 @@ This should be additive first, not a breaking change.
 
 ## Migration Phases
 
-### Phase 1: Freeze the boundary contract
+### Phase 1: Freeze the boundary contract ✅
 
-Define and document the rule:
+### Phase 2: Introduce Lemon-side resolved option builders ✅ (partial)
 
-- all Lemon secret/config/OAuth resolution must happen before calling `Ai`
+`apps/lemon_ai_runtime` exists with credentials, stream options, provider
+names, and auth resolvers for all 5 OAuth providers. Already used by
+`coding_agent`, `lemon_sim`, `lemon_channels`. Some provider-specific
+assembly paths (Codex stream options, Vertex token, Azure deployment name)
+are incomplete but not blockers — the providers handle those internally.
 
-Deliverables:
+### Phase 3: Remove `LemonCore.*` calls from `apps/ai` ← NEXT
 
-- this plan
-- explicit documentation in `apps/ai/README.md` and `apps/ai/AGENTS.md`
-- explicit documentation in the new Lemon runtime adapter layer
+This is the core remaining work. Current violations (as of 2025-07-14):
 
-### Phase 2: Introduce Lemon-side resolved option builders
+**`LemonCore.Secrets`** (6 providers + `Ai.Models` + 5 auth modules):
+- `Ai.Providers.Anthropic`
+- `Ai.Providers.OpenAICompletions`
+- `Ai.Providers.OpenAIResponses`
+- `Ai.Providers.Google`
+- `Ai.Providers.AzureOpenAIResponses`
+- `Ai.Providers.MistralConversations`
+- `Ai.Models`
+- `Ai.Auth.AnthropicOAuth`
+- `Ai.Auth.GitHubCopilotOAuth`
+- `Ai.Auth.GoogleAntigravityOAuth`
+- `Ai.Auth.GoogleGeminiCliOAuth`
+- `Ai.Auth.OpenAICodexOAuth`
 
-Add Lemon-owned modules that take:
+**`LemonCore.ProviderConfigResolver`** (3 providers):
+- `Ai.Providers.AzureOpenAIResponses`
+- `Ai.Providers.Bedrock`
+- `Ai.Providers.GoogleVertex`
 
-- provider name
-- model
-- config
-- secret refs
-- auth source
+**`LemonCore.Onboarding.LocalCallbackListener`** (3 auth modules):
+- `Ai.Auth.GoogleAntigravityOAuth`
+- `Ai.Auth.GoogleGeminiCliOAuth`
+- `Ai.Auth.OpenAICodexOAuth`
 
-and return:
+**`LemonCore.Telemetry`** (4 modules):
+- `Ai.CallDispatcher`
+- `Ai.CircuitBreaker`
+- `Ai.CompactingClient`
+- `Ai.ContextCompactor`
 
-- resolved `Ai.Types.StreamOptions`
+**`LemonCore.Introspection`** (1 module):
+- `Ai.PromptDiagnostics`
 
-Suggested responsibilities:
+For each: the caller (`lemon_ai_runtime` or the calling app) must resolve
+the value and pass it in via options. `Ai.Auth.*` refresh functions should
+return new tokens rather than persisting them.
 
-- generic provider credential resolution
-- OAuth payload decoding and refresh
-- OpenAI Codex token assembly
-- Vertex project/location/token assembly
-- Azure base URL / deployment / API key assembly
-- Bedrock credential assembly
+`LemonCore.Telemetry` is lower priority — standard observability coupling
+is less harmful than secret/config coupling.
 
-### Phase 3: Migrate callers off `Ai.Auth.*`
+### Phase 4-7: (unchanged from original plan)
 
-Update direct callers in:
-
-- `apps/coding_agent`
-- `apps/lemon_sim`
-- `apps/lemon_channels`
-- any scripts or tests that currently resolve OAuth through `Ai.Auth.*`
-
-Target state:
-
-- callers use Lemon runtime adapters
-- `Ai.Auth.*` is no longer part of the cross-app contract
+See PR Sequence below for the mechanical steps. The old phase descriptions
+are preserved for reference but the concrete violation list above is the
+source of truth for remaining work.
 
 ### Phase 4: Remove Lemon secret/config lookups from provider modules
 
