@@ -259,13 +259,11 @@ This should be additive first, not a breaking change.
 
 ### Phase 1: Freeze the boundary contract ✅
 
-### Phase 2: Introduce Lemon-side resolved option builders ✅ (partial)
+### Phase 2: Introduce Lemon-side resolved option builders ✅
 
 `apps/lemon_ai_runtime` exists with credentials, stream options, provider
 names, and auth resolvers for all 5 OAuth providers. Already used by
-`coding_agent`, `lemon_sim`, `lemon_channels`. Some provider-specific
-assembly paths (Codex stream options, Vertex token, Azure deployment name)
-are incomplete but not blockers — the providers handle those internally.
+`coding_agent`, `lemon_sim`, `lemon_channels`.
 
 ### Phase 3: Remove `LemonCore.*` calls from `apps/ai` ← NEXT
 
@@ -305,7 +303,10 @@ This is the core remaining work. Current violations (as of 2025-07-14):
 - `Ai.PromptDiagnostics`
 
 For each: the caller (`lemon_ai_runtime` or the calling app) must resolve
-the value and pass it in via options. `Ai.Auth.*` refresh functions should
+the value and pass it in via options. Providers should require credentials
+via `opts` and raise if missing — no `LemonCore.Secrets` fallback, no
+`System.get_env` fallback. All "where do I find the key" logic belongs
+exclusively in `lemon_ai_runtime`. `Ai.Auth.*` refresh functions should
 return new tokens rather than persisting them.
 
 `LemonCore.Telemetry` is lower priority — standard observability coupling
