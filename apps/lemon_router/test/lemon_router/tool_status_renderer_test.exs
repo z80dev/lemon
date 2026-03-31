@@ -38,7 +38,97 @@ defmodule LemonRouter.ToolStatusRendererTest do
     refute String.contains?(text, "%AgentCore.Types.AgentToolResult")
   end
 
-  test "telegram truncates tool list when more than 5 tools, showing last 4 + omitted line" do
+  test "telegram truncates nested children but keeps parent task lines" do
+    # 1 parent task + 8 children = 9 total (exceeds 5 limit)
+    actions =
+      Map.merge(
+        %{
+          "task_1" => %{title: "Task: investigate", phase: :started, ok: nil, detail: %{}}
+        },
+        for i <- 1..8, into: %{} do
+          {"c#{i}",
+           %{
+             title: "Child #{i}",
+             phase: :completed,
+             ok: true,
+             detail: %{parent_tool_use_id: "task_1", result_preview: "ok"}
+           }}
+        end
+      )
+
+    order = ["task_1" | Enum.map(1..8, &"c#{&1}")]
+    text = ToolStatusRenderer.render("telegram", actions, order)
+
+    # Parent must always be visible
+    assert String.contains?(text, "Task: investigate")
+    # With max 5 lines and 1 root, child_budget = 4, so 4 oldest children dropped
+    assert String.contains?(text, "(4 tools omitted)")
+    # Children 1-4 dropped, 5-8 kept
+    refute String.contains?(text, "Child 1")
+    refute String.contains?(text, "Child 4")
+    assert String.contains?(text, "Child 5")
+    assert String.contains?(text, "Child 8")
+  end
+
+  test "telegram truncates nested children but keeps multiple parent task lines" do
+    # 2 parent tasks + 6 children under first parent = 8 total
+    actions =
+      Map.merge(
+        %{
+          "task_a" => %{title: "Task A", phase: :started, ok: nil, detail: %{}},
+          "task_b" => %{title: "Task B", phase: :started, ok: nil, detail: %{}}
+        },
+        for i <- 1..6, into: %{} do
+          {"c#{i}",
+           %{
+             title: "Child #{i}",
+             phase: :completed,
+             ok: true,
+             detail: %{parent_tool_use_id: "task_a", result_preview: "ok"}
+           }}
+        end
+      )
+
+    order = ["task_a" | Enum.map(1..6, &"c#{&1}")] ++ ["task_b"]
+    text = ToolStatusRenderer.render("telegram", actions, order)
+
+    # Both parents must be visible
+    assert String.contains?(text, "Task A")
+    assert String.contains?(text, "Task B")
+    # 2 roots use 2 slots, child_budget = 3, so 3 oldest children dropped
+    assert String.contains?(text, "(3 tools omitted)")
+    refute String.contains?(text, "Child 1")
+    refute String.contains?(text, "Child 3")
+    assert String.contains?(text, "Child 4")
+    assert String.contains?(text, "Child 6")
+  end
+
+  test "telegram with nesting under limit shows all lines" do
+    actions = %{
+      "task_1" => %{title: "Task: build", phase: :started, ok: nil, detail: %{}},
+      "c1" => %{
+        title: "Read: foo.ex",
+        phase: :completed,
+        ok: true,
+        detail: %{parent_tool_use_id: "task_1"}
+      },
+      "c2" => %{
+        title: "Write: bar.ex",
+        phase: :completed,
+        ok: true,
+        detail: %{parent_tool_use_id: "task_1"}
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["task_1", "c1", "c2"])
+
+    refute String.contains?(text, "omitted")
+    assert String.contains?(text, "Task: build")
+    assert String.contains?(text, "Read: foo.ex")
+    assert String.contains?(text, "Write: bar.ex")
+  end
+
+  test "telegram truncates flat tool list when more than 5 tools, showing last 4 + omitted line" do
     actions =
       for i <- 1..7, into: %{} do
         id = "a#{i}"
@@ -56,11 +146,10 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     text = ToolStatusRenderer.render("telegram", actions, order)
 
-    # 7 tools total, keep last 4 (Tool 4-7), omit first 3
+    # 7 flat tools, keep last 4 (Tool 4-7), omit first 3
     assert String.contains?(text, "(3 tools omitted)")
     assert String.contains?(text, "Tool 4")
     assert String.contains?(text, "Tool 7")
-    # Tool 1-3 should NOT appear
     refute String.contains?(text, "Tool 1")
     refute String.contains?(text, "Tool 2")
     refute String.contains?(text, "Tool 3")

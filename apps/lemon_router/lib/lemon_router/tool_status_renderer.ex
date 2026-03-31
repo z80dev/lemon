@@ -34,26 +34,23 @@ defmodule LemonRouter.ToolStatusRenderer do
   end
 
   def render(channel_id, actions, order, opts) when is_map(actions) and is_list(order) do
-    _channel_id = channel_id
     max_lines = max_tool_lines(channel_id)
 
-    # Build all lines first
-    all_lines =
+    # Build tagged lines: {formatted_string, depth}
+    tagged_lines =
       Enum.map(order, fn id ->
         case Map.get(actions, id) do
-          nil -> nil
-          action -> format_action_line(action, actions)
+          nil ->
+            nil
+
+          action ->
+            {format_action_line(action, actions), action_depth(action, actions)}
         end
       end)
       |> Enum.reject(&is_nil/1)
 
-    # Truncate if needed
-    {omitted_count, display_lines} =
-      if length(all_lines) > max_lines do
-        {length(all_lines) - @keep_tail, Enum.take(all_lines, -@keep_tail)}
-      else
-        {0, all_lines}
-      end
+    # Truncate if needed (nesting-aware)
+    {omitted_count, display_lines} = truncate_tagged(tagged_lines, max_lines)
 
     lines =
       case omitted_count do
@@ -67,6 +64,59 @@ defmodule LemonRouter.ToolStatusRenderer do
     header = build_header(opts)
 
     Enum.join([header | lines], "\n")
+  end
+
+  defp truncate_tagged(tagged_lines, :infinity) do
+    {0, Enum.map(tagged_lines, &elem(&1, 0))}
+  end
+
+  defp truncate_tagged(tagged_lines, max_lines) do
+    total = length(tagged_lines)
+
+    if total <= max_lines do
+      {0, Enum.map(tagged_lines, &elem(&1, 0))}
+    else
+      has_nesting = Enum.any?(tagged_lines, fn {_line, depth} -> depth > 0 end)
+
+      if has_nesting do
+        truncate_preserving_parents(tagged_lines, max_lines)
+      else
+        # Flat list: original tail-keep behavior
+        kept = Enum.take(tagged_lines, -@keep_tail)
+        {total - @keep_tail, Enum.map(kept, &elem(&1, 0))}
+      end
+    end
+  end
+
+  defp truncate_preserving_parents(tagged_lines, max_lines) do
+    root_count = Enum.count(tagged_lines, fn {_, d} -> d == 0 end)
+    child_count = length(tagged_lines) - root_count
+    child_budget = max(max_lines - root_count, 1)
+
+    if child_count <= child_budget do
+      {0, Enum.map(tagged_lines, &elem(&1, 0))}
+    else
+      children_to_drop = child_count - child_budget
+
+      # Walk in order, drop the oldest (first) child lines
+      {result_reversed, _child_seen, dropped} =
+        Enum.reduce(tagged_lines, {[], 0, 0}, fn {line, depth}, {acc, child_seen, dropped} ->
+          if depth == 0 do
+            # Always keep root/parent lines
+            {[line | acc], child_seen, dropped}
+          else
+            if child_seen < children_to_drop do
+              # Drop this child (oldest first)
+              {acc, child_seen + 1, dropped + 1}
+            else
+              # Keep this child
+              {[line | acc], child_seen + 1, dropped}
+            end
+          end
+        end)
+
+      {dropped, Enum.reverse(result_reversed)}
+    end
   end
 
   defp max_tool_lines(channel_id) when is_binary(channel_id) do
