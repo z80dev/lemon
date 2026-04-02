@@ -8,7 +8,7 @@ Only the latest release on the `main` branch receives security fixes.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Open a [GitHub private security advisory](https://github.com/z80/lemon/security/advisories/new) to report vulnerabilities confidentially.
+Open a [GitHub private security advisory](https://github.com/z80dev/lemon/security/advisories/new) to report vulnerabilities confidentially.
 
 Include:
 - Description of the vulnerability
@@ -55,7 +55,7 @@ Drafts containing these patterns are discarded before writing to disk.
 
 The tool policy system (`require_approval`, `deny`) enforces approval gates
 for sensitive operations like `bash`, `write`, and `edit`. Policy is enforced
-in `LemonRouter.PolicyEngine` before any tool executes.
+in `LemonRouter.Policy` before any tool executes.
 
 ### Skills from untrusted sources
 
