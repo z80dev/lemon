@@ -26,8 +26,8 @@ Elixir adapter for X (Twitter) API v2 with OAuth 2.0 authentication.
 Run the OAuth flow to get initial tokens:
 
 ```elixir
-# This will open a browser for authorization
-LemonChannels.Adapters.XAPI.OAuth.initiate_flow()
+# This will print setup instructions and the authorization URL
+LemonChannels.Adapters.XAPI.OAuth.print_setup_instructions()
 ```
 
 Or manually:
