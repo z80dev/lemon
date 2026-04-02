@@ -12,6 +12,7 @@ Monitoring mode subscribes to control-plane events and loads rich runtime state 
 - `status`
 - `introspection.snapshot`
 - `agent.directory.list`
+- `agents.list`
 - `sessions.list` / `sessions.active.list`
 - `runs.active.list` / `runs.recent.list`
 - `tasks.active.list` / `tasks.recent.list`

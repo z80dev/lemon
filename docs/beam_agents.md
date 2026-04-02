@@ -79,6 +79,7 @@ Coordinator processes that spawn subagents must:
 
 ```
 AgentCore.Supervisor (:one_for_one)
++-- AgentCore.AbortSignal.TableOwner (GenServer)
 +-- AgentCore.AgentRegistry (Registry)
 +-- AgentCore.SubagentSupervisor (DynamicSupervisor)
 +-- AgentCore.LoopTaskSupervisor (Task.Supervisor)
@@ -417,21 +418,26 @@ File: `apps/agent_core/lib/agent_core/application.ex`
 
 ```
 AgentCore.Supervisor (:one_for_one)
++-- AgentCore.AbortSignal.TableOwner (GenServer)
 +-- AgentCore.AgentRegistry (Registry, keys: :unique)
 +-- AgentCore.SubagentSupervisor (DynamicSupervisor)
 +-- AgentCore.LoopTaskSupervisor (Task.Supervisor)
++-- AgentCore.ToolTaskSupervisor (Task.Supervisor)
 ```
 
 ```elixir
-# Lines 24-36
 def start(_type, _args) do
   children = [
+    # Owns the abort-signal ETS table so it doesn't get created by short-lived processes.
+    AgentCore.AbortSignal.TableOwner,
     # Registry for agent process lookup and discovery
     {Registry, keys: :unique, name: AgentCore.AgentRegistry},
     # DynamicSupervisor for subagent processes
     {AgentCore.SubagentSupervisor, name: AgentCore.SubagentSupervisor},
     # Task.Supervisor for agent loop tasks
-    {Task.Supervisor, name: AgentCore.LoopTaskSupervisor}
+    {Task.Supervisor, name: AgentCore.LoopTaskSupervisor},
+    # Task.Supervisor for tool execution tasks
+    {Task.Supervisor, name: AgentCore.ToolTaskSupervisor}
   ]
 
   opts = [strategy: :one_for_one, name: AgentCore.Supervisor]

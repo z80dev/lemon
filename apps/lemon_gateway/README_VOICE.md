@@ -1,6 +1,6 @@
-# zeebot Voice Integration
+# Lemon Voice Integration
 
-Make zeebot callable via phone using Twilio Media Streams, Deepgram STT, and ElevenLabs TTS.
+Make Lemon callable via phone using Twilio Media Streams, Deepgram STT, and ElevenLabs TTS.
 
 ## Architecture
 
@@ -15,12 +15,12 @@ Make zeebot callable via phone using Twilio Media Streams, Deepgram STT, and Ele
                     ▼
 ┌─────────┐     ┌─────────────┐     ┌──────────┐     ┌─────────────┐
 │ Eleven  │◀────│   GPT-4o    │◀────│ Deepgram │◀────│ Audio Stream│
-│  Labs   │     │   (zeebot)  │     │   STT    │     │  (mulaw)    │
+│  Labs   │     │   (Lemon)   │     │   STT    │     │  (mulaw)    │
 └────┬────┘     └─────────────┘     └──────────┘     └─────────────┘
      │
      ▼
 ┌──────────────┐
-│  Audio Back  │────▶ Caller hears zeebot's voice
+│  Audio Back  │────▶ Caller hears Lemon's voice
 │  to Twilio   │
 └──────────────┘
 ```
@@ -36,14 +36,7 @@ Make zeebot callable via phone using Twilio Media Streams, Deepgram STT, and Ele
 
 ### 2. Setup
 
-Run the setup script:
-
-```bash
-cd apps/lemon_gateway
-./priv/voice_setup.sh
-```
-
-Or configure the canonical Lemon TOML file (`~/.lemon/config.toml` or `.lemon/config.toml`):
+Configure the canonical Lemon TOML file (`~/.lemon/config.toml` or `.lemon/config.toml`):
 
 ```toml
 [gateway.voice]

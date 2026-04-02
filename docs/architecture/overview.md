@@ -81,7 +81,7 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 17+ applications:
+The project is an Elixir umbrella with 18+ applications:
 
 | App | Role |
 |---|---|
@@ -89,6 +89,7 @@ The project is an Elixir umbrella with 17+ applications:
 | `agent_core` | Core agent loop, tool execution, abort/subagent semantics |
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
+| `lemon_ai_runtime` | AI runtime utilities and provider helpers |
 | `lemon_core` | EventBus, MemoryStore, RoutingFeedbackStore, TaskFingerprint, config |
 | `lemon_router` | RunOrchestrator, ModelSelection, lane queues, policy engine |
 | `lemon_gateway` | Engine dispatch (native + CLI backends), execution lifecycle |
@@ -98,6 +99,7 @@ The project is an Elixir umbrella with 17+ applications:
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_sim` | Simulation harness for development/testing |
+| `lemon_sim_ui` | Phoenix LiveView UI for simulation spectator/admin |
 | `lemon_web` | React web frontend bridge |
 | `lemon_services` | Shared service infrastructure |
 | `market_intel` | Market intelligence capabilities |

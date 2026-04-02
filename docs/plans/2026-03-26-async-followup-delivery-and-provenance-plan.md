@@ -859,3 +859,201 @@ delivery-policy refactor contained and testable.
     than changing the existing `String.t()` API, add optional keyword opts:
     `follow_up(session, text, source: :task, task_id: id)`. This preserves
     backwards compatibility while enabling metadata flow.
+
+## Codex Re-Review Findings (2026-07)
+
+### Correctness Issues
+
+1. **The earlier assistant-role warning still stands and should now be treated
+   as a hard blocker for the proposed `llm_encoding: :assistant_envelope`
+   design**. `CodingAgent.Messages.convert_to_llm/1` is still where
+   `CustomMessage` is projected to LLM roles
+   (`apps/coding_agent/lib/coding_agent/messages.ex:407-418`), and
+   `AgentCore.Loop` still refuses to continue from a context whose last message
+   is assistant (`apps/agent_core/lib/agent_core/loop.ex:216-225`) while also
+   re-injecting follow-up messages as the pending messages for the next outer
+   turn (`apps/agent_core/lib/agent_core/loop.ex:400-418`). Nothing in the
+   current codebase has relaxed that invariant since March.
+
+2. **The earlier router-delivered provenance finding is still accurate, and it
+   now clearly requires a structured ingress path rather than just changing
+   `Session.steer/2` and `Session.follow_up/2`**. Router fallback still lands in
+   `CodingAgent.Session.prompt/3` through `LemonRunner`
+   (`apps/coding_agent/lib/coding_agent/cli_runners/lemon_runner.ex:280-281`),
+   `Session.prompt/3` still builds a plain prompt message via
+   `State.build_prompt_message/2`
+   (`apps/coding_agent/lib/coding_agent/session.ex:558-571`), and
+   `State.build_prompt_message/2` still only produces `%Ai.Types.UserMessage{}`
+   (`apps/coding_agent/lib/coding_agent/session/state.ex:72-95`). The plan
+   still underestimates this path.
+
+3. **Router follow-up merging is now the largest unaddressed provenance bug
+   beyond the live-path issue**. `SessionTransitions` still merges adjacent
+   `:followup` submissions within the debounce window
+   (`apps/lemon_router/lib/lemon_router/session_transitions.ex:221-271`), and
+   the merge logic overwrites duplicate metadata keys with `Map.merge/2`
+   (`apps/lemon_router/lib/lemon_router/session_transitions.ex:393-403`). If
+   the plan stores one `task_id`/`run_id`/`delivery` tuple in `details`, merged
+   followups will silently report only the later completion while keeping a
+   concatenated prompt body. That makes the earlier Codex concern about
+   `details.delivery` being misleading more severe than the March version
+   described.
+
+4. **The persistence review is still correct, but the current code reveals a
+   sharper failure mode than the earlier review captured**. `Persistence` still
+   persists only `%Ai.Types.UserMessage{}`, `%Ai.Types.AssistantMessage{}`, and
+   `%Ai.Types.ToolResultMessage{}` via `append_message/2`
+   (`apps/coding_agent/lib/coding_agent/session/persistence.ex:10-37`,
+   `apps/coding_agent/lib/coding_agent/session_manager.ex:425-428`), and
+   `MessageSerialization.serialize_message/1` still falls through to a generic
+   `is_map/1` clause for anything else
+   (`apps/coding_agent/lib/coding_agent/session/message_serialization.ex:14-18`,
+   `apps/coding_agent/lib/coding_agent/session/message_serialization.ex:49-50`).
+   The important additional point is that `SessionManager.json_safe/1`
+   whitelists only `Ai.Types.*` structs, not `CodingAgent.Messages.*`
+   (`apps/coding_agent/lib/coding_agent/session_manager.ex:991-1016`). If a
+   `CustomMessage` or its content blocks are persisted through the generic path,
+   unknown structs can collapse to `inspect/1` strings instead of round-tripping
+   as structured content.
+
+### Feasibility Concerns
+
+5. **`SessionManager` already supports `:custom_message` on the restore side, so
+   the plan should treat that part as partially done and explicitly add
+   `session_manager.ex` to `Files To Modify`**. The entry constructor already
+   exists (`apps/coding_agent/lib/coding_agent/session_manager.ex:238-248`),
+   restored session context already emits `"role" => "custom"`
+   (`apps/coding_agent/lib/coding_agent/session_manager.ex:585-602`), and
+   compaction already reconstructs `Messages.CustomMessage` from
+   `:custom_message` entries (`apps/coding_agent/lib/coding_agent/compaction.ex:923-949`).
+   The missing work is append/persist plumbing, not storage model invention.
+
+6. **The earlier Claude type-contract finding is real but narrower than it was
+   phrased in March**. `AgentCore.Types.agent_message()` is still declared as
+   `Ai.Types.message()` (`apps/agent_core/lib/agent_core/types.ex:41-46`), so
+   queuing `CustomMessage` still violates the public typespec. But the queue
+   consumers themselves are currently struct-agnostic and simply return whatever
+   was queued (`apps/agent_core/lib/agent_core/agent.ex:659-672`). This looks
+   like a documentation/dialyzer mismatch more than a proven runtime blocker.
+   The plan should still widen the type if it queues `CustomMessage` directly.
+
+7. **The earlier delegated-agent `queue_mode` concern is unchanged**.
+   Validation still treats `queue_mode` as the delegated run submission mode and
+   defaults it to `"collect"`
+   (`apps/coding_agent/lib/coding_agent/tools/agent.ex:847-917`), while the
+   delegated auto-followup path still ignores that setting and hardcodes router
+   fallback to `:followup`
+   (`apps/coding_agent/lib/coding_agent/tools/agent.ex:561-587`). Reusing the
+   same parameter as the async completion delivery policy would still change the
+   meaning of an existing public field.
+
+### Edge Cases Not Covered
+
+8. **Compaction still erases async-followup provenance even if persistence is
+   fixed**. `SessionManager.build_session_context/2` still materializes the
+   compaction summary as a plain `"role" => "user"` message
+   (`apps/coding_agent/lib/coding_agent/session_manager.ex:533-551`). That
+   means any async-followup messages compacted out of the kept branch stop being
+   distinguishable to the model on restored sessions. The plan currently treats
+   persistence/restore as the end of the provenance story, but compaction is
+   still a lossy hop.
+
+9. **Merged router followups need an explicit multi-event representation, not a
+   single prompt plus merged metadata**. `merge_prompt/2` concatenates prompt
+   bodies with a newline
+   (`apps/lemon_router/lib/lemon_router/session_transitions.ex:389-391`) while
+   `merge_user_message_meta/2` keeps only one value per key
+   (`apps/lemon_router/lib/lemon_router/session_transitions.ex:393-403`). The
+   plan does not currently say whether two near-simultaneous async completions
+   should become one stored custom message, two stored custom messages, or one
+   envelope containing an array of completions.
+
+10. **A structured router prompt will currently crash unless the session prompt
+    API changes first**. `Session.prompt/3` accepts `text` and immediately calls
+    `State.build_prompt_message/2`
+    (`apps/coding_agent/lib/coding_agent/session.ex:558-563`), and
+    `State.build_prompt_message/2` only has a binary clause
+    (`apps/coding_agent/lib/coding_agent/session/state.ex:72-73`). Any attempt
+    to solve router provenance by passing a map/struct through `RunRequest.prompt`
+    without first widening the session API will fail at runtime.
+
+### Implementation Risks
+
+11. **The March review note about config-test async isolation is now stale for
+    the two suites that matter most here**. Both
+    `task_async_test.exs` and `agent_test.exs` already run with
+    `async: false`
+    (`apps/coding_agent/test/coding_agent/tools/task_async_test.exs:1-3`,
+    `apps/coding_agent/test/coding_agent/tools/agent_test.exs:1-3`), so the
+    plan no longer needs to budget for converting those files. The risk is now
+    localized to any new config-mutating tests added elsewhere.
+
+12. **The existing `Messages` test suite still hardcodes the current
+    `CustomMessage -> UserMessage` behavior, so phase 3 will create a focused
+    but unavoidable test churn point**. The current expectations are explicit in
+    `apps/coding_agent/test/coding_agent/messages_test.exs:277-300`. This is
+    still an implementation risk, but it is narrower and more obvious now than
+    the March wording suggested.
+
+13. **There is still no dedicated message-serialization test file, and the
+    current persistence coverage remains too shallow for this change**. The only
+    direct persistence tests still cover a single user message append and a
+    simple restore case
+    (`apps/coding_agent/test/coding_agent/session/persistence_test.exs:7-33`).
+    That means the plan should continue to budget for new serialization
+    round-trip coverage rather than assuming existing tests will catch
+    `CustomMessage` regressions.
+
+## Gemini Review Findings (2026-07)
+
+### Correctness Issues
+
+1.  **Agrees with all prior reviews: `llm_encoding: :assistant_envelope` is fundamentally incompatible with `AgentCore.Loop`'s invariants and will break continuation.** The loop at `apps/agent_core/lib/agent_core/loop.ex:400-418` still unconditionally prepends follow-up messages to the list of pending messages for the *next* turn. The check at `apps/agent_core/lib/agent_core/loop.ex:216-225` still correctly refuses to start a turn if the history ends with an assistant message. Combining these two means that any async followup encoded as an assistant message will cause the *next* turn to fail its precondition check. This is not a minor issue; it is a hard blocker for the proposed encoding strategy.
+
+2.  **Agrees with all prior reviews: The router fallback path remains the largest unaddressed provenance gap.** Router-delivered followups still arrive as plain text to `CodingAgent.Session.prompt/3` via `LemonRunner`, which can only create `Ai.Types.UserMessage`. The plan's focus on `steer/2` and `follow_up/2` only covers the live-session case and will not fix the more common idle/dead-session scenario. The fix *must* involve a structured-data path from `RunRequest` through to `Session`.
+
+3.  **Router followup merging still corrupts provenance metadata.** The `Map.merge/2` logic in `SessionTransitions.merge_user_message_meta/2` (`apps/lemon_router/lib/lemon_router/session_transitions.ex:393-403`) is lossy by design. If two tasks complete in the same debounce window, their `details` maps will be merged, with the later one's values overwriting the earlier one's. The resulting `CustomMessage` would have a concatenated body but only the provenance of the *last* task, making it impossible to correctly trace or debug.
+
+4.  **`CustomMessage` persistence is still broken by default.** As noted in prior reviews, `SessionManager.append_message/2` does not have a clause for `CustomMessage`. Critically, `SessionManager.json_safe/1` (`apps/coding_agent/lib/coding_agent/session_manager.ex:991-1016`) also does not whitelist `CodingAgent.Messages.CustomMessage`, which can lead to the struct being silently converted to an `inspect/1` string during persistence, causing a total loss of structured data.
+
+### Feasibility Concerns
+
+5.  **The proposed solution for the `details` atom/string key mismatch is insufficient.** The plan suggests either always using string keys or normalizing on deserialization. However, `MessageSerialization.deserialize_message/1` for `"role" => "custom"` (`apps/coding_agent/lib/coding_agent/session/message_serialization.ex:156-159`) currently just returns `msg["details"]` as-is. The most robust fix is to use a dedicated function like `Jason.decode(Jason.encode!(details))` to force a full string-key conversion on the way in, and `Code.ensure_compiled(Jason)` to avoid lazy-loading issues.
+
+### Edge Cases Not Covered
+
+6.  **(Security) Unescaped content in the proposed XML envelope creates an injection vector.** The plan proposes `<async_followup...>#{content}</async_followup>`. If `content` contains `</async_followup>`, it prematurely terminates the envelope, allowing the model to interpret the rest of the content outside the intended provenance wrapper. This is a classic injection vulnerability. Any wrapper must either use a format that cannot be terminated by content (e.g., Markdown code fences ` ``` `) or rigorously escape the content (e.g., XML entity encoding).
+
+7.  **Compaction erases async-followup provenance.** `SessionManager.build_session_context/2` (`apps/coding_agent/lib/coding_agent/session_manager.ex:533-551`) materializes the compaction summary as a single `role: "user"` message. Any `CustomMessage` instances that are part of the compacted history are lost and their content is blended into this generic user message. Therefore, on a restored session, the model will lose all special provenance for older, compacted followups.
+
+8.  **The plan's phased approach is in the wrong order.** It proposes implementing provenance (`CustomMessage`) and LLM encoding *before* unifying the delivery policy. However, since the router fallback path (`LemonRunner` -> `Session.prompt/3`) is the most common delivery mechanism for long-running tasks and it only handles plain text, the provenance fix won't work for most cases until the delivery path is made to support structured data. The delivery path refactor must come first.
+
+### Implementation Risks
+
+9.  **The `agent` tool `queue_mode` conflict is a significant API risk.** The plan reuses the `queue_mode` parameter, which currently controls the *submission* of the delegated run, to also control the *completion followup*. This is a breaking change in semantics. A new, dedicated parameter like `followup_queue_mode` is required to avoid ambiguity and unexpected behavior for existing callers of the `agent` tool.
+
+### Suggestions
+
+10. **Use a user-role envelope with a non-XML wrapper as the LLM encoding.** To resolve the hard blocker with the `AgentCore.Loop` invariant, async followups should be projected as `Ai.Types.UserMessage`. To solve the provenance and security issues, use a robust, non-nesting wrapper like Markdown code fences with a clear header.
+    ```markdown
+    [SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]
+    Source: task (ID: task-...)
+    Delivery: steer_backlog
+    ---
+    ```
+    The task `implement the new feature` completed successfully.
+    ```
+    ```
+    This is safe, unambiguous for the model, and compatible with all existing provider and `AgentCore` constraints.
+
+11. **Prioritize a structured ingress path for all followup types.** Before any other changes, refactor `Session.prompt/3`, `Session.steer/2`, and `Session.follow_up/2` to delegate to a single internal `handle_ingress(message_struct)` function. Then, update `LemonRunner` and the live-session callers to build and pass a structured `CustomMessage` instead of plain text. This fixes the router-path bug upfront.
+
+12. **For merged followups, store provenance as a list in `details`.** Instead of a scalar `task_id`, the merged `CustomMessage` should contain `details: %{"async_followups" => [%{source: :task, task_id: "a"}, %{source: :task, task_id: "b"}]}`. This preserves the full chain of provenance. The LLM envelope can then render a summary for all completed tasks.
+
+13. **Create a dedicated `CodingAgent.Session.Persistence.append_custom_message/2` function.** This makes the intent explicit and ensures the correct `SessionEntry.custom_message/1` constructor is called, resolving the persistence bug. Also, add `CodingAgent.Messages.CustomMessage` to the `json_safe/1` whitelist in `SessionManager`.
+
+14. **Revised Phase Order:**
+    1.  **Phase 1: Structured Ingress.** Create a unified `handle_ingress` in `Session` that accepts message structs. Update all callers (`LemonRunner`, `steer`, `follow_up`) to pass `CustomMessage` structs. This makes all delivery paths structurally aware.
+    2.  **Phase 2: Persistence & Serialization.** Implement `append_custom_message` and fix the `json_safe` whitelist and `MessageSerialization` round-trip logic. Add dedicated serialization tests.
+    3.  **Phase 3: Safe LLM Encoding.** Implement the user-role envelope with Markdown code fences in `Messages.convert_to_llm/1`.
+    4.  **Phase 4: Delivery Policy Unification.** With the structured path in place, now implement the unified queue-mode resolution logic for both `task` and `agent` tools, confident that the chosen mode will be honored. Add a `followup_queue_mode` parameter to the `agent` tool.

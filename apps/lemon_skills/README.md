@@ -245,7 +245,6 @@ These skills ship with the application in `priv/builtin_skills/` and are seeded 
 | `tmux` | Terminal multiplexer control with helper scripts |
 | `pinata` | IPFS pinning service with shell scripts for auth, pin, upload, unpin |
 | `summarize` | Text summarization patterns |
-| `agent-games` | Turn-based Games API integration (RPS, Connect4) |
 | `skill-creator` | Guidelines and templates for creating new skills |
 | `runtime-remsh` | BEAM remote shell debugging patterns |
 | `session-logs` | Session logging patterns |

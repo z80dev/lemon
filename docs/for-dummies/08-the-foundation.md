@@ -88,7 +88,7 @@ store instead of plain text in config or environment variables.
 ```toml
 # In config.toml, reference a secret instead of a plain key:
 [providers.anthropic]
-secret_ref = "llm_anthropic_api_key_raw"
+api_key_secret = "llm_anthropic_api_key_raw"
 ```
 
 Secrets are managed via mix tasks: `mix lemon.secrets.set`,

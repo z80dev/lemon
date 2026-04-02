@@ -5,7 +5,7 @@ working in this repository.
 
 ## Prerequisites
 
-- Elixir 1.17+ and Erlang/OTP 27+
+- Elixir 1.19+ and Erlang/OTP 27+
 - Node.js 20+ (for `clients/lemon-tui` and `clients/lemon-web`)
 - A configured `~/.lemon/config.toml` with at least one provider API key
 
