@@ -231,7 +231,9 @@ defmodule LemonChannels.Adapters.XAPI do
         nil
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.warning("Failed to fetch secret #{env_var}: #{Exception.message(e)}")
+      nil
   end
 
   defp use_secrets_resolution? do
