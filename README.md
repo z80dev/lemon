@@ -163,12 +163,9 @@ enabled. Keep it aligned with the versions and dependency bootstrap steps in
 
 | Profile | Use case |
 |---|---|
-| `lemon_runtime_min` | Headless / CI / embedded |
-| `lemon_runtime_full` | Local development |
 | `sim_broadcast_platform` | Public sim broadcast and replay deployment (`lemon_sim_ui`) |
 
 ```bash
-MIX_ENV=prod mix release lemon_runtime_full
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
