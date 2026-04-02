@@ -254,6 +254,7 @@ end
 |------|-------------|
 | `types.ex` | Core types: ResumeToken, Action, events, EventFactory |
 | `jsonl_runner.ex` | Base GenServer for JSONL subprocess runners |
+| `tool_action_helpers.ex` | Shared helpers for translating tool calls to action events |
 | `codex_schema.ex` | Codex JSONL event parsing |
 | `codex_runner.ex` | Codex CLI implementation |
 | `codex_subagent.ex` | High-level API for using Codex as subagent |
@@ -263,6 +264,12 @@ end
 | `kimi_schema.ex` | Kimi JSONL event parsing |
 | `kimi_runner.ex` | Kimi CLI implementation |
 | `kimi_subagent.ex` | High-level API for using Kimi as subagent |
+| `opencode_schema.ex` | Opencode JSONL event parsing |
+| `opencode_runner.ex` | Opencode CLI implementation |
+| `opencode_subagent.ex` | High-level API for using Opencode as subagent |
+| `pi_schema.ex` | Pi Coding Agent JSONL event parsing |
+| `pi_runner.ex` | Pi CLI implementation |
+| `pi_subagent.ex` | High-level API for using Pi as subagent |
 
 ## Testing
 
