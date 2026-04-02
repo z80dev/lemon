@@ -7,9 +7,23 @@ end
 defmodule MarketIntel.Schema.PriceSnapshot do
   @moduledoc false
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @timestamps_opts [type: :utc_datetime_usec]
+
+  @castable_fields [
+    :token_symbol,
+    :token_address,
+    :price_usd,
+    :price_eth,
+    :market_cap,
+    :liquidity_usd,
+    :volume_24h,
+    :price_change_24h,
+    :source
+  ]
+  @required_fields [:token_symbol]
 
   schema "price_snapshots" do
     field(:token_symbol, :string)
@@ -24,14 +38,33 @@ defmodule MarketIntel.Schema.PriceSnapshot do
 
     timestamps()
   end
+
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(struct, params \\ %{}) do
+    struct
+    |> cast(params, @castable_fields)
+    |> validate_required(@required_fields)
+  end
 end
 
 defmodule MarketIntel.Schema.MentionEvent do
   @moduledoc false
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @timestamps_opts [type: :utc_datetime_usec]
+
+  @castable_fields [
+    :platform,
+    :author_handle,
+    :content,
+    :sentiment,
+    :engagement_score,
+    :mentioned_tokens,
+    :raw_metadata
+  ]
+  @required_fields [:platform]
 
   schema "mention_events" do
     field(:platform, :string)
@@ -43,6 +76,13 @@ defmodule MarketIntel.Schema.MentionEvent do
     field(:raw_metadata, :map)
 
     timestamps()
+  end
+
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(struct, params \\ %{}) do
+    struct
+    |> cast(params, @castable_fields)
+    |> validate_required(@required_fields)
   end
 end
 
@@ -80,9 +120,13 @@ end
 defmodule MarketIntel.Schema.MarketSignal do
   @moduledoc false
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @timestamps_opts [type: :utc_datetime_usec]
+
+  @castable_fields [:signal_type, :severity, :description, :data, :acknowledged]
+  @required_fields [:signal_type, :severity]
 
   schema "market_signals" do
     field(:signal_type, :string)
@@ -92,5 +136,12 @@ defmodule MarketIntel.Schema.MarketSignal do
     field(:acknowledged, :boolean, default: false)
 
     timestamps()
+  end
+
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(struct, params \\ %{}) do
+    struct
+    |> cast(params, @castable_fields)
+    |> validate_required(@required_fields)
   end
 end

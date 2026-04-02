@@ -165,7 +165,6 @@ defmodule LemonServices.Config do
   defp definition_to_yaml(definition) do
     map = Definition.to_map(definition)
 
-    # Build YAML manually for cleaner output
     lines = [
       "# Service definition for #{map["id"]}"
     ]
@@ -177,8 +176,60 @@ defmodule LemonServices.Config do
         lines
       end
 
-    lines ++ ["", "service:"]
+    yaml_body = yaml_encode(map, 1)
+    lines = lines ++ ["", "service:"] ++ yaml_body
+
+    Enum.join(lines, "\n") <> "\n"
   end
+
+  defp yaml_encode(map, indent) when is_map(map) do
+    prefix = String.duplicate("  ", indent)
+
+    Enum.flat_map(Map.to_list(map), fn {k, v} ->
+      yaml_encode_pair(k, v, prefix, indent)
+    end)
+  end
+
+  defp yaml_encode_list(list, indent) when is_list(list) do
+    prefix = String.duplicate("  ", indent)
+    Enum.map(list, fn item -> "#{prefix}- #{yaml_scalar(item)}" end)
+  end
+
+  defp yaml_encode_pair(key, nil, prefix, _indent) do
+    ["#{prefix}#{key}: ~"]
+  end
+
+  defp yaml_encode_pair(key, value, prefix, _indent) when is_boolean(value) do
+    ["#{prefix}#{key}: #{value}"]
+  end
+
+  defp yaml_encode_pair(key, value, prefix, _indent) when is_binary(value) do
+    ["#{prefix}#{key}: #{yaml_scalar(value)}"]
+  end
+
+  defp yaml_encode_pair(key, value, prefix, _indent) when is_atom(value) or is_number(value) do
+    ["#{prefix}#{key}: #{yaml_scalar(value)}"]
+  end
+
+  defp yaml_encode_pair(key, value, prefix, indent) when is_map(value) do
+    ["#{prefix}#{key}:"] ++ yaml_encode(value, indent + 1)
+  end
+
+  defp yaml_encode_pair(key, value, prefix, indent) when is_list(value) do
+    ["#{prefix}#{key}:"] ++ yaml_encode_list(value, indent + 1)
+  end
+
+  defp yaml_scalar(value) when is_binary(value) do
+    if String.contains?(value, ["\n", ":", "#", "'", "\"", "{", "}", "[", "]", ",", "&", "*", "?", "|", "-", "<", ">", "=", "!", "%", "@", "`"]) do
+      "\"#{String.replace(value, "\"", "\\\"")}\""
+    else
+      value
+    end
+  end
+
+  defp yaml_scalar(value) when is_integer(value), do: Integer.to_string(value)
+  defp yaml_scalar(value) when is_float(value), do: Float.to_string(value)
+  defp yaml_scalar(value) when is_atom(value), do: Atom.to_string(value)
 
   # Config Loader GenServer - loads services on boot
   defmodule Loader do

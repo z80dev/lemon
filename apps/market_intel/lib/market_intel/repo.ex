@@ -4,9 +4,9 @@ defmodule MarketIntel.Repo do
   
   Schema:
   - price_snapshots: token prices over time
-  - volume_records: trading volume data
   - mention_events: social media mentions
   - commentary_history: generated tweets for analysis
+  - market_signals: alerts and anomaly signals
   """
   
   use Ecto.Repo,
