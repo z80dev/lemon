@@ -213,8 +213,8 @@ See [`docs/user-guide/adaptive.md`](adaptive.md) for the full synthesis pipeline
 
 | Scope | Path |
 |---|---|
-| Global | `~/.lemon/agent/skills/` |
-| Project | `<cwd>/.lemon/skills/` |
+| Global | `~/.lemon/agent/skill/` |
+| Project | `<cwd>/.lemon/skill/` |
 | Global drafts | `~/.lemon/agent/skill_drafts/` |
 | Project drafts | `<cwd>/.lemon/skill_drafts/` |
 
