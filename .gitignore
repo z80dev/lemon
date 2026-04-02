@@ -80,6 +80,9 @@ tools/diagrams/output/
 # IDE/tool caches
 .expert/
 .factory/
+.agents/
+.pi/
+skills-lock.json
 
 # Test artifact temp directories
 apps/*/tmp/
