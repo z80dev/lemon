@@ -53,6 +53,17 @@ defmodule CodingAgent.Tools.AgentTest do
     end
   end
 
+  defmodule AgentTestHealthCheckSessionSpy do
+    def follow_up(pid, text) do
+      send(pid, {:session_follow_up, text})
+      :ok
+    end
+
+    def health_check(_pid) do
+      %{is_streaming: true}
+    end
+  end
+
   defmodule UnknownAgentRunOrchestrator do
     def submit(%RunRequest{}), do: {:error, {:unknown_agent_id, "missing-agent"}}
   end
@@ -263,6 +274,40 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
     refute_receive {:session_follow_up, _}, 150
+  end
+
+  test "auto_followup uses health_check fallback when session module does not export get_state" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestHealthCheckSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    assert_receive {:session_follow_up, text}, 500
+    assert text =~ "oracle update"
+    refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
   test "auto_followup falls back to router followup when session pid is unavailable" do

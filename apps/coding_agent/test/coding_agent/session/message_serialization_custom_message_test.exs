@@ -146,6 +146,40 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
   end
 
   @tag :tmp_dir
+  test "SessionManager save_to_file/load_from_file round-trips custom_message entry details",
+       %{
+         tmp_dir: tmp_dir
+       } do
+    session =
+      SessionManager.new(tmp_dir)
+      |> SessionManager.append_entry(
+        SessionEntry.custom_message("async_followup", "outer",
+          display: false,
+          details: %{
+            task_id: "task-123",
+            result: %{status: "done", exit_code: 0}
+          }
+        )
+      )
+
+    session_file = Path.join(tmp_dir, "custom_message_round_trip.jsonl")
+    assert :ok = SessionManager.save_to_file(session_file, session)
+
+    {:ok, loaded} = SessionManager.load_from_file(session_file)
+    [entry] = SessionManager.entries(loaded)
+
+    assert entry.type == :custom_message
+    assert entry.custom_type == "async_followup"
+    assert entry.content == "outer"
+    assert entry.display == false
+
+    assert entry.details == %{
+             "task_id" => "task-123",
+             "result" => %{"status" => "done", "exit_code" => 0}
+           }
+  end
+
+  @tag :tmp_dir
   test "SessionManager persistence currently collapses CustomMessage structs in details via json_safe",
        %{
          tmp_dir: tmp_dir

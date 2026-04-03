@@ -311,6 +311,20 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert merged.meta.left == "value"
     assert merged.meta.kind == "regular"
     assert merged.meta.right == "value"
+
+    assert merged.execution_request.meta["async_followups"] == [
+             %{
+               source: :delegated,
+               task_id: "task-a",
+               run_id: "run-a",
+               agent_id: "agent-a",
+               session_key: "session-a"
+             }
+           ]
+
+    assert merged.execution_request.meta.left == "value"
+    assert merged.execution_request.meta.kind == "regular"
+    assert merged.execution_request.meta.right == "value"
   end
 
   test "async followup accumulation handles duplicate task ids, empty meta, and nil values" do
@@ -336,6 +350,47 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert merged.execution_request.meta["async_followups"] == [
              %{source: :task, task_id: "task-a", run_id: "run-b"}
            ]
+  end
+
+  test "third async followup carries forward existing async_followups on an already merged submission" do
+    first =
+      submission("run1", "s1", :followup, "part1",
+        meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"},
+        request_meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"}
+      )
+
+    second =
+      submission("run2", "s1", :followup, "part2",
+        meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"},
+        request_meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"}
+      )
+
+    merged_once = merge_followups(first, second)
+
+    third =
+      submission("run3", "s1", :followup, "part3",
+        meta: %{task_auto_followup: true, task_id: "task-c", run_id: "run-c"},
+        request_meta: %{task_auto_followup: true, task_id: "task-c", run_id: "run-c"}
+      )
+
+    merged_twice = merge_followups(merged_once, third)
+
+    assert merged_twice.meta["async_followups"] == [
+             %{source: :task, task_id: "task-a", run_id: "run-a"},
+             %{source: :task, task_id: "task-b", run_id: "run-b"},
+             %{source: :task, task_id: "task-c", run_id: "run-c"}
+           ]
+
+    assert merged_twice.execution_request.meta["async_followups"] == [
+             %{source: :task, task_id: "task-a", run_id: "run-a"},
+             %{source: :task, task_id: "task-b", run_id: "run-b"},
+             %{source: :task, task_id: "task-c", run_id: "run-c"}
+           ]
+
+    assert merged_twice.meta.task_id == "task-c"
+    assert merged_twice.meta.run_id == "run-c"
+    assert merged_twice.execution_request.meta.task_id == "task-c"
+    assert merged_twice.execution_request.meta.run_id == "run-c"
   end
 
   defp merge_followups(previous, current) do
