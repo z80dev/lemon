@@ -240,6 +240,7 @@ defmodule CodingAgent.Messages do
   - Messages with `exclude_from_context: true` are skipped
   - `BashExecutionMessage` becomes a user message with formatted output
   - `CustomMessage` becomes a user message
+  - `CustomMessage{custom_type: "async_followup"}` becomes a user message with a provenance wrapper
   - `BranchSummaryMessage` becomes a user message with summary in `<branch_summary>` tags
   - `CompactionSummaryMessage` becomes a user message with summary in `<compaction_summary>` tags
   - Standard user/assistant/tool_result messages are converted to their Ai.Types equivalents
@@ -404,6 +405,14 @@ defmodule CodingAgent.Messages do
     }
   end
 
+  defp convert_to_llm(%CustomMessage{custom_type: "async_followup"} = msg) do
+    %Ai.Types.UserMessage{
+      role: :user,
+      content: format_async_followup_for_llm(msg),
+      timestamp: msg.timestamp
+    }
+  end
+
   defp convert_to_llm(%CustomMessage{} = msg) do
     content =
       case msg.content do
@@ -470,6 +479,52 @@ defmodule CodingAgent.Messages do
       is_error: Map.get(msg, :is_error, false),
       timestamp: Map.get(msg, :timestamp, 0)
     }
+  end
+
+  defp format_async_followup_for_llm(%CustomMessage{} = msg) do
+    details = msg.details || %{}
+    content = get_text(msg) || ""
+    fence = markdown_code_fence(content)
+
+    Enum.join(
+      [
+        "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]",
+        "Source: #{async_followup_detail(details, "source")} (ID: #{async_followup_detail(details, "task_id")})",
+        "Run: #{async_followup_detail(details, "run_id")}",
+        "Delivery: #{async_followup_detail(details, "delivery")}",
+        "---",
+        fence,
+        content,
+        fence
+      ],
+      "\n"
+    )
+  end
+
+  defp async_followup_detail(details, "source") when is_map(details),
+    do: normalize_async_followup_detail(Map.get(details, "source", Map.get(details, :source)))
+
+  defp async_followup_detail(details, "task_id") when is_map(details),
+    do: normalize_async_followup_detail(Map.get(details, "task_id", Map.get(details, :task_id)))
+
+  defp async_followup_detail(details, "run_id") when is_map(details),
+    do: normalize_async_followup_detail(Map.get(details, "run_id", Map.get(details, :run_id)))
+
+  defp async_followup_detail(details, "delivery") when is_map(details),
+    do: normalize_async_followup_detail(Map.get(details, "delivery", Map.get(details, :delivery)))
+
+  defp async_followup_detail(_details, _key), do: "unknown"
+
+  defp normalize_async_followup_detail(nil), do: "unknown"
+  defp normalize_async_followup_detail(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_async_followup_detail(value), do: to_string(value)
+
+  defp markdown_code_fence(content) when is_binary(content) do
+    max_backticks =
+      Regex.scan(~r/`+/, content)
+      |> Enum.reduce(0, fn [run], longest -> max(longest, String.length(run)) end)
+
+    String.duplicate("`", max(3, max_backticks + 1))
   end
 
   defp convert_content(content) when is_binary(content), do: content

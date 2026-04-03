@@ -301,6 +301,76 @@ defmodule CodingAgent.MessagesTest do
       assert is_list(result.content)
     end
 
+    test "wraps async followup custom messages with provenance header" do
+      original_content = "task output\nwith detail"
+
+      msg = %CustomMessage{
+        custom_type: "async_followup",
+        content: original_content,
+        details: %{
+          "source" => :task,
+          "task_id" => "task-123",
+          "run_id" => "run-123",
+          "delivery" => :steer_backlog
+        },
+        timestamp: 123
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert %Ai.Types.UserMessage{} = result
+      assert result.timestamp == 123
+      assert result.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
+      assert result.content =~ "Source: task (ID: task-123)"
+      assert result.content =~ "Run: run-123"
+      assert result.content =~ "Delivery: steer_backlog"
+      assert_async_followup_envelope(result.content, original_content)
+    end
+
+    test "wraps async followup custom messages with fallback values for missing metadata" do
+      msg = %CustomMessage{
+        custom_type: "async_followup",
+        content: "",
+        details: %{
+          "source" => :agent,
+          "task_id" => nil,
+          "run_id" => nil,
+          "delivery" => nil
+        },
+        timestamp: 123
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert %Ai.Types.UserMessage{} = result
+      assert result.content =~ "Source: agent (ID: unknown)"
+      assert result.content =~ "Run: unknown"
+      assert result.content =~ "Delivery: unknown"
+      assert_async_followup_envelope(result.content, "")
+    end
+
+    test "wraps very long async followup content inside a safe markdown fence" do
+      original_content =
+        String.duplicate("long async completion\n", 300) <>
+          "```\nembedded fence\n```"
+
+      msg = %CustomMessage{
+        custom_type: "async_followup",
+        content: original_content,
+        details: %{
+          "source" => :task,
+          "task_id" => "task-long",
+          "run_id" => "run-long",
+          "delivery" => :followup
+        },
+        timestamp: 123
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert %Ai.Types.UserMessage{} = result
+      assert result.content =~ "Delivery: followup"
+      assert result.content =~ "\n````\n"
+      assert_async_followup_envelope(result.content, original_content)
+    end
+
     test "converts BranchSummaryMessage with tags" do
       msg = %BranchSummaryMessage{summary: "branch info", timestamp: 123}
       [result] = Messages.to_llm([msg])
@@ -1308,5 +1378,12 @@ defmodule CodingAgent.MessagesTest do
       assert msg.summary == ""
       assert msg.timestamp == 0
     end
+  end
+
+  defp assert_async_followup_envelope(content, original_content) do
+    assert Regex.match?(
+             ~r/\n(`{3,})\n#{Regex.escape(original_content)}\n\1\z/s,
+             content
+           )
   end
 end

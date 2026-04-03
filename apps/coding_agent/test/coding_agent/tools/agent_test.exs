@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
   alias Elixir.CodingAgent.{RunGraph, Subagents, TaskStore}
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
+  alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias LemonCore.{Bus, Event, RunRequest, Store}
 
@@ -34,7 +35,11 @@ defmodule CodingAgent.Tools.AgentTest do
 
   defmodule AgentTestSessionSpy do
     def handle_async_followup(pid, message) do
-      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
+      send(
+        pid,
+        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+      )
+
       :ok
     end
 
@@ -45,7 +50,11 @@ defmodule CodingAgent.Tools.AgentTest do
 
   defmodule AgentTestIdleSessionSpy do
     def handle_async_followup(pid, message) do
-      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
+      send(
+        pid,
+        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+      )
+
       :ok
     end
 
@@ -56,7 +65,11 @@ defmodule CodingAgent.Tools.AgentTest do
 
   defmodule AgentTestHealthCheckSessionSpy do
     def handle_async_followup(pid, message) do
-      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
+      send(
+        pid,
+        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+      )
+
       :ok
     end
 
@@ -244,6 +257,15 @@ defmodule CodingAgent.Tools.AgentTest do
     assert message.details.run_id == result.details.run_id
     assert message.details.agent_id == "oracle"
     assert message.details.session_key == result.details.session_key
+
+    [llm_message] = Messages.to_llm([message])
+    assert %Ai.Types.UserMessage{} = llm_message
+    assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
+    assert llm_message.content =~ "Source: agent (ID: #{result.details.task_id})"
+    assert llm_message.content =~ "Run: #{result.details.run_id}"
+    assert llm_message.content =~ "Delivery: live"
+    assert llm_message.content =~ message.content
+
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
@@ -280,6 +302,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
+
     assert followup.meta["async_followups"] == [
              %{
                source: :agent,
@@ -290,6 +313,7 @@ defmodule CodingAgent.Tools.AgentTest do
                delivery: :router
              }
            ]
+
     refute_receive {:session_async_followup, _}, 150
   end
 
@@ -365,6 +389,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
+
     assert followup.meta["async_followups"] == [
              %{
                source: :agent,

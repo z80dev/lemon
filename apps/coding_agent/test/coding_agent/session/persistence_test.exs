@@ -1,6 +1,7 @@
 defmodule CodingAgent.Session.PersistenceTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session.Persistence
   alias CodingAgent.SessionManager
@@ -60,6 +61,34 @@ defmodule CodingAgent.Session.PersistenceTest do
              },
              timestamp: 123
            }
+  end
+
+  test "persisted async followups keep provenance when projected to llm messages" do
+    session_manager = SessionManager.new("/tmp")
+    state = %{session_manager: session_manager}
+
+    message = %CustomMessage{
+      custom_type: "async_followup",
+      content: "task completed",
+      details: %{
+        source: :task,
+        task_id: "task-123",
+        run_id: "run-123",
+        delivery: :steer_backlog
+      },
+      timestamp: 123
+    }
+
+    next_state = Persistence.persist_message(state, message)
+    [restored] = Persistence.restore_messages_from_session(next_state.session_manager)
+    [llm_message] = Messages.to_llm([restored])
+
+    assert %Ai.Types.UserMessage{} = llm_message
+    assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
+    assert llm_message.content =~ "Source: task (ID: task-123)"
+    assert llm_message.content =~ "Run: run-123"
+    assert llm_message.content =~ "Delivery: steer_backlog"
+    assert llm_message.content =~ "task completed"
   end
 
   test "save persists session file and updates session_file on state" do

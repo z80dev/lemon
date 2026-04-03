@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent.Tools.Task
   alias Elixir.CodingAgent.TaskStore
   alias Elixir.CodingAgent.RunGraph
+  alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias LemonCore.RunRequest
 
@@ -34,7 +35,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   defmodule TaskAsyncSessionSpy do
     def handle_async_followup(pid, message) do
-      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
+      send(
+        pid,
+        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+      )
+
       :ok
     end
 
@@ -45,7 +50,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   defmodule TaskAsyncIdleSessionSpy do
     def handle_async_followup(pid, message) do
-      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
+      send(
+        pid,
+        {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)}
+      )
+
       :ok
     end
 
@@ -112,6 +121,15 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert message.details.source == :task
       assert message.details.task_id == result.details.task_id
       assert message.details.run_id == result.details.run_id
+
+      [llm_message] = Messages.to_llm([message])
+      assert %Ai.Types.UserMessage{} = llm_message
+      assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
+      assert llm_message.content =~ "Source: task (ID: #{result.details.task_id})"
+      assert llm_message.content =~ "Run: #{result.details.run_id}"
+      assert llm_message.content =~ "Delivery: live"
+      assert llm_message.content =~ message.content
+
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -156,6 +174,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.cwd == parent_cwd
       assert followup.prompt =~ "Router followup task"
       assert followup.prompt =~ "router output"
+
       assert followup.meta["async_followups"] == [
                %{
                  source: :task,
@@ -201,6 +220,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.agent_id == "main"
       assert followup.prompt =~ "Idle followup task"
       assert followup.prompt =~ "idle output"
+
       assert followup.meta["async_followups"] == [
                %{
                  source: :task,
@@ -256,6 +276,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.meta.task_id == result.details.task_id
       assert followup.meta.run_id == result.details.run_id
       assert followup.meta.task_auto_followup == true
+
       assert followup.meta["async_followups"] == [
                %{
                  source: :task,
