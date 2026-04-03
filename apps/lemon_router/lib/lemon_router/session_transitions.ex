@@ -391,6 +391,23 @@ defmodule LemonRouter.SessionTransitions do
   defp merge_prompt(left, right), do: left <> "\n" <> right
 
   defp merge_user_message_meta(left, right) when is_map(left) and is_map(right) do
+    merged = merge_user_message_meta_scalars(left, right)
+    async_followups = merge_async_followups(left, right)
+
+    if async_followups == [] do
+      merged
+    else
+      merged
+      |> Map.put("async_followups", async_followups)
+      |> Map.delete(:async_followups)
+    end
+  end
+
+  defp merge_user_message_meta(left, _right) when is_map(left), do: left
+  defp merge_user_message_meta(_left, right) when is_map(right), do: right
+  defp merge_user_message_meta(_left, _right), do: %{}
+
+  defp merge_user_message_meta_scalars(left, right) do
     right_user_msg_id = MapHelpers.get_key(right, :user_msg_id)
 
     if is_nil(right_user_msg_id) do
@@ -403,9 +420,55 @@ defmodule LemonRouter.SessionTransitions do
     end
   end
 
-  defp merge_user_message_meta(left, _right) when is_map(left), do: left
-  defp merge_user_message_meta(_left, right) when is_map(right), do: right
-  defp merge_user_message_meta(_left, _right), do: %{}
+  defp merge_async_followups(left, right) do
+    left
+    |> async_followup_entries()
+    |> Kernel.++(async_followup_entries(right))
+    |> Enum.uniq()
+  end
+
+  defp async_followup_entries(meta) when is_map(meta) do
+    existing = normalize_async_followups(MapHelpers.get_key(meta, :async_followups))
+
+    existing ++
+      case extract_async_followup(meta) do
+        nil -> []
+        entry -> [entry]
+      end
+  end
+
+  defp async_followup_entries(_meta), do: []
+
+  defp normalize_async_followups(list) when is_list(list) do
+    Enum.filter(list, &is_map/1)
+  end
+
+  defp normalize_async_followups(_value), do: []
+
+  defp extract_async_followup(meta) when is_map(meta) do
+    cond do
+      truthy?(MapHelpers.get_key(meta, :task_auto_followup)) ->
+        %{
+          source: :task,
+          task_id: MapHelpers.get_key(meta, :task_id),
+          run_id: MapHelpers.get_key(meta, :run_id)
+        }
+
+      truthy?(MapHelpers.get_key(meta, :delegated_auto_followup)) ->
+        %{
+          source: :delegated,
+          task_id: MapHelpers.get_key(meta, :delegated_task_id),
+          run_id: MapHelpers.get_key(meta, :delegated_run_id),
+          agent_id: MapHelpers.get_key(meta, :delegated_agent_id),
+          session_key: MapHelpers.get_key(meta, :delegated_session_key)
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  defp extract_async_followup(_meta), do: nil
 
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
