@@ -64,6 +64,12 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   setup do
+    previous_async_followups = Application.get_env(:coding_agent, :async_followups)
+
+    on_exit(fn ->
+      Application.put_env(:coding_agent, :async_followups, previous_async_followups)
+    end)
+
     start_supervised!(__MODULE__.TaskAsyncStubRunOrchestrator)
     __MODULE__.TaskAsyncStubRunOrchestrator.configure(self())
 
@@ -84,7 +90,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   describe "execute/6 - async auto followup" do
-    test "posts completion into the live session when session pid is available" do
+    test "queue_mode followup uses the live session when session pid is available" do
       result =
         Task.execute(
           "call_live_followup",
@@ -92,7 +98,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Live followup task",
             "prompt" => "Return completion",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -121,19 +128,55 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert message.details.source == :task
       assert message.details.task_id == result.details.task_id
       assert message.details.run_id == result.details.run_id
+      assert message.details.delivery == :followup
 
       [llm_message] = Messages.to_llm([message])
       assert %Ai.Types.UserMessage{} = llm_message
       assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
       assert llm_message.content =~ "Source: task (ID: #{result.details.task_id})"
       assert llm_message.content =~ "Run: #{result.details.run_id}"
-      assert llm_message.content =~ "Delivery: live"
+      assert llm_message.content =~ "Delivery: followup"
       assert llm_message.content =~ message.content
 
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "falls back to router followup when session pid is unavailable" do
+    test "queue_mode steer uses the live session when the parent is streaming" do
+      result =
+        Task.execute(
+          "call_live_steer",
+          %{
+            "description" => "Live steer task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "steer"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "steer output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.details.delivery == :steer
+      assert message.content =~ "steer output"
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
+    end
+
+    test "queue_mode followup falls back to router when session pid is unavailable" do
       dead_pid = spawn(fn -> :ok end)
       ref = Process.monitor(dead_pid)
       assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
@@ -147,7 +190,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Router followup task",
             "prompt" => "Return completion",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -180,12 +224,12 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
                  source: :task,
                  task_id: result.details.task_id,
                  run_id: result.details.run_id,
-                 delivery: :router
+                 delivery: :followup
                }
              ]
     end
 
-    test "falls back to router followup when session pid is alive but idle" do
+    test "queue_mode followup uses the live session even when the parent is idle" do
       result =
         Task.execute(
           "call_idle_followup",
@@ -193,7 +237,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Idle followup task",
             "prompt" => "Return completion",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -214,40 +259,23 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      refute_receive {:session_async_followup, _message}, 150
-      assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
-      assert followup.session_key == "agent:main:main"
-      assert followup.agent_id == "main"
-      assert followup.prompt =~ "Idle followup task"
-      assert followup.prompt =~ "idle output"
-
-      assert followup.meta["async_followups"] == [
-               %{
-                 source: :task,
-                 task_id: result.details.task_id,
-                 run_id: result.details.run_id,
-                 delivery: :router
-               }
-             ]
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.details.delivery == :followup
+      assert message.content =~ "Idle followup task"
+      assert message.content =~ "idle output"
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "uses task-level routing overrides for async followup fallback" do
-      dead_pid = spawn(fn -> :ok end)
-      ref = Process.monitor(dead_pid)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
-
+    test "queue_mode steer_backlog still uses router when a streaming parent session exists" do
       result =
         Task.execute(
-          "call_router_override",
+          "call_router_backlog",
           %{
-            "description" => "Routing override task",
+            "description" => "Backlog routing task",
             "prompt" => "Return completion",
             "async" => true,
             "auto_followup" => true,
-            "session_key" => "agent:review:main",
-            "agent_id" => "review",
-            "queue_mode" => "interrupt",
-            "meta" => %{"origin" => "task_async_test"}
+            "queue_mode" => "steer_backlog"
           },
           nil,
           nil,
@@ -259,7 +287,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: dead_pid,
+          session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
@@ -268,11 +296,13 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      assert_receive {:router_submit, %RunRequest{} = followup, 1}, 1_000
-      assert followup.session_key == "agent:review:main"
-      assert followup.agent_id == "review"
-      assert followup.queue_mode == :interrupt
-      assert followup.meta["origin"] == "task_async_test"
+      refute_receive {:session_async_followup, _message}, 150
+
+      assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 1},
+                     1_000
+
+      assert followup.session_key == "agent:main:main"
+      assert followup.agent_id == "main"
       assert followup.meta.task_id == result.details.task_id
       assert followup.meta.run_id == result.details.run_id
       assert followup.meta.task_auto_followup == true
@@ -282,9 +312,124 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
                  source: :task,
                  task_id: result.details.task_id,
                  run_id: result.details.run_id,
-                 delivery: :router
+                 delivery: :steer_backlog
                }
              ]
+    end
+
+    test "queue_mode interrupt still uses router when a streaming parent session exists" do
+      result =
+        Task.execute(
+          "call_router_interrupt",
+          %{
+            "description" => "Interrupt routing task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "interrupt",
+            "session_key" => "agent:review:main",
+            "agent_id" => "review",
+            "meta" => %{"origin" => "task_async_test"}
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "interrupt output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      refute_receive {:session_async_followup, _message}, 150
+      assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 1}, 1_000
+      assert followup.session_key == "agent:review:main"
+      assert followup.agent_id == "review"
+      assert followup.meta["origin"] == "task_async_test"
+
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :interrupt
+               }
+             ]
+    end
+
+    test "omitted queue_mode uses the configured async followup default" do
+      Application.put_env(:coding_agent, :async_followups, default_queue_mode: :interrupt)
+
+      result =
+        Task.execute(
+          "call_config_default",
+          %{
+            "description" => "Config default task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "config output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      refute_receive {:session_async_followup, _message}, 150
+      assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 1}, 1_000
+      assert followup.meta.task_id == result.details.task_id
+    end
+
+    test "explicit queue_mode overrides the configured async followup default" do
+      Application.put_env(:coding_agent, :async_followups, default_queue_mode: :interrupt)
+
+      result =
+        Task.execute(
+          "call_config_override",
+          %{
+            "description" => "Config override task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "followup"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "override output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.details.delivery == :followup
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
+      assert result.details.status == "queued"
     end
 
     test "does not send followup when auto_followup is false" do
@@ -875,7 +1020,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Build widget",
             "prompt" => "Build it",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -912,7 +1058,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Broken task",
             "prompt" => "Do broken thing",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -944,7 +1091,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Silent task",
             "prompt" => "Do silent thing",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -979,7 +1127,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Partial task",
             "prompt" => "Partially complete",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -1031,7 +1180,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Crash resilience test",
             "prompt" => "Test crash",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -1064,7 +1214,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "No async followup func test",
             "prompt" => "Test missing func",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,
@@ -1097,7 +1248,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "description" => "Nil pid test",
             "prompt" => "Test nil",
             "async" => true,
-            "auto_followup" => true
+            "auto_followup" => true,
+            "queue_mode" => "followup"
           },
           nil,
           nil,

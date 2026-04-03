@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Task.Params do
   require Logger
 
   alias AgentCore.Types.AgentTool
+  alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
@@ -50,7 +51,7 @@ defmodule CodingAgent.Tools.Task.Params do
     meta = Map.get(params, "meta")
     session_key = normalize_optional_string(Map.get(params, "session_key"))
     agent_id = normalize_optional_string(Map.get(params, "agent_id"))
-    queue_mode = Map.get(params, "queue_mode", "followup")
+    queue_mode = Map.get(params, "queue_mode")
     role_cwd = delegated_cwd || cwd
 
     cond do
@@ -99,10 +100,10 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_nil(agent_id) and not is_binary(agent_id) ->
         {:error, "agent_id must be a string"}
 
-      not is_binary(queue_mode) ->
+      not is_nil(queue_mode) and not is_binary(queue_mode) ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
 
-      queue_mode not in @valid_queue_modes ->
+      is_binary(queue_mode) and queue_mode not in @valid_queue_modes ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
 
       not is_nil(role_id) and Subagents.get(role_cwd, role_id) == nil ->
@@ -116,6 +117,9 @@ defmodule CodingAgent.Tools.Task.Params do
 
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
+
+        followup_queue_mode =
+          if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
 
         {:ok,
          %{
@@ -132,7 +136,9 @@ defmodule CodingAgent.Tools.Task.Params do
            meta: meta || %{},
            session_key: session_key,
            agent_id: agent_id,
-           queue_mode: normalize_queue_mode(queue_mode)
+           queue_mode: followup_queue_mode,
+           resolved_queue_mode:
+             AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
          }}
     end
   end
@@ -199,7 +205,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "- cwd: Optional working directory override\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>
         "- session_key/agent_id: Optional async followup routing overrides\n" <>
-        "- queue_mode: Optional async followup router queue mode (default: followup)\n" <>
+        "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>
         "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
         "**Boundary with agent tool:**\n" <>
         "- task supports local/CLI execution controls plus followup routing overrides\n" <>

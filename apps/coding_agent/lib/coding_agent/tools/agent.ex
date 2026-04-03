@@ -15,6 +15,7 @@ defmodule CodingAgent.Tools.Agent do
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.AsyncFollowups
   alias CodingAgent.{RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}
 
@@ -79,6 +80,12 @@ defmodule CodingAgent.Tools.Agent do
             "type" => "string",
             "enum" => @valid_queue_modes,
             "description" => "Queue mode for delegated run (default: collect)"
+          },
+          "followup_queue_mode" => %{
+            "type" => "string",
+            "enum" => @valid_queue_modes,
+            "description" =>
+              "Optional queue mode for delegated completion followup (default: app config, fallback: followup)"
           },
           "engine_id" => %{
             "type" => "string",
@@ -516,20 +523,48 @@ defmodule CodingAgent.Tools.Agent do
 
   defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do
     text = auto_followup_text(completion, run_id, validated)
-    session_pid = Keyword.get(opts, :session_pid)
 
-    Logger.info(
-      "Agent tool auto-followup: task_id=#{task_id} run_id=#{run_id} " <>
-        "session_pid=#{inspect(session_pid)} alive=#{is_pid(session_pid) and Process.alive?(session_pid)} " <>
-        "parent_session_key=#{inspect(Keyword.get(opts, :session_key))}"
-    )
+    followup_queue_mode =
+      AsyncFollowups.resolve_async_followup_queue_mode(validated.followup_queue_mode, :followup)
 
     target_agent_id = validated.agent_id
+    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
+    session_pid = Keyword.get(opts, :session_pid)
 
-    if send_followup_via_live_session(text, run_id, task_id, target_agent_id, request, opts) do
-      :ok
-    else
-      send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
+    case AsyncFollowups.dispatch_target(followup_queue_mode, session_module, session_pid) do
+      {:live, delivery_mode} ->
+        if send_followup_via_live_session(
+             text,
+             run_id,
+             task_id,
+             target_agent_id,
+             request,
+             opts,
+             delivery_mode
+           ) do
+          :ok
+        else
+          send_followup_via_router(
+            text,
+            run_id,
+            task_id,
+            target_agent_id,
+            request,
+            opts,
+            AsyncFollowups.router_fallback_queue_mode(delivery_mode)
+          )
+        end
+
+      {:router, router_queue_mode} ->
+        send_followup_via_router(
+          text,
+          run_id,
+          task_id,
+          target_agent_id,
+          request,
+          opts,
+          router_queue_mode
+        )
     end
   rescue
     error ->
@@ -540,57 +575,46 @@ defmodule CodingAgent.Tools.Agent do
       :ok
   end
 
-  defp send_followup_via_live_session(text, run_id, task_id, target_agent_id, request, opts) do
+  defp send_followup_via_live_session(
+         text,
+         run_id,
+         task_id,
+         target_agent_id,
+         request,
+         opts,
+         delivery_mode
+       ) do
     session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
     session_pid = Keyword.get(opts, :session_pid)
 
-    if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :handle_async_followup, 2) and
-         live_session_streaming?(session_module, session_pid) do
-      case session_module.handle_async_followup(
-             session_pid,
-             build_async_followup_message(
-               text,
-               run_id,
-               task_id,
-               target_agent_id,
-               request.session_key,
-               :live
-             )
-           ) do
-        :ok -> true
-        {:error, _reason} -> false
-        _other -> true
-      end
-    else
-      false
+    case session_module.handle_async_followup(
+           session_pid,
+           build_async_followup_message(
+             text,
+             run_id,
+             task_id,
+             target_agent_id,
+             request.session_key,
+             delivery_mode
+           )
+         ) do
+      :ok -> true
+      {:error, _reason} -> false
+      _other -> true
     end
   rescue
     _ -> false
   end
 
-  defp live_session_streaming?(session_module, session_pid) do
-    cond do
-      function_exported?(session_module, :get_state, 1) ->
-        case session_module.get_state(session_pid) do
-          %{is_streaming: true} -> true
-          _ -> false
-        end
-
-      function_exported?(session_module, :health_check, 1) ->
-        case session_module.health_check(session_pid) do
-          %{is_streaming: true} -> true
-          _ -> false
-        end
-
-      true ->
-        true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts) do
+  defp send_followup_via_router(
+         text,
+         run_id,
+         task_id,
+         target_agent_id,
+         request,
+         opts,
+         queue_mode
+       ) do
     parent_session_key = Keyword.get(opts, :session_key)
 
     router = run_orchestrator(opts)
@@ -608,7 +632,7 @@ defmodule CodingAgent.Tools.Agent do
           session_key: parent_session_key,
           agent_id: parent_agent_id,
           prompt: text,
-          queue_mode: :followup,
+          queue_mode: queue_mode,
           meta: %{
             :delegated_auto_followup => true,
             :delegated_run_id => run_id,
@@ -616,7 +640,13 @@ defmodule CodingAgent.Tools.Agent do
             :delegated_agent_id => target_agent_id,
             :delegated_session_key => delegated_session_key,
             "async_followups" => [
-              async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, :router)
+              async_followup_entry(
+                run_id,
+                task_id,
+                target_agent_id,
+                delegated_session_key,
+                queue_mode
+              )
             ]
           }
         })
@@ -922,6 +952,7 @@ defmodule CodingAgent.Tools.Agent do
     continue_session = Map.get(params, "continue_session", true)
     explicit_session_key = Map.get(params, "session_key") |> normalize_optional_string()
     queue_mode = Map.get(params, "queue_mode", "collect")
+    followup_queue_mode = Map.get(params, "followup_queue_mode")
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
@@ -955,6 +986,9 @@ defmodule CodingAgent.Tools.Agent do
       not valid_queue_mode?(queue_mode) ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
 
+      not is_nil(followup_queue_mode) and not valid_queue_mode?(followup_queue_mode) ->
+        {:error, "followup_queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
+
       not valid_timeout_ms?(timeout_ms) ->
         {:error, "timeout_ms must be a non-negative integer"}
 
@@ -985,6 +1019,11 @@ defmodule CodingAgent.Tools.Agent do
            continue_session: continue_session,
            explicit_session_key: explicit_session_key,
            queue_mode: normalize_queue_mode(queue_mode),
+           followup_queue_mode:
+             if(is_nil(followup_queue_mode),
+               do: nil,
+               else: normalize_queue_mode(followup_queue_mode)
+             ),
            timeout_ms: timeout_ms,
            tool_policy: tool_policy,
            meta: meta || %{},
@@ -1206,7 +1245,8 @@ defmodule CodingAgent.Tools.Agent do
     - role: optional subagent prompt preset applied to the delegated prompt
     - async: true (default) = non-blocking, false = blocking/wait
     - auto_followup: true (default) = completion forwards back to this session
-    - queue_mode: collect (default), followup, steer, steer_backlog, interrupt
+    - queue_mode: delegated run submission mode (default: collect)
+    - followup_queue_mode: delegated completion delivery mode (default: app config, fallback: followup)
     - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
     """
     |> String.trim()

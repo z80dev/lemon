@@ -20,6 +20,8 @@ config :coding_agent, :lane_caps,
   subagent: 16,
   background_exec: 8
 
+config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
+
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,

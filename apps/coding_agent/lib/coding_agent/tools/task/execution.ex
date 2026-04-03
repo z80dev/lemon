@@ -89,7 +89,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       description: description,
       engine: validated.engine || "internal",
       role: role_id,
-      queue_mode: validated.queue_mode,
+      queue_mode: validated.resolved_queue_mode,
       meta: validated.meta
     }
 
@@ -110,7 +110,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       cwd: cwd,
       parent_session_key: parent_session_key,
       parent_agent_id: parent_agent_id,
-      queue_mode: validated.queue_mode,
+      queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,
       engine: validated.engine || "internal",
       role: role_id,
@@ -139,7 +139,9 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   defp build_run_fun(execution, signal, on_update, opts) do
     fn ->
-      on_update_safe = Async.wrap_on_update(execution.task_id, execution.lifecycle_context, on_update)
+      on_update_safe =
+        Async.wrap_on_update(execution.task_id, execution.lifecycle_context, on_update)
+
       run_override = Keyword.get(opts, :run_override)
 
       cond do
