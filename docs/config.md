@@ -175,6 +175,11 @@ Environment variables override file values. Common overrides:
 Python CLI. It is loaded at startup and can be toggled for the current process with
 `/thinking`.
 
+Async followup queue defaults for background `task` completions and delegated `agent`
+completions are currently umbrella app config, not TOML. The default lives in
+`config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
+Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
+
 ## Feature Flags
 
 Feature flags gate in-progress behaviour changes so they can be shipped incrementally

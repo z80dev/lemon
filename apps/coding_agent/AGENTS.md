@@ -557,6 +557,7 @@ CodingAgent.Mentions.parse("@research find auth endpoints", cwd)
 
 The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before execution.
 `Task` also supports per-run routing controls for async followups (`session_key`, `agent_id`, `queue_mode`, `meta`) while keeping execution local/CLI-oriented.
+`Agent` keeps delegated-run submission `queue_mode` separate from delegated-completion `followup_queue_mode`; omitted completion modes resolve through `:coding_agent, :async_followups` before falling back to `:followup`.
 
 ## Common Tasks
 

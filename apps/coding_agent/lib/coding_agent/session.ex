@@ -43,6 +43,7 @@ defmodule CodingAgent.Session do
 
   alias AgentCore.Types.AgentTool
   alias LemonCore.Introspection
+  alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
   alias CodingAgent.Session.BackgroundTasks
   alias CodingAgent.Session.CompactionLifecycle
@@ -589,9 +590,17 @@ defmodule CodingAgent.Session do
     state = persist_message(state, message)
 
     if state.is_streaming do
-      AgentCore.Agent.follow_up(state.agent, message)
-      queue = :queue.in(message, state.follow_up_queue)
-      {:reply, :ok, %{state | follow_up_queue: queue}}
+      case AsyncFollowups.live_delivery_mode(message) do
+        :steer ->
+          AgentCore.Agent.steer(state.agent, message)
+          queue = :queue.in(message, state.steering_queue)
+          {:reply, :ok, %{state | steering_queue: queue}}
+
+        :followup ->
+          AgentCore.Agent.follow_up(state.agent, message)
+          queue = :queue.in(message, state.follow_up_queue)
+          {:reply, :ok, %{state | follow_up_queue: queue}}
+      end
     else
       timer_ref = Process.send_after(self(), {:do_prompt, message}, @prompt_defer_ms)
       {:reply, :ok, State.begin_prompt(state, timer_ref)}

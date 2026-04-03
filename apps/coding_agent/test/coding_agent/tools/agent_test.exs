@@ -83,6 +83,12 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   setup do
+    previous_async_followups = Application.get_env(:coding_agent, :async_followups)
+
+    on_exit(fn ->
+      Application.put_env(:coding_agent, :async_followups, previous_async_followups)
+    end)
+
     start_supervised!(__MODULE__.AgentTestStubRunOrchestrator)
     __MODULE__.AgentTestStubRunOrchestrator.configure(self())
 
@@ -105,6 +111,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert Map.has_key?(tool.parameters["properties"], "role")
     assert Map.has_key?(tool.parameters["properties"], "task_ids")
     assert Map.has_key?(tool.parameters["properties"], "mode")
+    assert Map.has_key?(tool.parameters["properties"], "followup_queue_mode")
     assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
   end
 
@@ -220,7 +227,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert session_key_1 == session_key_2
   end
 
-  test "auto_followup uses live session when session pid is available" do
+  test "followup_queue_mode followup uses the live session when session pid is available" do
     result =
       AgentTool.execute(
         "call_1",
@@ -228,7 +235,8 @@ defmodule CodingAgent.Tools.AgentTest do
           "agent_id" => "oracle",
           "prompt" => "provide update",
           "async" => true,
-          "auto_followup" => true
+          "auto_followup" => true,
+          "followup_queue_mode" => "followup"
         },
         nil,
         nil,
@@ -257,19 +265,20 @@ defmodule CodingAgent.Tools.AgentTest do
     assert message.details.run_id == result.details.run_id
     assert message.details.agent_id == "oracle"
     assert message.details.session_key == result.details.session_key
+    assert message.details.delivery == :followup
 
     [llm_message] = Messages.to_llm([message])
     assert %Ai.Types.UserMessage{} = llm_message
     assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
     assert llm_message.content =~ "Source: agent (ID: #{result.details.task_id})"
     assert llm_message.content =~ "Run: #{result.details.run_id}"
-    assert llm_message.content =~ "Delivery: live"
+    assert llm_message.content =~ "Delivery: followup"
     assert llm_message.content =~ message.content
 
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "auto_followup falls back to router followup when session pid is alive but not streaming" do
+  test "followup_queue_mode followup uses the live session even when the parent is idle" do
     result =
       AgentTool.execute(
         "call_1",
@@ -277,7 +286,8 @@ defmodule CodingAgent.Tools.AgentTest do
           "agent_id" => "oracle",
           "prompt" => "provide update",
           "async" => true,
-          "auto_followup" => true
+          "auto_followup" => true,
+          "followup_queue_mode" => "followup"
         },
         nil,
         nil,
@@ -298,26 +308,13 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
       )
 
-    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
-    assert followup.session_key == "agent:main:main"
-    assert followup.agent_id == "main"
-    assert followup.prompt =~ "oracle update"
-
-    assert followup.meta["async_followups"] == [
-             %{
-               source: :agent,
-               task_id: result.details.task_id,
-               run_id: result.details.run_id,
-               agent_id: "oracle",
-               session_key: result.details.session_key,
-               delivery: :router
-             }
-           ]
-
-    refute_receive {:session_async_followup, _}, 150
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.details.delivery == :followup
+    assert message.content =~ "oracle update"
+    refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "auto_followup uses health_check fallback when session module does not export get_state" do
+  test "followup_queue_mode steer uses health_check streaming checks for live delivery" do
     result =
       AgentTool.execute(
         "call_1",
@@ -325,7 +322,8 @@ defmodule CodingAgent.Tools.AgentTest do
           "agent_id" => "oracle",
           "prompt" => "provide update",
           "async" => true,
-          "auto_followup" => true
+          "auto_followup" => true,
+          "followup_queue_mode" => "steer"
         },
         nil,
         nil,
@@ -349,10 +347,11 @@ defmodule CodingAgent.Tools.AgentTest do
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
     assert message.content =~ "oracle update"
     assert message.details.source == :agent
+    assert message.details.delivery == :steer
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "auto_followup falls back to router followup when session pid is unavailable" do
+  test "followup_queue_mode followup falls back to router when session pid is unavailable" do
     dead_pid = spawn(fn -> :ok end)
     ref = Process.monitor(dead_pid)
     assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
@@ -364,7 +363,8 @@ defmodule CodingAgent.Tools.AgentTest do
           "agent_id" => "oracle",
           "prompt" => "provide update",
           "async" => true,
-          "auto_followup" => true
+          "auto_followup" => true,
+          "followup_queue_mode" => "followup"
         },
         nil,
         nil,
@@ -397,7 +397,89 @@ defmodule CodingAgent.Tools.AgentTest do
                run_id: result.details.run_id,
                agent_id: "oracle",
                session_key: result.details.session_key,
-               delivery: :router
+               delivery: :followup
+             }
+           ]
+  end
+
+  test "followup_queue_mode is independent from delegated run queue_mode" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true,
+          "queue_mode" => "interrupt",
+          "followup_queue_mode" => "followup"
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.details.delivery == :followup
+    refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
+  end
+
+  test "omitted followup_queue_mode uses the configured async followup default" do
+    Application.put_env(:coding_agent, :async_followups, default_queue_mode: :steer_backlog)
+
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    refute_receive {:session_async_followup, _}, 150
+    assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 2}, 500
+
+    assert followup.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: result.details.task_id,
+               run_id: result.details.run_id,
+               agent_id: "oracle",
+               session_key: result.details.session_key,
+               delivery: :steer_backlog
              }
            ]
   end

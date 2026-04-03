@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Task.Followup do
   require Logger
 
   alias AgentCore.Types.AgentToolResult
+  alias CodingAgent.AsyncFollowups
   alias CodingAgent.Tools.Task.Params
   alias LemonCore.{RunRequest, SessionKey}
 
@@ -20,11 +21,38 @@ defmodule CodingAgent.Tools.Task.Followup do
   def maybe_send_async_followup(followup_context, task_id, run_id, outcome)
       when is_map(followup_context) do
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
+    queue_mode = Map.get(followup_context, :queue_mode, :followup)
+    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
+    session_pid = Map.get(followup_context, :session_pid)
 
-    if send_async_followup_to_live_session(followup_context, text, task_id, run_id) do
-      :ok
-    else
-      submit_async_followup_via_router(followup_context, task_id, run_id, text)
+    case AsyncFollowups.dispatch_target(queue_mode, session_module, session_pid) do
+      {:live, delivery_mode} ->
+        if send_async_followup_to_live_session(
+             followup_context,
+             text,
+             task_id,
+             run_id,
+             delivery_mode
+           ) do
+          :ok
+        else
+          submit_async_followup_via_router(
+            followup_context,
+            task_id,
+            run_id,
+            text,
+            AsyncFollowups.router_fallback_queue_mode(delivery_mode)
+          )
+        end
+
+      {:router, router_queue_mode} ->
+        submit_async_followup_via_router(
+          followup_context,
+          task_id,
+          run_id,
+          text,
+          router_queue_mode
+        )
     end
   rescue
     error ->
@@ -136,52 +164,36 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp short_id(id) when byte_size(id) > 8, do: String.slice(id, 0, 8)
   defp short_id(id), do: id
 
-  defp send_async_followup_to_live_session(followup_context, text, task_id, run_id) do
+  defp send_async_followup_to_live_session(
+         followup_context,
+         text,
+         task_id,
+         run_id,
+         delivery_mode
+       ) do
     session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
     session_pid = Map.get(followup_context, :session_pid)
 
-    if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :handle_async_followup, 2) and
-         live_session_streaming?(session_module, session_pid) do
-      case session_module.handle_async_followup(
-             session_pid,
-             build_async_followup_message(text, task_id, run_id, :live)
-           ) do
-        :ok -> true
-        {:error, _reason} -> false
-        _other -> true
-      end
-    else
-      false
+    case session_module.handle_async_followup(
+           session_pid,
+           build_async_followup_message(text, task_id, run_id, delivery_mode)
+         ) do
+      :ok -> true
+      {:error, _reason} -> false
+      _other -> true
     end
   rescue
     _ -> false
   end
 
-  defp live_session_streaming?(session_module, session_pid) do
-    cond do
-      function_exported?(session_module, :get_state, 1) ->
-        case session_module.get_state(session_pid) do
-          %{is_streaming: true} -> true
-          _ -> false
-        end
-
-      function_exported?(session_module, :health_check, 1) ->
-        case session_module.health_check(session_pid) do
-          %{is_streaming: true} -> true
-          _ -> false
-        end
-
-      true ->
-        true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
+  defp submit_async_followup_via_router(
+         followup_context,
+         task_id,
+         run_id,
+         text,
+         queue_mode
+       ) do
     parent_session_key = Map.get(followup_context, :parent_session_key)
-    queue_mode = Map.get(followup_context, :queue_mode, :followup)
     extra_meta = Map.get(followup_context, :meta, %{})
     cwd = Map.get(followup_context, :cwd)
 
@@ -207,7 +219,7 @@ defmodule CodingAgent.Tools.Task.Followup do
               :task_auto_followup => true,
               :task_id => task_id,
               :run_id => run_id,
-              "async_followups" => [async_followup_entry(task_id, run_id, :router)]
+              "async_followups" => [async_followup_entry(task_id, run_id, queue_mode)]
             })
         })
 
