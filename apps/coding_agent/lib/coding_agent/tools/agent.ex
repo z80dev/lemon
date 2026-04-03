@@ -545,7 +545,8 @@ defmodule CodingAgent.Tools.Agent do
     session_pid = Keyword.get(opts, :session_pid)
 
     if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :follow_up, 2) do
+         function_exported?(session_module, :follow_up, 2) and
+         live_session_streaming?(session_module, session_pid) do
       case session_module.follow_up(session_pid, text) do
         :ok -> true
         {:error, _reason} -> false
@@ -553,6 +554,27 @@ defmodule CodingAgent.Tools.Agent do
       end
     else
       false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp live_session_streaming?(session_module, session_pid) do
+    cond do
+      function_exported?(session_module, :get_state, 1) ->
+        case session_module.get_state(session_pid) do
+          %{is_streaming: true} -> true
+          _ -> false
+        end
+
+      function_exported?(session_module, :health_check, 1) ->
+        case session_module.health_check(session_pid) do
+          %{is_streaming: true} -> true
+          _ -> false
+        end
+
+      true ->
+        true
     end
   rescue
     _ -> false
