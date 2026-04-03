@@ -2,6 +2,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
+  alias CodingAgent.AsyncFollowups
   alias Elixir.CodingAgent.Tools.Task
   alias Elixir.CodingAgent.TaskStore
   alias Elixir.CodingAgent.RunGraph
@@ -90,6 +91,50 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   describe "execute/6 - async auto followup" do
+    test "queue_mode steer falls back to router followup when the parent is idle" do
+      result =
+        Task.execute(
+          "call_idle_steer",
+          %{
+            "description" => "Idle steer task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "steer"
+          },
+          nil,
+          nil,
+          "/tmp/task_async_idle_steer_parent",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "idle steer output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncIdleSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      refute_receive {:session_async_followup, _message}, 150
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
+      assert followup.prompt =~ "Idle steer task"
+      assert followup.prompt =~ "idle steer output"
+
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :followup
+               }
+             ]
+    end
+
     test "queue_mode followup uses the live session when session pid is available" do
       result =
         Task.execute(
@@ -364,6 +409,49 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
              ]
     end
 
+    test "queue_mode collect still uses router when a streaming parent session exists" do
+      result =
+        Task.execute(
+          "call_router_collect",
+          %{
+            "description" => "Collect routing task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "collect"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "collect output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      refute_receive {:session_async_followup, _message}, 150
+      assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 1}, 1_000
+      assert followup.prompt =~ "Collect routing task"
+      assert followup.prompt =~ "collect output"
+
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :collect
+               }
+             ]
+    end
+
     test "omitted queue_mode uses the configured async followup default" do
       Application.put_env(:coding_agent, :async_followups, default_queue_mode: :interrupt)
 
@@ -460,6 +548,26 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       refute_receive {:session_async_followup, _message}, 200
       refute_receive {:router_submit, %RunRequest{}, _}, 200
+    end
+  end
+
+  describe "async followup queue mode resolution" do
+    test "falls back to the tool default when config is missing" do
+      Application.delete_env(:coding_agent, :async_followups)
+
+      assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
+    end
+
+    test "falls back to the tool default when config has an invalid shape" do
+      Application.put_env(:coding_agent, :async_followups, :invalid)
+
+      assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
+    end
+
+    test "falls back to the tool default when config has an unsupported default queue mode" do
+      Application.put_env(:coding_agent, :async_followups, default_queue_mode: :bogus)
+
+      assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
     end
   end
 

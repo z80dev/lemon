@@ -351,6 +351,52 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
+  test "followup_queue_mode steer falls back to router followup when the parent is idle" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true,
+          "followup_queue_mode" => "steer"
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestIdleSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    refute_receive {:session_async_followup, _message}, 150
+    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
+    assert followup.prompt =~ "oracle update"
+
+    assert followup.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: result.details.task_id,
+               run_id: result.details.run_id,
+               agent_id: "oracle",
+               session_key: result.details.session_key,
+               delivery: :followup
+             }
+           ]
+  end
+
   test "followup_queue_mode followup falls back to router when session pid is unavailable" do
     dead_pid = spawn(fn -> :ok end)
     ref = Process.monitor(dead_pid)
@@ -400,6 +446,111 @@ defmodule CodingAgent.Tools.AgentTest do
                delivery: :followup
              }
            ]
+  end
+
+  test "followup_queue_mode steer_backlog still routes through router when the parent is streaming" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true,
+          "followup_queue_mode" => "steer_backlog"
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    refute_receive {:session_async_followup, _message}, 150
+    assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 2}, 500
+    assert followup.prompt =~ "oracle update"
+  end
+
+  test "followup_queue_mode interrupt routes through router" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true,
+          "followup_queue_mode" => "interrupt"
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    refute_receive {:session_async_followup, _message}, 150
+    assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 2}, 500
+    assert followup.prompt =~ "oracle update"
+  end
+
+  test "followup_queue_mode collect routes through router" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "provide update",
+          "async" => true,
+          "auto_followup" => true,
+          "followup_queue_mode" => "collect"
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Bus.broadcast(
+        Bus.run_topic(result.details.run_id),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+      )
+
+    refute_receive {:session_async_followup, _message}, 150
+    assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 2}, 500
+    assert followup.prompt =~ "oracle update"
   end
 
   test "followup_queue_mode is independent from delegated run queue_mode" do
