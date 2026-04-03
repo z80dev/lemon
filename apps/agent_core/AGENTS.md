@@ -65,9 +65,9 @@ AgentCore.Supervisor (:one_for_one)
 | `lib/agent_core/cli_runners/jsonl_runner.ex` | Base behaviour + GenServer for JSONL-streaming CLI subprocesses. ~1230 lines. Handles port spawning, JSONL line buffering, session locking, stderr capture, graceful shutdown. |
 | `lib/agent_core/cli_runners/types.ex` | CLI event types: `ResumeToken`, `Action`, `StartedEvent`, `ActionEvent`, `CompletedEvent`, `EventFactory`. |
 | `lib/agent_core/cli_runners/tool_action_helpers.ex` | Helpers for mapping between tool events and action events. |
-| `lib/agent_core/cli_runners/{claude,codex,kimi,opencode,pi}_runner.ex` | Engine-specific runners implementing `JsonlRunner` behaviour. |
-| `lib/agent_core/cli_runners/{claude,codex,kimi,opencode,pi}_schema.ex` | JSON event parsing for each engine's output format. |
-| `lib/agent_core/cli_runners/{claude,codex,kimi,opencode,pi}_subagent.ex` | Subagent wrappers integrating runners with `SubagentSupervisor`. |
+| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_runner.ex` | Engine-specific runners implementing `JsonlRunner` behaviour. |
+| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_schema.ex` | JSON event parsing for each engine's output format. |
+| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_subagent.ex` | Subagent wrappers integrating runners with `SubagentSupervisor`. |
 
 ## Common Modification Patterns
 
@@ -316,9 +316,9 @@ AgentCore emits introspection events via `LemonCore.Introspection.record/3`. Pay
 
 | Event Type | Engines | When |
 |---|---|---|
-| `:engine_subprocess_started` | codex, claude, kimi, opencode, pi | Engine session/subprocess initialized |
-| `:engine_output_observed` | codex, kimi, opencode, pi | Engine produces a final answer or output |
-| `:engine_subprocess_exited` | codex, claude, kimi, opencode, pi | Engine subprocess exits with error |
+| `:engine_subprocess_started` | codex, claude, droid, kimi, opencode, pi | Engine session/subprocess initialized |
+| `:engine_output_observed` | codex, droid, kimi, opencode, pi | Engine produces a final answer or output |
+| `:engine_subprocess_exited` | codex, claude, droid, kimi, opencode, pi | Engine subprocess exits with error |
 
 ## Subagent Spawning Patterns
 

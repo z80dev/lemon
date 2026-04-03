@@ -44,6 +44,7 @@ defmodule LemonCore.ResumeToken do
     case engine do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
+      "droid" -> "droid exec -s #{value}"
       "kimi" -> "kimi --session #{value}"
       "opencode" -> "opencode --session #{value}"
       "pi" -> "pi --session #{quote_token(value)}"
@@ -89,6 +90,8 @@ defmodule LemonCore.ResumeToken do
       {~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "codex"},
       # Claude: `claude --resume <session_id>` or claude --resume <session_id>
       {~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i, "claude"},
+      # Droid: `droid exec -s <session_id>` (or `droid -s <session_id>`)
+      {~r/`?droid(?:\s+exec)?\s+(?:-s|--session)\s+([a-zA-Z0-9_-]+)`?/i, "droid"},
       # Kimi: `kimi --session <session_id>` or kimi --session <session_id>
       {~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i, "kimi"},
       # OpenCode: `opencode --session <ses_...>` (optionally `opencode run --session`)
@@ -176,6 +179,8 @@ defmodule LemonCore.ResumeToken do
       ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i,
       # Claude
       ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i,
+      # Droid
+      ~r/^`?droid(?:\s+exec)?\s+(?:-s|--session)\s+[a-zA-Z0-9_-]+`?$/i,
       # Kimi
       ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i,
       # OpenCode
@@ -205,6 +210,7 @@ defmodule LemonCore.ResumeToken do
 
   defp resume_regex("codex"), do: ~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i
   defp resume_regex("claude"), do: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i
+  defp resume_regex("droid"), do: ~r/`?droid(?:\s+exec)?\s+(?:-s|--session)\s+([a-zA-Z0-9_-]+)`?/i
   defp resume_regex("kimi"), do: ~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i
 
   defp resume_regex("opencode"),
@@ -218,6 +224,10 @@ defmodule LemonCore.ResumeToken do
 
   defp strict_resume_regex("codex"), do: ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i
   defp strict_resume_regex("claude"), do: ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i
+
+  defp strict_resume_regex("droid"),
+    do: ~r/^`?droid(?:\s+exec)?\s+(?:-s|--session)\s+[a-zA-Z0-9_-]+`?$/i
+
   defp strict_resume_regex("kimi"), do: ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i
 
   defp strict_resume_regex("opencode"),

@@ -127,6 +127,12 @@ defmodule LemonCore.ConfigTest do
 
     [runtime.cli.claude]
     dangerously_skip_permissions = true
+
+    [runtime.cli.droid]
+    model = "builder-v1"
+    reasoning_effort = "medium"
+    enabled_tools = ["grep"]
+    use_spec = true
     """)
 
     config = Config.load()
@@ -134,6 +140,10 @@ defmodule LemonCore.ConfigTest do
     assert config.agent.cli.codex.extra_args == ["-c", "notify=[]"]
     assert config.agent.cli.codex.auto_approve == false
     assert config.agent.cli.claude.dangerously_skip_permissions == true
+    assert config.agent.cli.droid.model == "builder-v1"
+    assert config.agent.cli.droid.reasoning_effort == "medium"
+    assert config.agent.cli.droid.enabled_tools == ["grep"]
+    assert config.agent.cli.droid.use_spec == true
   end
 
   test "env overrides provider base_url", %{home: home} do
@@ -573,7 +583,7 @@ defmodule LemonCore.ConfigTest do
 
     assert config.gateway.enable_discord == true
     assert config.gateway.discord.bot_token == "discord-token"
-    assert config.gateway.discord.allowed_guild_ids == [1475727416549969980]
+    assert config.gateway.discord.allowed_guild_ids == [1_475_727_416_549_969_980]
     assert config.gateway.discord.deny_unbound_channels == false
   end
 end

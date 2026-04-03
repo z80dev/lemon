@@ -216,6 +216,7 @@ defmodule LemonCore.Config.Agent do
       kimi: resolve_kimi_cli(cli["kimi"] || %{}),
       opencode: resolve_opencode_cli(cli["opencode"] || %{}),
       pi: resolve_pi_cli(cli["pi"] || %{}),
+      droid: resolve_droid_cli(cli["droid"] || %{}),
       claude: resolve_claude_cli(cli["claude"] || %{})
     }
   end
@@ -244,6 +245,18 @@ defmodule LemonCore.Config.Agent do
       extra_args: parse_string_list(pi["extra_args"]),
       model: normalize_optional_string(pi["model"]),
       provider: normalize_optional_string(pi["provider"])
+    }
+  end
+
+  defp resolve_droid_cli(droid) do
+    %{
+      extra_args: parse_string_list(droid["extra_args"]),
+      model: normalize_optional_string(droid["model"]),
+      reasoning_effort: normalize_optional_string(droid["reasoning_effort"]),
+      enabled_tools: parse_string_list(droid["enabled_tools"]),
+      disabled_tools: parse_string_list(droid["disabled_tools"]),
+      use_spec: if(is_nil(droid["use_spec"]), do: false, else: droid["use_spec"]),
+      spec_model: normalize_optional_string(droid["spec_model"])
     }
   end
 

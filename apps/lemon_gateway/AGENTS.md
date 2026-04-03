@@ -95,6 +95,7 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `lib/lemon_gateway/engines/lemon.ex` | `Engines.Lemon` | Native engine: delegates to `CodingAgent.CliRunners.LemonRunner`. Only engine that supports steering. Ensures `:coding_agent` app is started. |
 | `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `AgentCore.CliRunners.ClaudeRunner` |
 | `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `AgentCore.CliRunners.CodexRunner` |
+| `lib/lemon_gateway/engines/droid.ex` | `Engines.Droid` | Factory Droid CLI: delegates to CliAdapter with `AgentCore.CliRunners.DroidRunner` |
 | `lib/lemon_gateway/engines/opencode.ex` | `Engines.Opencode` | Opencode CLI: delegates to CliAdapter with `AgentCore.CliRunners.OpencodeRunner` |
 | `lib/lemon_gateway/engines/pi.ex` | `Engines.Pi` | Pi CLI: delegates to CliAdapter with `AgentCore.CliRunners.PiRunner` |
 | `lib/lemon_gateway/engines/echo.ex` | `Engines.Echo` | Test engine: echoes prompt back, no subprocess, useful for integration tests |
@@ -246,7 +247,7 @@ Or modify the default list in `EngineRegistry.init/1`.
 If you want `/myengine` prefix support, update the regex in `EngineDirective.strip/1`:
 
 ```elixir
-~r{^/(lemon|codex|claude|opencode|pi|echo|myengine)\b\s*(.*)$}is
+~r{^/(lemon|codex|claude|droid|opencode|pi|echo|myengine)\b\s*(.*)$}is
 ```
 
 ### Event Protocol

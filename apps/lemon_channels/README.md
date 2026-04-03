@@ -535,7 +535,7 @@ LemonCore.ResumeToken.format_plain(%ResumeToken{engine: "claude", value: "abc123
 # "claude --resume abc123"
 ```
 
-Default known engines: `lemon`, `echo`, `codex`, `claude`, `opencode`, `pi`, `kimi`. Override the shared list via `config :lemon_core, :known_engines`.
+Default known engines: `lemon`, `echo`, `codex`, `claude`, `droid`, `opencode`, `pi`, `kimi`. Override the shared list via `config :lemon_core, :known_engines`.
 
 ### Runtime Bridge
 

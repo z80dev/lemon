@@ -141,7 +141,7 @@ defmodule AgentCore.CliRunners.ToolActionHelpers do
         title = if path, do: maybe_relativize_path(path, cwd), else: name
         {:file_change, title}
 
-      name_lower == "read" ->
+      name_lower in ["read", "read_file"] ->
         path = tool_input_path(input, path_keys)
         if path, do: {:tool, "read: `#{maybe_relativize_path(path, cwd)}`"}, else: {:tool, "read"}
 

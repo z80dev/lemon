@@ -6,7 +6,7 @@ defmodule LemonCore.EngineCatalog do
   modules, but router/channels validation should use this catalog.
   """
 
-  @default_ids ["lemon", "echo", "codex", "claude", "opencode", "pi", "kimi"]
+  @default_ids ["lemon", "echo", "codex", "claude", "droid", "opencode", "pi", "kimi"]
 
   @spec list_ids() :: [String.t()]
   def list_ids do

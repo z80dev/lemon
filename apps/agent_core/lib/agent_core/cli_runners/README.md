@@ -1,6 +1,6 @@
 # CLI Runners
 
-This module provides infrastructure for wrapping CLI-based AI tools (Codex, Claude, Kimi, etc.) as subagents. Inspired by the [Takopi](https://github.com/your-org/takopi) project's reliable subprocess management patterns.
+This module provides infrastructure for wrapping CLI-based AI tools (Codex, Claude, Droid, Kimi, etc.) as subagents. Inspired by the [Takopi](https://github.com/your-org/takopi) project's reliable subprocess management patterns.
 
 ## Overview
 
@@ -261,6 +261,9 @@ end
 | `claude_schema.ex` | Claude JSONL event parsing |
 | `claude_runner.ex` | Claude CLI implementation |
 | `claude_subagent.ex` | High-level API for using Claude as subagent |
+| `droid_schema.ex` | Droid JSONL event parsing |
+| `droid_runner.ex` | Droid CLI implementation |
+| `droid_subagent.ex` | High-level API for using Droid as subagent |
 | `kimi_schema.ex` | Kimi JSONL event parsing |
 | `kimi_runner.ex` | Kimi CLI implementation |
 | `kimi_subagent.ex` | High-level API for using Kimi as subagent |

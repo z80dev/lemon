@@ -100,7 +100,7 @@ All event atoms passed as the first argument to `LemonCore.Introspection.record/
 
 ### CLI Runner Engine Events (M3) — `provenance: :inferred`
 
-Emitted by each engine-specific runner (Codex, Claude, Kimi, OpenCode, Pi).
+Emitted by each engine-specific runner (Codex, Claude, Droid, Kimi, OpenCode, Pi).
 
 | Event Type | Engines | When |
 |---|---|---|

@@ -52,6 +52,21 @@ auto_approve = false
 # Optional model override passed to `opencode run --model`.
 model = "gpt-4.1"
 
+[runtime.cli.droid]
+# Optional model override passed to `droid exec -m`.
+model = "builder-v1"
+# Optional reasoning effort passed to `--reasoning-effort`.
+reasoning_effort = "medium"
+# Optional tool allow/deny lists passed to `--enabled-tools` / `--disabled-tools`.
+enabled_tools = ["grep", "read_file"]
+disabled_tools = ["write"]
+# Optional planning/spec mode.
+use_spec = false
+spec_model = "planner-v1"
+# Optional extra flags appended before the prompt.
+extra_args = []
+# Authentication is provided via FACTORY_API_KEY.
+
 [runtime.cli.pi]
 # Optional extra flags prepended to the `pi` command.
 extra_args = []
@@ -437,7 +452,7 @@ max_tool_invoke_depth = 4
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: retry settings.
-- `runtime.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
+- `runtime.cli`: CLI runner settings (`codex`, `claude`, `droid`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, `bindings`, and `engines`.
 - `logging`: optional file logging configuration.

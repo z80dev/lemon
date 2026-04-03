@@ -443,7 +443,7 @@ LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
   LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
 ```
 
-Default engines: `lemon echo codex claude opencode pi kimi`. Override via `config :lemon_core, :known_engines`.
+Default engines: `lemon echo codex claude droid opencode pi kimi`. Override via `config :lemon_core, :known_engines`.
 
 ## Runtime Bridge
 

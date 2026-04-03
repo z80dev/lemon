@@ -46,6 +46,13 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
       assert config.cli.pi.extra_args == []
       assert config.cli.pi.model == nil
       assert config.cli.pi.provider == nil
+      assert config.cli.droid.extra_args == []
+      assert config.cli.droid.model == nil
+      assert config.cli.droid.reasoning_effort == nil
+      assert config.cli.droid.enabled_tools == []
+      assert config.cli.droid.disabled_tools == []
+      assert config.cli.droid.use_spec == false
+      assert config.cli.droid.spec_model == nil
       assert config.cli.claude.dangerously_skip_permissions == true
       assert config.cli.claude.scrub_env == :auto
       assert config.cli.claude.env_overrides == %{}
@@ -58,6 +65,15 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
             "codex" => %{"extra_args" => ["--flag"], "auto_approve" => true},
             "opencode" => %{"model" => "gpt-4o"},
             "pi" => %{"model" => "test", "provider" => "openai"},
+            "droid" => %{
+              "extra_args" => ["--plain-output"],
+              "model" => "builder",
+              "reasoning_effort" => "medium",
+              "enabled_tools" => ["grep"],
+              "disabled_tools" => ["write"],
+              "use_spec" => true,
+              "spec_model" => "planner"
+            },
             "claude" => %{
               "dangerously_skip_permissions" => false,
               "allowed_tools" => ["bash"],
@@ -77,6 +93,13 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
       assert config.cli.opencode.model == "gpt-4o"
       assert config.cli.pi.model == "test"
       assert config.cli.pi.provider == "openai"
+      assert config.cli.droid.extra_args == ["--plain-output"]
+      assert config.cli.droid.model == "builder"
+      assert config.cli.droid.reasoning_effort == "medium"
+      assert config.cli.droid.enabled_tools == ["grep"]
+      assert config.cli.droid.disabled_tools == ["write"]
+      assert config.cli.droid.use_spec == true
+      assert config.cli.droid.spec_model == "planner"
       assert config.cli.claude.dangerously_skip_permissions == false
       assert config.cli.claude.allowed_tools == ["bash"]
       assert config.cli.claude.scrub_env == true

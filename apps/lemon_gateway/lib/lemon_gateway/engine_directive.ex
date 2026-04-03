@@ -19,7 +19,7 @@ defmodule LemonGateway.EngineDirective do
   def strip(text) when is_binary(text) do
     text = String.trim(text)
 
-    case Regex.run(~r{^/(lemon|codex|claude|opencode|pi|echo|kimi)\b\s*(.*)$}is, text) do
+    case Regex.run(~r{^/(lemon|codex|claude|droid|opencode|pi|echo|kimi)\b\s*(.*)$}is, text) do
       [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
       _ -> {nil, text}
     end

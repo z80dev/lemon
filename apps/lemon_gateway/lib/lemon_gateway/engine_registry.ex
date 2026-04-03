@@ -52,6 +52,7 @@ defmodule LemonGateway.EngineRegistry do
         LemonGateway.Engines.Echo,
         LemonGateway.Engines.Codex,
         LemonGateway.Engines.Claude,
+        LemonGateway.Engines.Droid,
         LemonGateway.Engines.Opencode,
         LemonGateway.Engines.Pi,
         LemonGateway.Engines.Kimi

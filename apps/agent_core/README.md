@@ -109,6 +109,7 @@ Each supported external AI engine has three modules:
 |--------|--------|--------|----------|
 | Claude | `claude_runner.ex` | `claude_schema.ex` | `claude_subagent.ex` |
 | Codex | `codex_runner.ex` | `codex_schema.ex` | `codex_subagent.ex` |
+| Droid | `droid_runner.ex` | `droid_schema.ex` | `droid_subagent.ex` |
 | Kimi | `kimi_runner.ex` | `kimi_schema.ex` | `kimi_subagent.ex` |
 | OpenCode | `opencode_runner.ex` | `opencode_schema.ex` | `opencode_subagent.ex` |
 | Pi | `pi_runner.ex` | `pi_schema.ex` | `pi_subagent.ex` |

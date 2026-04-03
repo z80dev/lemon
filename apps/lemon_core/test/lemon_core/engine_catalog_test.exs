@@ -20,7 +20,17 @@ defmodule LemonCore.EngineCatalogTest do
   test "uses default known engine ids" do
     Application.delete_env(:lemon_core, :known_engines)
 
-    assert EngineCatalog.list_ids() == ["lemon", "echo", "codex", "claude", "opencode", "pi", "kimi"]
+    assert EngineCatalog.list_ids() == [
+             "lemon",
+             "echo",
+             "codex",
+             "claude",
+             "droid",
+             "opencode",
+             "pi",
+             "kimi"
+           ]
+
     assert EngineCatalog.normalize(" Claude ") == "claude"
     assert EngineCatalog.known?("echo")
     refute EngineCatalog.known?("unknown")

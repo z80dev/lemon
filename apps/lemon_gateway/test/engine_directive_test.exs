@@ -21,6 +21,11 @@ defmodule LemonGateway.EngineDirectiveTest do
                {"claude", "summarize the code"}
     end
 
+    test "strips /droid directive with trailing text" do
+      assert EngineDirective.strip("/droid inspect this repository") ==
+               {"droid", "inspect this repository"}
+    end
+
     test "strips /opencode directive with trailing text" do
       assert EngineDirective.strip("/opencode refactor module") == {"opencode", "refactor module"}
     end
@@ -49,6 +54,10 @@ defmodule LemonGateway.EngineDirectiveTest do
 
     test "strips /claude with no trailing text" do
       assert EngineDirective.strip("/claude") == {"claude", ""}
+    end
+
+    test "strips /droid with no trailing text" do
+      assert EngineDirective.strip("/droid") == {"droid", ""}
     end
 
     test "strips /opencode with no trailing text" do

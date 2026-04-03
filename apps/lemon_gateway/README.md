@@ -82,6 +82,7 @@ Part of the `lemon` Elixir umbrella project.
 | `lemon` | `Engines.Lemon` | `CodingAgent.CliRunners.LemonRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering |
 | `claude` | `Engines.Claude` | `AgentCore.CliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
 | `codex` | `Engines.Codex` | `AgentCore.CliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
+| `droid` | `Engines.Droid` | `AgentCore.CliRunners.DroidRunner` | No | Factory Droid CLI wrapper via CliAdapter |
 | `opencode` | `Engines.Opencode` | `AgentCore.CliRunners.OpencodeRunner` | No | Opencode CLI wrapper via CliAdapter |
 | `pi` | `Engines.Pi` | `AgentCore.CliRunners.PiRunner` | No | Pi CLI wrapper via CliAdapter |
 | `echo` | `Engines.Echo` | (in-process Task) | No | Test/debug engine that echoes the prompt back |
@@ -169,6 +170,7 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Engines.Lemon` | `engines/lemon.ex` | Native CodingAgent engine with steering |
 | `LemonGateway.Engines.Claude` | `engines/claude.ex` | Claude Code CLI adapter |
 | `LemonGateway.Engines.Codex` | `engines/codex.ex` | OpenAI Codex CLI adapter |
+| `LemonGateway.Engines.Droid` | `engines/droid.ex` | Factory Droid CLI adapter |
 | `LemonGateway.Engines.Opencode` | `engines/opencode.ex` | Opencode CLI adapter |
 | `LemonGateway.Engines.Pi` | `engines/pi.ex` | Pi CLI adapter |
 | `LemonGateway.Engines.Echo` | `engines/echo.ex` | Test/debug echo engine |
