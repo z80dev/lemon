@@ -29,6 +29,9 @@ defmodule CodingAgent.Session.Persistence do
             MessageSerialization.serialize_message(message)
           )
 
+        %CodingAgent.Messages.CustomMessage{} ->
+          append_custom_message_once(state.session_manager, message)
+
         _ ->
           state.session_manager
       end
@@ -90,5 +93,38 @@ defmodule CodingAgent.Session.Persistence do
       {:error, reason} ->
         {:error, reason, state}
     end
+  end
+
+  @spec append_custom_message(Session.t(), CodingAgent.Messages.CustomMessage.t()) :: Session.t()
+  def append_custom_message(%Session{} = session_manager, %CodingAgent.Messages.CustomMessage{} = message) do
+    session_manager
+    |> SessionManager.append_custom_message(MessageSerialization.serialize_message(message))
+  end
+
+  defp append_custom_message_once(
+         %Session{} = session_manager,
+         %CodingAgent.Messages.CustomMessage{} = message
+       ) do
+    serialized = MessageSerialization.serialize_message(message)
+
+    if custom_message_persisted?(session_manager, serialized) do
+      session_manager
+    else
+      SessionManager.append_custom_message(session_manager, serialized)
+    end
+  end
+
+  defp custom_message_persisted?(%Session{} = session_manager, serialized) do
+    Enum.any?(SessionManager.entries(session_manager), fn
+      %SessionManager.SessionEntry{type: :custom_message} = entry ->
+        entry.custom_type == serialized["custom_type"] and
+          entry.content == serialized["content"] and
+          entry.display == serialized["display"] and
+          entry.details == serialized["details"] and
+          entry.timestamp == serialized["timestamp"]
+
+      _ ->
+        false
+    end)
   end
 end

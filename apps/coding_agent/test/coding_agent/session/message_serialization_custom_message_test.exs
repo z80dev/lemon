@@ -180,7 +180,7 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
   end
 
   @tag :tmp_dir
-  test "SessionManager persistence currently collapses CustomMessage structs in details via json_safe",
+  test "SessionManager persistence preserves nested CustomMessage structs in details",
        %{
          tmp_dir: tmp_dir
        } do
@@ -205,9 +205,14 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
     [entry] = SessionManager.entries(loaded)
 
     assert entry.type == :custom_message
-    assert is_binary(entry.details)
-    assert String.contains?(entry.details, "CodingAgent.Messages.CustomMessage")
-    assert String.contains?(entry.details, "custom_type: \"nested\"")
+    assert entry.details == %{
+             "role" => "custom",
+             "custom_type" => "nested",
+             "content" => "inner",
+             "display" => true,
+             "details" => %{"status" => "done"},
+             "timestamp" => 99
+           }
   end
 
   test "deserialize_message still reconstructs role=custom payloads" do
@@ -230,7 +235,7 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
            }
   end
 
-  test "serialize_message currently falls through and returns the CustomMessage struct as-is" do
+  test "serialize_message emits role=custom payloads for CustomMessage structs" do
     message = %CustomMessage{
       role: :custom,
       custom_type: "async_followup",
@@ -241,9 +246,14 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
 
     serialized = MessageSerialization.serialize_message(message)
 
-    assert serialized == message
-    assert match?(%CustomMessage{}, serialized)
-    refute match?(%{"role" => "custom"}, serialized)
+    assert serialized == %{
+             "role" => "custom",
+             "custom_type" => "async_followup",
+             "content" => "Task completed",
+             "display" => true,
+             "details" => %{"task_id" => "task-123"},
+             "timestamp" => 321
+           }
   end
 
   defp round_trip_custom_message(%CustomMessage{} = message) do

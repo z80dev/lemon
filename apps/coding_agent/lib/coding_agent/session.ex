@@ -59,6 +59,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.UI.Context, as: UIContext
+  alias CodingAgent.Messages.CustomMessage
 
   # ============================================================================
   # State
@@ -299,6 +300,14 @@ defmodule CodingAgent.Session do
   @spec follow_up(GenServer.server(), String.t()) :: :ok
   def follow_up(session, text) do
     GenServer.cast(session, {:follow_up, text})
+  end
+
+  @doc """
+  Add a structured async follow-up message to the session.
+  """
+  @spec handle_async_followup(GenServer.server(), CustomMessage.t() | String.t() | map()) :: :ok
+  def handle_async_followup(session, message_or_attrs) do
+    GenServer.call(session, {:handle_async_followup, message_or_attrs})
   end
 
   @doc """
@@ -570,6 +579,21 @@ defmodule CodingAgent.Session do
       # very fast (mocked) runs.
       timer_ref = Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
 
+      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+    end
+  end
+
+  def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
+    state = refresh_system_prompt(state)
+    message = State.build_async_followup_message(message_or_attrs)
+    state = persist_message(state, message)
+
+    if state.is_streaming do
+      AgentCore.Agent.follow_up(state.agent, message)
+      queue = :queue.in(message, state.follow_up_queue)
+      {:reply, :ok, %{state | follow_up_queue: queue}}
+    else
+      timer_ref = Process.send_after(self(), {:do_prompt, message}, @prompt_defer_ms)
       {:reply, :ok, State.begin_prompt(state, timer_ref)}
     end
   end
@@ -931,6 +955,15 @@ defmodule CodingAgent.Session do
       {:noreply, %{state | pending_prompt_timer_ref: nil}}
     else
       # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
+    if state.pending_prompt_timer_ref do
+      _ = AgentCore.Agent.prompt(state.agent, message)
+      {:noreply, %{state | pending_prompt_timer_ref: nil}}
+    else
       {:noreply, state}
     end
   end

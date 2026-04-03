@@ -1,6 +1,7 @@
 defmodule CodingAgent.Session.PersistenceTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session.Persistence
   alias CodingAgent.SessionManager
 
@@ -30,6 +31,35 @@ defmodule CodingAgent.Session.PersistenceTest do
 
     [message] = Persistence.restore_messages_from_session(session_manager)
     assert %Ai.Types.UserMessage{content: "hello", timestamp: 1} = message
+  end
+
+  test "persist_message stores and restores async followups as custom messages" do
+    session_manager = SessionManager.new("/tmp")
+    state = %{session_manager: session_manager}
+
+    message = %CustomMessage{
+      custom_type: "async_followup",
+      content: "task completed",
+      details: %{source: :task, task_id: "task-123", run_id: "run-123"},
+      timestamp: 123
+    }
+
+    next_state = Persistence.persist_message(state, message)
+
+    [restored] = Persistence.restore_messages_from_session(next_state.session_manager)
+
+    assert restored == %CustomMessage{
+             role: :custom,
+             custom_type: "async_followup",
+             content: "task completed",
+             display: true,
+             details: %{
+               "source" => :task,
+               "task_id" => "task-123",
+               "run_id" => "run-123"
+             },
+             timestamp: 123
+           }
   end
 
   test "save persists session file and updates session_file on state" do

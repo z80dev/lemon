@@ -21,7 +21,7 @@ defmodule CodingAgent.Tools.Task.Followup do
       when is_map(followup_context) do
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
 
-    if send_async_followup_to_live_session(followup_context, text) do
+    if send_async_followup_to_live_session(followup_context, text, task_id, run_id) do
       :ok
     else
       submit_async_followup_via_router(followup_context, task_id, run_id, text)
@@ -136,14 +136,17 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp short_id(id) when byte_size(id) > 8, do: String.slice(id, 0, 8)
   defp short_id(id), do: id
 
-  defp send_async_followup_to_live_session(followup_context, text) do
+  defp send_async_followup_to_live_session(followup_context, text, task_id, run_id) do
     session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
     session_pid = Map.get(followup_context, :session_pid)
 
     if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :follow_up, 2) and
+         function_exported?(session_module, :handle_async_followup, 2) and
          live_session_streaming?(session_module, session_pid) do
-      case session_module.follow_up(session_pid, text) do
+      case session_module.handle_async_followup(
+             session_pid,
+             build_async_followup_message(text, task_id, run_id, :live)
+           ) do
         :ok -> true
         {:error, _reason} -> false
         _other -> true
@@ -201,9 +204,10 @@ defmodule CodingAgent.Tools.Task.Followup do
           cwd: cwd,
           meta:
             Map.merge(extra_meta, %{
-              task_auto_followup: true,
-              task_id: task_id,
-              run_id: run_id
+              :task_auto_followup => true,
+              :task_id => task_id,
+              :run_id => run_id,
+              "async_followups" => [async_followup_entry(task_id, run_id, :router)]
             })
         })
 
@@ -272,6 +276,28 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)
+
+  defp build_async_followup_message(text, task_id, run_id, delivery) do
+    %{
+      content: text,
+      details: %{
+        source: :task,
+        task_id: task_id,
+        run_id: run_id,
+        delivery: delivery
+      },
+      async_followups: [async_followup_entry(task_id, run_id, delivery)]
+    }
+  end
+
+  defp async_followup_entry(task_id, run_id, delivery) do
+    %{
+      source: :task,
+      task_id: task_id,
+      run_id: run_id,
+      delivery: delivery
+    }
+  end
 
   defp log_followup_failure(task_id, run_id, reason) do
     Logger.warning(

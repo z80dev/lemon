@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
   alias Elixir.CodingAgent.{RunGraph, Subagents, TaskStore}
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
+  alias CodingAgent.Messages.CustomMessage
   alias LemonCore.{Bus, Event, RunRequest, Store}
 
   defmodule AgentTestStubRunOrchestrator do
@@ -32,8 +33,8 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   defmodule AgentTestSessionSpy do
-    def follow_up(pid, text) do
-      send(pid, {:session_follow_up, text})
+    def handle_async_followup(pid, message) do
+      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
       :ok
     end
 
@@ -43,8 +44,8 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   defmodule AgentTestIdleSessionSpy do
-    def follow_up(pid, text) do
-      send(pid, {:session_follow_up, text})
+    def handle_async_followup(pid, message) do
+      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
       :ok
     end
 
@@ -54,8 +55,8 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   defmodule AgentTestHealthCheckSessionSpy do
-    def follow_up(pid, text) do
-      send(pid, {:session_follow_up, text})
+    def handle_async_followup(pid, message) do
+      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
       :ok
     end
 
@@ -235,8 +236,14 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
       )
 
-    assert_receive {:session_follow_up, text}, 500
-    assert text =~ "oracle update"
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.custom_type == "async_followup"
+    assert message.content =~ "oracle update"
+    assert message.details.source == :agent
+    assert message.details.task_id == result.details.task_id
+    assert message.details.run_id == result.details.run_id
+    assert message.details.agent_id == "oracle"
+    assert message.details.session_key == result.details.session_key
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
@@ -273,7 +280,17 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
-    refute_receive {:session_follow_up, _}, 150
+    assert followup.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: result.details.task_id,
+               run_id: result.details.run_id,
+               agent_id: "oracle",
+               session_key: result.details.session_key,
+               delivery: :router
+             }
+           ]
+    refute_receive {:session_async_followup, _}, 150
   end
 
   test "auto_followup uses health_check fallback when session module does not export get_state" do
@@ -305,8 +322,9 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
       )
 
-    assert_receive {:session_follow_up, text}, 500
-    assert text =~ "oracle update"
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.content =~ "oracle update"
+    assert message.details.source == :agent
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
@@ -347,6 +365,16 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
+    assert followup.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: result.details.task_id,
+               run_id: result.details.run_id,
+               agent_id: "oracle",
+               session_key: result.details.session_key,
+               delivery: :router
+             }
+           ]
   end
 
   test "async completion can recover from missed bus events via run summary store polling" do

@@ -430,11 +430,14 @@ defmodule LemonRouter.SessionTransitions do
   defp async_followup_entries(meta) when is_map(meta) do
     existing = normalize_async_followups(MapHelpers.get_key(meta, :async_followups))
 
-    existing ++
+    if existing != [] do
+      existing
+    else
       case extract_async_followup(meta) do
         nil -> []
         entry -> [entry]
       end
+    end
   end
 
   defp async_followup_entries(_meta), do: []
