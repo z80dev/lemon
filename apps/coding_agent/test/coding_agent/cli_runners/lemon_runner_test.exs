@@ -2,6 +2,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.CliRunners.LemonRunner
+  alias CodingAgent.Messages.CustomMessage
+  alias CodingAgent.Session
 
   alias AgentCore.CliRunners.Types.{
     Action,
@@ -13,6 +15,80 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   }
 
   alias AgentCore.EventStream
+  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
+
+  defp mock_model do
+    %Model{
+      id: "mock-model-1",
+      name: "Mock Model",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://api.mock.test",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.01, output: 0.03},
+      context_window: 128_000,
+      max_tokens: 4096,
+      headers: %{},
+      compat: nil
+    }
+  end
+
+  defp assistant_message(text) do
+    %AssistantMessage{
+      role: :assistant,
+      content: [%TextContent{type: :text, text: text}],
+      api: :mock,
+      provider: :mock_provider,
+      model: "mock-model-1",
+      usage: %Usage{
+        input: 1,
+        output: 1,
+        cache_read: 0,
+        cache_write: 0,
+        total_tokens: 2,
+        cost: %Cost{input: 0.0, output: 0.0, total: 0.0}
+      },
+      stop_reason: :stop,
+      timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  defp mock_stream_fn_single_delayed(response, delay_ms) do
+    fn _model, _context, _options ->
+      {:ok, stream} = Ai.EventStream.start_link()
+
+      Task.start(fn ->
+        Ai.EventStream.push(stream, {:start, response})
+        Ai.EventStream.push(stream, {:text_start, 0, response})
+        Ai.EventStream.push(stream, {:text_delta, 0, CodingAgent.Messages.get_text(response), response})
+        Ai.EventStream.push(stream, {:text_end, 0, response})
+        Process.sleep(delay_ms)
+        Ai.EventStream.push(stream, {:done, response.stop_reason, response})
+        Ai.EventStream.complete(stream, response)
+      end)
+
+      {:ok, stream}
+    end
+  end
+
+  defp wait_until(fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition not met before timeout")
+      else
+        Process.sleep(10)
+        do_wait_until(fun, deadline)
+      end
+    end
+  end
 
   # ============================================================================
   # Module API Tests
@@ -60,6 +136,50 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     # Note: Full integration tests require CodingAgent.Session to be available,
     # which depends on the coding_agent application being started.
     # These tests are in the coding_agent app's test suite.
+
+    @tag :tmp_dir
+    test "router-delivered async followups enter session history as custom messages", %{
+      tmp_dir: tmp_dir
+    } do
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "[task task-123] delegated work completed",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: mock_stream_fn_single_delayed(assistant_message("ack"), 200),
+          async_followups: [
+            %{source: :task, task_id: "task-123", run_id: "run-123", delivery: :router}
+          ]
+        )
+
+      wait_until(fn ->
+        try do
+          session = :sys.get_state(runner).session
+
+          Process.alive?(session) and
+            Enum.any?(Session.get_messages(session), &match?(%CustomMessage{}, &1))
+        catch
+          :exit, _ -> false
+        end
+      end)
+
+      session = :sys.get_state(runner).session
+      messages = Session.get_messages(session)
+
+      assert Enum.any?(messages, fn
+               %CustomMessage{
+                 custom_type: "async_followup",
+                 content: "[task task-123] delegated work completed",
+                 details: details
+               } ->
+                 details[:source] == :task and
+                   details[:task_id] == "task-123" and
+                   details[:run_id] == "run-123"
+
+               _ ->
+                 false
+             end)
+    end
   end
 
   # ============================================================================

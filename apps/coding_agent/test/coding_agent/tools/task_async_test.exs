@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent.Tools.Task
   alias Elixir.CodingAgent.TaskStore
   alias Elixir.CodingAgent.RunGraph
+  alias CodingAgent.Messages.CustomMessage
   alias LemonCore.RunRequest
 
   defmodule TaskAsyncStubRunOrchestrator do
@@ -32,8 +33,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   defmodule TaskAsyncSessionSpy do
-    def follow_up(pid, text) do
-      send(pid, {:session_follow_up, text})
+    def handle_async_followup(pid, message) do
+      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
       :ok
     end
 
@@ -43,8 +44,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   defmodule TaskAsyncIdleSessionSpy do
-    def follow_up(pid, text) do
-      send(pid, {:session_follow_up, text})
+    def handle_async_followup(pid, message) do
+      send(pid, {:session_async_followup, CodingAgent.Session.State.build_async_followup_message(message)})
       :ok
     end
 
@@ -103,10 +104,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      assert_receive {:session_follow_up, text}, 1_000
-      assert text =~ "[task #{result.details.task_id}]"
-      assert text =~ "Live followup task"
-      assert text =~ "task output"
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.custom_type == "async_followup"
+      assert message.content =~ "[task #{result.details.task_id}]"
+      assert message.content =~ "Live followup task"
+      assert message.content =~ "task output"
+      assert message.details.source == :task
+      assert message.details.task_id == result.details.task_id
+      assert message.details.run_id == result.details.run_id
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -151,6 +156,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.cwd == parent_cwd
       assert followup.prompt =~ "Router followup task"
       assert followup.prompt =~ "router output"
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :router
+               }
+             ]
     end
 
     test "falls back to router followup when session pid is alive but idle" do
@@ -182,12 +195,20 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      refute_receive {:session_follow_up, _text}, 150
+      refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.session_key == "agent:main:main"
       assert followup.agent_id == "main"
       assert followup.prompt =~ "Idle followup task"
       assert followup.prompt =~ "idle output"
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :router
+               }
+             ]
     end
 
     test "uses task-level routing overrides for async followup fallback" do
@@ -235,6 +256,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.meta.task_id == result.details.task_id
       assert followup.meta.run_id == result.details.run_id
       assert followup.meta.task_auto_followup == true
+      assert followup.meta["async_followups"] == [
+               %{
+                 source: :task,
+                 task_id: result.details.task_id,
+                 run_id: result.details.run_id,
+                 delivery: :router
+               }
+             ]
     end
 
     test "does not send followup when auto_followup is false" do
@@ -263,7 +292,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      refute_receive {:session_follow_up, _text}, 200
+      refute_receive {:session_async_followup, _message}, 200
       refute_receive {:router_submit, %RunRequest{}, _}, 200
     end
   end
@@ -846,12 +875,12 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       task_id = result.details.task_id
       run_id = result.details.run_id
 
-      assert_receive {:session_follow_up, text}, 1_000
-      assert text =~ "[task #{task_id}]"
-      assert text =~ "Build widget"
-      assert text =~ "run="
-      assert text =~ "completed."
-      assert text =~ "Widget built successfully"
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content =~ "[task #{task_id}]"
+      assert message.content =~ "Build widget"
+      assert message.content =~ "run="
+      assert message.content =~ "completed."
+      assert message.content =~ "Widget built successfully"
     end
 
     test "formats failed task with error" do
@@ -879,11 +908,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       task_id = result.details.task_id
 
-      assert_receive {:session_follow_up, text}, 1_000
-      assert text =~ "[task #{task_id}]"
-      assert text =~ "Broken task"
-      assert text =~ "failed:"
-      assert text =~ "connection refused"
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content =~ "[task #{task_id}]"
+      assert message.content =~ "Broken task"
+      assert message.content =~ "failed:"
+      assert message.content =~ "connection refused"
     end
 
     test "formats completion with empty answer" do
@@ -914,11 +943,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       task_id = result.details.task_id
 
-      assert_receive {:session_follow_up, text}, 1_000
-      assert text =~ "[task #{task_id}]"
-      assert text =~ "completed."
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content =~ "[task #{task_id}]"
+      assert message.content =~ "completed."
       # Should NOT contain trailing content after "completed."
-      refute text =~ "completed.\n\n\n"
+      refute message.content =~ "completed.\n\n\n"
     end
 
     test "formats failure with partial output" do
@@ -949,12 +978,12 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       task_id = result.details.task_id
 
-      assert_receive {:session_follow_up, text}, 1_000
-      assert text =~ "[task #{task_id}]"
-      assert text =~ "failed:"
-      assert text =~ "timeout"
-      assert text =~ "Partial output:"
-      assert text =~ "Got halfway done"
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content =~ "[task #{task_id}]"
+      assert message.content =~ "failed:"
+      assert message.content =~ "timeout"
+      assert message.content =~ "Partial output:"
+      assert message.content =~ "Got halfway done"
     end
   end
 
@@ -964,13 +993,13 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "follow-up error resilience" do
     defmodule CrashingSession do
-      def follow_up(_pid, _text) do
+      def handle_async_followup(_pid, _message) do
         raise "session exploded"
       end
     end
 
     defmodule NoFollowUpSession do
-      # This module intentionally does NOT export follow_up/2
+      # This module intentionally does NOT export handle_async_followup/2
     end
 
     test "handles session crash during follow_up gracefully" do
@@ -1006,12 +1035,12 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
     end
 
-    test "falls back to router when session module lacks follow_up/2" do
+    test "falls back to router when session module lacks handle_async_followup/2" do
       result =
         Task.execute(
           "call_no_func",
           %{
-            "description" => "No follow_up func test",
+            "description" => "No async followup func test",
             "prompt" => "Test missing func",
             "async" => true,
             "auto_followup" => true
@@ -1035,7 +1064,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      # Session module doesn't have follow_up/2, so it should route via router
+      # Session module doesn't have handle_async_followup/2, so it should route via router
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
     end
 

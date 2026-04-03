@@ -46,11 +46,23 @@ defmodule CodingAgent.Session.MessageSerialization do
     }
   end
 
+  def serialize_message(%CodingAgent.Messages.CustomMessage{} = msg) do
+    %{
+      "role" => "custom",
+      "custom_type" => msg.custom_type,
+      "content" => serialize_content(msg.content),
+      "display" => msg.display,
+      "details" => normalize_map_keys(msg.details),
+      "timestamp" => msg.timestamp
+    }
+  end
+
   def serialize_message(msg) when is_map(msg) do
     msg
   end
 
   @spec serialize_content(String.t() | list()) :: String.t() | list()
+  def serialize_content(nil), do: ""
   def serialize_content(content) when is_binary(content), do: content
 
   def serialize_content(content) when is_list(content) do
@@ -71,6 +83,29 @@ defmodule CodingAgent.Session.MessageSerialization do
   end
 
   def serialize_content_block(%Ai.Types.ToolCall{id: id, name: name, arguments: arguments}) do
+    %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
+  end
+
+  def serialize_content_block(%CodingAgent.Messages.TextContent{text: text}) do
+    %{"type" => "text", "text" => text}
+  end
+
+  def serialize_content_block(%CodingAgent.Messages.ImageContent{
+        data: data,
+        mime_type: mime_type
+      }) do
+    %{"type" => "image", "data" => data, "mime_type" => mime_type}
+  end
+
+  def serialize_content_block(%CodingAgent.Messages.ThinkingContent{thinking: thinking}) do
+    %{"type" => "thinking", "thinking" => thinking}
+  end
+
+  def serialize_content_block(%CodingAgent.Messages.ToolCall{
+        id: id,
+        name: name,
+        arguments: arguments
+      }) do
     %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
   end
 
@@ -232,4 +267,16 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_trust(:trusted), do: :trusted
   def deserialize_trust("trusted"), do: :trusted
   def deserialize_trust(_), do: :trusted
+
+  defp normalize_map_keys(nil), do: nil
+
+  defp normalize_map_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {normalize_key(key), normalize_map_keys(value)} end)
+  end
+
+  defp normalize_map_keys(list) when is_list(list), do: Enum.map(list, &normalize_map_keys/1)
+  defp normalize_map_keys(other), do: other
+
+  defp normalize_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_key(key), do: key
 end

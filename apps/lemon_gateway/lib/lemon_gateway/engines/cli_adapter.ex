@@ -134,6 +134,7 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:model, get_in(job.meta || %{}, [:model]))
       |> maybe_put(:thinking_level, get_in(job.meta || %{}, [:thinking_level]))
       |> maybe_put(:system_prompt, get_in(job.meta || %{}, [:system_prompt]))
+      |> maybe_put(:async_followups, async_followups(job))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
       |> maybe_put(:extra_tools, gateway_extra_tools(engine_id, job, opts))
 
@@ -201,6 +202,11 @@ defmodule LemonGateway.Engines.CliAdapter do
       _ ->
         nil
     end
+  end
+
+  defp async_followups(job) do
+    meta = job.meta || %{}
+    meta[:async_followups] || meta["async_followups"]
   end
 
   defp consume_runner(runner_module, runner_pid, engine_id, sink_pid, run_ref) do

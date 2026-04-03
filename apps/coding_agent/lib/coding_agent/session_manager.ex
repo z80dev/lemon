@@ -429,6 +429,36 @@ defmodule CodingAgent.SessionManager do
   end
 
   @doc """
+  Convenience function for appending custom message entries.
+  """
+  @spec append_custom_message(Session.t(), map()) :: Session.t()
+  def append_custom_message(%Session{} = session, %{"role" => "custom"} = message) do
+    entry =
+      SessionEntry.custom_message(
+        message["custom_type"],
+        message["content"],
+        display: message["display"],
+        details: message["details"],
+        timestamp: message["timestamp"]
+      )
+
+    append_entry(session, entry)
+  end
+
+  def append_custom_message(%Session{} = session, %{role: :custom} = message) do
+    entry =
+      SessionEntry.custom_message(
+        message.custom_type,
+        message.content,
+        display: Map.get(message, :display),
+        details: Map.get(message, :details),
+        timestamp: Map.get(message, :timestamp)
+      )
+
+    append_entry(session, entry)
+  end
+
+  @doc """
   Add compaction entry.
   """
   @spec append_compaction(Session.t(), String.t(), String.t(), non_neg_integer(), map() | nil) ::
@@ -999,7 +1029,12 @@ defmodule CodingAgent.SessionManager do
     Ai.Types.AssistantMessage,
     Ai.Types.ToolResultMessage,
     Ai.Types.Usage,
-    Ai.Types.Cost
+    Ai.Types.Cost,
+    CodingAgent.Messages.CustomMessage,
+    CodingAgent.Messages.TextContent,
+    CodingAgent.Messages.ThinkingContent,
+    CodingAgent.Messages.ImageContent,
+    CodingAgent.Messages.ToolCall
   ]
 
   defp json_safe(%_{} = term) do

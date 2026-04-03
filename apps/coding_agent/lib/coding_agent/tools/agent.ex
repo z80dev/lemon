@@ -526,7 +526,7 @@ defmodule CodingAgent.Tools.Agent do
 
     target_agent_id = validated.agent_id
 
-    if send_followup_via_live_session(text, opts) do
+    if send_followup_via_live_session(text, run_id, task_id, target_agent_id, request, opts) do
       :ok
     else
       send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
@@ -540,14 +540,24 @@ defmodule CodingAgent.Tools.Agent do
       :ok
   end
 
-  defp send_followup_via_live_session(text, opts) do
+  defp send_followup_via_live_session(text, run_id, task_id, target_agent_id, request, opts) do
     session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
     session_pid = Keyword.get(opts, :session_pid)
 
     if is_pid(session_pid) and Process.alive?(session_pid) and
-         function_exported?(session_module, :follow_up, 2) and
+         function_exported?(session_module, :handle_async_followup, 2) and
          live_session_streaming?(session_module, session_pid) do
-      case session_module.follow_up(session_pid, text) do
+      case session_module.handle_async_followup(
+             session_pid,
+             build_async_followup_message(
+               text,
+               run_id,
+               task_id,
+               target_agent_id,
+               request.session_key,
+               :live
+             )
+           ) do
         :ok -> true
         {:error, _reason} -> false
         _other -> true
@@ -600,11 +610,14 @@ defmodule CodingAgent.Tools.Agent do
           prompt: text,
           queue_mode: :followup,
           meta: %{
-            delegated_auto_followup: true,
-            delegated_run_id: run_id,
-            delegated_task_id: task_id,
-            delegated_agent_id: target_agent_id,
-            delegated_session_key: delegated_session_key
+            :delegated_auto_followup => true,
+            :delegated_run_id => run_id,
+            :delegated_task_id => task_id,
+            :delegated_agent_id => target_agent_id,
+            :delegated_session_key => delegated_session_key,
+            "async_followups" => [
+              async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, :router)
+            ]
           }
         })
 
@@ -863,6 +876,41 @@ defmodule CodingAgent.Tools.Agent do
   defp format_duration(ms) when ms < 1000, do: "#{ms}ms"
   defp format_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
   defp format_duration(ms), do: "#{Float.round(ms / 60_000, 1)}m"
+
+  defp build_async_followup_message(
+         text,
+         run_id,
+         task_id,
+         target_agent_id,
+         delegated_session_key,
+         delivery
+       ) do
+    %{
+      content: text,
+      details: %{
+        source: :agent,
+        task_id: task_id,
+        run_id: run_id,
+        agent_id: target_agent_id,
+        session_key: delegated_session_key,
+        delivery: delivery
+      },
+      async_followups: [
+        async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, delivery)
+      ]
+    }
+  end
+
+  defp async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, delivery) do
+    %{
+      source: :agent,
+      task_id: task_id,
+      run_id: run_id,
+      agent_id: target_agent_id,
+      session_key: delegated_session_key,
+      delivery: delivery
+    }
+  end
 
   defp validate_run_params(params, cwd) when is_map(params) do
     agent_id = Map.get(params, "agent_id") |> normalize_optional_string()

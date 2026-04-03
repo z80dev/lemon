@@ -78,7 +78,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
           timeout: non_neg_integer(),
           model: term(),
           thinking_level: term(),
-          system_prompt: String.t() | nil
+          system_prompt: String.t() | nil,
+          async_followups: [map()],
+          stream_fn: function()
         ]
 
   defstruct [
@@ -194,8 +196,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     model = Keyword.get(opts, :model)
     thinking_level = Keyword.get(opts, :thinking_level)
     system_prompt = Keyword.get(opts, :system_prompt)
+    async_followups = Keyword.get(opts, :async_followups)
     approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
     extra_tools = Keyword.get(opts, :extra_tools)
+    stream_fn = Keyword.get(opts, :stream_fn)
 
     # Create the event stream
     {:ok, stream} =
@@ -261,6 +265,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       |> maybe_add_opt(:model, model)
       |> maybe_add_opt(:thinking_level, thinking_level)
       |> maybe_add_opt(:system_prompt, system_prompt)
+      |> maybe_add_opt(:stream_fn, stream_fn)
       |> maybe_add_opt(:tool_policy, tool_policy)
       |> maybe_add_opt(:approval_context, approval_context)
       |> maybe_add_opt(:session_key, session_key)
@@ -278,7 +283,17 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         _unsub = CodingAgent.Session.subscribe(session)
 
         # Send the prompt to start the agent
-        :ok = CodingAgent.Session.prompt(session, prompt)
+        case async_followups do
+          list when is_list(list) and list != [] ->
+            :ok =
+              CodingAgent.Session.handle_async_followup(session, %{
+                content: prompt,
+                async_followups: list
+              })
+
+          _ ->
+            :ok = CodingAgent.Session.prompt(session, prompt)
+        end
 
         session_ref = Process.monitor(session)
         state = %{state | session: session, session_ref: session_ref, session_id: session_id}

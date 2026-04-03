@@ -393,6 +393,76 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert merged_twice.execution_request.meta.run_id == "run-c"
   end
 
+  test "explicit async_followups metadata is not duplicated by legacy delegated fields" do
+    previous =
+      submission("run1", "s1", :followup, "part1",
+        meta: %{
+          "async_followups" => [
+            %{
+              source: :agent,
+              task_id: "task-a",
+              run_id: "run-a",
+              agent_id: "agent-a",
+              session_key: "session-a",
+              delivery: :router
+            }
+          ],
+          delegated_auto_followup: true,
+          delegated_task_id: "task-a",
+          delegated_run_id: "run-a",
+          delegated_agent_id: "agent-a",
+          delegated_session_key: "session-a"
+        },
+        request_meta: %{
+          "async_followups" => [
+            %{
+              source: :agent,
+              task_id: "task-a",
+              run_id: "run-a",
+              agent_id: "agent-a",
+              session_key: "session-a",
+              delivery: :router
+            }
+          ],
+          delegated_auto_followup: true,
+          delegated_task_id: "task-a",
+          delegated_run_id: "run-a",
+          delegated_agent_id: "agent-a",
+          delegated_session_key: "session-a"
+        }
+      )
+
+    current =
+      submission("run2", "s1", :followup, "part2",
+        meta: %{kind: "regular"},
+        request_meta: %{kind: "regular"}
+      )
+
+    merged = merge_followups(previous, current)
+
+    assert merged.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: "task-a",
+               run_id: "run-a",
+               agent_id: "agent-a",
+               session_key: "session-a",
+               delivery: :router
+             }
+           ]
+
+    assert merged.execution_request.meta["async_followups"] == [
+             %{
+               source: :agent,
+               task_id: "task-a",
+               run_id: "run-a",
+               agent_id: "agent-a",
+               session_key: "session-a",
+               delivery: :router
+             }
+           ]
+  end
+
   defp merge_followups(previous, current) do
     state = %SessionState{
       conversation_key: {:session, "s1"},

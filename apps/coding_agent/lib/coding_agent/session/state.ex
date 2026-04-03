@@ -5,6 +5,7 @@ defmodule CodingAgent.Session.State do
   alias Ai.Types.{ImageContent, TextContent, UserMessage}
   alias CodingAgent.Config
   alias CodingAgent.ContextGuardrails
+  alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Security.UntrustedToolBoundary
 
   @spec normalize_extra_tools(term()) :: [AgentTool.t()]
@@ -93,6 +94,60 @@ defmodule CodingAgent.Session.State do
       role: :user,
       content: content,
       timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  @spec build_async_followup_message(CustomMessage.t() | String.t() | map(), keyword()) ::
+          CustomMessage.t()
+  def build_async_followup_message(message_or_attrs, opts \\ [])
+
+  def build_async_followup_message(%CustomMessage{} = message, _opts) do
+    %CustomMessage{
+      message
+      | custom_type: normalize_custom_type(message.custom_type),
+        content: normalize_custom_content(message.content),
+        display: normalize_display(message.display),
+        details: merge_async_followup_details(message.details, details_async_followups(message.details)),
+        timestamp: normalize_timestamp(message.timestamp)
+    }
+  end
+
+  def build_async_followup_message(text, opts) when is_binary(text) and is_list(opts) do
+    build_async_followup_message(%{
+      content: text,
+      details: Keyword.get(opts, :details),
+      async_followups: Keyword.get(opts, :async_followups),
+      timestamp: Keyword.get(opts, :timestamp)
+    })
+  end
+
+  def build_async_followup_message(attrs, _opts) when is_map(attrs) do
+    details = Map.get(attrs, :details) || Map.get(attrs, "details")
+
+    async_followups =
+      Map.get(attrs, :async_followups) ||
+        Map.get(attrs, "async_followups") ||
+        details_async_followups(details)
+
+    %CustomMessage{
+      role: :custom,
+      custom_type:
+        attrs
+        |> Map.get(:custom_type, Map.get(attrs, "custom_type"))
+        |> normalize_custom_type(),
+      content:
+        attrs
+        |> Map.get(:content, Map.get(attrs, "content"))
+        |> normalize_custom_content(),
+      display:
+        attrs
+        |> Map.get(:display, Map.get(attrs, "display"))
+        |> normalize_display(),
+      details: merge_async_followup_details(details, normalize_async_followups(async_followups)),
+      timestamp:
+        attrs
+        |> Map.get(:timestamp, Map.get(attrs, "timestamp"))
+        |> normalize_timestamp()
     }
   end
 
@@ -215,4 +270,63 @@ defmodule CodingAgent.Session.State do
   defp determine_health_status(false, _error_rate), do: :unhealthy
   defp determine_health_status(true, error_rate) when error_rate > 0.2, do: :degraded
   defp determine_health_status(true, _error_rate), do: :healthy
+
+  defp normalize_custom_type(custom_type) when is_binary(custom_type) and custom_type != "",
+    do: custom_type
+
+  defp normalize_custom_type(_custom_type), do: "async_followup"
+
+  defp normalize_display(nil), do: true
+  defp normalize_display(display), do: display
+
+  defp normalize_custom_content(content) when is_list(content), do: content
+  defp normalize_custom_content(content) when is_binary(content), do: content
+  defp normalize_custom_content(_content), do: ""
+
+  defp normalize_timestamp(timestamp) when is_integer(timestamp) and timestamp > 0, do: timestamp
+  defp normalize_timestamp(_timestamp), do: System.system_time(:millisecond)
+
+  defp normalize_async_followups(list) when is_list(list) do
+    Enum.filter(list, &is_map/1)
+  end
+
+  defp normalize_async_followups(_other), do: []
+
+  defp details_async_followups(details) when is_map(details) do
+    normalize_async_followups(
+      Map.get(details, :async_followups) || Map.get(details, "async_followups")
+    )
+  end
+
+  defp details_async_followups(_details), do: []
+
+  defp merge_async_followup_details(details, []), do: details
+
+  defp merge_async_followup_details(details, async_followups) do
+    latest = List.last(async_followups)
+
+    details =
+      case details do
+        %{} = map -> map
+        nil -> %{}
+        other -> %{value: other}
+      end
+
+    details =
+      details
+      |> Map.put(:async_followups, async_followups)
+      |> maybe_put_async_detail(:source, latest)
+      |> maybe_put_async_detail(:task_id, latest)
+      |> maybe_put_async_detail(:run_id, latest)
+      |> maybe_put_async_detail(:delivery, latest)
+      |> maybe_put_async_detail(:agent_id, latest)
+      |> maybe_put_async_detail(:session_key, latest)
+
+    if map_size(details) == 0, do: nil, else: details
+  end
+
+  defp maybe_put_async_detail(details, key, followup) do
+    value = Map.get(followup, key) || Map.get(followup, Atom.to_string(key))
+    if is_nil(value), do: details, else: Map.put(details, key, value)
+  end
 end
