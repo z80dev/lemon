@@ -1,8 +1,52 @@
 # Async Followup Delivery And Provenance Plan
 
-Status: planning
+Status: shipped (with 3 known open items)
 
-Last reviewed: 2026-03-26
+Last reviewed: 2026-07-29 (Codex re-evaluation)
+
+## Progress
+
+### ✅ Quick wins (merged)
+- `675d0c7c` — CustomMessage serialization round-trip tests (7 tests)
+- `21473b7f` — Agent tool streaming check (matches task tool behavior)
+- `260c1f1f` — Merge-safe async_followups list in SessionTransitions
+- `eaa4dd07` — Quick-win review note fixes (persistence path test, health_check fallback, 3-way merge)
+
+### ✅ PR 1: Structured ingress + durable storage (merged)
+- `7eeb6f90` — CustomMessage now flows through the full async followup lifecycle
+  - Live path: `task/followup.ex` and `agent.ex` build structured metadata, call `handle_async_followup/2`
+  - Router path: `cli_adapter.ex` → `lemon_runner.ex` detects `meta["async_followups"]` → structured ingress
+  - Persistence: `append_custom_message/2`, `json_safe/1` whitelist, explicit `serialize_message/1` clause
+  - Serialization: string-key normalization for `details`, content serialization
+  - 95 tests across affected suites, 0 failures
+
+### ✅ PR 2: LLM provenance envelope (merged)
+- `9ec7c414` — `convert_to_llm/1` now renders async followups as UserMessage with provenance header
+  - Format: Markdown code fences (not XML — avoids injection), explicit `[SYSTEM-DELIVERED ASYNC COMPLETION]` header
+  - Header includes source, task_id, run_id, delivery
+  - Dynamic fence length handles embedded backticks in tool output
+  - 193 total tests, 0 failures
+
+### ✅ Delivery policy unification (merged)
+- `e0314e33` — Config-driven `default_queue_mode`, explicit dispatch rules per queue_mode
+  - New module: `CodingAgent.AsyncFollowups` (queue mode resolver)
+  - Router-owned modes (`:steer_backlog`, `:interrupt`, `:collect`) always route through router
+  - Agent tool: new `followup_queue_mode` param (separate from submission `queue_mode`)
+  - 67 tests across affected suites, 0 failures
+
+### 🔲 Remaining (verified 2026-07-29 Codex re-evaluation)
+
+1. **🔴 High — `details.delivery` metadata can be wrong after router promotion.**
+   Both `task` and delegated-agent router followups stamp provenance before router queue-mode rewriting, but `SessionTransitions.maybe_promote_auto_followup/2` can turn `:followup` into `:steer_backlog`. Persisted `details.delivery` and LLM envelope may claim `followup` when router actually did `steer_backlog`. Files: `followup.ex:209`, `agent.ex:629`, `messages.ex:484`.
+2. **🟡 Medium — Compaction still erases async-followup provenance.**
+   `SessionManager.build_session_context/2` emits a plain user summary for compacted history. Old async followups stop existing as distinct events even though `compaction.ex:929` can reconstruct `CustomMessage` entries before summarization. Restored long sessions lose async provenance where it matters most.
+3. **🟡 Medium — Missing full router-path regression test.**
+   Router-delivered save/restore and duplicate custom-message persistence already have coverage in `persistence_test.exs`, plus merge coverage in `session_transitions_test.exs`. What's missing is a focused `RunOrchestrator -> SessionTransitions promotion/merge -> LemonRunner -> restored session` regression that would catch the wrong-`delivery` bug above.
+
+### ✅ Previously listed but already done
+- ~~Duplicate persistence dedupe regression test~~ — coverage exists in `persistence_test.exs`
+- ~~End-to-end router persistence regression test~~ — partial coverage exists
+- ~~Consider unified `handle_ingress` path~~ — not needed; current separate `handle_async_followup/2` works
 
 ## Summary
 
@@ -1057,3 +1101,175 @@ delivery-policy refactor contained and testable.
     2.  **Phase 2: Persistence & Serialization.** Implement `append_custom_message` and fix the `json_safe` whitelist and `MessageSerialization` round-trip logic. Add dedicated serialization tests.
     3.  **Phase 3: Safe LLM Encoding.** Implement the user-role envelope with Markdown code fences in `Messages.convert_to_llm/1`.
     4.  **Phase 4: Delivery Policy Unification.** With the structured path in place, now implement the unified queue-mode resolution logic for both `task` and `agent` tools, confident that the chosen mode will be honored. Add a `followup_queue_mode` parameter to the `agent` tool.
+
+## 2026-07 Implementation Readiness Assessment (Codex) — ARCHIVED
+
+> **Note:** This section described the codebase state *before* the provenance work landed.
+> All items listed as `still present` below have been addressed in the shipped commits
+> (`675d0c7c`, `21473b7f`, `260c1f1f`, `eaa4dd07`, `7eeb6f90`, `9ec7c414`, `e0314e33`, `c2f7b9a8`).
+> Kept for historical reference only. See "Remaining" section above for current open items.
+
+### Review finding status (archived)
+
+All items below were `still present` at time of review. All have since been shipped.
+
+### Codex Review Findings — all `fixed`
+
+### Claude Review Findings — all `fixed`
+
+### Codex Re-Review Findings (2026-07) — all `fixed`
+
+### Gemini Review Findings (2026-07) — all `fixed`
+
+### Recommended implementation order — ARCHIVED
+
+> This order was followed. All phases shipped.
+
+### Cross-Workstream Conflict Analysis (Codex) — ARCHIVED
+
+> This analysis is historical. The provenance workstream is shipped. The status projection workstream is deferred (see `memory/topics/async-task-status-review.md`).
+
+## Cross-Workstream Conflict Analysis (Codex) — ARCHIVED
+
+> Historical reference. The provenance workstream shipped. The status projection workstream
+> is deferred (architecture cleanup only, not missing product capability).
+> The coordination recommendations below were followed during implementation.
+
+*(Full analysis preserved below for archive purposes.)*
+
+Direct overlap or adjacent seam overlap:
+
+- `apps/coding_agent/lib/coding_agent/tools/task/followup.ex`
+  - status workstream depends on this module continuing to emit stable async followup/task identity (`task_id`, `run_id`, queue semantics) even though it does not own status rendering.
+  - followup/provenance workstream explicitly changes its live-session vs router fallback behavior.
+- `apps/coding_agent/lib/coding_agent/cli_runners/lemon_runner.ex`
+  - status path already depends on `detail.result_meta` coming through Lemon-runner-backed task/poll flows.
+  - followup/provenance plan explicitly needs this file for router-delivered structured ingress.
+- `apps/lemon_router/lib/lemon_router/session_transitions.ex`
+  - status workstream does not center on it, but current async task completions use its auto-followup promotion and merge behavior.
+  - followup/provenance workstream explicitly needs merge-safe async provenance here.
+
+Shared infrastructure with strong coupling but mostly non-overlapping edits:
+
+- `apps/coding_agent/lib/coding_agent/tools/task/execution.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/async.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/result.ex`
+- `apps/coding_agent/lib/coding_agent/task_progress_binding_store.ex`
+- `apps/coding_agent/lib/coding_agent/task_progress_binding_server.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/live_bridge.ex`
+- `apps/lemon_router/lib/lemon_router/async_task_surface_subscriber.ex`
+- `apps/lemon_router/lib/lemon_router/surface_manager.ex`
+- `apps/lemon_router/lib/lemon_router/tool_status_coalescer.ex`
+- `apps/lemon_router/lib/lemon_router/run_process.ex`
+- `apps/coding_agent/lib/coding_agent/session.ex`
+- `apps/coding_agent/lib/coding_agent/session/state.ex`
+- `apps/coding_agent/lib/coding_agent/session/persistence.ex`
+- `apps/coding_agent/lib/coding_agent/session/message_serialization.ex`
+- `apps/coding_agent/lib/coding_agent/session_manager.ex`
+- `apps/coding_agent/lib/coding_agent/messages.ex`
+- `apps/coding_agent/lib/coding_agent/tools/agent.ex`
+- `apps/coding_agent/lib/coding_agent/task_store.ex`
+- `apps/coding_agent/lib/coding_agent/run_graph.ex`
+
+### What each workstream currently assumes
+
+Live Status Projection currently assumes:
+
+- async child progress can be mapped back to the parent task surface through `TaskProgressBindingStore` and `AsyncTaskSurfaceSubscriber`.
+- task roots expose stable `detail.result_meta.task_id`, `detail.result_meta.run_id`, `detail.result_meta.status`, `detail.result_meta.current_action`, and `detail.result_meta.action_detail` for poll rebinding and embedded child rendering.
+- router-owned display code still compensates for hybrid ownership in `SurfaceManager`, `RunProcess`, and `ToolStatusCoalescer`.
+
+Async Followup Delivery & Provenance currently assumes:
+
+- async completion delivery still enters the session through text-first APIs: `CodingAgent.Session.prompt/3`, `steer/2`, and `follow_up/2`.
+- router fallback still carries binary prompt text and queue metadata, with `SessionTransitions.merge_prompt/2` concatenating strings.
+- a safe first fix uses structured provenance in metadata plus structured ingress at `LemonRunner`/`Session`, without sending raw structs through `RunRequest.prompt`.
+
+### Conflicts found
+
+No hard architectural contradiction was found. The workstreams target different layers:
+
+- live status is primarily router-side status-surface ownership and async child projection.
+- followup/provenance is primarily session ingress, persistence, and model-context encoding.
+
+The real conflicts are sequencing and contract conflicts:
+
+1. `SessionTransitions` is a shared correctness hotspot.
+- Followup/provenance needs merge-safe `async_followups` accumulation instead of current scalar-overwrite `Map.merge/2`.
+- If that is not fixed first, concurrent async completions can still lose provenance even if structured ingress lands.
+- Status work does not directly depend on that data today, but it shares the same async completion traffic and queue timing.
+
+2. `LemonRunner` is a shared ingress seam.
+- Followup/provenance needs it to detect router-carried async metadata and call structured session ingress.
+- Status already relies on Lemon-runner-backed task metadata surviving through poll/result flows.
+- A parallel change that starts sending non-binary prompt payloads through router before `LemonRunner` and `Session` are updated would break current router assumptions (`merge_prompt/2` still assumes text).
+
+3. The status redesign wants to delete infrastructure the current system still uses.
+- The status review explicitly recommends eventually removing `TaskProgressBindingStore`, `TaskProgressBindingServer`, and `CodingAgent.Tools.Task.LiveBridge`.
+- That does not block followup/provenance directly, but it means the status branch must not delete or repurpose task/run identity plumbing until router-owned replacements preserve the current `task_id`/`run_id` contract.
+
+4. Metadata namespace drift is an avoidable conflict.
+- Status currently relies on `result_meta` and projected-child `detail` fields for display routing.
+- Followup/provenance should keep using a dedicated metadata key such as `async_followups` on router submissions, not overload status metadata fields.
+- This matches the followup plan's current assessment and avoids accidental collisions with status rendering.
+
+### Shared infrastructure opportunities
+
+- Canonical async identity contract:
+  keep `task_id`, `run_id`, `parent_run_id`, and queue-mode semantics stable across both workstreams. Both features already rely on `TaskStore` and `RunGraph`.
+- Canonical router-carried async metadata:
+  define one dedicated `meta["async_followups"]` list shape for completion provenance. That can be merged in `SessionTransitions` without touching status metadata.
+- Router-owned async lifecycle ownership:
+  if the AsyncTaskSurface redesign proceeds, it should reuse existing task lifecycle events on `LemonCore.Bus` plus `TaskStore`/`RunGraph`, instead of inventing a second async identity source.
+- Shared end-to-end tests:
+  add at least one router fallback async completion test that verifies both:
+  router queue/merge behavior and session ingress provenance preservation.
+
+### Recommended implementation order
+
+1. Land a small shared-contract cut first.
+- Update `apps/lemon_router/lib/lemon_router/session_transitions.ex` to accumulate async provenance as a list instead of overwriting scalar metadata.
+- Keep router prompts binary; do not send raw `%CustomMessage{}` through `RunRequest.prompt`.
+- Reserve a dedicated router metadata key for async provenance, separate from status metadata.
+
+2. Land followup/provenance structured ingress next.
+- `apps/coding_agent/lib/coding_agent/cli_runners/lemon_runner.ex`
+- `apps/coding_agent/lib/coding_agent/session.ex`
+- `apps/coding_agent/lib/coding_agent/session/state.ex`
+- `apps/coding_agent/lib/coding_agent/session/persistence.ex`
+- `apps/coding_agent/lib/coding_agent/session/message_serialization.ex`
+- `apps/coding_agent/lib/coding_agent/session_manager.ex`
+- `apps/coding_agent/lib/coding_agent/messages.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/followup.ex`
+- `apps/coding_agent/lib/coding_agent/tools/agent.ex`
+
+3. Then do the deeper AsyncTaskSurface/status ownership cleanup.
+- `apps/lemon_router/lib/lemon_router/surface_manager.ex`
+- `apps/lemon_router/lib/lemon_router/async_task_surface_subscriber.ex`
+- `apps/lemon_router/lib/lemon_router/run_process.ex`
+- `apps/lemon_router/lib/lemon_router/tool_status_coalescer.ex`
+- `apps/coding_agent/lib/coding_agent/task_progress_binding_store.ex`
+- `apps/coding_agent/lib/coding_agent/task_progress_binding_server.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/live_bridge.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/execution.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task/result.ex`
+
+Reason for this order:
+
+- the followup/provenance work fixes a current correctness bug on `main`.
+- it only needs a small router contract change up front.
+- the status redesign is broader and explicitly intends to remove compatibility layers, so it is safer to do after the ingress/provenance carrier is stabilized.
+
+### Final verdict
+
+These workstreams should not be treated as fully independent, but they also do not need to be strictly sequential end-to-end.
+
+- They can proceed in parallel after a small shared contract agreement on:
+  `SessionTransitions` merge behavior, router metadata naming, and keeping prompt transport text-based.
+- They should avoid concurrent edits to:
+  `apps/lemon_router/lib/lemon_router/session_transitions.ex`
+  and
+  `apps/coding_agent/lib/coding_agent/cli_runners/lemon_runner.ex`.
+- The status redesign should merge after the ingress/provenance carrier is stable, especially before deleting `TaskProgressBindingStore`/`LiveBridge` compatibility paths.
+
+Practical verdict: parallelizable with coordination, but not safely independent; do the small router metadata/merge contract first, then followup/provenance, then the heavier AsyncTaskSurface cleanup.
