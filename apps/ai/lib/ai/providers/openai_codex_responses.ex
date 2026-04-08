@@ -74,6 +74,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
                              "queued",
                              "in_progress"
                            ])
+  @default_instructions "You are a coding assistant."
 
   # ============================================================================
   # Provider Behaviour
@@ -155,7 +156,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
       "model" => model.id,
       "store" => false,
       "stream" => true,
-      "instructions" => context.system_prompt,
+      "instructions" => normalize_instructions(context.system_prompt),
       "input" => messages,
       "text" => %{"verbosity" => get_text_verbosity(opts)},
       "include" => ["reasoning.encrypted_content"],
@@ -200,6 +201,12 @@ defmodule Ai.Providers.OpenAICodexResponses do
   defp get_text_verbosity(opts) do
     Map.get(opts.thinking_budgets || %{}, :text_verbosity, "medium")
   end
+
+  defp normalize_instructions(prompt) when is_binary(prompt) do
+    if String.trim(prompt) == "", do: @default_instructions, else: prompt
+  end
+
+  defp normalize_instructions(_), do: @default_instructions
 
   defp clamp_reasoning_effort(model_id, effort) do
     # Extract base model ID
@@ -503,7 +510,6 @@ defmodule Ai.Providers.OpenAICodexResponses do
     end
   end
 
-
   # ============================================================================
   # Event Mapping
   # ============================================================================
@@ -565,5 +571,4 @@ defmodule Ai.Providers.OpenAICodexResponses do
   # ============================================================================
   # Helpers
   # ============================================================================
-
 end

@@ -435,6 +435,27 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
+    test "uses default instructions when system prompt is missing" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "bad request")
+      end)
+
+      model = make_model()
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+
+      assert_receive {:request_body, body}, 1000
+      assert body["instructions"] == "You are a coding assistant."
+
+      EventStream.result(stream, 1000)
+    end
+
     test "sets store to false" do
       test_pid = self()
 
