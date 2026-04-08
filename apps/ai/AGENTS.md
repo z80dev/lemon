@@ -76,6 +76,7 @@ Ai (main API)
   and normalization of restored map-shaped content blocks (`text`, `image`, `thinking`, `tool_use`,
   tool-result text) before Anthropic-compatible request building for providers like MiniMax
 - `Ai.Models.OpenAI` - Static direct OpenAI model catalog used by channel pickers; keep latest alias IDs aligned with live `GET /v1/models` results for the configured key and remove dead aliases instead of leaving them selectable
+- `:"openai-codex"` model registry - Derived from the direct OpenAI catalog plus Codex OAuth-only IDs; do not assume `/v1/models` is authoritative for ChatGPT/Codex-authenticated model availability
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text

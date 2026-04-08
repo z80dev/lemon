@@ -125,6 +125,10 @@ pickers. Keep the latest alias IDs there aligned with live `GET /v1/models`
 results for the configured OpenAI key, and remove dead aliases instead of
 leaving them selectable.
 
+`:"openai-codex"` is a separate ChatGPT/Codex OAuth catalog layered on top of the
+direct OpenAI list. It may include OAuth-only model IDs that do not appear in the
+API-key `/v1/models` response.
+
 Anthropic-compatible providers also normalize restored map-shaped content blocks
 during request building. That keeps replayed session history usable when message
 content has been serialized and reloaded as plain maps instead of `Ai.Types`

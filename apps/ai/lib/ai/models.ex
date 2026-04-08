@@ -35,10 +35,39 @@ defmodule Ai.Models do
   # Provider Submodule Imports
   # ============================================================================
 
+  @openai_codex_oauth_only_models %{
+    "codex-mini-latest" => %Model{
+      id: "codex-mini-latest",
+      name: "Codex Mini",
+      api: :openai_codex_responses,
+      provider: :"openai-codex",
+      base_url: "https://chatgpt.com",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 200_000,
+      max_tokens: 100_000
+    },
+    "gpt-5.3-codex-spark" => %Model{
+      id: "gpt-5.3-codex-spark",
+      name: "GPT-5.3 Codex Spark",
+      api: :openai_codex_responses,
+      provider: :"openai-codex",
+      base_url: "https://chatgpt.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 32_000
+    }
+  }
+
   # OpenAI Codex (ChatGPT OAuth) uses the Codex Responses endpoint.
-  # Models are mostly the same IDs as OpenAI's Responses API, but usage is billed
-  # via ChatGPT subscription, not per-token API pricing, so we set costs to 0.
-  @openai_codex_models Enum.into(Ai.Models.OpenAI.models(), %{}, fn {id, model} ->
+  # Most models mirror the direct OpenAI Responses API, but some IDs are only
+  # available through the ChatGPT/Codex auth surface and should not be inferred
+  # from the direct `/v1/models` API-key catalog.
+  @openai_codex_models Ai.Models.OpenAI.models()
+                       |> Enum.into(%{}, fn {id, model} ->
                          {id,
                           %Model{
                             model
@@ -53,6 +82,7 @@ defmodule Ai.Models do
                               }
                           }}
                        end)
+                       |> Map.merge(@openai_codex_oauth_only_models)
 
   # ============================================================================
   # Combined Registry

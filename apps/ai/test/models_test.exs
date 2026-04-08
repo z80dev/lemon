@@ -44,6 +44,21 @@ defmodule Ai.ModelsLegacyTest do
       assert model.cost.input == 0.0
     end
 
+    test "returns oauth-only openai-codex model ids" do
+      spark = Models.get_model(:"openai-codex", "gpt-5.3-codex-spark")
+      mini = Models.get_model(:"openai-codex", "codex-mini-latest")
+
+      assert %Model{} = spark
+      assert spark.api == :openai_codex_responses
+      assert spark.provider == :"openai-codex"
+      assert spark.base_url == "https://chatgpt.com"
+
+      assert %Model{} = mini
+      assert mini.api == :openai_codex_responses
+      assert mini.provider == :"openai-codex"
+      assert mini.base_url == "https://chatgpt.com"
+    end
+
     test "returns google model by id" do
       model = Models.get_model(:google, "gemini-2.5-pro")
 
@@ -133,6 +148,8 @@ defmodule Ai.ModelsLegacyTest do
       assert is_list(models)
       assert length(models) > 0
       assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
+      assert Enum.any?(models, &(&1.id == "gpt-5.3-codex-spark"))
+      assert Enum.any?(models, &(&1.id == "codex-mini-latest"))
     end
 
     test "returns all google models" do
