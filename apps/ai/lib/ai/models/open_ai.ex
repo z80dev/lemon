@@ -9,18 +9,6 @@ defmodule Ai.Models.OpenAI do
   alias Ai.Types.{Model, ModelCost}
 
   @models %{
-    "codex-mini-latest" => %Model{
-      id: "codex-mini-latest",
-      name: "Codex Mini",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      reasoning: true,
-      input: [:text],
-      cost: %ModelCost{input: 1.5, output: 6.0, cache_read: 0.375, cache_write: 0.0},
-      context_window: 200_000,
-      max_tokens: 100_000
-    },
     "gpt-4" => %Model{
       id: "gpt-4",
       name: "GPT-4",
@@ -321,18 +309,6 @@ defmodule Ai.Models.OpenAI do
       context_window: 400_000,
       max_tokens: 128_000
     },
-    "gpt-5.3-codex-spark" => %Model{
-      id: "gpt-5.3-codex-spark",
-      name: "GPT-5.3 Codex Spark",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
-      context_window: 128_000,
-      max_tokens: 32_000
-    },
     "gpt-5.2-pro" => %Model{
       id: "gpt-5.2-pro",
       name: "GPT-5.2 Pro",
@@ -355,6 +331,30 @@ defmodule Ai.Models.OpenAI do
       input: [:text, :image],
       cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 0.0},
       context_window: 272_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4-mini" => %Model{
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.4, output: 3.2, cache_read: 0.04, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.4-nano" => %Model{
+      id: "gpt-5.4-nano",
+      name: "GPT-5.4 Nano",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.1, output: 0.8, cache_read: 0.01, cache_write: 0.0},
+      context_window: 400_000,
       max_tokens: 128_000
     },
     "gpt-5.4-pro" => %Model{
@@ -405,18 +405,6 @@ defmodule Ai.Models.OpenAI do
       context_window: 200_000,
       max_tokens: 100_000
     },
-    "o3-deep-research" => %Model{
-      id: "o3-deep-research",
-      name: "o3-deep-research",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 10.0, output: 40.0, cache_read: 2.5, cache_write: 0.0},
-      context_window: 200_000,
-      max_tokens: 100_000
-    },
     "o3-mini" => %Model{
       id: "o3-mini",
       name: "o3-mini",
@@ -426,18 +414,6 @@ defmodule Ai.Models.OpenAI do
       reasoning: true,
       input: [:text],
       cost: %ModelCost{input: 1.1, output: 4.4, cache_read: 0.55, cache_write: 0.0},
-      context_window: 200_000,
-      max_tokens: 100_000
-    },
-    "o3-pro" => %Model{
-      id: "o3-pro",
-      name: "o3-pro",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 20.0, output: 80.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 200_000,
       max_tokens: 100_000
     },

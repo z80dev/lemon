@@ -514,15 +514,15 @@ defmodule Ai.ModelsLegacyTest do
       assert model.name == "Gemini 3 Pro Preview"
     end
 
-    test "gpt 5.3 codex spark has correct specs" do
-      model = Models.get_model(:openai, "gpt-5.3-codex-spark")
+    test "gpt 5.4 mini has correct specs" do
+      model = Models.get_model(:openai, "gpt-5.4-mini")
 
-      assert model.cost.input == 1.75
-      assert model.cost.output == 14.0
-      assert model.cost.cache_read == 0.175
+      assert model.cost.input == 0.4
+      assert model.cost.output == 3.2
+      assert model.cost.cache_read == 0.04
       assert model.cost.cache_write == 0.0
-      assert model.context_window == 128_000
-      assert model.max_tokens == 32_000
+      assert model.context_window == 400_000
+      assert model.max_tokens == 128_000
       assert model.reasoning == true
     end
   end
@@ -560,12 +560,22 @@ defmodule Ai.ModelsLegacyTest do
       assert Models.get_model(:openai, "gpt-4o") != nil
       assert Models.get_model(:openai, "gpt-4o-mini") != nil
       assert Models.get_model(:openai, "gpt-5") != nil
+      assert Models.get_model(:openai, "gpt-5.4") != nil
+      assert Models.get_model(:openai, "gpt-5.4-mini") != nil
+      assert Models.get_model(:openai, "gpt-5.4-nano") != nil
+      assert Models.get_model(:openai, "gpt-5.4-pro") != nil
       assert Models.get_model(:openai, "o1") != nil
       assert Models.get_model(:openai, "o3") != nil
       assert Models.get_model(:openai, "o3-mini") != nil
       assert Models.get_model(:openai, "gpt-5.2-codex") != nil
       assert Models.get_model(:openai, "gpt-5.3-codex") != nil
-      assert Models.get_model(:openai, "gpt-5.3-codex-spark") != nil
+    end
+
+    test "dead direct openai ids stay out of the catalog" do
+      assert Models.get_model(:openai, "codex-mini-latest") == nil
+      assert Models.get_model(:openai, "gpt-5.3-codex-spark") == nil
+      assert Models.get_model(:openai, "o3-deep-research") == nil
+      assert Models.get_model(:openai, "o3-pro") == nil
     end
 
     test "google flagship models" do

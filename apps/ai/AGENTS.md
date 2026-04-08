@@ -41,7 +41,7 @@ Ai (main API)
 | `Ai.RateLimiter` | Token bucket rate limiting per provider, lazy-started |
 | `Ai.ModelCache` | ETS-backed model availability cache (5-minute default TTL) |
 | `Ai.EventStream` | Async GenServer for streaming events with lifecycle management |
-| `Ai.Models` | All model definitions and metadata (large file: many thousands of lines) |
+| `Ai.Models` | All model definitions and metadata (large file: many thousands of lines). Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
 | `Ai.Types` | All type/struct definitions (inline in module) |
 | `Ai.Error` | HTTP error parsing, classification, and formatting utilities |
 | `Ai.HttpInspector` | Captures and saves request dumps for 4xx errors |
@@ -72,7 +72,10 @@ Ai (main API)
 - `Ai.Providers.Anthropic` - Anthropic Messages provider, including Claude Code-compatible
   OAuth request/response shaping for Claude subscription auth (`anthropic-beta` headers,
   dynamic Claude CLI version detection, Claude Code system identity, OAuth-only system prompt
-  sanitization, `mcp_` tool name normalization/prefixing/stripping, and adaptive thinking on Claude 4.6)
+  sanitization, `mcp_` tool name normalization/prefixing/stripping, adaptive thinking on Claude 4.6,
+  and normalization of restored map-shaped content blocks (`text`, `image`, `thinking`, `tool_use`,
+  tool-result text) before Anthropic-compatible request building for providers like MiniMax
+- `Ai.Models.OpenAI` - Static direct OpenAI model catalog used by channel pickers; keep latest alias IDs aligned with live `GET /v1/models` results for the configured key and remove dead aliases instead of leaving them selectable
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
@@ -584,7 +587,9 @@ Run with: `mix test --include integration`
 
 Provider env vars are part of Lemon's canonical override layer and should be
 resolved centrally through `LemonCore.ProviderConfigResolver` / provider config,
-not by adding new direct env reads inside provider modules.
+including OpenAI-compatible providers such as OpenAI, ZAI, MiniMax, Fireworks,
+OpenRouter, Groq, xAI, Mistral, and Copilot. Do not add new direct env reads
+inside provider modules.
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
@@ -694,3 +699,4 @@ Ai.Supervisor (one_for_one)
 - Use `Ai.CircuitBreaker.get_state(:provider)` to inspect circuit breaker status
 - Use `Ai.CallDispatcher.get_state()` to see concurrency caps and active request counts
 - Use `Ai.ModelCache.stats()` to inspect cache entries
+OpenAI-compatible providers must resolve provider-specific API keys before falling back to `OPENAI_API_KEY` (for example `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`).

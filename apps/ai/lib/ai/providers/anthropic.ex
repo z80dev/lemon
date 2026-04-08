@@ -1181,6 +1181,19 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
+  defp convert_user_content_block(%{"type" => "text", "text" => text}, _model)
+       when is_binary(text) do
+    if String.trim(text) != "" do
+      %{"type" => "text", "text" => text}
+    else
+      nil
+    end
+  end
+
+  defp convert_user_content_block(%{type: :text, text: text}, model) do
+    convert_user_content_block(%{"type" => "text", "text" => text}, model)
+  end
+
   defp convert_user_content_block(%Ai.Types.ImageContent{data: data, mime_type: mime_type}, model) do
     if :image in model.input do
       %{
@@ -1196,6 +1209,46 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
+  defp convert_user_content_block(
+         %{
+           "type" => "image",
+           "source" => %{
+             "type" => "base64",
+             "media_type" => mime_type,
+             "data" => data
+           }
+         },
+         model
+       )
+       when is_binary(mime_type) and is_binary(data) do
+    if :image in model.input do
+      %{
+        "type" => "image",
+        "source" => %{
+          "type" => "base64",
+          "media_type" => mime_type,
+          "data" => data
+        }
+      }
+    else
+      nil
+    end
+  end
+
+  defp convert_user_content_block(%{type: :image, data: data, mime_type: mime_type}, model) do
+    convert_user_content_block(
+      %{
+        "type" => "image",
+        "source" => %{
+          "type" => "base64",
+          "media_type" => mime_type,
+          "data" => data
+        }
+      },
+      model
+    )
+  end
+
   defp convert_user_content_block(_, _), do: nil
 
   defp convert_assistant_content_block(%TextContent{text: text}, _oauth_request?) do
@@ -1204,6 +1257,15 @@ defmodule Ai.Providers.Anthropic do
     else
       nil
     end
+  end
+
+  defp convert_assistant_content_block(%{"type" => "text", "text" => text}, oauth_request?)
+       when is_binary(text) do
+    convert_assistant_content_block(%TextContent{text: text}, oauth_request?)
+  end
+
+  defp convert_assistant_content_block(%{type: :text, text: text}, oauth_request?) do
+    convert_assistant_content_block(%{"type" => "text", "text" => text}, oauth_request?)
   end
 
   defp convert_assistant_content_block(
@@ -1230,6 +1292,31 @@ defmodule Ai.Providers.Anthropic do
   end
 
   defp convert_assistant_content_block(
+         %{"type" => "thinking", "thinking" => thinking} = block,
+         oauth_request?
+       )
+       when is_binary(thinking) do
+    convert_assistant_content_block(
+      %ThinkingContent{
+        thinking: thinking,
+        thinking_signature: Map.get(block, "signature")
+      },
+      oauth_request?
+    )
+  end
+
+  defp convert_assistant_content_block(
+         %{type: :thinking, thinking: thinking} = block,
+         oauth_request?
+       )
+       when is_binary(thinking) do
+    convert_assistant_content_block(
+      %{"type" => "thinking", "thinking" => thinking, "signature" => Map.get(block, :signature)},
+      oauth_request?
+    )
+  end
+
+  defp convert_assistant_content_block(
          %ToolCall{id: id, name: name, arguments: args},
          oauth_request?
        ) do
@@ -1241,6 +1328,28 @@ defmodule Ai.Providers.Anthropic do
     }
   end
 
+  defp convert_assistant_content_block(
+         %{"type" => "tool_use", "id" => id, "name" => name, "input" => args},
+         oauth_request?
+       )
+       when is_binary(id) and is_binary(name) and is_map(args) do
+    convert_assistant_content_block(
+      %ToolCall{id: id, name: name, arguments: args},
+      oauth_request?
+    )
+  end
+
+  defp convert_assistant_content_block(
+         %{type: :tool_use, id: id, name: name, input: args},
+         oauth_request?
+       )
+       when is_binary(id) and is_binary(name) and is_map(args) do
+    convert_assistant_content_block(
+      %{"type" => "tool_use", "id" => id, "name" => name, "input" => args},
+      oauth_request?
+    )
+  end
+
   defp convert_assistant_content_block(_, _oauth_request?), do: nil
 
   defp convert_tool_result_content(content) when is_list(content) do
@@ -1248,9 +1357,15 @@ defmodule Ai.Providers.Anthropic do
       content
       |> Enum.filter(fn
         %TextContent{} -> true
+        %{"type" => "text", "text" => text} when is_binary(text) -> true
+        %{type: :text, text: text} when is_binary(text) -> true
         _ -> false
       end)
-      |> Enum.map(fn %TextContent{text: text} -> text end)
+      |> Enum.map(fn
+        %TextContent{text: text} -> text
+        %{"text" => text} -> text
+        %{text: text} -> text
+      end)
       |> Enum.join("\n")
 
     if text_parts != "", do: text_parts, else: "(empty result)"

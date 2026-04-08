@@ -73,7 +73,7 @@ Ai.Supervisor (one_for_one)
 
 | Module | `api_id` | Covers |
 |--------|----------|--------|
-| `Ai.Providers.Anthropic` | `:anthropic_messages` | Anthropic Claude (also Kimi, OpenCode via same wire format) |
+| `Ai.Providers.Anthropic` | `:anthropic_messages` | Anthropic Claude (also Kimi, OpenCode, MiniMax Anthropic-compat via same wire format) |
 | `Ai.Providers.OpenAICompletions` | `:openai_completions` | OpenAI Chat Completions and compatible APIs (Groq, Mistral, xAI, Cerebras, OpenRouter, HuggingFace, etc.) |
 | `Ai.Providers.OpenAIResponses` | `:openai_responses` | OpenAI Responses API |
 | `Ai.Providers.OpenAICodexResponses` | `:openai_codex_responses` | OpenAI Codex (ChatGPT JWT auth) |
@@ -119,6 +119,16 @@ Each provider has a dedicated module under `Ai.Models.*` that returns a
 `Ai.Models.MiniMaxCN`, `Ai.Models.ZAI`, `Ai.Models.Kimi`,
 `Ai.Models.KimiCoding`, `Ai.Models.OpenCode`, `Ai.Models.HuggingFace`,
 `Ai.Models.OpenRouter`, `Ai.Models.VercelAIGateway`
+
+The direct OpenAI catalog in `Ai.Models.OpenAI` is user-facing in channel model
+pickers. Keep the latest alias IDs there aligned with live `GET /v1/models`
+results for the configured OpenAI key, and remove dead aliases instead of
+leaving them selectable.
+
+Anthropic-compatible providers also normalize restored map-shaped content blocks
+during request building. That keeps replayed session history usable when message
+content has been serialized and reloaded as plain maps instead of `Ai.Types`
+structs.
 
 ## Supported Providers
 
@@ -371,6 +381,7 @@ Events emitted by `Ai.EventStream`:
 ## Environment Variables
 
 Provider env vars are consumed through Lemon's central config resolution path.
+That includes OpenAI-compatible providers that share `Ai.Providers.OpenAICompletions`.
 New provider code should not add direct `System.get_env/1` fallbacks for
 config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
 

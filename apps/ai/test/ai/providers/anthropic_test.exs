@@ -449,6 +449,133 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
 
+    test "converts map-shaped user text blocks for MiniMax anthropic compatibility" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 200, minimal_success_body())
+      end)
+
+      minimax_model =
+        model(%{
+          id: "MiniMax-M2.7",
+          provider: :minimax,
+          base_url: "https://api.minimax.io/anthropic",
+          reasoning: true
+        })
+
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: [%{"type" => "text", "text" => "Hello from restored text"}]}
+          ]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(minimax_model, context, %StreamOptions{api_key: "sk-test"})
+
+      assert_receive {:body, body}, 1000
+      [msg] = body["messages"]
+      assert msg["role"] == "user"
+
+      assert msg["content"] == [
+               %{
+                 "type" => "text",
+                 "text" => "Hello from restored text",
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    test "converts map-shaped assistant and tool result blocks when replaying MiniMax history" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 200, minimal_success_body())
+      end)
+
+      minimax_model =
+        model(%{
+          id: "MiniMax-M2.7",
+          provider: :minimax,
+          base_url: "https://api.minimax.io/anthropic",
+          reasoning: true
+        })
+
+      assistant_msg = %AssistantMessage{
+        content: [
+          %{"type" => "thinking", "thinking" => "Plan carefully", "signature" => "sig-123"},
+          %{
+            "type" => "tool_use",
+            "id" => "tc_1",
+            "name" => "lookup",
+            "input" => %{"q" => "MiniMax"}
+          }
+        ]
+      }
+
+      tool_result = %ToolResultMessage{
+        tool_call_id: "tc_1",
+        content: [%{"type" => "text", "text" => "Lookup result"}],
+        is_error: false
+      }
+
+      context =
+        Context.new(
+          messages: [
+            assistant_msg,
+            tool_result,
+            %UserMessage{content: "Continue"}
+          ]
+        )
+
+      {:ok, stream} =
+        Anthropic.stream(minimax_model, context, %StreamOptions{api_key: "sk-test"})
+
+      assert_receive {:body, body}, 1000
+      [assistant_body, tool_result_body, user_body] = body["messages"]
+
+      assert assistant_body == %{
+               "role" => "assistant",
+               "content" => [
+                 %{
+                   "type" => "thinking",
+                   "thinking" => "Plan carefully",
+                   "signature" => "sig-123"
+                 },
+                 %{
+                   "type" => "tool_use",
+                   "id" => "tc_1",
+                   "name" => "lookup",
+                   "input" => %{"q" => "MiniMax"}
+                 }
+               ]
+             }
+
+      assert tool_result_body == %{
+               "role" => "user",
+               "content" => [
+                 %{
+                   "type" => "tool_result",
+                   "tool_use_id" => "tc_1",
+                   "content" => "Lookup result",
+                   "is_error" => false
+                 }
+               ]
+             }
+
+      assert user_body["role"] == "user"
+      assert user_body["content"] == "Continue"
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
     test "converts tools to Anthropic format" do
       test_pid = self()
 
