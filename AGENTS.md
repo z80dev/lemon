@@ -239,6 +239,8 @@ npm run dev      # Watch mode
 ./bin/lemon-tui    # TUI attached to unified runtime; auto-starts runtime if needed
 ```
 
+`./bin/lemon` should be started with a working secrets master key in env on Linux (`LEMON_SECRETS_MASTER_KEY`) unless keychain loading is available; otherwise the runtime can boot with channels/providers present but encrypted secrets undecryptable.
+
 ---
 
 ## Architecture Overview
