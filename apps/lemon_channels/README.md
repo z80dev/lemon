@@ -274,13 +274,27 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram` (plugin) | Plugin behaviour implementation, id/meta/child_spec/deliver |
 | `Telegram.Supervisor` | Starts `AsyncSupervisor` (Task.Supervisor) and `Transport` |
 | `Telegram.Transport` | Long-polling GenServer via `getUpdates`, command handling, inbound routing |
+| `Telegram.Transport.ApprovalRequest` | Approval-request rendering and callback payload helpers for exec approvals |
+| `Telegram.Transport.CallbackHandler` | Inline keyboard callback handling for approvals and model-picker flows |
+| `Telegram.Transport.ChatPreferences` | Trigger gating plus `/trigger`, `/thinking`, and `/cwd` command handling |
 | `Telegram.Transport.Poller` | Poll loop and update dispatch extracted from `Transport` |
 | `Telegram.Transport.CommandRouter` | Command/message decision tree extracted from `Transport` |
 | `Telegram.Transport.Commands` | Pure functions for command detection, scope keys, message joining |
 | `Telegram.Transport.FileOperations` | `/file put`/`get` commands, auto-put for document uploads, media group file handling |
+| `Telegram.Transport.InboundActions` | Router submission path for normal inbound messages, including progress reactions and session metadata |
+| `Telegram.Transport.InboundContext` | Normalized transport event context shared across normalize/pipeline/action-runner |
 | `Telegram.Transport.MediaGroups` | Media group coalescence with debounce timer |
+| `Telegram.Transport.MemoryReflection` | `/new` memory-reflection transcript assembly and prompt generation |
 | `Telegram.Transport.MessageBuffer` | Debounce buffering for rapid-fire user messages |
+| `Telegram.Transport.ModelPicker` | `/model` picker flow, provider/model pagination, and selection-state transitions |
+| `Telegram.Transport.Normalize` | Raw update/timer normalization into Telegram-local inbound context |
+| `Telegram.Transport.PerChatState` | Telegram per-thread state, generation bookkeeping, and last-engine helpers |
+| `Telegram.Transport.Pipeline` | Telegram-local ingress coordinator for normalized events and emitted actions |
+| `Telegram.Transport.RuntimeState` | Helper for adapter-owned runtime state without a dedicated struct migration |
+| `Telegram.Transport.SessionRouting` | Session-key derivation, reply routing, and parallel-session bookkeeping |
+| `Telegram.Transport.TopicCommand` | `/topic` command handler extracted from the transport shell |
 | `Telegram.Transport.UpdateProcessor` | Authorization, dedup, routing pipeline, known-target indexing, engine directive parsing |
+| `Telegram.Transport.VoiceHandler` | Voice-download and transcription orchestration before normal inbound routing |
 | `Telegram.Renderer` | Telegram semantic renderer for stream snapshots, finals, edits, and presentation-state-aware delivery |
 | `Telegram.StatusRenderer` | Telegram-specific tool-status formatting and controls rendering |
 | `Telegram.FileBatcher` | Telegram media/file batching strategy for renderer-owned outbound UX |
