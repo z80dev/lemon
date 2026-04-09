@@ -1,6 +1,7 @@
 defmodule CodingAgent.Tools.TaskTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Tools.Task
   alias AgentCore.AbortSignal
   alias LemonCore.ResumeToken
@@ -12,6 +13,7 @@ defmodule CodingAgent.Tools.TaskTest do
       assert tool.name == "task"
       assert tool.label == "Run Task"
       assert tool.description =~ "subtask"
+      assert tool.description =~ "Do not rely on auto_followup alone"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == []
       assert is_function(tool.execute, 4)
@@ -42,14 +44,14 @@ defmodule CodingAgent.Tools.TaskTest do
   end
 
   describe "execute/6 - parameter validation" do
-    test "returns error when description is missing" do
+    test "derives description from prompt when description is missing" do
       result =
         Task.execute("call_1", %{"prompt" => "do something"}, nil, nil, "/tmp", [])
 
-      assert {:error, "Description is required"} = result
+      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
-    test "returns error when description is empty" do
+    test "derives description from prompt when description is empty" do
       result =
         Task.execute(
           "call_1",
@@ -60,10 +62,10 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Description must be a non-empty string"} = result
+      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
-    test "returns error when description is not a string" do
+    test "derives description from prompt when description is not a string" do
       result =
         Task.execute(
           "call_1",
@@ -74,7 +76,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Description must be a non-empty string"} = result
+      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
     test "returns error when prompt is empty" do
@@ -381,6 +383,72 @@ defmodule CodingAgent.Tools.TaskTest do
       assert {:error,
               "queue_mode must be one of: collect, followup, steer, steer_backlog, interrupt"} =
                result
+    end
+  end
+
+  describe "prompt tool-only guardrails" do
+    test "infers an internal tool policy from tool-only prompt wording" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "Inspect repo",
+                   "prompt" => "Use bash/read/grep tools only. Check whether foo exists."
+                 },
+                 "/tmp"
+               )
+
+      assert validated.tool_policy.allow == ["bash", "read", "grep"]
+      assert validated.tool_policy.profile == :custom
+      assert validated.prompt =~ "Use only these tools: bash, read, grep"
+      assert validated.prompt =~ "Do not rely on prior knowledge or guess"
+      assert validated.prompt =~ "Use bash/read/grep tools only. Check whether foo exists."
+    end
+
+    test "does not infer policy when prompt names unknown tools" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "Inspect repo",
+                   "prompt" => "Use bash/read/curl tools only."
+                 },
+                 "/tmp"
+               )
+
+      assert validated.tool_policy == nil
+      assert validated.prompt == "Use bash/read/curl tools only."
+    end
+
+    test "does not override explicit task tool_policy" do
+      explicit_policy = %{"allow" => ["find"], "deny" => ["bash"]}
+
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "Inspect repo",
+                   "prompt" => "Use bash/read/grep tools only.",
+                   "tool_policy" => explicit_policy
+                 },
+                 "/tmp"
+               )
+
+      assert validated.tool_policy == explicit_policy
+      assert validated.prompt == "Use bash/read/grep tools only."
+    end
+
+    test "does not infer internal tool policy for external engines" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "Inspect repo",
+                   "prompt" => "Use bash/read/grep tools only.",
+                   "engine" => "codex"
+                 },
+                 "/tmp"
+               )
+
+      assert validated.engine == "codex"
+      assert validated.tool_policy == nil
+      assert validated.prompt == "Use bash/read/grep tools only."
     end
   end
 

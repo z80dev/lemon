@@ -6,6 +6,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias AgentCore.Types.AgentTool
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
+  alias CodingAgent.Session
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
@@ -13,6 +14,24 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @valid_engines ["internal", "codex", "claude", "kimi", "opencode", "pi"]
+  @tool_only_guardrail_known_tools [
+    "bash",
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "write",
+    "edit",
+    "patch",
+    "webfetch",
+    "websearch",
+    "todo",
+    "task",
+    "agent",
+    "extensions_status",
+    "memory_topic"
+  ]
+  @tool_only_guardrail_regex ~r/\buse\s+([a-z0-9_,\/\-\s]+?)\s+tools?\s+only\b/i
 
   @spec valid_queue_modes() :: [String.t()]
   def valid_queue_modes, do: @valid_queue_modes
@@ -38,13 +57,13 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @spec validate_run_params(map(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def validate_run_params(params, cwd) do
-    description = Map.get(params, "description")
     prompt = Map.get(params, "prompt")
+    description = normalize_task_description(Map.get(params, "description"), prompt)
     role_id = normalize_optional_string(Map.get(params, "role"))
     engine = Map.get(params, "engine")
     model = normalize_optional_string(Map.get(params, "model"))
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
-    async? = Map.get(params, "async", false)
+    async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
     delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
     tool_policy = Map.get(params, "tool_policy")
@@ -55,11 +74,8 @@ defmodule CodingAgent.Tools.Task.Params do
     role_cwd = delegated_cwd || cwd
 
     cond do
-      not Map.has_key?(params, "description") ->
-        {:error, "Description is required"}
-
       not is_binary(description) or String.trim(description) == "" ->
-        {:error, "Description must be a non-empty string"}
+        {:error, "Description or prompt must be a non-empty string"}
 
       not Map.has_key?(params, "prompt") ->
         {:error, "Prompt is required"}
@@ -117,6 +133,8 @@ defmodule CodingAgent.Tools.Task.Params do
 
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
+        {effective_prompt, effective_tool_policy} =
+          apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy)
 
         followup_queue_mode =
           if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
@@ -124,7 +142,7 @@ defmodule CodingAgent.Tools.Task.Params do
         {:ok,
          %{
            description: description,
-           prompt: prompt,
+           prompt: effective_prompt,
            role_id: role_id,
            engine: normalized_engine,
            model: model,
@@ -132,7 +150,7 @@ defmodule CodingAgent.Tools.Task.Params do
            async: async?,
            auto_followup: auto_followup,
            cwd: delegated_cwd,
-           tool_policy: tool_policy,
+           tool_policy: effective_tool_policy,
            meta: meta || %{},
            session_key: session_key,
            agent_id: agent_id,
@@ -186,9 +204,12 @@ defmodule CodingAgent.Tools.Task.Params do
         "2. Continue the user conversation without waiting\n" <>
         "3. Poll with action=poll and task_id to check status, OR\n" <>
         "4. Use action=join with multiple task_ids to wait for completion\n\n" <>
+        "**Coordination rule:**\n" <>
+        "- If you launch subtasks and still need one final answer in this same turn, keep the task_ids and call action=join before you respond.\n" <>
+        "- Do not rely on auto_followup alone for same-turn aggregation.\n\n" <>
         "**Parameters:**\n" <>
         "- action: run (default), poll, or join\n" <>
-        "- async: true (recommended) = non-blocking, false = wait for completion\n" <>
+        "- async: true (default, recommended) = non-blocking, false = wait for completion\n" <>
         "- task_id: required when action=poll\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
@@ -203,6 +224,8 @@ defmodule CodingAgent.Tools.Task.Params do
         "- thinking_level: Optional thinking level override for internal engine\n" <>
         "- role: Optional specialization that applies to ANY engine\n" <>
         "- cwd: Optional working directory override\n" <>
+        "  - External text-only tasks without an explicit cwd automatically use a scratch workspace so CLI runners do not waste time scanning a repo they do not need.\n" <>
+        "  - Pure text-only Codex/Claude tasks without explicit cwd/role may skip the CLI entirely and call the provider directly to avoid CLI startup latency. Compatible model hints such as \"haiku\", \"sonnet\", and direct provider model specs stay on the fast path.\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>
         "- session_key/agent_id: Optional async followup routing overrides\n" <>
         "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>
@@ -244,11 +267,11 @@ defmodule CodingAgent.Tools.Task.Params do
   def build_session_opts(cwd, opts, validated) do
     inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
+    inherited_model = resolve_inherited_model(opts)
 
     base_opts =
       opts
       |> Keyword.take([
-        :model,
         :thinking_level,
         :system_prompt,
         :prompt_template,
@@ -264,6 +287,7 @@ defmodule CodingAgent.Tools.Task.Params do
         :agent_id
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> maybe_put_kw(:model, inherited_model)
 
     override_opts =
       []
@@ -275,6 +299,29 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
 
     [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
+  end
+
+  defp resolve_inherited_model(opts) do
+    with nil <- Keyword.get(opts, :model),
+         session_pid when is_pid(session_pid) <- Keyword.get(opts, :session_pid),
+         true <- Process.alive?(session_pid),
+         session_module <- Keyword.get(opts, :session_module, Session),
+         true <- function_exported?(session_module, :get_state, 1),
+         state when is_map(state) <- safe_get_session_state(session_module, session_pid),
+         model when is_binary(model) and model != "" <- Map.get(state, :model) do
+      model
+    else
+      model when is_binary(model) and model != "" -> model
+      _ -> Keyword.get(opts, :model)
+    end
+  end
+
+  defp safe_get_session_state(session_module, session_pid) do
+    session_module.get_state(session_pid)
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   @spec normalize_queue_mode(term()) ::
@@ -290,6 +337,109 @@ defmodule CodingAgent.Tools.Task.Params do
   def normalize_queue_mode(:steer_backlog), do: :steer_backlog
   def normalize_queue_mode(:interrupt), do: :interrupt
   def normalize_queue_mode(_), do: :followup
+
+  defp apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy) do
+    if is_nil(normalized_engine) and is_nil(tool_policy) do
+      case infer_tool_only_policy(prompt) do
+        nil ->
+          {prompt, nil}
+
+        inferred_policy ->
+          {prepend_tool_only_guardrail(prompt, inferred_policy.allow), inferred_policy}
+      end
+    else
+      {prompt, tool_policy}
+    end
+  end
+
+  defp infer_tool_only_policy(prompt) when is_binary(prompt) do
+    case Regex.run(@tool_only_guardrail_regex, prompt) do
+      [_, captured] ->
+        captured
+        |> parse_tool_only_list()
+        |> case do
+          [] -> nil
+          allow -> ToolPolicy.from_profile(:custom) |> Map.put(:allow, allow)
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp infer_tool_only_policy(_), do: nil
+
+  defp parse_tool_only_list(segment) when is_binary(segment) do
+    cleaned =
+      segment
+      |> String.downcase()
+      |> String.replace(~r/\btools?\b/i, " ")
+      |> String.replace(~r/\band\b/i, ",")
+      |> String.replace("&", ",")
+      |> String.replace("/", ",")
+
+    tokens =
+      cleaned
+      |> String.split(~r/[\s,]+/, trim: true)
+      |> Enum.uniq()
+
+    cond do
+      tokens == [] ->
+        []
+
+      Enum.all?(tokens, &(&1 in @tool_only_guardrail_known_tools)) ->
+        tokens
+
+      true ->
+        []
+    end
+  end
+
+  defp prepend_tool_only_guardrail(prompt, allow) when is_binary(prompt) and is_list(allow) do
+    tools = Enum.join(allow, ", ")
+
+    """
+    Tool execution requirement:
+    - Use only these tools: #{tools}
+    - Verify the answer from tool output before responding
+    - Do not rely on prior knowledge or guess
+    - If the allowed tools cannot verify the answer, say that directly
+
+    #{prompt}
+    """
+    |> String.trim()
+  end
+
+  defp normalize_task_description(description, prompt) do
+    case normalize_optional_string(description) do
+      value when is_binary(value) ->
+        value
+
+      _ ->
+        prompt
+        |> normalize_optional_string()
+        |> fallback_description_from_prompt()
+    end
+  end
+
+  defp fallback_description_from_prompt(nil), do: nil
+
+  defp fallback_description_from_prompt(prompt) when is_binary(prompt) do
+    prompt
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> case do
+      "" ->
+        nil
+
+      trimmed ->
+        if String.length(trimmed) <= 80 do
+          trimmed
+        else
+          String.slice(trimmed, 0, 77) <> "..."
+        end
+    end
+  end
 
   defp maybe_put_kw(list, _key, nil), do: list
   defp maybe_put_kw(list, key, value), do: Keyword.put(list, key, value)

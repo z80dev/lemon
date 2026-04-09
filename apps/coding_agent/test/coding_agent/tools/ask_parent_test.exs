@@ -13,6 +13,12 @@ defmodule CodingAgent.Tools.AskParentTest do
     end
   end
 
+  defmodule SessionStateSpy do
+    def get_state(_pid) do
+      %{model: "openai:gpt-5.4-pro"}
+    end
+  end
+
   setup do
     try do
       ParentQuestions.clear()
@@ -192,5 +198,25 @@ defmodule CodingAgent.Tools.AskParentTest do
 
     extra_tools = Keyword.get(opts, :extra_tools, [])
     assert Enum.any?(extra_tools, &(&1.name == "ask_parent"))
+  end
+
+  test "build_session_opts inherits model from the live parent session when task model is omitted" do
+    opts =
+      Params.build_session_opts(
+        "/tmp",
+        [
+          session_pid: self(),
+          session_module: __MODULE__.SessionStateSpy
+        ],
+        %{
+          model: nil,
+          thinking_level: nil,
+          tool_policy: nil,
+          session_key: nil,
+          agent_id: nil
+        }
+      )
+
+    assert Keyword.get(opts, :model) == "openai:gpt-5.4-pro"
   end
 end
