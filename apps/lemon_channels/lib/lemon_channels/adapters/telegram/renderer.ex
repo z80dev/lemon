@@ -39,7 +39,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
          chunks <- normalize_text(intent, text),
          state <- PresentationState.get(route, intent.run_id, surface),
          text_hash = text_hash({chunks, status_reply_markup(intent)}) do
-      if duplicate?(state, seq, text_hash) do
+      if duplicate?(state, intent.kind, seq, text_hash) do
         :ok
       else
         case send_text_chunks(intent, route, state, surface, seq, text_hash, chunks) do
@@ -61,21 +61,33 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp send_text_chunks(intent, route, state, surface, _seq, text_hash, [first | rest]) do
     reply_markup = status_reply_markup(intent)
-    meta = intent_meta(intent, reply_markup)
 
-    # When a message create is pending, we must defer ALL chunks together
-    # to avoid follow-ups arriving before the first chunk is created.
-    if is_reference(state.pending_create_ref) do
-      full_text = Enum.join([first | rest], "\n")
-      seq = extract_seq(intent)
-      PresentationState.defer_text(route, intent.run_id, surface, full_text, seq, text_hash, meta)
+    meta =
+      intent
+      |> intent_meta(reply_markup)
+      |> put_followup_reply_to(optional_reply_to(intent))
+
+    seq = extract_seq(intent)
+
+    # When a message create/edit is pending, we must defer ALL chunks together
+    # to avoid follow-ups arriving before the first chunk is updated.
+    if is_reference(state.pending_create_ref) or is_reference(state.pending_edit_ref) do
+      PresentationState.defer_chunks(
+        route,
+        intent.run_id,
+        surface,
+        [first | rest],
+        seq,
+        text_hash,
+        meta
+      )
+
       :ok
     else
       # Send the first chunk via the normal edit/create flow
       case send_text_single(intent, route, state, surface, text_hash, first, meta) do
         :ok ->
-          # Send remaining chunks as follow-up messages (no reply_to, no status markup)
-          send_followup_chunks(intent, route, rest, meta)
+          PresentationState.stage_followups(route, intent.run_id, surface, rest, meta)
 
         other ->
           other
@@ -92,9 +104,26 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp send_text_single(intent, route, state, surface, text_hash, text, meta) do
     seq = extract_seq(intent)
+    notify_pid = Process.whereis(PresentationState)
 
     cond do
+      present_message_id?(state.platform_message_id) and is_reference(state.pending_edit_ref) ->
+        PresentationState.defer_text(route, intent.run_id, surface, text, seq, text_hash, meta)
+        :ok
+
       present_message_id?(state.platform_message_id) ->
+        notify_ref = make_ref()
+
+        PresentationState.register_pending_edit(
+          route,
+          intent.run_id,
+          surface,
+          notify_ref,
+          seq,
+          text_hash,
+          state.platform_message_id
+        )
+
         payload =
           OutboundPayload.edit(
             "telegram",
@@ -103,24 +132,18 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
             to_string(state.platform_message_id),
             text,
             idempotency_key: intent.intent_id,
-            meta: meta
+            meta: Map.put(meta, :notify_tag, PresentationState.notify_tag()),
+            notify_pid: notify_pid,
+            notify_ref: notify_ref
           )
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} ->
-            PresentationState.mark_sent(
-              route,
-              intent.run_id,
-              surface,
-              seq,
-              text_hash,
-              state.platform_message_id
-            )
-
             maybe_index_resume(intent, route, state.platform_message_id)
             :ok
 
           {:error, :duplicate} ->
+            notify_duplicate_delivery(notify_ref, state.platform_message_id)
             :ok
 
           {:error, reason} ->
@@ -156,7 +179,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
             idempotency_key: intent.intent_id,
             reply_to: optional_reply_to(intent),
             meta: Map.put(meta, :notify_tag, PresentationState.notify_tag()),
-            notify_pid: Process.whereis(PresentationState),
+            notify_pid: notify_pid,
             notify_ref: notify_ref
           )
 
@@ -165,30 +188,13 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
             :ok
 
           {:error, :duplicate} ->
+            notify_duplicate_delivery(notify_ref)
             :ok
 
           {:error, reason} ->
             {:error, reason}
         end
     end
-  end
-
-  # Send follow-up chunks as new text messages (no reply_to, no status markup)
-  defp send_followup_chunks(_intent, _route, [], _meta), do: :ok
-
-  defp send_followup_chunks(intent, route, [chunk | rest], meta) do
-    payload =
-      OutboundPayload.text(
-        "telegram",
-        route.account_id,
-        peer(route),
-        chunk,
-        idempotency_key: "#{intent.intent_id}:chunk:#{:erlang.unique_integer([:positive])}",
-        meta: Map.drop(meta, [:reply_markup, :controls, :notify_tag])
-      )
-
-    _ = Outbox.enqueue(payload)
-    send_followup_chunks(intent, route, rest, meta)
   end
 
   defp dispatch_files(
@@ -311,6 +317,9 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       reply_markup: reply_markup
     }
   end
+
+  defp put_followup_reply_to(meta, nil), do: meta
+  defp put_followup_reply_to(meta, reply_to), do: Map.put(meta, :followup_reply_to, reply_to)
 
   defp optional_reply_to(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
@@ -497,11 +506,36 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp resume_token_like?(_), do: false
 
-  defp duplicate?(state, seq, text_hash) do
-    state.last_seq == seq and state.last_text_hash == text_hash
+  defp duplicate?(state, kind, seq, text_hash) do
+    state.last_seq == seq and state.last_text_hash == text_hash or
+      finalize_repeat?(state, kind, seq, text_hash)
   end
 
+  defp finalize_repeat?(state, kind, seq, text_hash)
+       when kind in [:stream_finalize, :final_text] do
+    state.last_text_hash == text_hash and is_integer(state.last_seq) and seq >= state.last_seq
+  end
+
+  defp finalize_repeat?(_state, _kind, _seq, _text_hash), do: false
+
   defp text_hash(value), do: :erlang.phash2(value)
+
+  defp notify_duplicate_delivery(notify_ref, message_id \\ nil)
+       when is_reference(notify_ref) do
+    send(
+      PresentationState,
+      {PresentationState.notify_tag(), notify_ref, duplicate_delivery_result(message_id)}
+    )
+
+    :ok
+  end
+
+  defp duplicate_delivery_result(message_id)
+       when is_integer(message_id) or is_binary(message_id) do
+    %{"ok" => true, "result" => %{"message_id" => message_id}}
+  end
+
+  defp duplicate_delivery_result(_message_id), do: %{"ok" => true}
 
   defp present_message_id?(id) when is_integer(id), do: true
   defp present_message_id?(id) when is_binary(id), do: id != ""

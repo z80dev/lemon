@@ -154,6 +154,20 @@ hands the finalized `:answer` message over to the tool-status surface so the nex
 append under that assistant text instead of reusing an older standalone status message.
 `ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
 assistant delta starts, at which point the segment is finalized in place and reset.
+After `StreamCoalescer` emits `:stream_finalize`, it must not emit any later
+`:stream_snapshot` for the same finalized answer; late flushes should discard
+buffered answer text instead of overwriting multi-chunk final output with a
+truncated snapshot.
+If `StreamCoalescer.finalize_run/4` exits or times out, `SurfaceManager.finalize_answer/3`
+must fall back to a direct `:final_text` dispatch so the final answer is not lost behind
+the last snapshot.
+For runs that already streamed answer deltas, `SurfaceManager.finalize_answer/3` should dispatch
+the direct `:stream_finalize` answer intent first and then finalize the coalescer state, because
+channels key their answer surface by `{route, run_id, :answer}` and the streamed-final path is the
+reliable way to update the existing streamed message in place.
+Completion-time artifact enrichment must never block answer finalization; if
+`RunProcess.ArtifactTracker.finalize_meta/1` fails, `RunProcess` should log and continue with empty
+final-answer metadata rather than letting `terminate/2` flush a stale snapshot.
 Task roots use dedicated status surfaces keyed by task id, so child actions with
 `detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
 or unrelated top-level tool calls create newer answer/status turns.

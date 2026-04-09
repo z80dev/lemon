@@ -122,6 +122,14 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule RaisingArtifactTracker do
+    @moduledoc false
+
+    def track_generated_images(state, _action_event), do: state
+    def track_requested_send_files(state, _action_event), do: state
+    def finalize_meta(_state), do: raise("artifact finalize boom")
+  end
+
   setup do
     # Ensure PubSub is running for LemonCore.Bus.
     if is_nil(Process.whereis(LemonCore.PubSub)) do
@@ -1629,40 +1637,18 @@ defmodule LemonRouter.RunProcessTest do
           )
         )
 
-      assert_receive {:delivered,
-                      %LemonChannels.OutboundPayload{
-                        kind: first_kind,
-                        content: first_content,
-                        meta: %{run_id: ^run_id}
-                      }},
-                     1_500
+      payloads = receive_run_payloads_until_idle(run_id, 1_500)
+      texts = Enum.map(payloads, &payload_text/1)
 
-      assert_receive {:delivered,
-                      %LemonChannels.OutboundPayload{
-                        kind: second_kind,
-                        content: second_content,
-                        meta: %{run_id: ^run_id}
-                      }},
-                     1_500
+      assert Enum.any?(texts, &String.contains?(&1, "Read: foo.txt"))
+      assert Enum.any?(texts, &String.contains?(&1, "Final answer"))
 
-      assert first_kind in [:text, :edit]
-      assert second_kind in [:text, :edit]
+      first_status_text =
+        Enum.find_value(texts, fn text ->
+          if String.contains?(text, "Read: foo.txt"), do: text
+        end)
 
-      first_text =
-        case first_content do
-          %{text: text} -> text
-          text when is_binary(text) -> text
-        end
-
-      second_text =
-        case second_content do
-          %{text: text} -> text
-          text when is_binary(text) -> text
-        end
-
-      assert String.contains?(first_text, "Read: foo.txt")
-      refute String.contains?(first_text, "Final answer")
-      assert String.contains?(second_text, "Final answer")
+      refute String.contains?(first_status_text, "Final answer")
       assert eventually(fn -> not Process.alive?(pid) end)
     end
 
@@ -1855,29 +1841,111 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
-      assert_receive {:delivered,
-                      %LemonChannels.OutboundPayload{
-                        meta: %{intent_kind: first_kind, run_id: ^run_id}
-                      }},
-                     3_000
+      payloads = receive_run_payloads_until_idle(run_id, 3_000)
+      intent_kinds = Enum.map(payloads, & &1.meta[:intent_kind])
+      texts = Enum.map(payloads, &payload_text/1)
+
+      assert Enum.any?(intent_kinds, &(&1 in [:tool_status_snapshot, :tool_status_finalize]))
+      assert Enum.any?(intent_kinds, &(&1 in [:stream_finalize, :final_text]))
+      assert Enum.any?(texts, &String.contains?(&1, "Final answer without streamed deltas"))
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+  end
+
+  describe "completion ordering with streamed deltas" do
+    test "still finalizes the answer when artifact metadata enrichment raises" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ =
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      job =
+        make_test_request(
+          run_id,
+          %{progress_msg_id: 111, user_msg_id: 222},
+          %{session_key: session_key, conversation_key: {:session, session_key}}
+        )
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false,
+                 artifact_tracker: RaisingArtifactTracker
+               })
+
+      delta_event =
+        LemonCore.Event.new(
+          :delta,
+          %{seq: 1, text: "snapshot body"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer after artifact tracker failure"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
-                        meta: %{intent_kind: second_kind, run_id: ^run_id},
-                        content: second_content
+                        meta: %{intent_kind: :stream_finalize, run_id: ^run_id},
+                        content: final_content
                       }},
                      3_000
-
-      assert first_kind in [:tool_status_snapshot, :tool_status_finalize]
-      assert second_kind in [:stream_finalize, :final_text]
 
       final_text =
-        case second_content do
+        case final_content do
           %{text: text} -> text
           text when is_binary(text) -> text
         end
 
-      assert String.contains?(final_text, "Final answer without streamed deltas")
+      assert String.contains?(final_text, "Final answer after artifact tracker failure")
       assert eventually(fn -> not Process.alive?(pid) end)
     end
   end
@@ -2753,7 +2821,9 @@ defmodule LemonRouter.RunProcessTest do
           peer_id: "12345"
         })
 
-      cwd = Path.join(System.tmp_dir!(), "run-process-files-#{System.unique_integer([:positive])}")
+      cwd =
+        Path.join(System.tmp_dir!(), "run-process-files-#{System.unique_integer([:positive])}")
+
       file_path = Path.join(cwd, "workspace/image.png")
       File.mkdir_p!(Path.dirname(file_path))
       File.write!(file_path, "png-bytes")
@@ -2815,7 +2885,11 @@ defmodule LemonRouter.RunProcessTest do
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
                         kind: :file,
-                        content: %{path: delivered_path, filename: "renamed.png", caption: "Generated"},
+                        content: %{
+                          path: delivered_path,
+                          filename: "renamed.png",
+                          caption: "Generated"
+                        },
                         meta: %{run_id: ^run_id}
                       }},
                      3_000
@@ -2857,4 +2931,23 @@ defmodule LemonRouter.RunProcessTest do
       assert String.contains?(key, "bot123")
     end
   end
+
+  defp receive_run_payloads_until_idle(run_id, timeout_ms) do
+    receive_run_payloads_until_idle(run_id, timeout_ms, [])
+  end
+
+  defp receive_run_payloads_until_idle(run_id, timeout_ms, acc) do
+    receive do
+      {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}} = payload} ->
+        receive_run_payloads_until_idle(run_id, timeout_ms, [payload | acc])
+    after
+      timeout_ms ->
+        Enum.reverse(acc)
+    end
+  end
+
+  defp payload_text(%LemonChannels.OutboundPayload{content: %{text: text}}) when is_binary(text),
+    do: text
+
+  defp payload_text(%LemonChannels.OutboundPayload{content: text}) when is_binary(text), do: text
 end

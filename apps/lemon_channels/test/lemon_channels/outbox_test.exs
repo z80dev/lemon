@@ -117,6 +117,46 @@ defmodule LemonChannels.OutboxTest do
 
       assert {:ok, _ref} = Outbox.enqueue(payload)
     end
+
+    test "coalesces queued edits for the same message", %{outbox_pid: outbox_pid} do
+      original_state = :sys.get_state(outbox_pid)
+      group_key = {{"test-channel", "account-1", :dm, "user-1", nil}, :edit, "42"}
+
+      on_exit(fn ->
+        :sys.replace_state(outbox_pid, fn _ -> original_state end)
+      end)
+
+      :sys.replace_state(outbox_pid, fn state ->
+        %{state | queue: :queue.new(), processing_groups: %{group_key => make_ref()}}
+      end)
+
+      payload1 = %OutboundPayload{
+        channel_id: "test-channel",
+        kind: :edit,
+        content: %{message_id: "42", text: "old"},
+        account_id: "account-1",
+        peer: %{kind: :dm, id: "user-1", thread_id: nil}
+      }
+
+      payload2 = %OutboundPayload{
+        channel_id: "test-channel",
+        kind: :edit,
+        content: %{message_id: "42", text: "new"},
+        account_id: "account-1",
+        peer: %{kind: :dm, id: "user-1", thread_id: nil}
+      }
+
+      assert {:ok, _ref} = Outbox.enqueue(payload1)
+      assert {:ok, _ref} = Outbox.enqueue(payload2)
+
+      Process.sleep(50)
+
+      state = :sys.get_state(outbox_pid)
+      queued = :queue.to_list(state.queue)
+
+      assert length(queued) == 1
+      assert hd(queued).payload.content == %{message_id: "42", text: "new"}
+    end
   end
 
   describe "rate limiting" do

@@ -91,6 +91,12 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
+  defmodule FailingIntentDispatcherStub do
+    @moduledoc false
+
+    def dispatch(%DeliveryIntent{}), do: {:error, :forced_failure}
+  end
+
   setup do
     # Start the coalescer registry and supervisor if not running
     if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerRegistry)) do
@@ -325,6 +331,63 @@ defmodule LemonRouter.StreamCoalescerTest do
                         meta: %{surface: :answer, user_msg_id: 9}
                       }},
                      1_000
+    end
+
+    test "finalize_run returns an error when the dispatcher rejects the final intent" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, FailingIntentDispatcherStub)
+
+      on_exit(fn ->
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      session_key = "agent:test:telegram:bot:group:12345:thread:777"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      assert {:error, {:dispatch_failed, :forced_failure}} =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 9},
+                 final_text: "Final answer"
+               )
+    end
+
+    test "finalize_run can mark the coalescer finalized without dispatching" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, FailingIntentDispatcherStub)
+
+      on_exit(fn ->
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      session_key = "agent:test:telegram:bot:group:12345:thread:777"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 9},
+                 final_text: "Final answer",
+                 dispatch?: false
+               )
+
+      [{pid, _}] =
+        Registry.lookup(
+          Elixir.LemonRouter.CoalescerRegistry,
+          {session_key, channel_id}
+        )
+
+      state = :sys.get_state(pid)
+      assert state.finalized == true
+      assert state.last_sent_text == "Final answer"
     end
   end
 
@@ -689,6 +752,86 @@ defmodule LemonRouter.StreamCoalescerTest do
                         meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
                       }},
                      1_000
+    end
+
+    test "long streamed finalization is not overwritten by a later snapshot flush" do
+      session_key = "agent:test:telegram:bot:group:12360:thread:999"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      route = telegram_route("bot", :group, "12360", "999")
+
+      long_text =
+        Enum.map_join(1..520, "\n", fn i ->
+          "LINE-#{String.pad_leading(Integer.to_string(i), 4, "0")} abcdefghijklmnopqrstuvwxyz"
+        end) <> "\nEND-OF-LONG-REPLY"
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 5208,
+                 long_text,
+                 meta: %{user_msg_id: 222}
+               )
+
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+
+      snapshot_key = "#{run_id}:stream:5208:stream_snapshot"
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        channel_id: "telegram",
+                        kind: :text,
+                        idempotency_key: ^snapshot_key,
+                        meta: %{run_id: ^run_id, intent_kind: :stream_snapshot}
+                      }},
+                     1_000
+
+      assert eventually(fn ->
+               LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+                 101
+             end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 222},
+                 final_text: long_text
+               )
+
+      finalize_key = "#{run_id}:stream:5208:stream_finalize"
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        channel_id: "telegram",
+                        kind: :edit,
+                        idempotency_key: ^finalize_key,
+                        content: %{message_id: message_id, text: first_chunk},
+                        meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
+                      }},
+                     1_000
+
+      assert message_id in ["101", 101]
+      assert String.length(first_chunk) < String.length(long_text)
+
+      delivered_chunks =
+        collect_finalize_chunks(run_id, [first_chunk], 5)
+
+      expected_chunks = LemonChannels.Telegram.Truncate.split_messages(long_text)
+      assert first_chunk == hd(expected_chunks)
+      assert Enum.sort(delivered_chunks) == Enum.sort(expected_chunks)
+      assert Enum.any?(delivered_chunks, &String.ends_with?(&1, "END-OF-LONG-REPLY"))
+
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+
+      refute_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        meta: %{run_id: ^run_id, intent_kind: :stream_snapshot}
+                      }},
+                     200
+
+      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      assert entry.last_text_hash == :erlang.phash2({expected_chunks, nil})
     end
 
     test "handles explicit nil final_text with no prior deltas" do
@@ -1089,5 +1232,22 @@ defmodule LemonRouter.StreamCoalescerTest do
       peer_id: peer_id,
       thread_id: thread_id
     }
+  end
+
+  defp collect_finalize_chunks(_run_id, acc, 0), do: acc
+
+  defp collect_finalize_chunks(run_id, acc, remaining) do
+    receive do
+      {:delivered,
+       %LemonChannels.OutboundPayload{
+         channel_id: "telegram",
+         kind: :text,
+         content: chunk,
+         meta: %{run_id: ^run_id, intent_kind: :stream_finalize}
+       }} ->
+        collect_finalize_chunks(run_id, acc ++ [chunk], remaining - 1)
+    after
+      1_000 -> acc
+    end
   end
 end

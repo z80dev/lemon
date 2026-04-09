@@ -54,6 +54,12 @@ Channel transport or gateway-native ingress
 | `LemonRouter.AgentDirectory` | Active/durable session discovery |
 | `LemonRouter.AgentEndpoints` | Persistent route aliases |
 
+`SurfaceManager.finalize_answer/3` dispatches `:stream_finalize` first for runs that already
+streamed answer deltas, then finalizes `StreamCoalescer` state so late flushes cannot overwrite
+the final. For non-streamed completions it still finalizes through `StreamCoalescer`, with a direct
+`:final_text` fallback if the coalescer finalize call exits or times out. Completion-time artifact
+metadata enrichment is best-effort and must not block the final answer path.
+
 ## Important Contracts
 
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.

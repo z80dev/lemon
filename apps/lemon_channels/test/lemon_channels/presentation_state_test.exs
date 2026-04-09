@@ -16,6 +16,7 @@ defmodule LemonChannels.PresentationStateTest do
     case Process.whereis(PresentationState) do
       nil ->
         {:ok, pid} = PresentationState.start_link([])
+
         on_exit(fn ->
           if Process.alive?(pid), do: GenServer.stop(pid)
         end)
@@ -52,8 +53,9 @@ defmodule LemonChannels.PresentationStateTest do
       # The TTL is 30s, so we test the GC logic directly via the state
       state = :sys.get_state(PresentationState)
 
-      key = {@route.channel_id, @route.account_id, @route.peer_kind, @route.peer_id,
-             @route.thread_id, run_id, :answer}
+      key =
+        {@route.channel_id, @route.account_id, @route.peer_kind, @route.peer_id, @route.thread_id,
+         run_id, :answer}
 
       entry = Map.get(state.entries, key)
       assert is_reference(entry.pending_create_ref)
@@ -61,6 +63,7 @@ defmodule LemonChannels.PresentationStateTest do
       # Backdate the pending_create_at to simulate 31 seconds ago
       stale_at = System.monotonic_time(:millisecond) - 31_000
       stale_entry = %{entry | pending_create_at: stale_at}
+
       :sys.replace_state(PresentationState, fn s ->
         put_in(s, [:entries, key], stale_entry)
       end)
@@ -101,8 +104,10 @@ defmodule LemonChannels.PresentationStateTest do
 
       # Simulate staleness
       stale_at = System.monotonic_time(:millisecond) - 31_000
-      key = {@route.channel_id, @route.account_id, @route.peer_kind, @route.peer_id,
-             @route.thread_id, run_id, :answer}
+
+      key =
+        {@route.channel_id, @route.account_id, @route.peer_kind, @route.peer_id, @route.thread_id,
+         run_id, :answer}
 
       :sys.replace_state(PresentationState, fn s ->
         case Map.get(s.entries, key) do
@@ -133,7 +138,10 @@ defmodule LemonChannels.PresentationStateTest do
       PresentationState.register_pending_create(@route, run_id, :answer, ref, 1, 111)
 
       # Simulate delivery notification
-      send(PresentationState, {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 42}}}})
+      send(
+        PresentationState,
+        {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 42}}}}
+      )
 
       # Give the GenServer time to process
       Process.sleep(50)
@@ -164,7 +172,10 @@ defmodule LemonChannels.PresentationStateTest do
       unknown_ref = make_ref()
 
       # Send notification for a ref that was never registered
-      send(PresentationState, {:presentation_delivery, unknown_ref, {:ok, %{"result" => %{"message_id" => 99}}}})
+      send(
+        PresentationState,
+        {:presentation_delivery, unknown_ref, {:ok, %{"result" => %{"message_id" => 99}}}}
+      )
 
       Process.sleep(50)
 
@@ -180,12 +191,35 @@ defmodule LemonChannels.PresentationStateTest do
 
       PresentationState.register_pending_create(@route, run_id, :answer, ref, 1, 111)
 
-      send(PresentationState, {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 77}}}})
+      send(
+        PresentationState,
+        {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 77}}}}
+      )
 
       Process.sleep(50)
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert is_nil(entry.pending_create_at)
+    end
+
+    test "flushes staged followups when create notification arrives" do
+      run_id = "run_create_followups_#{System.unique_integer()}"
+      ref = make_ref()
+
+      PresentationState.register_pending_create(@route, run_id, :answer, ref, 1, 111)
+      PresentationState.stage_followups(@route, run_id, :answer, ["tail"], %{reply_to: "42"})
+
+      send(
+        PresentationState,
+        {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 42}}}}
+      )
+
+      Process.sleep(50)
+
+      entry = PresentationState.get(@route, run_id, :answer)
+      assert entry.platform_message_id == 42
+      assert is_nil(entry.pending_create_ref)
+      assert is_nil(entry.pending_followup_chunks)
     end
   end
 
@@ -204,7 +238,10 @@ defmodule LemonChannels.PresentationStateTest do
       assert entry.deferred_text == "Updated text"
 
       # Simulate create notification
-      send(PresentationState, {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 55}}}})
+      send(
+        PresentationState,
+        {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 55}}}}
+      )
 
       Process.sleep(50)
 
@@ -213,6 +250,48 @@ defmodule LemonChannels.PresentationStateTest do
       assert is_nil(entry.deferred_text)
       assert entry.last_seq == 2
       assert entry.last_text_hash == 222
+    end
+
+    test "clears pending_edit_ref when edit notification arrives" do
+      run_id = "run_edit_clear_#{System.unique_integer()}"
+      ref = make_ref()
+
+      :ok = PresentationState.mark_sent(@route, run_id, :answer, 1, 111, 55)
+      :ok = PresentationState.register_pending_edit(@route, run_id, :answer, ref, 2, 222, 55)
+
+      send(PresentationState, {:presentation_delivery, ref, {:ok, %{"ok" => true}}})
+
+      Process.sleep(50)
+
+      entry = PresentationState.get(@route, run_id, :answer)
+      assert is_nil(entry.pending_edit_ref)
+      assert is_nil(entry.pending_edit_at)
+      assert entry.platform_message_id == 55
+    end
+
+    test "ignores stale edit notifications when a newer edit is pending" do
+      run_id = "run_edit_stale_#{System.unique_integer()}"
+      stale_ref = make_ref()
+      current_ref = make_ref()
+
+      :ok = PresentationState.mark_sent(@route, run_id, :answer, 1, 111, 55)
+
+      :ok =
+        PresentationState.register_pending_edit(@route, run_id, :answer, stale_ref, 2, 222, 55)
+
+      :ok =
+        PresentationState.register_pending_edit(@route, run_id, :answer, current_ref, 3, 333, 55)
+
+      :ok =
+        PresentationState.stage_followups(@route, run_id, :answer, ["tail"], %{reply_to: "42"})
+
+      send(PresentationState, {:presentation_delivery, stale_ref, {:ok, %{"ok" => true}}})
+
+      Process.sleep(50)
+
+      entry = PresentationState.get(@route, run_id, :answer)
+      assert entry.pending_edit_ref == current_ref
+      assert entry.pending_followup_chunks == ["tail"]
     end
   end
 end

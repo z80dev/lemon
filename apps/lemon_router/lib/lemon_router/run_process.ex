@@ -156,7 +156,8 @@ defmodule LemonRouter.RunProcess do
         generated_image_paths: [],
         requested_send_files: [],
         task_status_surfaces: %{},
-        task_status_refs: %{}
+        task_status_refs: %{},
+        artifact_tracker: opts[:artifact_tracker] || ArtifactTracker
       }
 
       Logger.debug(
@@ -294,11 +295,29 @@ defmodule LemonRouter.RunProcess do
     end
 
     unless retried? do
-      extra_meta = ArtifactTracker.finalize_meta(state)
+      extra_meta = safe_finalize_meta(state)
+
+      Introspection.record(
+        :answer_finalize_started,
+        %{saw_delta: state.saw_delta, extra_meta_keys: Map.keys(extra_meta)},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
 
       # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
       # channels keep their dedicated final-answer behavior separate from tool status UI.
       SurfaceManager.finalize_answer(state, event, extra_meta)
+
+      Introspection.record(
+        :answer_finalize_completed,
+        %{saw_delta: state.saw_delta},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
 
       # If no streaming deltas were emitted, emit a final output chunk so channels respond.
       SurfaceManager.maybe_seed_final_answer(state, event)
@@ -347,8 +366,8 @@ defmodule LemonRouter.RunProcess do
     # Forward semantic status updates through the router surface façade.
     SurfaceManager.ingest_status_action(state, action_ev, tool_status_surface)
 
-    state = ArtifactTracker.track_generated_images(state, action_ev)
-    state = ArtifactTracker.track_requested_send_files(state, action_ev)
+    state = artifact_tracker(state).track_generated_images(state, action_ev)
+    state = artifact_tracker(state).track_requested_send_files(state, action_ev)
 
     {:noreply, state}
   end
@@ -670,6 +689,30 @@ defmodule LemonRouter.RunProcess do
   # ---------------------------------------------------------------------------
   # Gateway monitoring
   # ---------------------------------------------------------------------------
+
+  defp artifact_tracker(%{artifact_tracker: mod}) when is_atom(mod), do: mod
+  defp artifact_tracker(_state), do: ArtifactTracker
+
+  defp safe_finalize_meta(state) do
+    artifact_tracker(state).finalize_meta(state)
+  rescue
+    error ->
+      Introspection.record(
+        :answer_artifact_finalize_failed,
+        %{error: Exception.message(error)},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
+
+      Logger.warning(
+        "RunProcess artifact finalize_meta failed run_id=#{inspect(state.run_id)} " <>
+          "session_key=#{inspect(state.session_key)} error=#{Exception.message(error)}"
+      )
+
+      %{}
+  end
 
   defp maybe_monitor_gateway_run(%{gateway_run_ref: ref} = state) when not is_nil(ref), do: state
 

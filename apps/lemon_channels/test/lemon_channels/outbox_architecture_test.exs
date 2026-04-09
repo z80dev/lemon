@@ -205,6 +205,57 @@ defmodule LemonChannels.OutboxArchitectureTest do
     end)
   end
 
+  test "edits do not block new sends in the same thread when they target a specific message" do
+    Registry.register(BlockingPlugin)
+    on_exit(fn -> Registry.unregister(BlockingPlugin.id()) end)
+
+    baseline_processing = Outbox.stats().processing_count
+    outbox_pid = Process.whereis(Outbox)
+    account_id = "acct-#{System.unique_integer([:positive])}"
+    peer = %{kind: :dm, id: "user-1", thread_id: "thread-1"}
+
+    edit_payload = %OutboundPayload{
+      channel_id: BlockingPlugin.id(),
+      kind: :edit,
+      content: %{message_id: "42", text: "editing"},
+      account_id: account_id,
+      peer: peer,
+      meta: %{test_pid: self()}
+    }
+
+    text_payload = %OutboundPayload{
+      channel_id: BlockingPlugin.id(),
+      kind: :text,
+      content: "tail chunk",
+      account_id: account_id,
+      peer: peer,
+      meta: %{test_pid: self()}
+    }
+
+    {:ok, _ref} = Outbox.enqueue(edit_payload)
+    {:ok, _ref} = Outbox.enqueue(text_payload)
+
+    send(outbox_pid, :process_queue)
+    send(outbox_pid, :process_queue)
+
+    workers =
+      for _ <- 1..2 do
+        assert_receive {:deliver_started, pid, _chunk_index}, 500
+        pid
+      end
+
+    Enum.each(workers, fn pid -> send(pid, :release) end)
+
+    for _ <- 1..2 do
+      assert_receive {:delivered, _chunk_index}, 500
+    end
+
+    eventually(fn ->
+      stats2 = Outbox.stats()
+      assert stats2.processing_count <= baseline_processing
+    end)
+  end
+
   test "a crashing delivery worker does not wedge processing bookkeeping (supervised task + crash handling)" do
     Registry.register(CrashPlugin)
     on_exit(fn -> Registry.unregister(CrashPlugin.id()) end)

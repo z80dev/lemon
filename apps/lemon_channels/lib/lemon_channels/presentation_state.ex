@@ -31,12 +31,17 @@ defmodule LemonChannels.PresentationState do
           platform_message_id: integer() | binary() | nil,
           pending_create_ref: reference() | nil,
           pending_create_at: integer() | nil,
+          pending_edit_ref: reference() | nil,
+          pending_edit_at: integer() | nil,
           last_seq: non_neg_integer(),
           last_text_hash: integer() | nil,
           deferred_text: binary() | nil,
+          deferred_chunks: [binary()] | nil,
+          pending_followup_chunks: [binary()] | nil,
           deferred_seq: non_neg_integer() | nil,
           deferred_hash: integer() | nil,
           deferred_meta: map(),
+          pending_followup_meta: map(),
           pending_resume: term() | nil
         }
 
@@ -80,6 +85,32 @@ defmodule LemonChannels.PresentationState do
     )
   end
 
+  @spec register_pending_edit(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          reference(),
+          non_neg_integer(),
+          integer() | nil,
+          integer() | binary() | nil
+        ) :: :ok
+  def register_pending_edit(
+        %DeliveryRoute{} = route,
+        run_id,
+        surface,
+        ref,
+        seq,
+        text_hash,
+        message_id
+      )
+      when is_binary(run_id) and is_reference(ref) and is_integer(seq) do
+    GenServer.call(
+      __MODULE__,
+      {:register_pending_edit, key(route, run_id, surface), route, run_id, surface, ref, seq,
+       text_hash, message_id}
+    )
+  end
+
   @spec defer_text(
           DeliveryRoute.t(),
           binary(),
@@ -105,6 +136,48 @@ defmodule LemonChannels.PresentationState do
       __MODULE__,
       {:defer_text, key(route, run_id, surface), route, run_id, surface, text, seq, text_hash,
        deferred_meta}
+    )
+  end
+
+  @spec defer_chunks(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          [binary()],
+          non_neg_integer(),
+          integer() | nil,
+          map()
+        ) :: :ok
+  def defer_chunks(
+        %DeliveryRoute{} = route,
+        run_id,
+        surface,
+        chunks,
+        seq,
+        text_hash,
+        deferred_meta \\ %{}
+      )
+      when is_binary(run_id) and is_list(chunks) and is_integer(seq) and is_map(deferred_meta) do
+    GenServer.call(
+      __MODULE__,
+      {:defer_chunks, key(route, run_id, surface), route, run_id, surface, chunks, seq, text_hash,
+       deferred_meta}
+    )
+  end
+
+  @spec stage_followups(DeliveryRoute.t(), binary(), surface(), [binary()], map()) :: :ok
+  def stage_followups(
+        %DeliveryRoute{} = route,
+        run_id,
+        surface,
+        chunks,
+        followup_meta \\ %{}
+      )
+      when is_binary(run_id) and is_list(chunks) and is_map(followup_meta) do
+    GenServer.call(
+      __MODULE__,
+      {:stage_followups, key(route, run_id, surface), route, run_id, surface, chunks,
+       followup_meta}
     )
   end
 
@@ -173,7 +246,32 @@ defmodule LemonChannels.PresentationState do
     state =
       state
       |> put_entry(key, entry)
-      |> put_ref(ref, key)
+      |> put_ref(ref, {key, :create})
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:register_pending_edit, key, route, run_id, surface, ref, seq, text_hash, message_id},
+        _from,
+        state
+      ) do
+    entry =
+      state.entries
+      |> Map.get(key, new_entry(route, run_id, surface))
+      |> Map.merge(%{
+        platform_message_id:
+          message_id || Map.get(state.entries[key] || %{}, :platform_message_id),
+        pending_edit_ref: ref,
+        pending_edit_at: System.monotonic_time(:millisecond),
+        last_seq: seq,
+        last_text_hash: text_hash
+      })
+
+    state =
+      state
+      |> put_entry(key, entry)
+      |> put_ref(ref, {key, :edit})
 
     {:reply, :ok, state}
   end
@@ -188,12 +286,42 @@ defmodule LemonChannels.PresentationState do
       |> Map.get(key, new_entry(route, run_id, surface))
       |> Map.merge(%{
         deferred_text: text,
+        deferred_chunks: nil,
         deferred_seq: seq,
         deferred_hash: text_hash,
         deferred_meta: deferred_meta
       })
 
-    {:reply, :ok, put_entry(state, key, entry)}
+    state =
+      state
+      |> put_entry(key, entry)
+      |> maybe_flush_late_deferred(key, entry)
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:defer_chunks, key, route, run_id, surface, chunks, seq, text_hash, deferred_meta},
+        _from,
+        state
+      ) do
+    entry =
+      state.entries
+      |> Map.get(key, new_entry(route, run_id, surface))
+      |> Map.merge(%{
+        deferred_text: nil,
+        deferred_chunks: Enum.filter(chunks, &(is_binary(&1) and &1 != "")),
+        deferred_seq: seq,
+        deferred_hash: text_hash,
+        deferred_meta: deferred_meta
+      })
+
+    state =
+      state
+      |> put_entry(key, entry)
+      |> maybe_flush_late_deferred(key, entry)
+
+    {:reply, :ok, state}
   end
 
   def handle_call(
@@ -211,12 +339,34 @@ defmodule LemonChannels.PresentationState do
           message_id || Map.get(state.entries[key] || %{}, :platform_message_id),
         pending_create_ref: nil,
         pending_create_at: nil,
+        pending_edit_ref: nil,
+        pending_edit_at: nil,
         deferred_text: nil,
+        deferred_chunks: nil,
+        pending_followup_chunks: nil,
         deferred_seq: nil,
         deferred_hash: nil,
         deferred_meta: %{},
+        pending_followup_meta: %{},
         pending_resume: nil
       })
+
+    {:reply, :ok, put_entry(state, key, entry)}
+  end
+
+  def handle_call(
+        {:stage_followups, key, route, run_id, surface, chunks, followup_meta},
+        _from,
+        state
+      ) do
+    entry =
+      state.entries
+      |> Map.get(key, new_entry(route, run_id, surface))
+      |> Map.merge(%{
+        pending_followup_chunks: Enum.filter(chunks, &(is_binary(&1) and &1 != "")),
+        pending_followup_meta: followup_meta(followup_meta)
+      })
+      |> maybe_flush_late_staged_followups()
 
     {:reply, :ok, put_entry(state, key, entry)}
   end
@@ -224,7 +374,7 @@ defmodule LemonChannels.PresentationState do
   def handle_call({:clear, key}, _from, state) do
     refs =
       state.refs
-      |> Enum.reject(fn {_ref, ref_key} -> ref_key == key end)
+      |> Enum.reject(fn {_ref, ref_key} -> ref_matches_key?(ref_key, key) end)
       |> Map.new()
 
     entries = Map.delete(state.entries, key)
@@ -243,8 +393,9 @@ defmodule LemonChannels.PresentationState do
       entry ->
         refs =
           state.refs
-          |> Enum.reject(fn {_ref, ref_key} -> ref_key == to_key end)
+          |> Enum.reject(fn {_ref, ref_key} -> ref_matches_key?(ref_key, to_key) end)
           |> Enum.map(fn
+            {ref, {^from_key, kind}} -> {ref, {to_key, kind}}
             {ref, ^from_key} -> {ref, to_key}
             pair -> pair
           end)
@@ -263,10 +414,10 @@ defmodule LemonChannels.PresentationState do
 
   @impl true
   def handle_info({@notify_tag, ref, result}, state) when is_reference(ref) do
-    {key, refs} = Map.pop(state.refs, ref)
+    {ref_key, refs} = Map.pop(state.refs, ref)
 
     state =
-      case key do
+      case ref_key do
         nil ->
           # Ref not tracked — this can happen legitimately when the Outbox
           # chunked a payload and subsequent chunks still carry the old ref.
@@ -277,7 +428,8 @@ defmodule LemonChannels.PresentationState do
 
           %{state | refs: refs}
 
-        key ->
+        ref_key ->
+          {key, phase} = normalize_ref_key(ref_key)
           entry = Map.get(state.entries, key)
           state = %{state | refs: refs}
 
@@ -287,28 +439,7 @@ defmodule LemonChannels.PresentationState do
 
             _ ->
               message_id = extract_message_id(result)
-
-              entry = %{
-                entry
-                | pending_create_ref: nil,
-                  pending_create_at: nil
-              }
-
-              entry =
-                if is_nil(message_id) do
-                  Logger.debug(
-                    "PresentationState: delivery succeeded but message_id not extractable " <>
-                      "from result=#{inspect(result)}, run_id=#{entry.run_id}"
-                  )
-
-                  entry
-                else
-                  maybe_index_pending_resume(entry, message_id)
-                  %{entry | platform_message_id: message_id, pending_resume: nil}
-                end
-
-              entry = maybe_flush_deferred_edit(entry, message_id)
-              put_entry(state, key, entry)
+              apply_delivery_notification(state, key, entry, ref, phase, result, message_id)
           end
       end
 
@@ -317,38 +448,55 @@ defmodule LemonChannels.PresentationState do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp maybe_flush_deferred_edit(entry, message_id)
+  defp maybe_flush_deferred_edit(state, key, entry, message_id)
        when is_integer(message_id) or (is_binary(message_id) and message_id != "") do
-    with text when is_binary(text) and text != "" <- entry.deferred_text do
+    with [first_chunk | rest_chunks] <- deferred_chunks(entry) do
+      notify_ref = make_ref()
+
       payload =
         OutboundPayload.edit(
           entry.route.channel_id,
           entry.route.account_id,
           peer(entry.route),
           to_string(message_id),
-          text,
-          meta: entry.deferred_meta
+          first_chunk,
+          meta: Map.put(entry.deferred_meta, :notify_tag, notify_tag()),
+          notify_pid: Process.whereis(__MODULE__),
+          notify_ref: notify_ref
         )
 
-      _ = Outbox.enqueue(payload)
+      case Outbox.enqueue(payload) do
+        {:ok, _} ->
+          entry = %{
+            entry
+            | pending_edit_ref: notify_ref,
+              pending_edit_at: System.monotonic_time(:millisecond),
+              last_seq: entry.deferred_seq || entry.last_seq,
+              last_text_hash: entry.deferred_hash || entry.last_text_hash,
+              deferred_text: nil,
+              deferred_chunks: nil,
+              pending_followup_chunks: rest_chunks,
+              deferred_seq: nil,
+              deferred_hash: nil,
+              deferred_meta: %{},
+              pending_followup_meta: followup_meta(entry.deferred_meta)
+          }
 
-      %{
-        entry
-        | last_seq: entry.deferred_seq || entry.last_seq,
-          last_text_hash: entry.deferred_hash || entry.last_text_hash,
-          deferred_text: nil,
-          deferred_seq: nil,
-          deferred_hash: nil,
-          deferred_meta: %{}
-      }
+          state
+          |> put_entry(key, entry)
+          |> put_ref(notify_ref, {key, :edit})
+
+        _ ->
+          put_entry(state, key, entry)
+      end
     else
-      _ -> entry
+      _ -> put_entry(state, key, entry)
     end
   rescue
-    _ -> entry
+    _ -> put_entry(state, key, entry)
   end
 
-  defp maybe_flush_deferred_edit(entry, _message_id), do: entry
+  defp maybe_flush_deferred_edit(state, key, entry, _message_id), do: put_entry(state, key, entry)
 
   defp maybe_index_pending_resume(%{pending_resume: nil}, _message_id), do: :ok
 
@@ -394,12 +542,17 @@ defmodule LemonChannels.PresentationState do
       platform_message_id: nil,
       pending_create_ref: nil,
       pending_create_at: nil,
+      pending_edit_ref: nil,
+      pending_edit_at: nil,
       last_seq: 0,
       last_text_hash: nil,
       deferred_text: nil,
+      deferred_chunks: nil,
+      pending_followup_chunks: nil,
       deferred_seq: nil,
       deferred_hash: nil,
       deferred_meta: %{},
+      pending_followup_meta: %{},
       pending_resume: nil
     }
   end
@@ -422,27 +575,11 @@ defmodule LemonChannels.PresentationState do
 
       %{pending_create_ref: ref, pending_create_at: at} = entry
       when is_reference(ref) and is_integer(at) ->
-        now = System.monotonic_time(:millisecond)
+        maybe_gc_stale_pending(state, key, entry, ref, :create, surface)
 
-        if now - at > @pending_create_ttl_ms do
-          Logger.warning(
-            "PresentationState evicting stale pending_create_ref " <>
-              "(#{now - at}ms old) for run_id=#{entry.run_id}, surface=#{surface}. " <>
-              "Delivery notification was lost; next flush will CREATE a new message."
-          )
-
-          cleaned = %{
-            entry
-            | pending_create_ref: nil,
-              pending_create_at: nil
-          }
-
-          # Also remove from refs map
-          refs = Map.delete(state.refs, ref)
-          {cleaned, %{state | entries: Map.put(state.entries, key, cleaned), refs: refs}}
-        else
-          {entry, state}
-        end
+      %{pending_edit_ref: ref, pending_edit_at: at} = entry
+      when is_reference(ref) and is_integer(at) ->
+        maybe_gc_stale_pending(state, key, entry, ref, :edit, surface)
 
       entry ->
         {entry, state}
@@ -489,4 +626,163 @@ defmodule LemonChannels.PresentationState do
   defp extract_message_id(%{"message_id" => id}), do: extract_message_id(id)
   defp extract_message_id(%{"result" => %{"message_id" => id}}), do: extract_message_id(id)
   defp extract_message_id(_), do: nil
+
+  defp apply_delivery_notification(state, key, entry, ref, :create, result, message_id) do
+    if entry.pending_create_ref != ref do
+      put_entry(state, key, entry)
+    else
+      entry = %{entry | pending_create_ref: nil, pending_create_at: nil}
+
+      entry =
+        if is_nil(message_id) do
+          Logger.debug(
+            "PresentationState: delivery succeeded but message_id not extractable " <>
+              "from result=#{inspect(result)}, run_id=#{entry.run_id}"
+          )
+
+          entry
+        else
+          maybe_index_pending_resume(entry, message_id)
+          %{entry | platform_message_id: message_id, pending_resume: nil}
+        end
+
+      entry =
+        if deferred_chunks(entry) == [] do
+          maybe_enqueue_followups(entry)
+        else
+          %{entry | pending_followup_chunks: nil, pending_followup_meta: %{}}
+        end
+
+      maybe_flush_deferred_edit(state, key, entry, message_id)
+    end
+  end
+
+  defp apply_delivery_notification(state, key, entry, ref, :edit, _result, _message_id) do
+    if entry.pending_edit_ref != ref do
+      put_entry(state, key, entry)
+    else
+      entry =
+        %{
+          entry
+          | pending_edit_ref: nil,
+            pending_edit_at: nil
+        }
+
+      entry =
+        if deferred_chunks(entry) == [] do
+          maybe_enqueue_followups(entry)
+        else
+          %{entry | pending_followup_chunks: nil, pending_followup_meta: %{}}
+        end
+
+      maybe_flush_deferred_edit(state, key, entry, entry.platform_message_id)
+    end
+  end
+
+  defp normalize_ref_key({key, phase}) when phase in [:create, :edit], do: {key, phase}
+  defp normalize_ref_key(key), do: {key, :create}
+
+  defp ref_matches_key?({ref_key, _phase}, key), do: ref_key == key
+  defp ref_matches_key?(ref_key, key), do: ref_key == key
+
+  defp maybe_gc_stale_pending(state, key, entry, ref, phase, surface) do
+    now = System.monotonic_time(:millisecond)
+
+    if now - pending_at(entry, phase) > @pending_create_ttl_ms do
+      Logger.warning(
+        "PresentationState evicting stale pending_#{phase}_ref " <>
+          "(#{now - pending_at(entry, phase)}ms old) for run_id=#{entry.run_id}, surface=#{surface}."
+      )
+
+      cleaned =
+        case phase do
+          :create -> %{entry | pending_create_ref: nil, pending_create_at: nil}
+          :edit -> %{entry | pending_edit_ref: nil, pending_edit_at: nil}
+        end
+
+      refs = Map.delete(state.refs, ref)
+      {cleaned, %{state | entries: Map.put(state.entries, key, cleaned), refs: refs}}
+    else
+      {entry, state}
+    end
+  end
+
+  defp pending_at(entry, :create), do: entry.pending_create_at || 0
+  defp pending_at(entry, :edit), do: entry.pending_edit_at || 0
+
+  defp deferred_chunks(%{deferred_chunks: chunks}) when is_list(chunks) and chunks != [],
+    do: chunks
+
+  defp deferred_chunks(%{deferred_text: text}) when is_binary(text) and text != "", do: [text]
+  defp deferred_chunks(_), do: []
+
+  defp maybe_enqueue_followups(%{pending_followup_chunks: chunks} = entry)
+       when is_list(chunks) and chunks != [] do
+    Enum.each(chunks, fn chunk ->
+      _ =
+        Outbox.enqueue(
+          OutboundPayload.text(
+            entry.route.channel_id,
+            entry.route.account_id,
+            peer(entry.route),
+            chunk,
+            idempotency_key: nil,
+            reply_to: followup_reply_to(entry.pending_followup_meta),
+            meta: entry.pending_followup_meta
+          )
+        )
+    end)
+
+    %{entry | pending_followup_chunks: nil, pending_followup_meta: %{}}
+  end
+
+  defp maybe_enqueue_followups(entry), do: entry
+
+  defp maybe_flush_late_staged_followups(
+         %{
+           platform_message_id: message_id,
+           pending_create_ref: nil,
+           pending_edit_ref: nil,
+           pending_followup_chunks: chunks
+         } = entry
+       )
+       when (is_integer(message_id) or (is_binary(message_id) and message_id != "")) and
+              is_list(chunks) and chunks != [] do
+    maybe_enqueue_followups(entry)
+  end
+
+  defp maybe_flush_late_staged_followups(entry), do: entry
+
+  defp maybe_flush_late_deferred(
+         state,
+         key,
+         %{
+           platform_message_id: message_id,
+           pending_create_ref: nil,
+           pending_edit_ref: nil
+         } = entry
+       )
+       when is_integer(message_id) or (is_binary(message_id) and message_id != "") do
+    if deferred_chunks(entry) == [] do
+      state
+    else
+      maybe_flush_deferred_edit(state, key, entry, message_id)
+    end
+  end
+
+  defp maybe_flush_late_deferred(state, _key, _entry), do: state
+
+  defp followup_meta(meta) when is_map(meta),
+    do: Map.drop(meta, [:reply_markup, :controls, :notify_tag])
+
+  defp followup_meta(_), do: %{}
+
+  defp followup_reply_to(meta) when is_map(meta) do
+    case Map.get(meta, :followup_reply_to) || Map.get(meta, "followup_reply_to") do
+      nil -> nil
+      reply_to -> to_string(reply_to)
+    end
+  end
+
+  defp followup_reply_to(_), do: nil
 end

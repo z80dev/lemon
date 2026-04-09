@@ -366,12 +366,38 @@ defmodule LemonChannels.Outbox do
           group_key: delivery_group_key(payload)
         }
 
-        queue = :queue.in(entry, acc.queue)
+        queue =
+          acc.queue
+          |> drop_superseded_queued_edits(entry)
+          |> then(&:queue.in(entry, &1))
+
         %{acc | queue: queue}
       end)
 
     %{state | enqueued_total: state.enqueued_total + length(payloads)}
   end
+
+  defp drop_superseded_queued_edits(
+         queue,
+         %{payload: %OutboundPayload{kind: :edit} = payload} = entry
+       ) do
+    case edit_target_message_id(payload) do
+      nil ->
+        queue
+
+      message_id ->
+        queue
+        |> :queue.to_list()
+        |> Enum.reject(fn queued ->
+          queued.group_key == entry.group_key and
+            match?(%OutboundPayload{kind: :edit}, queued.payload) and
+            edit_target_message_id(queued.payload) == message_id
+        end)
+        |> :queue.from_list()
+    end
+  end
+
+  defp drop_superseded_queued_edits(queue, _entry), do: queue
 
   defp process_available(state) do
     {state, min_wait_ms} = do_process_available(state, nil)
@@ -488,9 +514,26 @@ defmodule LemonChannels.Outbox do
   defp delivery_group_key(%OutboundPayload{} = payload) do
     peer = payload.peer || %{}
 
-    {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id),
-     Map.get(peer, :thread_id)}
+    base =
+      {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id),
+       Map.get(peer, :thread_id)}
+
+    case payload.kind do
+      :edit -> {base, :edit, edit_target_message_id(payload)}
+      :delete -> {base, :delete, edit_target_message_id(payload)}
+      _ -> base
+    end
   end
+
+  defp edit_target_message_id(%OutboundPayload{kind: :edit, content: %{message_id: id}})
+       when not is_nil(id),
+       do: to_string(id)
+
+  defp edit_target_message_id(%OutboundPayload{kind: :edit, content: %{"message_id" => id}})
+       when not is_nil(id),
+       do: to_string(id)
+
+  defp edit_target_message_id(_payload), do: nil
 
   defp start_delivery_task(entry) do
     _ = ensure_worker_supervisor_started()

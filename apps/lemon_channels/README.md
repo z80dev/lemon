@@ -40,7 +40,7 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
-**Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids and pending creates per `{route, run, surface}`.
+**Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
 

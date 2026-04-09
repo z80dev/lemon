@@ -96,25 +96,49 @@ defmodule LemonRouter.StreamCoalescer do
           channel_id :: binary(),
           run_id :: binary(),
           opts :: keyword()
-        ) :: :ok
+        ) :: :ok | {:error, term()}
   def finalize_run(session_key, channel_id, run_id, opts \\ [])
       when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
     final_text = Keyword.get(opts, :final_text)
+    dispatch? = Keyword.get(opts, :dispatch?, true)
 
     case get_or_start_coalescer(session_key, channel_id, meta) do
       {:ok, pid} ->
         try do
-          GenServer.call(pid, {:finalize, run_id, meta, final_text}, 5_000)
+          GenServer.call(pid, {:finalize, run_id, meta, final_text, dispatch?}, 5_000)
         catch
-          :exit, _ -> :ok
+          :exit, reason ->
+            Logger.warning(
+              "StreamCoalescer.finalize_run failed for session=#{inspect(session_key)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+            )
+
+            {:error, {:finalize_call_failed, reason}}
+        end
+
+      {:error, reason} ->
+        Logger.warning(
+          "StreamCoalescer.finalize_run could not start coalescer for session=#{inspect(session_key)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  @spec current_text(binary(), binary(), binary()) :: binary() | nil
+  def current_text(session_key, channel_id, run_id)
+      when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
+    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, {:current_text, run_id}, 5_000)
+        catch
+          :exit, _ -> nil
         end
 
       _ ->
-        :ok
+        nil
     end
-
-    :ok
   end
 
   @doc """
@@ -299,7 +323,7 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @impl true
-  def handle_call({:finalize, run_id, meta, final_text}, _from, state) do
+  def handle_call({:finalize, run_id, meta, final_text, dispatch?}, _from, state) do
     state =
       cond do
         state.run_id == nil ->
@@ -330,8 +354,22 @@ defmodule LemonRouter.StreamCoalescer do
           %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
-    state = do_finalize(state, final_text)
-    {:reply, :ok, state}
+    case do_finalize_with_result(state, final_text, dispatch?) do
+      {:ok, state} ->
+        {:reply, :ok, state}
+
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:current_text, run_id}, _from, state) do
+    reply =
+      if state.run_id == run_id and is_binary(state.full_text) and state.full_text != "" do
+        state.full_text
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:commit_turn, run_id}, _from, state) do
@@ -468,6 +506,13 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp do_finalize(state, final_text) do
+    case do_finalize_with_result(state, final_text, true) do
+      {:ok, state} -> state
+      {:error, _reason, state} -> state
+    end
+  end
+
+  defp do_finalize_with_result(state, final_text, dispatch?) do
     text =
       cond do
         is_binary(final_text) and final_text != "" -> final_text
@@ -476,7 +521,7 @@ defmodule LemonRouter.StreamCoalescer do
         true -> nil
       end
 
-    state =
+    result =
       case text do
         nil ->
           Logger.warning(
@@ -484,34 +529,60 @@ defmodule LemonRouter.StreamCoalescer do
               "(run_id=#{state.run_id}, last_seq=#{state.last_seq})"
           )
 
-          case build_intent(
-                 state,
-                 :stream_finalize,
-                 "⚠️ Empty response from model — no output was generated."
-               ) do
-            {:ok, intent} ->
-              _ = dispatcher().dispatch(intent)
-              %{state | last_sent_text: nil, finalized: true}
-
-            :error ->
-              %{state | finalized: true}
-          end
+          dispatch_or_mark_finalized(
+            state,
+            "⚠️ Empty response from model — no output was generated.",
+            nil,
+            dispatch?
+          )
 
         _ ->
-          case build_intent(state, :stream_finalize, text) do
-            {:ok, intent} ->
-              _ = dispatcher().dispatch(intent)
-              %{state | last_sent_text: text, finalized: true}
-
-            :error ->
-              %{state | finalized: true}
-          end
+          dispatch_or_mark_finalized(state, text, text, dispatch?)
       end
 
     cancel_timer(state.flush_timer)
-    state
+
+    case result do
+      {:ok, next_state} ->
+        {:ok,
+         %{
+           next_state
+           | buffer: "",
+             first_delta_ts: nil,
+             flush_timer: nil
+         }}
+
+      {:error, reason, next_state} ->
+        {:error, reason, %{next_state | flush_timer: nil}}
+    end
   rescue
-    _ -> state
+    _ -> {:error, :finalize_crashed, %{state | finalized: false, flush_timer: nil}}
+  end
+
+  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, false)
+       when is_binary(intent_text) do
+    {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}
+  end
+
+  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, true)
+       when is_binary(intent_text) do
+    case build_intent(state, :stream_finalize, intent_text) do
+      {:ok, intent} ->
+        case dispatcher().dispatch(intent) do
+          :ok ->
+            {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}
+
+          {:error, reason} ->
+            Logger.warning(
+              "StreamCoalescer finalize dispatch failed session=#{inspect(state.session_key)} run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
+            )
+
+            {:error, {:dispatch_failed, reason}, %{state | finalized: false}}
+        end
+
+      :error ->
+        {:error, :build_intent_failed, %{state | finalized: false}}
+    end
   end
 
   defp build_intent(state, kind, text) when is_binary(text) do
