@@ -300,6 +300,7 @@ defmodule LemonChannels.Capabilities.Registry do
   def lookup("discord") do
     Capabilities.new([
       :threads,
+      :reactions,
       :edit,
       :delete,
       {:attachments, max_size: 25_000_000, features: [:images, :videos, :documents]},
@@ -654,7 +655,9 @@ defmodule LemonChannels.Capabilities do
 
     caps =
       if legacy[:chunk_limit] do
-        put_in(caps, [Access.key(:chunk_limit)],
+        put_in(
+          caps,
+          [Access.key(:chunk_limit)],
           Capability.new(:chunk_limit, enabled: true, value: legacy[:chunk_limit])
         )
       else
@@ -663,7 +666,9 @@ defmodule LemonChannels.Capabilities do
 
     caps =
       if legacy[:rate_limit] do
-        put_in(caps, [Access.key(:rate_limit)],
+        put_in(
+          caps,
+          [Access.key(:rate_limit)],
           Capability.new(:rate_limit, enabled: true, value: legacy[:rate_limit])
         )
       else

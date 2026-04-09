@@ -242,6 +242,7 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |
 | `LemonGateway.Tools.SmsClaimMessage` | `tools/sms_claim_message.ex` | Mark an SMS as claimed by the current session |
 | `LemonGateway.Tools.TelegramSendImage` | `tools/telegram_send_image.ex` | Queue an image for Telegram delivery (Telegram sessions only) |
+| `LemonGateway.Tools.DiscordSendFile` | `tools/discord_send_file.ex` | Queue a file for Discord delivery (Discord sessions only) |
 
 ### Health
 

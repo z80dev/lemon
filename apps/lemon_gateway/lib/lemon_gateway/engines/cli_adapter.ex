@@ -160,19 +160,31 @@ defmodule LemonGateway.Engines.CliAdapter do
       LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: job.session_key)
     ]
 
-    if telegram_session?(job) do
-      workspace_dir = CodingAgent.Config.workspace_dir()
+    workspace_dir = CodingAgent.Config.workspace_dir()
 
-      [
-        LemonGateway.Tools.TelegramSendImage.tool(
-          cwd,
-          session_key: job.session_key,
-          workspace_dir: workspace_dir
-        )
-        | sms_tools
-      ]
-    else
-      sms_tools
+    cond do
+      telegram_session?(job) ->
+        [
+          LemonGateway.Tools.TelegramSendImage.tool(
+            cwd,
+            session_key: job.session_key,
+            workspace_dir: workspace_dir
+          )
+          | sms_tools
+        ]
+
+      discord_session?(job) ->
+        [
+          LemonGateway.Tools.DiscordSendFile.tool(
+            cwd,
+            session_key: job.session_key,
+            workspace_dir: workspace_dir
+          )
+          | sms_tools
+        ]
+
+      true ->
+        sms_tools
     end
   end
 
@@ -181,6 +193,15 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp telegram_session?(job) do
     case LemonCore.SessionKey.parse(job.session_key || "") do
       %{kind: :channel_peer, channel_id: "telegram"} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp discord_session?(job) do
+    case LemonCore.SessionKey.parse(job.session_key || "") do
+      %{kind: :channel_peer, channel_id: "discord"} -> true
       _ -> false
     end
   rescue

@@ -158,6 +158,7 @@ These tools are added to Lemon engine runs only (not CLI engines) via `CliAdapte
 | `lib/lemon_gateway/tools/sms_list_messages.ex` | `Tools.SmsListMessages` | List recent SMS messages |
 | `lib/lemon_gateway/tools/sms_claim_message.ex` | `Tools.SmsClaimMessage` | Mark a message as claimed by session |
 | `lib/lemon_gateway/tools/telegram_send_image.ex` | `Tools.TelegramSendImage` | Queue image for Telegram delivery (Telegram sessions only) |
+| `lib/lemon_gateway/tools/discord_send_file.ex` | `Tools.DiscordSendFile` | Queue a file for Discord delivery (Discord sessions only) |
 
 ## How to Add a New Engine
 

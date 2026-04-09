@@ -8,7 +8,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   require Logger
 
-  alias LemonChannels.Adapters.Discord.{FileOperations, Inbound, ModelPolicyAdapter, Outbound, StatusRenderer, TriggerMode}
+  alias LemonChannels.Adapters.Discord.{
+    FileOperations,
+    Inbound,
+    ModelPolicyAdapter,
+    Outbound,
+    StatusRenderer,
+    TriggerMode
+  }
+
   alias LemonAiRuntime
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
@@ -16,7 +24,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Cwd
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
-  alias LemonCore.{ChatStateStore, InboundMessage, ProjectBindingStore, ResumeToken, RouterBridge, Secrets, SessionKey}
+
+  alias LemonCore.{
+    ChatStateStore,
+    InboundMessage,
+    ProjectBindingStore,
+    ResumeToken,
+    RouterBridge,
+    Secrets,
+    SessionKey
+  }
+
   alias Nostrum.Api.{ApplicationCommand, Interaction}
 
   @cancel_callback_prefix "lemon:cancel"
@@ -48,10 +66,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     description: "Session controls",
     type: 1,
     options: [
-      %{type: 1, name: "new", description: "Start a new session",
+      %{
+        type: 1,
+        name: "new",
+        description: "Start a new session",
         options: [
           %{type: 3, name: "project", description: "Project path or ID", required: false}
-        ]},
+        ]
+      },
       %{type: 1, name: "info", description: "Show session info"}
     ]
   }
@@ -68,7 +90,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     type: 1,
     options: [
       %{
-        type: 3, name: "level", description: "Thinking level",
+        type: 3,
+        name: "level",
+        description: "Thinking level",
         required: false,
         choices: [
           %{name: "off", value: "off"},
@@ -105,7 +129,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     type: 1,
     options: [
       %{
-        type: 3, name: "mode", description: "Trigger mode",
+        type: 3,
+        name: "mode",
+        description: "Trigger mode",
         required: false,
         choices: [
           %{name: "mentions", value: "mentions"},
@@ -330,13 +356,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           ok? = run_completed_ok?(event)
           reaction_emoji = if ok?, do: "✅", else: "❌"
 
-          _ = spawn(fn ->
-            # Remove 👀 and add result reaction
-            _ = Outbound.delete_own_reaction(channel_id, user_msg_id, "👀")
-            _ = Outbound.create_reaction(channel_id, user_msg_id, reaction_emoji)
-          end)
+          _ =
+            spawn(fn ->
+              # Remove 👀 and add result reaction
+              _ = Outbound.delete_own_reaction(channel_id, user_msg_id, "👀")
+              _ = Outbound.create_reaction(channel_id, user_msg_id, reaction_emoji)
+            end)
 
-          if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :unsubscribe, 1) do
+          if Code.ensure_loaded?(LemonCore.Bus) and
+               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
             topic = LemonCore.Bus.session_topic(matched_sk)
             _ = LemonCore.Bus.unsubscribe(topic)
           end
@@ -424,7 +452,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   rescue
     e ->
-      Logger.warning("discord inbound handler crashed: #{Exception.format(:error, e, __STACKTRACE__)}")
+      Logger.warning(
+        "discord inbound handler crashed: #{Exception.format(:error, e, __STACKTRACE__)}"
+      )
+
       state
   end
 
@@ -457,10 +488,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     buffer =
       if existing do
-        %{existing |
-          messages: [msg_entry | existing.messages],
-          debounce_ref: debounce_ref,
-          inbound: inbound
+        %{
+          existing
+          | messages: [msg_entry | existing.messages],
+            debounce_ref: debounce_ref,
+            inbound: inbound
         }
       else
         %{
@@ -476,7 +508,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp buffer_scope_key(inbound) do
     channel_id = inbound.meta[:channel_id]
     thread_id = inbound.meta[:thread_id]
-    {channel_id, thread_id}
+
+    session_key =
+      inbound.meta[:session_key] || inbound.meta[:user_id] || get_in(inbound, [:sender, :id])
+
+    {channel_id, thread_id, session_key}
   end
 
   defp submit_inbound_now(state, inbound) do
@@ -603,17 +639,39 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     name = interaction |> map_get(:data) |> map_get(:name)
 
     case name do
-      "lemon" -> handle_lemon_interaction(interaction, state)
-      "session" -> handle_session_interaction(interaction, state)
-      "model" -> handle_model_interaction(interaction, state)
-      "thinking" -> handle_thinking_interaction(interaction, state)
-      "resume" -> handle_resume_interaction(interaction, state)
-      "cancel" -> handle_cancel_interaction(interaction, state)
-      "trigger" -> handle_trigger_interaction(interaction, state)
-      "cwd" -> handle_cwd_interaction(interaction, state)
-      "reload" -> handle_reload_interaction(interaction, state)
-      "topic" -> handle_topic_interaction(interaction, state)
-      "file" -> handle_file_interaction(interaction, state)
+      "lemon" ->
+        handle_lemon_interaction(interaction, state)
+
+      "session" ->
+        handle_session_interaction(interaction, state)
+
+      "model" ->
+        handle_model_interaction(interaction, state)
+
+      "thinking" ->
+        handle_thinking_interaction(interaction, state)
+
+      "resume" ->
+        handle_resume_interaction(interaction, state)
+
+      "cancel" ->
+        handle_cancel_interaction(interaction, state)
+
+      "trigger" ->
+        handle_trigger_interaction(interaction, state)
+
+      "cwd" ->
+        handle_cwd_interaction(interaction, state)
+
+      "reload" ->
+        handle_reload_interaction(interaction, state)
+
+      "topic" ->
+        handle_topic_interaction(interaction, state)
+
+      "file" ->
+        handle_file_interaction(interaction, state)
+
       _ ->
         respond_ephemeral(interaction, "Unknown command")
         state
@@ -697,14 +755,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         thinking_line = ModelPolicyAdapter.format_thinking_line(thinking_hint, thinking_scope)
         cwd_line = resolve_cwd_display(scope)
 
-        info = [
-          "**Session Info**",
-          "Session: `#{session_key}`",
-          "Model: #{model_line}",
-          "Thinking: #{thinking_line}",
-          "CWD: #{cwd_line}",
-          "Account: #{state.account_id || "default"}"
-        ] |> Enum.join("\n")
+        info =
+          [
+            "**Session Info**",
+            "Session: `#{session_key}`",
+            "Model: #{model_line}",
+            "Thinking: #{thinking_line}",
+            "CWD: #{cwd_line}",
+            "Account: #{state.account_id || "default"}"
+          ]
+          |> Enum.join("\n")
 
         respond_ephemeral(interaction, info)
 
@@ -726,7 +786,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     agent_id = BindingResolver.resolve_agent_id(scope)
 
     session_key =
-      session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+      session_key_for(
+        agent_id,
+        state.account_id,
+        peer_kind,
+        channel_id,
+        user_id,
+        thread_id,
+        guild_id
+      )
 
     # Handle project selection
     project_result =
@@ -742,8 +810,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       _ ->
         # Fire-and-forget memory reflection before clearing the session
         spawn_memory_reflection_before_new(
-          state, scope, session_key, interaction,
-          channel_id, thread_id, user_id, peer_kind, agent_id
+          state,
+          scope,
+          session_key,
+          interaction,
+          channel_id,
+          thread_id,
+          user_id,
+          peer_kind,
+          agent_id
         )
 
         # Clear state
@@ -751,20 +826,44 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         _ = ModelPolicyAdapter.delete_session_model_override(session_key)
 
         project = extract_project_info(project_result)
-        msg = started_new_session_message(state, scope, session_key, project, "Started a new session.")
+
+        msg =
+          started_new_session_message(
+            state,
+            scope,
+            session_key,
+            project,
+            "Started a new session."
+          )
+
         respond_ephemeral(interaction, msg)
     end
   end
 
   defp spawn_memory_reflection_before_new(
-         state, scope, session_key, interaction,
-         channel_id, thread_id, _user_id, peer_kind, agent_id
+         state,
+         scope,
+         session_key,
+         interaction,
+         channel_id,
+         thread_id,
+         _user_id,
+         peer_kind,
+         agent_id
        ) do
     inbound = %InboundMessage{
       channel_id: "discord",
       account_id: state.account_id,
-      peer: %{kind: peer_kind, id: Integer.to_string(channel_id), thread_id: maybe_to_string(thread_id)},
-      sender: %{id: maybe_to_string(interaction_user_id(interaction)), username: nil, display_name: nil},
+      peer: %{
+        kind: peer_kind,
+        id: Integer.to_string(channel_id),
+        thread_id: maybe_to_string(thread_id)
+      },
+      sender: %{
+        id: maybe_to_string(interaction_user_id(interaction)),
+        username: nil,
+        display_name: nil
+      },
       message: %{id: nil, text: nil, timestamp: System.system_time(:second), reply_to_id: nil},
       raw: interaction,
       meta: %{
@@ -809,12 +908,23 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     session_key =
       session_key_for(
-        BindingResolver.resolve_agent_id(%ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}),
-        state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id
+        BindingResolver.resolve_agent_id(%ChatScope{
+          transport: :discord,
+          chat_id: channel_id,
+          topic_id: thread_id
+        }),
+        state.account_id,
+        peer_kind,
+        channel_id,
+        user_id,
+        thread_id,
+        guild_id
       )
 
     current_session_model = ModelPolicyAdapter.session_model_override(session_key)
-    current_future_model = ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
+
+    current_future_model =
+      ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
 
     providers = available_model_providers()
 
@@ -839,8 +949,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     session_key =
       session_key_for(
-        BindingResolver.resolve_agent_id(%ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}),
-        state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id
+        BindingResolver.resolve_agent_id(%ChatScope{
+          transport: :discord,
+          chat_id: channel_id,
+          topic_id: thread_id
+        }),
+        state.account_id,
+        peer_kind,
+        channel_id,
+        user_id,
+        thread_id,
+        guild_id
       )
 
     case parse_model_callback(custom_id, values) do
@@ -848,23 +967,36 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         models = models_for_provider(provider)
 
         if models == [] do
-          update_interaction(interaction, "No models available for #{provider}.",
-            model_provider_components(available_model_providers(), 0))
+          update_interaction(
+            interaction,
+            "No models available for #{provider}.",
+            model_provider_components(available_model_providers(), 0)
+          )
         else
-          update_interaction(interaction, "Provider: **#{provider}**\nChoose a model:",
-            model_list_components(provider, models, 0))
+          update_interaction(
+            interaction,
+            "Provider: **#{provider}**\nChoose a model:",
+            model_list_components(provider, models, 0)
+          )
         end
 
       {:providers, page} ->
         providers = available_model_providers()
-        current_future_model = ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
+
+        current_future_model =
+          ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
+
         text = render_model_picker_text(nil, current_future_model)
         update_interaction(interaction, text, model_provider_components(providers, page))
 
       {:provider, provider, page} ->
         models = models_for_provider(provider)
-        update_interaction(interaction, "Provider: **#{provider}**\nChoose a model:",
-          model_list_components(provider, models, page))
+
+        update_interaction(
+          interaction,
+          "Provider: **#{provider}**\nChoose a model:",
+          model_list_components(provider, models, page)
+        )
 
       {:choose, provider, index} ->
         case model_at_index(provider, index) do
@@ -872,9 +1004,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             acknowledge_interaction(interaction)
 
           model ->
-            update_interaction(interaction,
+            update_interaction(
+              interaction,
               "Selected: **#{model_label(model)}**\nApply to:",
-              model_scope_components(provider, index))
+              model_scope_components(provider, index)
+            )
         end
 
       {:set, scope_type, provider, index} ->
@@ -887,8 +1021,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             _ = ModelPolicyAdapter.put_session_model_override(session_key, model_value)
 
             if scope_type == :future do
-              _ = ModelPolicyAdapter.put_default_model_preference(
-                state.account_id, channel_id, thread_id, model_value)
+              _ =
+                ModelPolicyAdapter.put_default_model_preference(
+                  state.account_id,
+                  channel_id,
+                  thread_id,
+                  model_value
+                )
             end
 
             text =
@@ -925,11 +1064,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         respond_ephemeral(interaction, render_thinking_status(state, scope))
 
       :clear ->
-        had? = ModelPolicyAdapter.clear_default_thinking_preference(account_id, channel_id, thread_id)
+        had? =
+          ModelPolicyAdapter.clear_default_thinking_preference(account_id, channel_id, thread_id)
+
         respond_ephemeral(interaction, render_thinking_cleared(scope, had?))
 
       {:set, level} ->
-        :ok = ModelPolicyAdapter.put_default_thinking_preference(account_id, channel_id, thread_id, level)
+        :ok =
+          ModelPolicyAdapter.put_default_thinking_preference(
+            account_id,
+            channel_id,
+            thread_id,
+            level
+          )
+
         respond_ephemeral(interaction, render_thinking_set(scope, level))
 
       :invalid ->
@@ -981,24 +1129,49 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           guild_id = interaction |> map_get(:guild_id) |> parse_id()
           peer_kind = if is_integer(guild_id), do: :group, else: :dm
 
-          _sk = session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+          _sk =
+            session_key_for(
+              agent_id,
+              state.account_id,
+              peer_kind,
+              channel_id,
+              user_id,
+              thread_id,
+              guild_id
+            )
 
           # Store the resume selection
-          LemonCore.Store.put(:discord_selected_resume, {state.account_id, channel_id, thread_id}, resume)
+          LemonCore.Store.put(
+            :discord_selected_resume,
+            {state.account_id, channel_id, thread_id},
+            resume
+          )
 
-          respond_ephemeral(interaction,
-            "Switched to session: #{ResumeSelection.format_session_ref(resume)}\nNext message will resume this session.")
+          respond_ephemeral(
+            interaction,
+            "Switched to session: #{ResumeSelection.format_session_ref(resume)}\nNext message will resume this session."
+          )
 
         _ ->
           # Try as a direct resume spec
           case ResumeSelection.resolve_resume_selector(selector, sessions) do
             %ResumeToken{} = resume ->
-              LemonCore.Store.put(:discord_selected_resume, {state.account_id, channel_id, thread_id}, resume)
-              respond_ephemeral(interaction,
-                "Switched to session: #{ResumeSelection.format_session_ref(resume)}")
+              LemonCore.Store.put(
+                :discord_selected_resume,
+                {state.account_id, channel_id, thread_id},
+                resume
+              )
+
+              respond_ephemeral(
+                interaction,
+                "Switched to session: #{ResumeSelection.format_session_ref(resume)}"
+              )
 
             _ ->
-              respond_ephemeral(interaction, "Invalid selector. Use a number (1-#{length(sessions)}).")
+              respond_ephemeral(
+                interaction,
+                "Invalid selector. Use a number (1-#{length(sessions)})."
+              )
           end
       end
     end
@@ -1144,8 +1317,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     sub = file_subcommand(interaction)
 
     case sub do
-      "put" -> handle_file_put_interaction(interaction, state)
-      "get" -> handle_file_get_interaction(interaction, state)
+      "put" ->
+        handle_file_put_interaction(interaction, state)
+
+      "get" ->
+        handle_file_get_interaction(interaction, state)
+
       _ ->
         respond_ephemeral(interaction, "Usage: /file put <attachment> [path] or /file get <path>")
     end
@@ -1315,14 +1492,24 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     nav_buttons =
       []
-      |> maybe_append(has_prev, StatusRenderer.button("Prev", "#{@model_callback_prefix}:providers:#{max(page - 1, 0)}"))
-      |> maybe_append(has_next, StatusRenderer.button("Next", "#{@model_callback_prefix}:providers:#{page + 1}"))
-      |> maybe_append(true, StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger))
+      |> maybe_append(
+        has_prev,
+        StatusRenderer.button("Prev", "#{@model_callback_prefix}:providers:#{max(page - 1, 0)}")
+      )
+      |> maybe_append(
+        has_next,
+        StatusRenderer.button("Next", "#{@model_callback_prefix}:providers:#{page + 1}")
+      )
+      |> maybe_append(
+        true,
+        StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
+      )
 
     components = [
       StatusRenderer.action_row([
         StatusRenderer.select_menu("#{@model_callback_prefix}:select_provider", options,
-          placeholder: "Choose a provider")
+          placeholder: "Choose a provider"
+        )
       ])
     ]
 
@@ -1344,15 +1531,34 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     nav_buttons =
       []
-      |> maybe_append(has_prev, StatusRenderer.button("Prev", "#{@model_callback_prefix}:provider:#{provider}:#{max(page - 1, 0)}"))
-      |> maybe_append(has_next, StatusRenderer.button("Next", "#{@model_callback_prefix}:provider:#{provider}:#{page + 1}"))
-      |> maybe_append(true, StatusRenderer.button("Back", "#{@model_callback_prefix}:providers:0"))
-      |> maybe_append(true, StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger))
+      |> maybe_append(
+        has_prev,
+        StatusRenderer.button(
+          "Prev",
+          "#{@model_callback_prefix}:provider:#{provider}:#{max(page - 1, 0)}"
+        )
+      )
+      |> maybe_append(
+        has_next,
+        StatusRenderer.button(
+          "Next",
+          "#{@model_callback_prefix}:provider:#{provider}:#{page + 1}"
+        )
+      )
+      |> maybe_append(
+        true,
+        StatusRenderer.button("Back", "#{@model_callback_prefix}:providers:0")
+      )
+      |> maybe_append(
+        true,
+        StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
+      )
 
     [
       StatusRenderer.action_row([
-        StatusRenderer.select_menu("#{@model_callback_prefix}:select_model:#{provider}:#{page}", options,
-          placeholder: "Choose a model")
+        StatusRenderer.select_menu(
+          "#{@model_callback_prefix}:select_model:#{provider}:#{page}",
+          options, placeholder: "Choose a model")
       ]),
       StatusRenderer.action_row(nav_buttons)
     ]
@@ -1361,8 +1567,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp model_scope_components(provider, index) do
     [
       StatusRenderer.action_row([
-        StatusRenderer.button("This session", "#{@model_callback_prefix}:set:s:#{provider}:#{index}", style: :primary),
-        StatusRenderer.button("All future sessions", "#{@model_callback_prefix}:set:f:#{provider}:#{index}", style: :success),
+        StatusRenderer.button(
+          "This session",
+          "#{@model_callback_prefix}:set:s:#{provider}:#{index}", style: :primary),
+        StatusRenderer.button(
+          "All future sessions",
+          "#{@model_callback_prefix}:set:f:#{provider}:#{index}", style: :success),
         StatusRenderer.button("Back", "#{@model_callback_prefix}:provider:#{provider}:0"),
         StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
       ])
@@ -1378,18 +1588,22 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       # Select menu: model selection
       String.starts_with?(custom_id, "#{@model_callback_prefix}:select_model:") and values != [] ->
         selected = List.first(values)
+
         case String.split(selected, ":", parts: 2) do
           [provider, idx_str] ->
             case Integer.parse(idx_str) do
               {idx, _} -> {:choose, provider, idx}
               _ -> nil
             end
-          _ -> nil
+
+          _ ->
+            nil
         end
 
       # Button callbacks
       true ->
         prefix = @model_callback_prefix <> ":"
+
         if String.starts_with?(custom_id, prefix) do
           rest = String.replace_prefix(custom_id, prefix, "")
           parse_model_button_callback(rest)
@@ -1477,7 +1691,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     session_key = pending[:session_key] || pending["session_key"]
 
     with true <- is_binary(approval_id) and is_binary(session_key),
-         %{kind: :channel_peer, channel_id: "discord", account_id: account_id, peer_id: peer_id, thread_id: _thread_id} <-
+         %{
+           kind: :channel_peer,
+           channel_id: "discord",
+           account_id: account_id,
+           peer_id: peer_id,
+           thread_id: _thread_id
+         } <-
            SessionKey.parse(session_key),
          true <- is_nil(account_id) or account_id == state.account_id,
          channel_id when is_integer(channel_id) <- parse_id(peer_id) do
@@ -1584,7 +1804,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     topic_level =
       if is_integer(scope.topic_id),
-        do: ModelPolicyAdapter.default_thinking_preference(account_id, scope.chat_id, scope.topic_id),
+        do:
+          ModelPolicyAdapter.default_thinking_preference(
+            account_id,
+            scope.chat_id,
+            scope.topic_id
+          ),
         else: nil
 
     chat_level = ModelPolicyAdapter.default_thinking_preference(account_id, scope.chat_id, nil)
@@ -1603,7 +1828,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "Channel default: #{chat_level || "none"}",
       "Thread override: #{topic_level || "none"}",
       thinking_usage()
-    ] |> Enum.join("\n")
+    ]
+    |> Enum.join("\n")
   rescue
     _ -> thinking_usage()
   end
@@ -1617,14 +1843,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp render_thinking_cleared(%ChatScope{topic_id: topic_id}, had?) when is_integer(topic_id) do
-    if had?, do: "Cleared thinking level override for this thread.", else: "No override was set for this thread."
+    if had?,
+      do: "Cleared thinking level override for this thread.",
+      else: "No override was set for this thread."
   end
 
   defp render_thinking_cleared(%ChatScope{}, had?) do
-    if had?, do: "Cleared thinking level override for this channel.", else: "No override was set for this channel."
+    if had?,
+      do: "Cleared thinking level override for this channel.",
+      else: "No override was set for this channel."
   end
 
-  defp thinking_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id), do: "this thread"
+  defp thinking_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id),
+    do: "this thread"
+
   defp thinking_scope_label(_), do: "this channel"
 
   defp thinking_usage, do: "Usage: `/thinking [off|minimal|low|medium|high|xhigh|clear|status]`"
@@ -1642,13 +1874,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp normalize_thinking_arg(_), do: :invalid
 
   defp render_trigger_status(%{mode: mode, chat_mode: chat_mode, topic_mode: topic_mode}) do
-    base = if mode == :mentions, do: "Trigger mode: **mentions-only**", else: "Trigger mode: **all**"
+    base =
+      if mode == :mentions, do: "Trigger mode: **mentions-only**", else: "Trigger mode: **all**"
+
     chat_line = "Channel default: #{chat_mode || "not set"}"
     topic_line = "Thread override: #{topic_mode || "none"}"
     [base, chat_line, topic_line, "Use `/trigger [mentions|all|clear]`"] |> Enum.join("\n")
   end
 
-  defp render_trigger_set(mode, %ChatScope{topic_id: nil}), do: "Trigger mode set to **#{mode}** for this channel."
+  defp render_trigger_set(mode, %ChatScope{topic_id: nil}),
+    do: "Trigger mode set to **#{mode}** for this channel."
+
   defp render_trigger_set(mode, _), do: "Trigger mode set to **#{mode}** for this thread."
 
   defp render_cwd_status(%ChatScope{} = scope) do
@@ -1669,16 +1905,21 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp render_cwd_cleared(scope, had?) do
-    if had?, do: "Cleared working directory override for #{cwd_scope_label(scope)}.",
-    else: "No /cwd override was set for #{cwd_scope_label(scope)}."
+    if had?,
+      do: "Cleared working directory override for #{cwd_scope_label(scope)}.",
+      else: "No /cwd override was set for #{cwd_scope_label(scope)}."
   end
 
-  defp cwd_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id), do: "this thread"
+  defp cwd_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id),
+    do: "this thread"
+
   defp cwd_scope_label(_), do: "this channel"
 
   defp resolve_cwd_display(scope) do
     case BindingResolver.resolve_cwd(scope) do
-      cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
+      cwd when is_binary(cwd) and cwd != "" ->
+        Path.expand(cwd)
+
       _ ->
         case Cwd.default_cwd() do
           cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
@@ -1689,7 +1930,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     _ -> "(not configured)"
   end
 
-  defp format_model_line(model_value, model_scope) when is_binary(model_value) and model_value != "" do
+  defp format_model_line(model_value, model_scope)
+       when is_binary(model_value) and model_value != "" do
     case model_scope do
       :session -> "#{model_value} (session override)"
       :future -> "#{model_value} (channel default)"
@@ -1705,7 +1947,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp started_new_session_message(state, %ChatScope{} = scope, session_key, project, base_msg) do
-    {model_hint, model_scope} = resolve_model_hint(state, session_key, scope.chat_id, scope.topic_id)
+    {model_hint, model_scope} =
+      resolve_model_hint(state, session_key, scope.chat_id, scope.topic_id)
+
     model_line = format_model_line(model_hint, model_scope)
     {thinking_hint, thinking_scope} = resolve_thinking_hint(state, scope.chat_id, scope.topic_id)
     thinking_line = ModelPolicyAdapter.format_thinking_line(thinking_hint, thinking_scope)
@@ -1768,6 +2012,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         case BindingResolver.lookup_project(sel) do
           %{root: root} when is_binary(root) and byte_size(root) > 0 ->
             root = Path.expand(root)
+
             if File.dir?(root) do
               ProjectBindingStore.put_override(scope, sel)
               {:ok, %{id: sel, root: root}}
@@ -1824,7 +2069,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end)
   end
 
-  defp model_at_index(provider, index) when is_binary(provider) and is_integer(index) and index >= 0 do
+  defp model_at_index(provider, index)
+       when is_binary(provider) and is_integer(index) and index >= 0 do
     models_for_provider(provider) |> Enum.at(index)
   end
 
@@ -1832,10 +2078,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp model_spec(%{provider: provider, id: id}) when is_binary(provider) and is_binary(id),
     do: "#{provider}:#{id}"
+
   defp model_spec(_), do: nil
 
   defp model_label(%{name: name, id: id}) when is_binary(name) and name != "" and is_binary(id),
     do: "#{name} (#{id})"
+
   defp model_label(%{id: id}) when is_binary(id), do: id
   defp model_label(other), do: inspect(other)
 
@@ -1862,9 +2110,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     filtered
     |> Enum.group_by(& &1.provider)
     |> Enum.map(fn {provider, provider_models} ->
-      %{provider: provider, models: Enum.sort_by(provider_models, fn m ->
-        {String.downcase(m.name || m.id || ""), m.id || ""}
-      end)}
+      %{
+        provider: provider,
+        models:
+          Enum.sort_by(provider_models, fn m ->
+            {String.downcase(m.name || m.id || ""), m.id || ""}
+          end)
+      }
     end)
     |> Enum.sort_by(& &1.provider)
   rescue
@@ -1929,6 +2181,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp configured_provider_index(cfg) do
     providers = cfg.providers || %{}
+
     Enum.reduce(providers, %{}, fn {name, provider_cfg}, acc ->
       Map.put(acc, normalize_provider_name(name), provider_cfg || %{})
     end)
@@ -1972,7 +2225,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp normalize_provider_name(name) when is_binary(name), do: String.downcase(String.trim(name))
-  defp normalize_provider_name(name) when is_atom(name), do: name |> Atom.to_string() |> normalize_provider_name()
+
+  defp normalize_provider_name(name) when is_atom(name),
+    do: name |> Atom.to_string() |> normalize_provider_name()
+
   defp normalize_provider_name(_), do: ""
 
   # ============================================================================
@@ -2058,7 +2314,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     agent_id = BindingResolver.resolve_agent_id(scope)
 
     session_key =
-      session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+      session_key_for(
+        agent_id,
+        state.account_id,
+        peer_kind,
+        channel_id,
+        user_id,
+        thread_id,
+        guild_id
+      )
 
     %InboundMessage{
       channel_id: "discord",
@@ -2106,7 +2370,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       agent_id = BindingResolver.resolve_agent_id(scope)
 
       session_key =
-        session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+        session_key_for(
+          agent_id,
+          state.account_id,
+          peer_kind,
+          channel_id,
+          user_id,
+          thread_id,
+          guild_id
+        )
 
       meta =
         inbound.meta
@@ -2125,7 +2397,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     peer_kind = inbound.peer.kind
     agent_id = if scope, do: BindingResolver.resolve_agent_id(scope), else: "default"
 
-    session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+    session_key_for(
+      agent_id,
+      state.account_id,
+      peer_kind,
+      channel_id,
+      user_id,
+      thread_id,
+      guild_id
+    )
   end
 
   defp session_key_for(agent_id, account_id, peer_kind, channel_id, user_id, thread_id, guild_id) do
@@ -2156,7 +2436,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     agent_id = BindingResolver.resolve_agent_id(scope)
 
-    session_key_for(agent_id, state.account_id, peer_kind, channel_id, user_id, thread_id, guild_id)
+    session_key_for(
+      agent_id,
+      state.account_id,
+      peer_kind,
+      channel_id,
+      user_id,
+      thread_id,
+      guild_id
+    )
   end
 
   defp interaction_user_id(interaction) do
@@ -2184,7 +2472,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp resolve_model_hint(state, session_key, channel_id, thread_id) do
-    ModelPolicyAdapter.resolve_model_hint(state.account_id || "default", session_key, channel_id, thread_id)
+    ModelPolicyAdapter.resolve_model_hint(
+      state.account_id || "default",
+      session_key,
+      channel_id,
+      thread_id
+    )
   end
 
   defp resolve_thinking_hint(state, channel_id, thread_id) do
@@ -2193,7 +2486,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp route_to_router(%InboundMessage{} = inbound) do
     case RouterBridge.handle_inbound(inbound) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, reason} ->
         Logger.warning("discord inbound routing failed: #{inspect(reason)}")
         :ok
@@ -2217,6 +2512,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
       _ = LemonCore.Bus.subscribe("exec_approvals")
     end
+
     :ok
   rescue
     _ -> :ok
@@ -2268,6 +2564,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         chat_id: inbound.meta[:channel_id],
         topic_id: inbound.meta[:thread_id]
       }
+
       not is_nil(BindingResolver.resolve_binding(scope))
     else
       true
@@ -2313,8 +2610,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp start_consumer do
     case safe_start_consumer() do
-      {:ok, pid} -> pid
-      :ok -> nil
+      {:ok, pid} ->
+        pid
+
+      :ok ->
+        nil
+
       {:error, reason} ->
         Logger.warning("discord consumer failed to start: #{inspect(reason)}")
         nil
@@ -2396,7 +2697,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Utility Functions
   # ============================================================================
 
-  defp paginate(list, page, per_page) when is_list(list) and is_integer(page) and is_integer(per_page) do
+  defp paginate(list, page, per_page)
+       when is_list(list) and is_integer(page) and is_integer(per_page) do
     p = if page < 0, do: 0, else: page
     start_index = p * per_page
     total = length(list)
@@ -2435,6 +2737,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp merge_config(base, nil), do: base
   defp merge_config(base, cfg) when is_map(cfg), do: Map.merge(base || %{}, cfg)
+
   defp merge_config(base, cfg) when is_list(cfg) do
     if Keyword.keyword?(cfg), do: Map.merge(base || %{}, Enum.into(cfg, %{})), else: base || %{}
   end
@@ -2468,7 +2771,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp resolve_bot_token_secret(config) do
     secret_name = cfg_get(config, :bot_token_secret)
-    if is_binary(secret_name) and secret_name != "", do: Secrets.fetch_value(secret_name), else: nil
+
+    if is_binary(secret_name) and secret_name != "",
+      do: Secrets.fetch_value(secret_name),
+      else: nil
   end
 
   defp resolve_token do

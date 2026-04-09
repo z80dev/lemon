@@ -3,6 +3,7 @@ defmodule LemonChannels.Dispatcher do
   Router-facing semantic delivery entrypoint.
   """
 
+  alias LemonChannels.Adapters.Discord.Renderer, as: DiscordRenderer
   alias LemonChannels.Adapters.Generic.Renderer, as: GenericRenderer
   alias LemonChannels.Adapters.Telegram.Renderer, as: TelegramRenderer
   alias LemonCore.DeliveryIntent
@@ -14,6 +15,7 @@ defmodule LemonChannels.Dispatcher do
   end
 
   defp renderer_for(%DeliveryIntent{route: %{channel_id: "telegram"}}), do: TelegramRenderer
+  defp renderer_for(%DeliveryIntent{route: %{channel_id: "discord"}}), do: DiscordRenderer
   defp renderer_for(_intent), do: GenericRenderer
 
   defp dispatch_with(renderer, %DeliveryIntent{} = intent) do

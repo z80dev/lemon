@@ -141,9 +141,11 @@ Provider availability in the Telegram `/model` picker should match the real prov
 |------|-------------|
 | `adapters/discord.ex` | Plugin impl. id: `"discord"`, chunk_limit: 2000, rate_limit: 5. |
 | `adapters/discord/supervisor.ex` | Starts Transport if bot_token configured. |
-| `adapters/discord/transport.ex` | Nostrum consumer. Slash commands (`/lemon`, `/session new`, `/session info`). Inbound routing via RouterBridge. |
+| `adapters/discord/transport.ex` | Nostrum consumer. Slash commands, button interactions, inbound routing, debounce buffering keyed by channel/thread/session so shared-channel users do not get merged into one run. |
 | `adapters/discord/inbound.ex` | Normalizes Discord message events to InboundMessage. Handles attachments. |
-| `adapters/discord/outbound.ex` | Delivers via `Nostrum.Api.Message` (create, edit, delete). |
+| `adapters/discord/renderer.ex` | Discord semantic renderer. Owns send-vs-edit behavior, status controls, thread-aware replies, and finalize-time auto-send files. |
+| `adapters/discord/status_renderer.ex` | Builds Discord button rows for cancel/keep-waiting UX. |
+| `adapters/discord/outbound.ex` | Delivers via `Nostrum.Api.Message` (create, edit, delete, reaction, multipart file upload). |
 
 ### X API Adapter
 
@@ -361,7 +363,6 @@ Session/resume indices use generation-scoped keys:
 alias LemonChannels.Telegram.Delivery
 
 Delivery.enqueue_send(chat_id, "Hello", thread_id: topic_id)
-Delivery.enqueue_edit(chat_id, message_id, "Updated text")
 
 # With delivery notification
 ref = make_ref()
