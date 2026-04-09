@@ -94,6 +94,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
         true ->
           cond do
+            model_picker_active_for_scope?(state, inbound) ->
+              callbacks.handle_model_command.(state, inbound)
+
             callbacks.should_ignore_for_trigger?.(state, inbound, original_text) ->
               callbacks.maybe_log_drop.(state, inbound, :trigger_mentions)
               state
@@ -123,4 +126,31 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
       state
   end
+
+  defp model_picker_active_for_scope?(state, inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+
+    Enum.any?(state.model_pickers || %{}, fn
+      {{picker_chat_id, picker_thread_id, _sender_id}, _picker} ->
+        picker_chat_id == chat_id and picker_thread_id == thread_id
+
+      _ ->
+        false
+    end)
+  rescue
+    _ -> false
+  end
+
+  defp parse_int(nil), do: nil
+  defp parse_int(i) when is_integer(i), do: i
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp parse_int(_), do: nil
 end

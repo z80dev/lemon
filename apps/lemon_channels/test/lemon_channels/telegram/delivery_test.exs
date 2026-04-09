@@ -89,6 +89,28 @@ defmodule LemonChannels.Telegram.DeliveryTest do
                    1_000
   end
 
+  test "enqueue_send/3 preserves reply markup in payload metadata" do
+    reply_markup = %{"keyboard" => [[%{"text" => "pick me"}]], "resize_keyboard" => true}
+
+    assert :ok ==
+             Delivery.enqueue_send(654, "choose",
+               reply_markup: reply_markup,
+               reply_to_message_id: 12,
+               thread_id: 34
+             )
+
+    assert_receive {:delivered,
+                    %OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :text,
+                      content: "choose",
+                      reply_to: "12",
+                      peer: %{id: "654", thread_id: "34"},
+                      meta: %{reply_markup: ^reply_markup}
+                    }},
+                   1_000
+  end
+
   test "enqueue_fallback/5 preserves idempotency and notify tag" do
     ref = make_ref()
     idempotency_key = "fallback-key-#{System.unique_integer([:positive])}"

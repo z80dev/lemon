@@ -311,6 +311,11 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `/new` | Start a new session (acknowledges immediately, cleans up async) |
 | `/resume` | Resume a previous session |
 | `/model` | Interactive provider/model picker via reply keyboard |
+
+The Telegram picker should only surface models that are healthy enough for the
+current transport UX. Known-bad variants may remain in provider registries for
+manual use, but the picker should filter them out and prefer task-capable
+Google preview variants over dead or weaker direct IDs.
 | `/thinking` | Toggle extended thinking |
 | `/trigger` | Switch between `:all` and `:mentions` mode |
 | `/cwd` | Set working directory |
@@ -324,7 +329,7 @@ Session and resume indices are scoped by a generation counter. `/new` increments
 
 #### `/model` Picker Behavior
 
-`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`.
+`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the current session override; `All future sessions` writes a chat-wide default even when invoked from a topic. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
 
 #### Ownership Note
 

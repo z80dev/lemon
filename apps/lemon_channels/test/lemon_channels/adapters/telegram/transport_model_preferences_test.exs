@@ -60,6 +60,20 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
     assert "high" == ModelPolicyAdapter.default_thinking_preference("default", chat_id, nil)
   end
 
+  test "topic resolution inherits a chat-wide model default" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = System.unique_integer([:positive])
+
+    :ok = ModelPolicyAdapter.put_default_model_preference("default", chat_id, nil, "openai:gpt-5")
+
+    assert "openai:gpt-5" == ModelPolicyAdapter.default_model_preference("default", chat_id, nil)
+
+    assert "openai:gpt-5" ==
+             ModelPolicyAdapter.default_model_preference("default", chat_id, topic_id)
+
+    assert nil == ModelPolicy.get(ModelPolicyAdapter.route_for("default", chat_id, topic_id))
+  end
+
   test "clearing a thinking-only override removes the placeholder policy" do
     chat_id = System.unique_integer([:positive])
 

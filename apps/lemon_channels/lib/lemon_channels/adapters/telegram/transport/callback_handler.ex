@@ -163,7 +163,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
               state,
               chat_id,
               message_id,
-              render_model_picker_text(nil, default_model_preference(state, chat_id, topic_id)),
+              render_model_picker_text(nil, chat_default_model_preference(state, chat_id)),
               %{"reply_markup" => model_provider_markup(providers, page)}
             )
 
@@ -227,7 +227,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
               _ = put_session_model_override(session_key, model_spec)
 
               if scope == :future do
-                _ = put_default_model_preference(state, chat_id, topic_id, model_spec)
+                _ = put_default_model_preference(state, chat_id, nil, model_spec)
               end
 
               text =
@@ -547,6 +547,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     filtered =
       model_maps
       |> filter_enabled_model_maps()
+      |> reject_unhealthy_picker_model_maps()
       |> maybe_fallback_to_default_providers(model_maps)
 
     filtered
@@ -554,10 +555,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     |> Enum.map(fn {provider, provider_models} ->
       %{
         provider: provider,
-        models:
-          Enum.sort_by(provider_models, fn m ->
-            {String.downcase(m.name || m.id || ""), m.id || ""}
-          end)
+        models: sort_models_for_picker(provider_models)
       }
     end)
     |> Enum.sort_by(& &1.provider)
@@ -590,6 +588,73 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     |> Enum.sort_by(& &1.provider)
   end
 
+  defp sort_models_for_picker(models) when is_list(models) do
+    Enum.sort_by(models, &model_picker_sort_key/1, :desc)
+  end
+
+  defp model_picker_sort_key(model) when is_map(model) do
+    provider = String.downcase(model[:provider] || model["provider"] || "")
+    name = String.downcase(model[:name] || model["name"] || "")
+    id = String.downcase(model[:id] || model["id"] || "")
+
+    {
+      provider_specific_rank(provider, name, id),
+      version_tuple(name, id),
+      latest_rank(name, id),
+      String.contains?(name, "thinking"),
+      name,
+      id
+    }
+  end
+
+  defp model_picker_sort_key(_), do: {{0, 0, 0}, 0, false, "", ""}
+
+  defp latest_rank(name, id) do
+    if String.contains?(name, "latest") or String.contains?(id, "latest"), do: 1, else: 0
+  end
+
+  defp version_tuple(name, id) do
+    source =
+      cond do
+        is_binary(name) and name != "" -> name
+        is_binary(id) and id != "" -> id
+        true -> ""
+      end
+
+    case Regex.run(~r/\b(\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?\b/, source) do
+      [_, major, minor, patch] ->
+        {parse_version_part(major), parse_version_part(minor), parse_version_part(patch)}
+
+      [_, major, minor] ->
+        {parse_version_part(major), parse_version_part(minor), 0}
+
+      [_, major] ->
+        {parse_version_part(major), 0, 0}
+
+      _ ->
+        {0, 0, 0}
+    end
+  end
+
+  defp parse_version_part(nil), do: 0
+
+  defp parse_version_part(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _} -> parsed
+      :error -> 0
+    end
+  end
+
+  defp provider_specific_rank("google", name, id) do
+    cond do
+      String.contains?(id, "customtools") or String.contains?(name, "custom tools") -> 2
+      String.contains?(id, "preview") or String.contains?(name, "preview") -> 1
+      true -> 0
+    end
+  end
+
+  defp provider_specific_rank(_, _, _), do: 0
+
   defp filter_enabled_model_maps(model_maps) when is_list(model_maps) do
     enabled = enabled_model_provider_names(model_maps)
 
@@ -597,6 +662,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
       normalize_provider_name(model.provider) in enabled
     end)
   end
+
+  defp reject_unhealthy_picker_model_maps(model_maps) when is_list(model_maps) do
+    Enum.reject(model_maps, fn model ->
+      provider = normalize_provider_name(model.provider)
+      id = model[:id] || model["id"] || ""
+      picker_model_blocked?(provider, id)
+    end)
+  end
+
+  defp picker_model_blocked?("minimax", "MiniMax-M2.7-highspeed"), do: true
+  defp picker_model_blocked?(_, _), do: false
 
   defp maybe_fallback_to_default_providers([], model_maps) when is_list(model_maps) do
     []
@@ -654,7 +730,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
       case normalize_provider_name(provider) do
         "google-antigravity" -> [provider, "google"]
         "google-gemini-cli" -> [provider, "google"]
-        "google-vertex" -> [provider, "google"]
+        "google-vertex" -> [provider]
         "kimi-coding" -> [provider, "kimi"]
         "amazon-bedrock" -> [provider, "bedrock", "aws"]
         "azure-openai-responses" -> [provider, "azure-openai", "azure-openai-responses"]
@@ -673,6 +749,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
   defp default_model_preference(state, chat_id, thread_id) do
     ModelPolicyAdapter.default_model_preference(state.account_id || "default", chat_id, thread_id)
+  end
+
+  defp chat_default_model_preference(state, chat_id) do
+    default_model_preference(state, chat_id, nil)
   end
 
   defp put_session_model_override(session_key, model),

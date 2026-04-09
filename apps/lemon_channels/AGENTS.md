@@ -125,6 +125,8 @@ share a group and are never delivered concurrently to prevent reordering.
 | `telegram/poller_lock.ex` | Global + file-based lock preventing duplicate pollers for the same account/token. |
 | `telegram/transport_shared.ex` | Shared dedupe helpers across transport modules. |
 
+Provider availability in the Telegram `/model` picker should match the real provider boundary. Do not alias plain Google AI Studio credentials to `google-vertex`; Vertex must only appear when actual Vertex credentials/config are present.
+
 ### Discord Adapter
 
 | File | What It Does |
@@ -268,7 +270,11 @@ Defined in `LemonChannels.Capabilities`:
 - The picker state machine should be driven through the Telegram-local pipeline/command helpers and persisted in the existing Telegram model/session state modules, not in ad-hoc inline `transport.ex` branches.
 - Provider/model lists auto-detect from runtime config + secrets/env credentials
 - Pagination handled inline with `<< Prev` / `Next >>` keyboard buttons
+- `This session` is session-scoped; `All future sessions` writes a chat-wide default even when selected from a forum topic
 - Selection messages are intercepted and not routed as normal inbound prompts
+- The model step should accept either the exact button label or plain text model ids like `gpt-5.4` / `provider:model_id`, so Telegram users and test harnesses do not have to echo the full display label
+- Reply-keyboard picker messages should go through `Telegram.Delivery.enqueue_send/3` so topic-scoped picker traffic gets normal Outbox retry and rate-limit handling instead of raw Bot API sends.
+- Picker catalog changes should be conservative and evidence-based: if a model is proven dead or consistently broken on the live transport path, filter it at the picker layer instead of letting Telegram users select it.
 
 ### Modifying the `/new` command behavior (Telegram)
 

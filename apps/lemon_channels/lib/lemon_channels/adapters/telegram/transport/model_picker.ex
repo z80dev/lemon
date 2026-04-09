@@ -18,6 +18,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.Secrets
+  alias LemonChannels.Telegram.API, as: TelegramAPI
 
   @providers_per_page 8
   @models_per_page 8
@@ -45,7 +46,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         })
 
       current_session_model = session_model_override(session_key)
-      current_future_model = default_model_preference(state, chat_id, thread_id)
+      current_future_model = chat_default_model_preference(state, chat_id)
 
       text = render_model_picker_text(current_session_model, current_future_model)
       picker_key = model_picker_key(inbound)
@@ -88,14 +89,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
             state
 
           true ->
-            opts =
-              %{
-                "reply_to_message_id" => user_msg_id,
-                "reply_markup" => callback_model_provider_markup(providers, 0)
-              }
-              |> maybe_put("message_thread_id", thread_id)
+            _ =
+              send_model_picker_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                text,
+                callback_model_provider_markup(providers, 0)
+              )
 
-            _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
             state
         end
       end
@@ -115,22 +118,139 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         {state, false}
 
       true ->
-        case model_picker_key(inbound) do
+        pickers = state.model_pickers || %{}
+
+        case lookup_model_picker(pickers, inbound) do
           nil ->
             {state, false}
 
-          key ->
-            pickers = state.model_pickers || %{}
+          {key, picker} ->
+            case safe_handle_model_picker_input(state, inbound, key, picker, trimmed) do
+              {:ok, {next_state, true}} ->
+                {next_state, true}
 
-            case Map.get(pickers, key) do
-              nil ->
-                {state, false}
+              {:ok, {_next_state, false}} ->
+                consume_invalid_model_picker_input(state, inbound, key, picker)
 
-              picker ->
-                handle_model_picker_input(state, inbound, key, picker, trimmed)
+              {:error, _reason} ->
+                consume_invalid_model_picker_input(state, inbound, key, picker)
             end
         end
     end
+  rescue
+    _ -> {state, false}
+  end
+
+  defp safe_handle_model_picker_input(state, inbound, key, picker, trimmed) do
+    {:ok, handle_model_picker_input(state, inbound, key, picker, trimmed)}
+  rescue
+    error -> {:error, error}
+  end
+
+  defp lookup_model_picker(pickers, inbound) when is_map(pickers) do
+    case model_picker_key(inbound) do
+      nil ->
+        scope_model_picker(pickers, inbound)
+
+      key ->
+        case Map.fetch(pickers, key) do
+          {:ok, picker} -> {key, picker}
+          :error -> scope_model_picker(pickers, inbound)
+        end
+    end
+  end
+
+  defp lookup_model_picker(_pickers, _inbound), do: nil
+
+  defp scope_model_picker(pickers, inbound) when is_map(pickers) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+
+    pickers
+    |> Enum.filter(fn
+      {{picker_chat_id, picker_thread_id, _sender_id}, _picker} ->
+        picker_chat_id == chat_id and picker_thread_id == thread_id
+
+      _ ->
+        false
+    end)
+    |> case do
+      [{key, picker}] -> {key, picker}
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp consume_invalid_model_picker_input(state, inbound, key, picker) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    state = put_model_picker(state, key, picker)
+
+    case picker[:step] do
+      :provider ->
+        providers = available_model_providers()
+
+        text =
+          invalid_picker_selection_text(
+            "Unknown provider selection. Use one of the buttons.",
+            model_picker_overview_text(state, picker, chat_id, thread_id)
+          )
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_provider_reply_markup(providers, picker[:provider_page] || 0)
+          )
+
+      :model ->
+        provider = picker[:provider]
+        models = models_for_provider(provider)
+
+        text =
+          invalid_picker_selection_text(
+            "Unknown model selection. Use one of the buttons.",
+            render_provider_models_text(provider)
+          )
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_list_reply_markup(provider, models, picker[:model_page] || 0)
+          )
+
+      :scope ->
+        provider = picker[:provider]
+        model = model_at_index(provider, picker[:model_index] || -1)
+
+        text =
+          invalid_picker_selection_text(
+            "Choose one of the scope buttons.",
+            render_model_scope_text(model)
+          )
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_scope_reply_markup()
+          )
+
+      _ ->
+        :ok
+    end
+
+    {state, true}
   rescue
     _ -> {state, false}
   end
@@ -265,7 +385,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         end
 
       true ->
-        {drop_model_picker(state, key), false}
+        text =
+          invalid_picker_selection_text(
+            "Unknown provider selection. Use one of the buttons.",
+            model_picker_overview_text(state, picker, chat_id, thread_id)
+          )
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_provider_reply_markup(providers, page)
+          )
+
+        {state, true}
     end
   end
 
@@ -350,14 +486,46 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         {state, true}
 
       true ->
-        case model_index_by_label(models, input) do
+        case model_index_by_input(provider, models, input) do
           nil ->
-            {drop_model_picker(state, key), false}
+            text =
+              invalid_picker_selection_text(
+                "Unknown model selection. Use one of the buttons.",
+                render_provider_models_text(provider)
+              )
+
+            _ =
+              send_model_picker_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                text,
+                model_list_reply_markup(provider, models, page)
+              )
+
+            {state, true}
 
           index ->
             case model_at_index(provider, index) do
               nil ->
-                {drop_model_picker(state, key), false}
+                text =
+                  invalid_picker_selection_text(
+                    "Unknown model selection. Use one of the buttons.",
+                    render_provider_models_text(provider)
+                  )
+
+                _ =
+                  send_model_picker_message(
+                    state,
+                    chat_id,
+                    thread_id,
+                    user_msg_id,
+                    text,
+                    model_list_reply_markup(provider, models, page)
+                  )
+
+                {state, true}
 
               model ->
                 picker =
@@ -449,7 +617,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         )
 
       true ->
-        {drop_model_picker(state, key), false}
+        model = model_at_index(provider, picker[:model_index])
+
+        text =
+          invalid_picker_selection_text(
+            "Choose one of the scope buttons.",
+            render_model_scope_text(model)
+          )
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_scope_reply_markup()
+          )
+
+        {state, true}
     end
   end
 
@@ -468,7 +654,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         _ = put_session_model_override(session_key, model_value)
 
         if scope == :future do
-          _ = put_default_model_preference(state, chat_id, thread_id, model_value)
+          _ = put_default_model_preference(state, chat_id, nil, model_value)
         end
 
         text =
@@ -494,19 +680,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     end
   end
 
-  defp model_picker_overview_text(state, picker, chat_id, thread_id) do
+  defp model_picker_overview_text(state, picker, chat_id, _thread_id) do
     session_key = picker[:session_key]
     current_session_model = session_model_override(session_key)
-    current_future_model = default_model_preference(state, chat_id, thread_id)
+    current_future_model = chat_default_model_preference(state, chat_id)
     render_model_picker_text(current_session_model, current_future_model)
   end
 
   defp model_picker_key(inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
     thread_id = parse_int(inbound.peer.thread_id)
-    sender_id = inbound.sender && inbound.sender.id
+    sender_id = normalize_sender_id(inbound.sender && inbound.sender.id)
 
-    if is_integer(chat_id) and is_binary(sender_id) and sender_id != "" do
+    if is_integer(chat_id) and not is_nil(sender_id) do
       {chat_id, thread_id, sender_id}
     else
       nil
@@ -514,6 +700,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   rescue
     _ -> nil
   end
+
+  defp normalize_sender_id(id) when is_integer(id), do: Integer.to_string(id)
+
+  defp normalize_sender_id(id) when is_binary(id) do
+    trimmed = String.trim(id)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp normalize_sender_id(_), do: nil
 
   defp put_model_picker(state, key, picker) when is_map(picker) do
     put_in(state, [:model_pickers], Map.put(state.model_pickers || %{}, key, picker))
@@ -538,10 +733,32 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       |> maybe_put("message_thread_id", thread_id)
       |> maybe_put("reply_markup", reply_markup)
 
-    _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-    :ok
+    if use_outbox_delivery?(state) do
+      delivery_opts =
+        []
+        |> maybe_put_kw(:account_id, state.account_id || "default")
+        |> maybe_put_kw(:thread_id, thread_id)
+        |> maybe_put_kw(:reply_to_message_id, reply_to_message_id)
+        |> maybe_put_kw(:reply_markup, reply_markup)
+
+      case Delivery.enqueue_send(chat_id, text, delivery_opts) do
+        :ok ->
+          :ok
+
+        {:error, _reason} ->
+          _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+          :ok
+      end
+    else
+      _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+      :ok
+    end
   rescue
     _ -> :ok
+  end
+
+  defp use_outbox_delivery?(state) do
+    state.api_mod == TelegramAPI
   end
 
   defp model_provider_reply_markup(providers, page) when is_list(providers) do
@@ -596,6 +813,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     %{"remove_keyboard" => true}
   end
 
+  defp invalid_picker_selection_text(error_text, body)
+       when is_binary(error_text) and is_binary(body) do
+    error_text <> "\n\n" <> body
+  end
+
   defp maybe_add_reply_pagination_row(rows, has_prev, has_next) do
     nav =
       []
@@ -630,13 +852,43 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
   defp picker_text_eq?(_left, _right), do: false
 
-  defp model_index_by_label(models, label) when is_list(models) and is_binary(label) do
+  defp model_index_by_input(provider, models, input)
+       when is_binary(provider) and is_list(models) and is_binary(input) do
+    normalized = normalize_model_picker_input(input)
+
     Enum.find_index(models, fn model ->
-      model_label(model) == label
+      normalized in model_picker_inputs(provider, model)
     end)
   end
 
-  defp model_index_by_label(_models, _label), do: nil
+  defp model_index_by_input(_provider, _models, _input), do: nil
+
+  defp model_picker_inputs(provider, %{id: id} = model)
+       when is_binary(provider) and is_binary(id) do
+    [
+      model_label(model),
+      id,
+      "#{provider}:#{id}",
+      Map.get(model, :name),
+      Map.get(model, "name")
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&normalize_model_picker_input/1)
+  end
+
+  defp model_picker_inputs(_provider, model) do
+    [model_label(model)]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&normalize_model_picker_input/1)
+  end
+
+  defp normalize_model_picker_input(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_model_picker_input(_value), do: nil
 
   defp max_page_for(list, per_page)
        when is_list(list) and is_integer(per_page) and per_page > 0 do
@@ -732,6 +984,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     filtered =
       model_maps
       |> filter_enabled_model_maps()
+      |> reject_unhealthy_picker_model_maps()
       |> maybe_fallback_to_default_providers(model_maps)
 
     filtered
@@ -739,10 +992,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     |> Enum.map(fn {provider, provider_models} ->
       %{
         provider: provider,
-        models:
-          Enum.sort_by(provider_models, fn m ->
-            {String.downcase(m.name || m.id || ""), m.id || ""}
-          end)
+        models: sort_models_for_picker(provider_models)
       }
     end)
     |> Enum.sort_by(& &1.provider)
@@ -775,6 +1025,73 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     |> Enum.sort_by(& &1.provider)
   end
 
+  defp sort_models_for_picker(models) when is_list(models) do
+    Enum.sort_by(models, &model_picker_sort_key/1, :desc)
+  end
+
+  defp model_picker_sort_key(model) when is_map(model) do
+    provider = String.downcase(model[:provider] || model["provider"] || "")
+    name = String.downcase(model[:name] || model["name"] || "")
+    id = String.downcase(model[:id] || model["id"] || "")
+
+    {
+      provider_specific_rank(provider, name, id),
+      version_tuple(name, id),
+      latest_rank(name, id),
+      String.contains?(name, "thinking"),
+      name,
+      id
+    }
+  end
+
+  defp model_picker_sort_key(_), do: {{0, 0, 0}, 0, false, "", ""}
+
+  defp latest_rank(name, id) do
+    if String.contains?(name, "latest") or String.contains?(id, "latest"), do: 1, else: 0
+  end
+
+  defp version_tuple(name, id) do
+    source =
+      cond do
+        is_binary(name) and name != "" -> name
+        is_binary(id) and id != "" -> id
+        true -> ""
+      end
+
+    case Regex.run(~r/\b(\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?\b/, source) do
+      [_, major, minor, patch] ->
+        {parse_version_part(major), parse_version_part(minor), parse_version_part(patch)}
+
+      [_, major, minor] ->
+        {parse_version_part(major), parse_version_part(minor), 0}
+
+      [_, major] ->
+        {parse_version_part(major), 0, 0}
+
+      _ ->
+        {0, 0, 0}
+    end
+  end
+
+  defp parse_version_part(nil), do: 0
+
+  defp parse_version_part(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _} -> parsed
+      :error -> 0
+    end
+  end
+
+  defp provider_specific_rank("google", name, id) do
+    cond do
+      String.contains?(id, "customtools") or String.contains?(name, "custom tools") -> 2
+      String.contains?(id, "preview") or String.contains?(name, "preview") -> 1
+      true -> 0
+    end
+  end
+
+  defp provider_specific_rank(_, _, _), do: 0
+
   defp filter_enabled_model_maps(model_maps) when is_list(model_maps) do
     enabled = enabled_model_provider_names(model_maps)
 
@@ -782,6 +1099,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       normalize_provider_name(model.provider) in enabled
     end)
   end
+
+  defp reject_unhealthy_picker_model_maps(model_maps) when is_list(model_maps) do
+    Enum.reject(model_maps, fn model ->
+      provider = normalize_provider_name(model.provider)
+      id = model[:id] || model["id"] || ""
+      picker_model_blocked?(provider, id)
+    end)
+  end
+
+  defp picker_model_blocked?("minimax", "MiniMax-M2.7-highspeed"), do: true
+  defp picker_model_blocked?(_, _), do: false
 
   defp maybe_fallback_to_default_providers([], model_maps) when is_list(model_maps) do
     []
@@ -843,7 +1171,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       case normalize_provider_name(provider) do
         "google-antigravity" -> [provider, "google"]
         "google-gemini-cli" -> [provider, "google"]
-        "google-vertex" -> [provider, "google"]
+        "google-vertex" -> [provider]
         "kimi-coding" -> [provider, "kimi"]
         "amazon-bedrock" -> [provider, "bedrock", "aws"]
         "azure-openai-responses" -> [provider, "azure-openai", "azure-openai-responses"]
@@ -889,6 +1217,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         chat_id,
         thread_id
       )
+
+  defp chat_default_model_preference(state, chat_id),
+    do: default_model_preference(state, chat_id, nil)
 
   defp put_default_model_preference(state, chat_id, thread_id, model),
     do:
