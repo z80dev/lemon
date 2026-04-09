@@ -191,18 +191,6 @@ defmodule Ai.Models.Fireworks do
       context_window: 128_000,
       max_tokens: 16_384
     },
-    "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct" => %Model{
-      id: "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct",
-      name: "Qwen3 Coder 480B A35B Instruct",
-      api: :openai_completions,
-      provider: :fireworks,
-      base_url: @base_url,
-      reasoning: false,
-      input: [:text],
-      cost: %ModelCost{input: 0.45, output: 1.8, cache_read: 0.0, cache_write: 0.0},
-      context_window: 256_000,
-      max_tokens: 32_768
-    },
     "accounts/fireworks/models/gpt-oss-20b" => %Model{
       id: "accounts/fireworks/models/gpt-oss-20b",
       name: "GPT OSS 20B",

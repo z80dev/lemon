@@ -76,8 +76,10 @@ Ai (main API)
   and normalization of restored map-shaped content blocks (`text`, `image`, `thinking`, `tool_use`,
   tool-result text) before Anthropic-compatible request building for providers like MiniMax
 - `Ai.Models.OpenAI` - Static direct OpenAI model catalog used by channel pickers; keep latest alias IDs aligned with live `GET /v1/models` results for the configured key and remove dead aliases instead of leaving them selectable
+- `Ai.Models.Google` - Treat direct Google Generative AI entries the same way: remove IDs that fail live `generateContent` on the configured surface instead of leaving dead models selectable in Telegram
 - `:"openai-codex"` model registry - Derived from the direct OpenAI catalog plus Codex OAuth-only IDs; do not assume `/v1/models` is authoritative for ChatGPT/Codex-authenticated model availability
-- `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
+- `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards and immediate terminal handling once `response.completed` arrives
+- `Ai.Providers.OpenAIResponses` - Direct OpenAI Responses streaming path; when tools are present it now sends explicit `tool_choice: "auto"` and `parallel_tool_calls: true` so GPT-5 family models do not silently skip tool use on task-heavy prompts
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
 - `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
@@ -609,6 +611,8 @@ inside provider modules.
 | `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI provider | JSON credential payload (`{"token","projectId"}`) |
 | `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex provider | Inline service account JSON |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex provider | Service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` / `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client credentials |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials (secret store is primary) |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |

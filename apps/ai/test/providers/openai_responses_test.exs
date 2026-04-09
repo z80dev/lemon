@@ -288,6 +288,8 @@ defmodule Ai.Providers.OpenAIResponsesTest do
           "strict" => false
         }
       ],
+      "tool_choice" => "auto",
+      "parallel_tool_calls" => true,
       "reasoning" => %{"effort" => "low", "summary" => "concise"},
       "include" => ["reasoning.encrypted_content"]
     }

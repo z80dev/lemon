@@ -23,7 +23,7 @@ defmodule Ai.Providers.Anthropic do
 
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
-  alias LemonCore.Secrets
+  alias LemonCore.{ProviderConfigResolver, Secrets}
   import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
@@ -70,19 +70,26 @@ defmodule Ai.Providers.Anthropic do
 
   defp do_stream(stream, model, context, opts) do
     output = init_assistant_message(model)
+    resolved_provider_opts = resolve_provider_options(model, opts)
 
     try do
-      api_key = resolve_api_key(model, opts)
+      api_key = resolve_api_key(model, opts, resolved_provider_opts)
 
       if api_key == "" do
         raise missing_api_key_error(model.provider)
       end
 
       base_url =
-        if model.base_url != "" do
-          String.trim_trailing(model.base_url, "/")
-        else
-          @api_base_url
+        case Map.get(resolved_provider_opts, :base_url) do
+          override when is_binary(override) and override != "" ->
+            String.trim_trailing(override, "/")
+
+          _ ->
+            if model.base_url != "" do
+              String.trim_trailing(model.base_url, "/")
+            else
+              @api_base_url
+            end
         end
 
       url = "#{base_url}/v1/messages"
@@ -197,10 +204,13 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp resolve_api_key(model, opts) do
+  defp resolve_api_key(model, opts, resolved_provider_opts) do
     cond do
       is_binary(opts.api_key) and opts.api_key != "" ->
         opts.api_key
+
+      api_key = Map.get(resolved_provider_opts, :api_key) ->
+        api_key
 
       api_key = get_provider_env_api_key(model.provider) ->
         api_key
@@ -211,6 +221,22 @@ defmodule Ai.Providers.Anthropic do
       true ->
         maybe_oauth_key(model.provider)
     end
+  end
+
+  defp resolve_provider_options(model, opts) do
+    model.provider
+    |> normalize_provider_id()
+    |> ProviderConfigResolver.resolve_for_provider(Map.from_struct(opts))
+  rescue
+    _ -> %{}
+  end
+
+  defp normalize_provider_id(provider) when is_atom(provider), do: provider
+
+  defp normalize_provider_id(provider) when is_binary(provider) do
+    provider
+    |> String.replace("-", "_")
+    |> String.to_atom()
   end
 
   defp maybe_oauth_key(provider) do
@@ -231,6 +257,15 @@ defmodule Ai.Providers.Anthropic do
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
   defp provider_env_vars(:opencode), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
   defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(:minimax), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars("minimax"), do: ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+
+  defp provider_env_vars(:minimax_cn),
+    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+
+  defp provider_env_vars("minimax_cn"),
+    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
+
   defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
 
   defp env_value(name) when is_binary(name) do

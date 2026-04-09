@@ -85,6 +85,128 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
+  test "uses ZAI_API_KEY for zai provider when api_key option is missing" do
+    test_pid = self()
+    prev_zai = System.get_env("ZAI_API_KEY")
+    prev_openai = System.get_env("OPENAI_API_KEY")
+
+    on_exit(fn ->
+      if is_binary(prev_zai) do
+        System.put_env("ZAI_API_KEY", prev_zai)
+      else
+        System.delete_env("ZAI_API_KEY")
+      end
+
+      if is_binary(prev_openai) do
+        System.put_env("OPENAI_API_KEY", prev_openai)
+      else
+        System.delete_env("OPENAI_API_KEY")
+      end
+    end)
+
+    System.put_env("ZAI_API_KEY", "zai-env-key")
+    System.put_env("OPENAI_API_KEY", "openai-env-key")
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = %Model{
+      id: "glm-5-turbo",
+      name: "GLM 5 Turbo",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/paas/v4"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+
+    assert_receive {:request_headers, headers}, 1000
+    assert Map.new(headers)["authorization"] == "Bearer zai-env-key"
+    assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
+  test "uses canonical provider config secret and base_url for zai provider" do
+    test_pid = self()
+    prev_home = System.get_env("HOME")
+    prev_secret = System.get_env("llm_zai_api_key")
+    prev_zai = System.get_env("ZAI_API_KEY")
+    prev_openai = System.get_env("OPENAI_API_KEY")
+
+    tmp_home =
+      Path.join(System.tmp_dir!(), "openai_completions_zai_#{System.unique_integer([:positive])}")
+
+    global_dir = Path.join(tmp_home, ".lemon")
+    project_dir = Path.join(tmp_home, "project")
+
+    File.mkdir_p!(global_dir)
+    File.mkdir_p!(project_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [providers.zai]
+    api_key_secret = "llm_zai_api_key"
+    base_url = "https://override.zai.test/v4"
+    """)
+
+    System.put_env("HOME", tmp_home)
+    System.put_env("llm_zai_api_key", "zai-secret-ref-key")
+    System.delete_env("ZAI_API_KEY")
+    System.delete_env("OPENAI_API_KEY")
+
+    on_exit(fn ->
+      if is_binary(prev_home) do
+        System.put_env("HOME", prev_home)
+      else
+        System.delete_env("HOME")
+      end
+
+      if is_binary(prev_secret) do
+        System.put_env("llm_zai_api_key", prev_secret)
+      else
+        System.delete_env("llm_zai_api_key")
+      end
+
+      if is_binary(prev_zai) do
+        System.put_env("ZAI_API_KEY", prev_zai)
+      else
+        System.delete_env("ZAI_API_KEY")
+      end
+
+      if is_binary(prev_openai) do
+        System.put_env("OPENAI_API_KEY", prev_openai)
+      else
+        System.delete_env("OPENAI_API_KEY")
+      end
+
+      File.rm_rf!(tmp_home)
+    end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request, conn.host, conn.request_path, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = %Model{
+      id: "glm-5-turbo",
+      name: "GLM 5 Turbo",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/paas/v4"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} =
+      OpenAICompletions.stream(model, context, %StreamOptions{cwd: project_dir})
+
+    assert_receive {:request, "override.zai.test", "/v4/chat/completions", headers}, 1000
+    assert Map.new(headers)["authorization"] == "Bearer zai-secret-ref-key"
+    assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
   test "merges headers with opts overriding model headers" do
     test_pid = self()
 

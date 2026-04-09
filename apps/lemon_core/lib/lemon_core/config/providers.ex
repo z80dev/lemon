@@ -54,7 +54,11 @@ defmodule LemonCore.Config.Providers do
           oauth_secret: String.t() | nil,
           project: String.t() | nil,
           project_id: String.t() | nil,
-          project_secret: String.t() | nil
+          project_secret: String.t() | nil,
+          location: String.t() | nil,
+          location_secret: String.t() | nil,
+          service_account_json: String.t() | nil,
+          service_account_json_secret: String.t() | nil
         }
 
   @type t :: %__MODULE__{
@@ -107,6 +111,8 @@ defmodule LemonCore.Config.Providers do
       project: normalize_optional_string(config["project"]),
       project_id: normalize_optional_string(config["project_id"] || config["projectId"]),
       # Google Vertex fields
+      location: normalize_optional_string(config["location"]),
+      service_account_json: normalize_optional_string(config["service_account_json"]),
       project_secret: normalize_optional_string(config["project_secret"]),
       location_secret: normalize_optional_string(config["location_secret"]),
       service_account_json_secret:

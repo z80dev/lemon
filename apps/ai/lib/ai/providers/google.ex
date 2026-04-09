@@ -26,7 +26,7 @@ defmodule Ai.Providers.Google do
   alias Ai.EventStream
   alias Ai.Providers.GoogleShared
   import Ai.Providers.AssistantMessageHelper
-  alias LemonCore.Secrets
+  alias LemonCore.{ProviderConfigResolver, Secrets}
 
   alias Ai.Types.{
     Context,
@@ -69,10 +69,11 @@ defmodule Ai.Providers.Google do
 
   defp do_stream(stream, model, context, opts) do
     output = init_assistant_message(model, api_override: :google_generative_ai)
+    resolved_provider_opts = resolve_provider_options(opts)
 
     try do
-      api_key = resolve_api_key(model, opts)
-      base_url = build_base_url(model)
+      api_key = resolve_api_key(model, opts, resolved_provider_opts)
+      base_url = build_base_url(model, resolved_provider_opts)
       url = "#{base_url}/models/#{model.id}:streamGenerateContent?alt=sse"
 
       headers = build_headers(api_key, model, opts)
@@ -91,10 +92,13 @@ defmodule Ai.Providers.Google do
     end
   end
 
-  defp resolve_api_key(model, opts) do
+  defp resolve_api_key(model, opts, resolved_provider_opts) do
     cond do
       is_binary(opts.api_key) and opts.api_key != "" ->
         opts.api_key
+
+      api_key = Map.get(resolved_provider_opts, :api_key) ->
+        api_key
 
       api_key = get_provider_env_key(model.provider) ->
         api_key
@@ -103,21 +107,34 @@ defmodule Ai.Providers.Google do
         api_key
 
       true ->
-        ""
+        raise "Google Generative AI API key is required. Set GOOGLE_GENERATIVE_AI_API_KEY or configure providers.google.api_key/api_key_secret."
     end
+  end
+
+  defp resolve_provider_options(opts) do
+    ProviderConfigResolver.resolve_for_provider(:google, Map.from_struct(opts))
+  rescue
+    _ -> %{}
   end
 
   defp get_provider_env_key(:opencode), do: Secrets.fetch_value("OPENCODE_API_KEY")
   defp get_provider_env_key("opencode"), do: Secrets.fetch_value("OPENCODE_API_KEY")
   defp get_provider_env_key(_), do: nil
 
+  defp build_base_url(%Model{} = model, resolved_provider_opts) do
+    cond do
+      is_binary(Map.get(resolved_provider_opts, :base_url)) and
+          Map.get(resolved_provider_opts, :base_url) != "" ->
+        resolved_provider_opts
+        |> Map.fetch!(:base_url)
+        |> String.trim_trailing("/")
 
-  defp build_base_url(%Model{base_url: base_url}) when is_binary(base_url) and base_url != "" do
-    String.trim_trailing(base_url, "/")
-  end
+      is_binary(model.base_url) and model.base_url != "" ->
+        String.trim_trailing(model.base_url, "/")
 
-  defp build_base_url(_model) do
-    "https://generativelanguage.googleapis.com/v1beta"
+      true ->
+        "https://generativelanguage.googleapis.com/v1beta"
+    end
   end
 
   defp build_headers(api_key, model, opts) do

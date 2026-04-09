@@ -88,7 +88,7 @@ Ai.Supervisor (one_for_one)
 | Module | Purpose |
 |--------|---------|
 | `Ai.Providers.GoogleShared` | Shared content/tool conversion, stop-reason mapping, thought-signature handling for all Google providers |
-| `Ai.Providers.OpenAIResponsesShared` | Shared message/tool conversion, stream processing, `function_call_output` size guards for OpenAI Responses family |
+| `Ai.Providers.OpenAIResponsesShared` | Shared message/tool conversion, stream processing, `function_call_output` size guards for OpenAI Responses family; treat `response.completed` as terminal immediately instead of waiting for socket close |
 | `Ai.Providers.HttpTrace` | HTTP request/response trace logging (enabled via `LEMON_AI_HTTP_TRACE=1`) |
 | `Ai.Providers.TextSanitizer` | UTF-8 sanitization for streamed text (replaces invalid sequences with U+FFFD) |
 
@@ -125,6 +125,11 @@ pickers. Keep the latest alias IDs there aligned with live `GET /v1/models`
 results for the configured OpenAI key, and remove dead aliases instead of
 leaving them selectable.
 
+Apply the same rule to provider-specific static catalogs when live calls prove
+an entry is dead on that surface. For example, direct Google Generative AI
+should not advertise `gemini-3.1-pro` if the live `v1beta` API returns 404 for
+`generateContent`, even if related preview variants still work.
+
 `:"openai-codex"` is a separate ChatGPT/Codex OAuth catalog layered on top of the
 direct OpenAI list. It may include OAuth-only model IDs that do not appear in the
 API-key `/v1/models` response.
@@ -133,6 +138,11 @@ Anthropic-compatible providers also normalize restored map-shaped content blocks
 during request building. That keeps replayed session history usable when message
 content has been serialized and reloaded as plain maps instead of `Ai.Types`
 structs.
+
+The direct OpenAI Responses path also opts into explicit tool use when tools are
+available by sending `tool_choice: "auto"` and `parallel_tool_calls: true`.
+That keeps higher-end GPT-5 variants aligned with Lemon's task-heavy prompts
+instead of leaving tool invocation to provider defaults.
 
 ## Supported Providers
 
@@ -406,6 +416,8 @@ config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
 | `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI | JSON credential payload (`{"token","projectId"}`) |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | Google Vertex | GCP project ID |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex | GCP region |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex | Inline service account JSON |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex | Service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client ID |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client secret |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for OAuth client ID |

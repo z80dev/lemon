@@ -13,6 +13,8 @@ defmodule LemonCore.ProviderConfigResolverTest do
       "GOOGLE_CLOUD_PROJECT_ID" => System.get_env("GOOGLE_CLOUD_PROJECT_ID"),
       "GCLOUD_PROJECT" => System.get_env("GCLOUD_PROJECT"),
       "GOOGLE_CLOUD_LOCATION" => System.get_env("GOOGLE_CLOUD_LOCATION"),
+      "GOOGLE_APPLICATION_CREDENTIALS_JSON" =>
+        System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON"),
       "AZURE_OPENAI_API_VERSION" => System.get_env("AZURE_OPENAI_API_VERSION"),
       "AZURE_OPENAI_BASE_URL" => System.get_env("AZURE_OPENAI_BASE_URL"),
       "AZURE_OPENAI_RESOURCE_NAME" => System.get_env("AZURE_OPENAI_RESOURCE_NAME"),
@@ -24,6 +26,7 @@ defmodule LemonCore.ProviderConfigResolverTest do
     # Clear env vars for a clean slate
     Enum.each(
       ~w(LEMON_GEMINI_PROJECT_ID GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_PROJECT_ID GCLOUD_PROJECT GOOGLE_CLOUD_LOCATION
+         GOOGLE_APPLICATION_CREDENTIALS_JSON
          AZURE_OPENAI_API_VERSION AZURE_OPENAI_BASE_URL AZURE_OPENAI_RESOURCE_NAME
          AWS_REGION AWS_DEFAULT_REGION),
       &System.delete_env/1
@@ -117,6 +120,29 @@ defmodule LemonCore.ProviderConfigResolverTest do
         })
 
       assert result.service_account_json == "{\"key\": \"value\"}"
+    end
+
+    test "reads GOOGLE_APPLICATION_CREDENTIALS_JSON from env" do
+      System.put_env("GOOGLE_APPLICATION_CREDENTIALS_JSON", "{\"key\": \"value\"}")
+      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      assert result.service_account_json == "{\"key\": \"value\"}"
+    end
+
+    test "reads plain google vertex config values from TOML", %{home: home} do
+      global_dir = Path.join(home, ".lemon")
+      File.mkdir_p!(global_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.google_vertex]
+      project = "plain-project"
+      location = "europe-west4"
+      service_account_json = '{"key":"value"}'
+      """)
+
+      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      assert result.project == "plain-project"
+      assert result.location == "europe-west4"
+      assert result.service_account_json == "{\"key\":\"value\"}"
     end
   end
 
@@ -270,6 +296,27 @@ defmodule LemonCore.ProviderConfigResolverTest do
       result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
       assert result.api_key == "config-key"
       assert result.project == "env-project"
+    end
+
+    test "reads openai-compatible provider api_key_secret and base_url from config", %{home: home} do
+      global_dir = Path.join(home, ".lemon")
+      File.mkdir_p!(global_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.zai]
+      api_key_secret = "TEST_ZAI_SECRET"
+      base_url = "https://override.zai.test/v4"
+      """)
+
+      System.put_env("TEST_ZAI_SECRET", "zai-key-from-secret")
+
+      on_exit(fn ->
+        System.delete_env("TEST_ZAI_SECRET")
+      end)
+
+      result = ProviderConfigResolver.resolve_for_provider(:zai)
+      assert result.api_key == "zai-key-from-secret"
+      assert result.base_url == "https://override.zai.test/v4"
     end
 
     test "project-local google vertex config overrides global config", %{home: home} do

@@ -56,6 +56,17 @@ defmodule Ai.ModelsCoreTest do
       models = Models.get_models(:openai)
       assert Enum.all?(models, fn m -> m.provider == :openai end)
     end
+
+    test "omits provider IDs that are known dead in live integrations" do
+      refute Models.get_model(:google_vertex, "gemini-3-flash-preview")
+      refute Models.get_model(:google_vertex, "gemini-3-pro-preview")
+      refute Models.get_model(:google_vertex, "gemini-3.1-pro-preview")
+
+      refute Models.get_model(
+               :fireworks,
+               "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct"
+             )
+    end
   end
 
   # ============================================================================

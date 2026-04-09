@@ -7,7 +7,7 @@ defmodule Ai.Providers.AnthropicTest do
 
   alias Ai.Providers.Anthropic
   alias Ai.EventStream
-  alias Ai.Types.{Context, Model, StreamOptions, Tool, ToolCall, UserMessage}
+  alias Ai.Types.{Context, Model, ModelCost, StreamOptions, Tool, ToolCall, UserMessage}
 
   setup do
     previous_defaults = Req.default_options()
@@ -29,6 +29,25 @@ defmodule Ai.Providers.AnthropicTest do
       event -> "data: " <> Jason.encode!(event) <> "\n\n"
     end)
     |> Enum.join()
+  end
+
+  defp model(overrides \\ %{}) do
+    defaults = %{
+      id: "MiniMax-M2.7",
+      name: "MiniMax-M2.7",
+      api: :anthropic_messages,
+      provider: :minimax,
+      base_url: "https://api.minimax.io/anthropic",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 1.2, cache_read: 0.06, cache_write: 0.375},
+      context_window: 204_800,
+      max_tokens: 131_072,
+      headers: %{},
+      compat: nil
+    }
+
+    struct(Model, Map.merge(defaults, overrides))
   end
 
   # ============================================================================
@@ -94,6 +113,76 @@ defmodule Ai.Providers.AnthropicTest do
 
     test "provider_id returns correct identifier" do
       assert Anthropic.provider_id() == :anthropic
+    end
+  end
+
+  describe "provider config resolution" do
+    test "uses canonical provider config secret and base_url for minimax" do
+      test_pid = self()
+      prev_home = System.get_env("HOME")
+      prev_secret = System.get_env("llm_minimax_api_key")
+      prev_minimax = System.get_env("MINIMAX_API_KEY")
+      prev_anthropic = System.get_env("ANTHROPIC_API_KEY")
+
+      tmp_home =
+        Path.join(
+          System.tmp_dir!(),
+          "anthropic_minimax_cfg_#{System.unique_integer([:positive])}"
+        )
+
+      global_dir = Path.join(tmp_home, ".lemon")
+      project_dir = Path.join(tmp_home, "project")
+
+      File.mkdir_p!(global_dir)
+      File.mkdir_p!(project_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.minimax]
+      api_key_secret = "llm_minimax_api_key"
+      base_url = "https://override.minimax.test/anthropic"
+      """)
+
+      System.put_env("HOME", tmp_home)
+      System.put_env("llm_minimax_api_key", "minimax-secret-ref-key")
+      System.delete_env("MINIMAX_API_KEY")
+      System.delete_env("ANTHROPIC_API_KEY")
+
+      on_exit(fn ->
+        if is_binary(prev_home),
+          do: System.put_env("HOME", prev_home),
+          else: System.delete_env("HOME")
+
+        if is_binary(prev_secret),
+          do: System.put_env("llm_minimax_api_key", prev_secret),
+          else: System.delete_env("llm_minimax_api_key")
+
+        if is_binary(prev_minimax),
+          do: System.put_env("MINIMAX_API_KEY", prev_minimax),
+          else: System.delete_env("MINIMAX_API_KEY")
+
+        if is_binary(prev_anthropic),
+          do: System.put_env("ANTHROPIC_API_KEY", prev_anthropic),
+          else: System.delete_env("ANTHROPIC_API_KEY")
+
+        File.rm_rf!(tmp_home)
+      end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request, conn.host, conn.request_path, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_resp(200, sse_body([:done]))
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      opts = %StreamOptions{cwd: project_dir}
+
+      {:ok, stream} = Anthropic.stream(model(), context, opts)
+
+      assert_receive {:request, "override.minimax.test", "/anthropic/v1/messages", headers}, 1000
+      assert Map.new(headers)["x-api-key"] == "minimax-secret-ref-key"
+      assert {:ok, _} = EventStream.result(stream, 5_000)
     end
   end
 

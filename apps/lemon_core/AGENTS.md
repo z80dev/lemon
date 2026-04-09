@@ -57,7 +57,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
 | `LemonCore.GatewayConfig` | Unified gateway config access from canonical TOML gateway section only (test-mode full-replacement via app env is allowed for test isolation) |
-| `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, then passes concrete values to provider implementations |
+| `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
@@ -150,6 +150,8 @@ Config provides defaults; runtime state provides the current effective value. Cu
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
 | `GOOGLE_GEMINI_CLI_API_KEY` | `providers.google_gemini_cli.api_key` (JSON credential payload: `{"token","projectId"}`) |
 | `LEMON_GEMINI_PROJECT_ID` | Runtime override for `providers.google_gemini_cli.project_id` |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex inline service account JSON |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex service account JSON file path |
 
 ## Secrets Management Flow
 

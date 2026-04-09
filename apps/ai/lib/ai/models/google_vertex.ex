@@ -116,42 +116,6 @@ defmodule Ai.Models.GoogleVertex do
       cost: %ModelCost{input: 1.25, output: 10.0, cache_read: 0.125, cache_write: 0.0},
       context_window: 1_048_576,
       max_tokens: 65_536
-    },
-    "gemini-3-flash-preview" => %Model{
-      id: "gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview (Vertex)",
-      api: :google_vertex,
-      provider: :google_vertex,
-      base_url: "https://{location}-aiplatform.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.5, output: 3.0, cache_read: 0.05, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_536
-    },
-    "gemini-3-pro-preview" => %Model{
-      id: "gemini-3-pro-preview",
-      name: "Gemini 3 Pro Preview (Vertex)",
-      api: :google_vertex,
-      provider: :google_vertex,
-      base_url: "https://{location}-aiplatform.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 0.0},
-      context_window: 1_000_000,
-      max_tokens: 64_000
-    },
-    "gemini-3.1-pro-preview" => %Model{
-      id: "gemini-3.1-pro-preview",
-      name: "Gemini 3.1 Pro Preview (Vertex)",
-      api: :google_vertex,
-      provider: :google_vertex,
-      base_url: "https://{location}-aiplatform.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_536
     }
   }
 

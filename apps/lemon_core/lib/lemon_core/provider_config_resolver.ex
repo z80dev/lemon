@@ -23,17 +23,22 @@ defmodule LemonCore.ProviderConfigResolver do
     project =
       Map.get(opts, :project) ||
         resolve_secret(config[:project_secret]) ||
+        config[:project] ||
+        config[:project_id] ||
         System.get_env("GOOGLE_CLOUD_PROJECT") ||
         System.get_env("GCLOUD_PROJECT")
 
     location =
       Map.get(opts, :location) ||
         resolve_secret(config[:location_secret]) ||
+        config[:location] ||
         System.get_env("GOOGLE_CLOUD_LOCATION")
 
     service_account_json =
       Map.get(opts, :service_account_json) ||
-        resolve_secret(config[:service_account_json_secret])
+        resolve_secret(config[:service_account_json_secret]) ||
+        config[:service_account_json] ||
+        System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
     %{
       project: project,
@@ -65,6 +70,25 @@ defmodule LemonCore.ProviderConfigResolver do
       ])
 
     %{project: project}
+    |> reject_nil_values()
+  end
+
+  def resolve_for_provider(:google, opts) do
+    config = get_provider_config("google", opts)
+
+    %{
+      api_key:
+        first_non_empty_binary([
+          Map.get(opts, :api_key),
+          config[:api_key],
+          resolve_secret(config[:api_key_secret])
+        ]),
+      base_url:
+        first_non_empty_binary([
+          Map.get(opts, :base_url),
+          config[:base_url]
+        ])
+    }
     |> reject_nil_values()
   end
 
@@ -152,7 +176,30 @@ defmodule LemonCore.ProviderConfigResolver do
     |> reject_nil_header_values()
   end
 
-  def resolve_for_provider(_provider_id, _opts), do: %{}
+  def resolve_for_provider(provider_id, opts) do
+    case openai_compatible_provider_name(provider_id) do
+      nil ->
+        %{}
+
+      provider_name ->
+        config = get_provider_config(provider_name, opts)
+
+        %{
+          api_key:
+            first_non_empty_binary([
+              Map.get(opts, :api_key),
+              config[:api_key],
+              resolve_secret(config[:api_key_secret])
+            ]),
+          base_url:
+            first_non_empty_binary([
+              Map.get(opts, :base_url),
+              config[:base_url]
+            ])
+        }
+        |> reject_nil_values()
+    end
+  end
 
   # ============================================================================
   # Internal helpers
@@ -208,6 +255,54 @@ defmodule LemonCore.ProviderConfigResolver do
       value when is_binary(value) -> String.trim(value) != ""
       _ -> false
     end)
+  end
+
+  defp openai_compatible_provider_name(provider_id) do
+    normalized =
+      case provider_id do
+        value when is_atom(value) ->
+          value
+          |> Atom.to_string()
+          |> String.downcase()
+          |> String.replace("-", "_")
+
+        value when is_binary(value) ->
+          value
+          |> String.downcase()
+          |> String.replace("-", "_")
+
+        _ ->
+          nil
+      end
+
+    case normalized do
+      name
+      when name in [
+             "openai",
+             "opencode",
+             "opencode_go",
+             "xai",
+             "mistral",
+             "cerebras",
+             "openrouter",
+             "zai",
+             "minimax",
+             "minimax_cn",
+             "fireworks",
+             "github_copilot",
+             "huggingface",
+             "deepseek",
+             "qwen",
+             "vercel_ai_gateway",
+             "kimi",
+             "kimi_coding",
+             "groq"
+           ] ->
+        name
+
+      _ ->
+        nil
+    end
   end
 
   defp parse_deployment_name_map(nil), do: %{}

@@ -9,12 +9,20 @@ defmodule Ai.Providers.GoogleStreamingTest do
     {:ok, _} = Application.ensure_all_started(:ai)
 
     previous_defaults = Req.default_options()
+    prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
+    System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "google-test-key")
 
     on_exit(fn ->
       Req.default_options(previous_defaults)
       Req.Test.set_req_test_to_private(%{})
+
+      if is_binary(prev_google) do
+        System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", prev_google)
+      else
+        System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+      end
     end)
 
     :ok
@@ -189,6 +197,45 @@ defmodule Ai.Providers.GoogleStreamingTest do
 
     assert req_body == expected
     assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
+  test "fails fast when no Google API key is configured" do
+    prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
+    prev_google_alt = System.get_env("GOOGLE_API_KEY")
+    prev_gemini = System.get_env("GEMINI_API_KEY")
+
+    on_exit(fn ->
+      if is_binary(prev_google),
+        do: System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", prev_google),
+        else: System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+
+      if is_binary(prev_google_alt),
+        do: System.put_env("GOOGLE_API_KEY", prev_google_alt),
+        else: System.delete_env("GOOGLE_API_KEY")
+
+      if is_binary(prev_gemini),
+        do: System.put_env("GEMINI_API_KEY", prev_gemini),
+        else: System.delete_env("GEMINI_API_KEY")
+    end)
+
+    System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+    System.delete_env("GOOGLE_API_KEY")
+    System.delete_env("GEMINI_API_KEY")
+
+    model = %Model{
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://example.test"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = Google.stream(model, context, %StreamOptions{})
+
+    assert {:error, result} = EventStream.result(stream, 1000)
+    assert result.error_message =~ "Google Generative AI API key is required"
   end
 
   test "omits toolConfig when tool_choice is nil" do

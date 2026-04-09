@@ -54,7 +54,7 @@ defmodule Ai.Providers.OpenAICompletions do
   }
 
   alias Ai.EventStream
-  alias LemonCore.Secrets
+  alias LemonCore.{ProviderConfigResolver, Secrets}
 
   require Logger
 
@@ -84,10 +84,11 @@ defmodule Ai.Providers.OpenAICompletions do
 
   defp do_stream(stream, model, context, opts) do
     output = build_initial_output(model)
+    resolved_provider_opts = resolve_provider_options(model, opts)
 
     try do
-      api_key = get_api_key(model, opts)
-      url = build_url(model)
+      api_key = get_api_key(model, opts, resolved_provider_opts)
+      url = build_url(model, resolved_provider_opts)
       headers = build_headers(model, context, api_key, opts)
       params = build_params(model, context, opts)
 
@@ -132,10 +133,13 @@ defmodule Ai.Providers.OpenAICompletions do
     }
   end
 
-  defp get_api_key(model, opts) do
+  defp get_api_key(model, opts, resolved_provider_opts) do
     cond do
       opts.api_key && opts.api_key != "" ->
         opts.api_key
+
+      api_key = Map.get(resolved_provider_opts, :api_key) ->
+        api_key
 
       api_key = get_provider_env_key(model.provider) ->
         api_key
@@ -148,6 +152,27 @@ defmodule Ai.Providers.OpenAICompletions do
     end
   end
 
+  defp resolve_provider_options(model, opts) do
+    model.provider
+    |> normalize_provider_id()
+    |> ProviderConfigResolver.resolve_for_provider(Map.from_struct(opts))
+  rescue
+    error ->
+      Logger.warning(
+        "Failed to resolve OpenAI-compatible provider config for #{inspect(model.provider)}: #{Exception.message(error)}"
+      )
+
+      %{}
+  end
+
+  defp normalize_provider_id(provider) when is_atom(provider), do: provider
+
+  defp normalize_provider_id(provider) when is_binary(provider) do
+    provider
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
   defp get_provider_env_key(provider) do
     env_var =
       case provider do
@@ -157,20 +182,30 @@ defmodule Ai.Providers.OpenAICompletions do
         :cerebras -> "CEREBRAS_API_KEY"
         :openrouter -> "OPENROUTER_API_KEY"
         :opencode -> "OPENCODE_API_KEY"
+        :zai -> "ZAI_API_KEY"
+        :minimax -> "MINIMAX_API_KEY"
+        :fireworks -> "FIREWORKS_API_KEY"
         "groq" -> "GROQ_API_KEY"
         "mistral" -> "MISTRAL_API_KEY"
         "xai" -> "XAI_API_KEY"
         "cerebras" -> "CEREBRAS_API_KEY"
         "openrouter" -> "OPENROUTER_API_KEY"
         "opencode" -> "OPENCODE_API_KEY"
+        "zai" -> "ZAI_API_KEY"
+        "minimax" -> "MINIMAX_API_KEY"
+        "fireworks" -> "FIREWORKS_API_KEY"
         _ -> nil
       end
 
     if env_var, do: Secrets.fetch_value(env_var), else: nil
   end
 
-  defp build_url(model) do
-    base_url = String.trim_trailing(model.base_url, "/")
+  defp build_url(model, resolved_provider_opts) do
+    base_url =
+      resolved_provider_opts
+      |> Map.get(:base_url, model.base_url)
+      |> String.trim_trailing("/")
+
     "#{base_url}/chat/completions"
   end
 

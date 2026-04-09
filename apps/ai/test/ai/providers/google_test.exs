@@ -262,6 +262,81 @@ defmodule Ai.Providers.GoogleTest do
       EventStream.result(stream, 5_000)
     end
 
+    test "uses canonical provider config secret and base_url" do
+      test_pid = self()
+      prev_home = System.get_env("HOME")
+      prev_secret = System.get_env("llm_google_api_key")
+      prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
+      prev_google_api = System.get_env("GOOGLE_API_KEY")
+      prev_gemini = System.get_env("GEMINI_API_KEY")
+
+      tmp_home =
+        Path.join(System.tmp_dir!(), "google_provider_cfg_#{System.unique_integer([:positive])}")
+
+      global_dir = Path.join(tmp_home, ".lemon")
+      project_dir = Path.join(tmp_home, "project")
+
+      File.mkdir_p!(global_dir)
+      File.mkdir_p!(project_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.google]
+      api_key_secret = "llm_google_api_key"
+      base_url = "https://override.google.test/v1beta"
+      """)
+
+      System.put_env("HOME", tmp_home)
+      System.put_env("llm_google_api_key", "google-secret-ref-key")
+      System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+      System.delete_env("GOOGLE_API_KEY")
+      System.delete_env("GEMINI_API_KEY")
+
+      on_exit(fn ->
+        if is_binary(prev_home),
+          do: System.put_env("HOME", prev_home),
+          else: System.delete_env("HOME")
+
+        if is_binary(prev_secret),
+          do: System.put_env("llm_google_api_key", prev_secret),
+          else: System.delete_env("llm_google_api_key")
+
+        if is_binary(prev_google),
+          do: System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", prev_google),
+          else: System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+
+        if is_binary(prev_google_api),
+          do: System.put_env("GOOGLE_API_KEY", prev_google_api),
+          else: System.delete_env("GOOGLE_API_KEY")
+
+        if is_binary(prev_gemini),
+          do: System.put_env("GEMINI_API_KEY", prev_gemini),
+          else: System.delete_env("GEMINI_API_KEY")
+
+        File.rm_rf!(tmp_home)
+      end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request, conn.host, conn.request_path, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_resp(200, sse_data(text_chunk("OK", %{finish_reason: "STOP"})))
+      end)
+
+      model = build_model(%{base_url: "https://fallback.google.test"})
+      context = build_context()
+      opts = build_opts(%{api_key: nil, cwd: project_dir})
+
+      {:ok, stream} = Google.stream(model, context, opts)
+
+      assert_receive {:request, "override.google.test",
+                      "/v1beta/models/gemini-2.5-flash:streamGenerateContent", headers},
+                     1000
+
+      assert Map.new(headers)["x-goog-api-key"] == "google-secret-ref-key"
+      assert {:ok, _} = EventStream.result(stream, 5_000)
+    end
+
     test "includes API key in headers" do
       Req.Test.stub(__MODULE__, fn conn ->
         [api_key] = Plug.Conn.get_req_header(conn, "x-goog-api-key")

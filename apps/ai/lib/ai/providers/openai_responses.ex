@@ -103,8 +103,7 @@ defmodule Ai.Providers.OpenAIResponses do
                  model,
                  %{
                    service_tier: parse_service_tier(opts),
-                   apply_service_tier_pricing:
-                     &OpenAIResponsesShared.apply_service_tier_pricing/2
+                   apply_service_tier_pricing: &OpenAIResponsesShared.apply_service_tier_pricing/2
                  }
                ) do
             {:ok, final_output} ->
@@ -214,7 +213,10 @@ defmodule Ai.Providers.OpenAIResponses do
     # Add tools if present
     params =
       if context.tools && context.tools != [] do
-        Map.put(params, "tools", OpenAIResponsesShared.convert_tools(context.tools))
+        params
+        |> Map.put("tools", OpenAIResponsesShared.convert_tools(context.tools))
+        |> Map.put("tool_choice", "auto")
+        |> Map.put("parallel_tool_calls", true)
       else
         params
       end
@@ -537,9 +539,7 @@ defmodule Ai.Providers.OpenAIResponses do
     end
   end
 
-
   # ============================================================================
   # Helpers
   # ============================================================================
-
 end

@@ -108,7 +108,6 @@ defmodule Ai.Providers.GoogleVertex do
     end
   end
 
-
   defp resolve_project(opts, resolved) do
     project = Map.get(opts, :project) || Map.get(resolved, :project)
 
@@ -136,30 +135,42 @@ defmodule Ai.Providers.GoogleVertex do
     else
       # Try service account JSON from opts, then resolved config (set via secrets)
       service_account_json =
-        Map.get(opts, :service_account_json) || Map.get(resolved, :service_account_json)
+        Map.get(opts, :service_account_json) ||
+          Map.get(resolved, :service_account_json) ||
+          System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+
+      credentials_path = System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
 
       cond do
         service_account_json && service_account_json != "" ->
           get_access_token_from_service_account(service_account_json)
 
-        File.exists?(System.get_env("GOOGLE_APPLICATION_CREDENTIALS", "")) ->
-          # Use ADC file path
-          case System.cmd("gcloud", ["auth", "print-access-token"], stderr_to_stdout: true) do
-            {token, 0} -> String.trim(token)
-            {error, _} -> raise "Failed to get access token via gcloud: #{error}"
-          end
+        is_binary(credentials_path) and credentials_path != "" and File.exists?(credentials_path) ->
+          credentials_path
+          |> File.read!()
+          |> get_access_token_from_service_account()
 
         true ->
-          # Try gcloud ADC as fallback
-          case System.cmd("gcloud", ["auth", "print-access-token"], stderr_to_stdout: true) do
-            {token, 0} ->
-              String.trim(token)
-
-            {error, _} ->
-              raise "Failed to get access token via gcloud: #{error}. Ensure you're authenticated with 'gcloud auth login' or 'gcloud auth application-default login', or provide service_account_json in options."
-          end
+          get_access_token_from_gcloud()
       end
     end
+  end
+
+  defp get_access_token_from_gcloud do
+    case System.cmd("gcloud", ["auth", "print-access-token"], stderr_to_stdout: true) do
+      {token, 0} ->
+        String.trim(token)
+
+      {error, _} ->
+        raise "Failed to get access token via gcloud: #{error}. Ensure you're authenticated with 'gcloud auth login' or 'gcloud auth application-default login', or provide service_account_json in options."
+    end
+  rescue
+    e in ErlangError ->
+      if e.original == :enoent do
+        raise "Failed to get access token via gcloud: command not found. Provide service_account_json, GOOGLE_APPLICATION_CREDENTIALS_JSON, or GOOGLE_APPLICATION_CREDENTIALS."
+      end
+
+      reraise e, __STACKTRACE__
   end
 
   defp get_access_token_from_service_account(json) when is_binary(json) do

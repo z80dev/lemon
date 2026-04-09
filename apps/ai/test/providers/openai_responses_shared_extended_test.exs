@@ -259,6 +259,36 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
 
       EventStream.cancel(stream, :test_cleanup)
     end
+
+    test "halts immediately once response.completed arrives" do
+      {:ok, stream} = EventStream.start_link()
+      test_pid = self()
+
+      events =
+        Stream.resource(
+          fn -> :before_completed end,
+          fn
+            :before_completed ->
+              {[%{"type" => "response.completed", "response" => %{"status" => "completed"}}],
+               :after_completed}
+
+            :after_completed ->
+              send(test_pid, :consumed_after_completed)
+              Process.sleep(:infinity)
+              {[], :done}
+          end,
+          fn _ -> :ok end
+        )
+
+      output = base_output()
+      model = base_model()
+
+      assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+      assert final.stop_reason == :stop
+      refute_received :consumed_after_completed
+
+      EventStream.cancel(stream, :test_cleanup)
+    end
   end
 
   # ============================================================================

@@ -170,6 +170,10 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | `mix lemon.secrets.check` | Check secrets health |
 | `mix lemon.secrets.import_env` | Import env vars as secrets |
 | `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
+
+Provider onboarding `preferred_models` should favor stable models that actually
+work on Lemon's live transport path. Do not keep known-broken variants in those
+default suggestions just because the upstream provider documents them.
 | `mix lemon.onboard.anthropic` | Anthropic provider setup |
 | `mix lemon.onboard.antigravity` | Antigravity (Google) provider setup with OAuth |
 | `mix lemon.onboard.gemini` | Google Gemini CLI / Code Assist setup with OAuth |

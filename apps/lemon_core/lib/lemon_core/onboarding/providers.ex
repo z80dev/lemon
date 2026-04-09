@@ -147,7 +147,7 @@ defmodule LemonCore.Onboarding.Providers do
       api_key_secret_provider: "onboarding_minimax",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"],
+      preferred_models: ["MiniMax-M2.7", "MiniMax-M2.5", "minimax-m2.5"],
       aliases: ["mini-max", "minimax-m2"],
       api_key_prompt: "Enter your MiniMax API key: ",
       api_key_choice_label: "Paste API key",

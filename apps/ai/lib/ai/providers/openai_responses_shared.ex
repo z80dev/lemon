@@ -724,10 +724,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       Enum.reduce_while(events, state, fn event, state ->
         case process_event(event, state) do
           {:ok, new_state} -> {:cont, new_state}
+          {:done, new_state} -> {:halt, {:ok, new_state}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
       |> case do
+        {:ok, final_state} -> {:ok, final_state.output}
         {:error, reason} -> {:error, reason}
         final_state -> {:ok, final_state.output}
       end
@@ -1038,7 +1040,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       end
 
     output = %{output | stop_reason: stop_reason}
-    {:ok, %{state | output: output}}
+    {:done, %{state | output: output}}
   end
 
   defp process_event(%{"type" => "error", "code" => code, "message" => message}, _state) do
