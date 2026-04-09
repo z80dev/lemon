@@ -4,6 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.BindingResolver
+  alias LemonChannels.Telegram.TriggerMode
   alias LemonChannels.Telegram.StateStore
   alias LemonCore.ChatScope
   alias LemonCore.ProjectBindingStore
@@ -21,9 +22,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   defmodule MockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
+    @chat_member_status_key {__MODULE__, :chat_member_status}
 
     def set_updates(updates), do: :persistent_term.put(@updates_key, updates)
     def register_test(pid), do: :persistent_term.put(@pid_key, pid)
+    def set_chat_member_status(status), do: :persistent_term.put(@chat_member_status_key, status)
 
     def get_updates(_token, _offset, _timeout_ms) do
       updates = :persistent_term.get(@updates_key, [])
@@ -53,6 +56,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
        }}
     end
 
+    def get_chat_member(_token, chat_id, user_id) do
+      status = :persistent_term.get(@chat_member_status_key, "administrator")
+      notify({:get_chat_member, chat_id, user_id, status})
+      {:ok, %{"ok" => true, "result" => %{"status" => status}}}
+    end
+
     defp notify(msg) do
       if pid = :persistent_term.get(@pid_key, nil) do
         send(pid, msg)
@@ -73,6 +82,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     :persistent_term.put({TestRouter, :pid}, self())
 
     MockAPI.register_test(self())
+    MockAPI.set_chat_member_status("administrator")
 
     case LemonChannels.Registry.register(LemonChannels.Adapters.Telegram) do
       :ok -> :ok
@@ -89,6 +99,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       :persistent_term.erase({MockAPI, :updates})
 
       :persistent_term.erase({MockAPI, :pid})
+      :persistent_term.erase({MockAPI, :chat_member_status})
 
       :persistent_term.erase({TestRouter, :pid})
 
@@ -278,6 +289,98 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
     assert clear_msg == "Cleared thinking level override for this topic."
     assert StateStore.get_default_thinking({"default", chat_id, topic_id}) == nil
+  end
+
+  test "/trigger mentions in a group requires mentions for follow-up messages" do
+    chat_id = System.unique_integer([:positive])
+
+    MockAPI.set_updates([
+      group_message_update(chat_id, "/trigger mentions"),
+      group_message_update(chat_id, "plain hello"),
+      group_message_update(chat_id, "@lemonbot mentioned hello")
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               bot_username: "lemonbot",
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+
+    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert trigger_msg == "Trigger mode set to mentions for this chat."
+
+    assert_receive {:inbound, inbound}, 1_200
+    assert inbound.message.text == "@lemonbot mentioned hello"
+    assert TriggerMode.resolve("default", chat_id, nil).mode == :mentions
+
+    refute_receive {:inbound, _msg}, 250
+  end
+
+  test "/trigger mentions is rejected for non-admin senders" do
+    chat_id = System.unique_integer([:positive])
+    MockAPI.set_chat_member_status("member")
+
+    MockAPI.set_updates([
+      group_message_update(chat_id, "/trigger mentions"),
+      group_message_update(chat_id, "plain hello")
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               bot_username: "lemonbot",
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:get_chat_member, ^chat_id, 99, "member"}, 400
+
+    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert trigger_msg == "Trigger mode can only be changed by a group admin."
+
+    assert_receive {:inbound, inbound}, 1_200
+    assert inbound.message.text == "plain hello"
+    assert TriggerMode.resolve("default", chat_id, nil).mode == :all
+  end
+
+  test "/trigger clear removes a topic override and falls back to the chat default" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = System.unique_integer([:positive])
+    msg_id = System.unique_integer([:positive])
+
+    MockAPI.set_updates([
+      group_message_update(chat_id, "/trigger mentions"),
+      topic_message_update(chat_id, topic_id, "/trigger all", msg_id + 1),
+      topic_message_update(chat_id, topic_id, "/trigger clear", msg_id + 2)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               bot_username: "lemonbot",
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, chat_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert chat_msg == "Trigger mode set to mentions for this chat."
+
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert topic_msg == "Trigger mode set to all for this topic."
+    assert TriggerMode.resolve("default", chat_id, topic_id).mode == :all
+
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert clear_msg == "Cleared topic trigger override."
+
+    resolved = TriggerMode.resolve("default", chat_id, topic_id)
+    assert resolved.mode == :mentions
+    assert resolved.chat_mode == :mentions
+    assert resolved.topic_mode == nil
+    refute_receive {:inbound, _msg}, 250
   end
 
   defp start_transport(overrides) when is_map(overrides) do
