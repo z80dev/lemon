@@ -75,9 +75,10 @@ Channel transport or gateway-native ingress
 Queue-mode behavior lives here:
 
 - `:collect` appends
-- `:followup` debounces/merges recent followups
+- `:followup` debounces/merges recent followups, except async task/delegated followups which stay separate
 - `:steer` attempts in-run steer and falls back to followup
 - `:steer_backlog` attempts in-run steer and falls back to collect
+- active async task/delegated auto-followups are promoted to `:steer` so completions try to reach the live parent run before falling back to a queued followup
 - `:interrupt` cancels the active run and inserts the new request at the front
 
 ## Output Semantics

@@ -25,6 +25,12 @@ defmodule CodingAgent.AsyncFollowups do
       queue_mode == :steer and live_session_streaming?(session_module, session_pid) ->
         {:live, :steer}
 
+      queue_mode == :steer_backlog and live_session_streaming?(session_module, session_pid) ->
+        {:live, :steer}
+
+      queue_mode == :steer_backlog and live_session_available?(session_module, session_pid) ->
+        {:live, :followup}
+
       queue_mode == :steer ->
         {:router, :followup}
 

@@ -74,6 +74,10 @@ Inbound transport
 - steer and steer-backlog fallback
 - interrupt behavior
 
+Async task/delegated followups are special:
+- active auto-followups should prefer `:steer` with `:followup` fallback, not `:steer_backlog` with `:collect` fallback
+- async followups with task/delegated provenance must not be merged together during the followup debounce window
+
 Conversation keys are:
 
 - `{:resume, engine, token}` when resume is known

@@ -448,7 +448,7 @@ defmodule CodingAgent.Tools.AgentTest do
            ]
   end
 
-  test "followup_queue_mode steer_backlog still routes through router when the parent is streaming" do
+  test "followup_queue_mode steer_backlog uses live steer delivery when the parent is streaming" do
     result =
       AgentTool.execute(
         "call_1",
@@ -478,9 +478,10 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
       )
 
-    refute_receive {:session_async_followup, _message}, 150
-    assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 2}, 500
-    assert followup.prompt =~ "oracle update"
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.details.delivery == :steer
+    assert message.content =~ "oracle update"
+    refute_receive {:router_submit, %RunRequest{}, 2}, 150
   end
 
   test "followup_queue_mode interrupt routes through router" do
@@ -620,19 +621,10 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
       )
 
-    refute_receive {:session_async_followup, _}, 150
-    assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 2}, 500
-
-    assert followup.meta["async_followups"] == [
-             %{
-               source: :agent,
-               task_id: result.details.task_id,
-               run_id: result.details.run_id,
-               agent_id: "oracle",
-               session_key: result.details.session_key,
-               delivery: :steer_backlog
-             }
-           ]
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert message.details.delivery == :steer
+    assert message.content =~ "oracle update"
+    refute_receive {:router_submit, %RunRequest{}, 2}, 150
   end
 
   test "async completion can recover from missed bus events via run summary store polling" do

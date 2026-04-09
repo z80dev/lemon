@@ -170,7 +170,31 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert next_state.pending_steers == %{"run1" => [{steer_backlog, :collect}]}
 
     assert effects == [
-             {:dispatch_steer, "run1", :steer_backlog, steer_backlog, :collect}
+           {:dispatch_steer, "run1", :steer_backlog, steer_backlog, :collect}
+           ]
+  end
+
+  test "active task auto followups are promoted to steer with followup fallback" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    followup =
+      submission("run2", "s1", :followup, "task done",
+        meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"},
+        request_meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"}
+      )
+
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, followup, 100)
+
+    assert next_state.pending_steers == %{"run1" => [{%{followup | queue_mode: :steer}, :followup}]}
+
+    assert effects == [
+             {:dispatch_steer, "run1", :steer, %{followup | queue_mode: :steer}, :followup}
            ]
   end
 
@@ -240,7 +264,7 @@ defmodule LemonRouter.SessionTransitionsTest do
            }
   end
 
-  test "two async followups accumulate task provenance in async_followups" do
+  test "two async followups stay separate within the debounce window" do
     previous =
       submission("run1", "s1", :followup, "part1",
         meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"},
@@ -253,23 +277,39 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"}
       )
 
-    merged = merge_followups(previous, current)
+    next_state = submit_followups(previous, current)
 
-    assert merged.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: "run-a"},
-             %{source: :task, task_id: "task-b", run_id: "run-b"}
-           ]
-
-    assert merged.execution_request.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: "run-a"},
-             %{source: :task, task_id: "task-b", run_id: "run-b"}
-           ]
-
-    assert merged.meta.task_id == "task-b"
-    assert merged.meta.run_id == "run-b"
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+    assert Enum.at(next_state.queue, 0).meta.task_id == "task-a"
+    assert Enum.at(next_state.queue, 1).meta.task_id == "task-b"
   end
 
-  test "async delegated and regular followups preserve both regular fields and async provenance" do
+  test "async task followups do not merge within the debounce window" do
+    previous =
+      submission("run1", "s1", :followup, "part1",
+        meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"},
+        request_meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"}
+      )
+
+    current =
+      submission("run2", "s1", :followup, "part2",
+        meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"},
+        request_meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"}
+      )
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: nil,
+      queue: [previous],
+      last_followup_at_ms: 100,
+      pending_steers: %{}
+    }
+
+    assert {:ok, next_state, [:maybe_start_next]} = SessionTransitions.submit(state, current, 200)
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+  end
+
+  test "async delegated followups do not merge with regular followups" do
     previous =
       submission("run1", "s1", :followup, "part1",
         meta: %{
@@ -296,38 +336,15 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{kind: "regular", right: "value"}
       )
 
-    merged = merge_followups(previous, current)
+    next_state = submit_followups(previous, current)
 
-    assert merged.meta["async_followups"] == [
-             %{
-               source: :delegated,
-               task_id: "task-a",
-               run_id: "run-a",
-               agent_id: "agent-a",
-               session_key: "session-a"
-             }
-           ]
-
-    assert merged.meta.left == "value"
-    assert merged.meta.kind == "regular"
-    assert merged.meta.right == "value"
-
-    assert merged.execution_request.meta["async_followups"] == [
-             %{
-               source: :delegated,
-               task_id: "task-a",
-               run_id: "run-a",
-               agent_id: "agent-a",
-               session_key: "session-a"
-             }
-           ]
-
-    assert merged.execution_request.meta.left == "value"
-    assert merged.execution_request.meta.kind == "regular"
-    assert merged.execution_request.meta.right == "value"
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+    assert Enum.at(next_state.queue, 0).meta.left == "value"
+    assert Enum.at(next_state.queue, 1).meta.kind == "regular"
+    assert Enum.at(next_state.queue, 1).meta.right == "value"
   end
 
-  test "async followup accumulation handles duplicate task ids, empty meta, and nil values" do
+  test "async followups with duplicate task ids and nil values still stay separate" do
     previous =
       submission("run1", "s1", :followup, "part1",
         meta: %{task_auto_followup: true, task_id: "task-a", run_id: nil},
@@ -340,19 +357,14 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-b"}
       )
 
-    merged = merge_followups(previous, current)
+    next_state = submit_followups(previous, current)
 
-    assert merged.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: nil},
-             %{source: :task, task_id: "task-a", run_id: "run-b"}
-           ]
-
-    assert merged.execution_request.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: "run-b"}
-           ]
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+    assert Enum.at(next_state.queue, 0).meta.run_id == nil
+    assert Enum.at(next_state.queue, 1).meta.run_id == "run-b"
   end
 
-  test "third async followup carries forward existing async_followups on an already merged submission" do
+  test "third async followup appends as a third queued followup" do
     first =
       submission("run1", "s1", :followup, "part1",
         meta: %{task_auto_followup: true, task_id: "task-a", run_id: "run-a"},
@@ -365,7 +377,7 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{task_auto_followup: true, task_id: "task-b", run_id: "run-b"}
       )
 
-    merged_once = merge_followups(first, second)
+    first_state = submit_followups(first, second)
 
     third =
       submission("run3", "s1", :followup, "part3",
@@ -373,27 +385,11 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{task_auto_followup: true, task_id: "task-c", run_id: "run-c"}
       )
 
-    merged_twice = merge_followups(merged_once, third)
-
-    assert merged_twice.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: "run-a"},
-             %{source: :task, task_id: "task-b", run_id: "run-b"},
-             %{source: :task, task_id: "task-c", run_id: "run-c"}
-           ]
-
-    assert merged_twice.execution_request.meta["async_followups"] == [
-             %{source: :task, task_id: "task-a", run_id: "run-a"},
-             %{source: :task, task_id: "task-b", run_id: "run-b"},
-             %{source: :task, task_id: "task-c", run_id: "run-c"}
-           ]
-
-    assert merged_twice.meta.task_id == "task-c"
-    assert merged_twice.meta.run_id == "run-c"
-    assert merged_twice.execution_request.meta.task_id == "task-c"
-    assert merged_twice.execution_request.meta.run_id == "run-c"
+    assert {:ok, next_state, [:maybe_start_next]} = SessionTransitions.submit(first_state, third, 300)
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2", "run3"]
   end
 
-  test "explicit async_followups metadata is not duplicated by legacy delegated fields" do
+  test "explicit async_followups metadata also prevents merge with later regular followups" do
     previous =
       submission("run1", "s1", :followup, "part1",
         meta: %{
@@ -438,20 +434,10 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{kind: "regular"}
       )
 
-    merged = merge_followups(previous, current)
+    next_state = submit_followups(previous, current)
 
-    assert merged.meta["async_followups"] == [
-             %{
-               source: :agent,
-               task_id: "task-a",
-               run_id: "run-a",
-               agent_id: "agent-a",
-               session_key: "session-a",
-               delivery: :router
-             }
-           ]
-
-    assert merged.execution_request.meta["async_followups"] == [
+    assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+    assert Enum.at(next_state.queue, 0).meta["async_followups"] == [
              %{
                source: :agent,
                task_id: "task-a",
@@ -464,6 +450,12 @@ defmodule LemonRouter.SessionTransitionsTest do
   end
 
   defp merge_followups(previous, current) do
+    next_state = submit_followups(previous, current)
+    assert [merged] = next_state.queue
+    merged
+  end
+
+  defp submit_followups(previous, current) do
     state = %SessionState{
       conversation_key: {:session, "s1"},
       active: nil,
@@ -473,8 +465,7 @@ defmodule LemonRouter.SessionTransitionsTest do
     }
 
     assert {:ok, next_state, [:maybe_start_next]} = SessionTransitions.submit(state, current, 200)
-    assert [merged] = next_state.queue
-    merged
+    next_state
   end
 
   defp submission(run_id, session_key, queue_mode, prompt, opts \\ []) do

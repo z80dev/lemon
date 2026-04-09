@@ -199,7 +199,7 @@ defmodule LemonRouter.SessionTransitions do
        when not is_nil(state.active) do
     if truthy?(MapHelpers.get_key(meta || %{}, :task_auto_followup)) or
          truthy?(MapHelpers.get_key(meta || %{}, :delegated_auto_followup)) do
-      %{submission | queue_mode: :steer_backlog}
+      %{submission | queue_mode: :steer}
     else
       submission
     end
@@ -220,6 +220,9 @@ defmodule LemonRouter.SessionTransitions do
 
   defp maybe_merge_followup(queue, submission, last_followup_at_ms, now_ms) do
     cond do
+      async_followup_submission?(submission) ->
+        :no_merge
+
       is_nil(last_followup_at_ms) ->
         :no_merge
 
@@ -235,13 +238,25 @@ defmodule LemonRouter.SessionTransitions do
             :no_merge
 
           {%{queue_mode: :followup} = previous, rest} ->
-            {:merged, rest ++ [merge_followup_submission(previous, submission)]}
+            if async_followup_submission?(previous) do
+              :no_merge
+            else
+              {:merged, rest ++ [merge_followup_submission(previous, submission)]}
+            end
 
           {_other, _rest} ->
             :no_merge
         end
     end
   end
+
+  defp async_followup_submission?(%{meta: meta}) when is_map(meta) do
+    truthy?(MapHelpers.get_key(meta, :task_auto_followup)) or
+      truthy?(MapHelpers.get_key(meta, :delegated_auto_followup)) or
+      normalize_async_followups(MapHelpers.get_key(meta, :async_followups)) != []
+  end
+
+  defp async_followup_submission?(_submission), do: false
 
   defp merge_followup_submission(previous, current) do
     merged_prompt =
