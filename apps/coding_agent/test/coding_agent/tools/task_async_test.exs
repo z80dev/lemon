@@ -91,6 +91,38 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   describe "execute/6 - async auto followup" do
+    test "omitted async defaults to background launch" do
+      result =
+        Task.execute(
+          "call_default_async",
+          %{
+            "description" => "Default async task",
+            "prompt" => "Return completion"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "task output"}],
+              details: %{status: "completed"}
+            }
+          end
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+      assert is_binary(result.details.task_id)
+      assert is_binary(result.details.run_id)
+      assert [%Ai.Types.TextContent{text: text}] = result.content
+      assert text =~ "Task queued: Default async task"
+      assert text =~ "action=join"
+      assert text =~ result.details.task_id
+
+      assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
+      assert record.description == "Default async task"
+    end
+
     test "queue_mode steer falls back to router followup when the parent is idle" do
       result =
         Task.execute(
@@ -311,7 +343,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "queue_mode steer_backlog still uses router when a streaming parent session exists" do
+    test "queue_mode steer_backlog uses live steer delivery when the parent session is streaming" do
       result =
         Task.execute(
           "call_router_backlog",
@@ -341,25 +373,48 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
-      refute_receive {:session_async_followup, _message}, 150
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.details.delivery == :steer
+      assert message.content =~ "Backlog routing task"
+      assert message.content =~ "override output"
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
+    end
 
-      assert_receive {:router_submit, %RunRequest{queue_mode: :steer_backlog} = followup, 1},
-                     1_000
+    test "queue_mode steer_backlog uses live followup delivery when the parent session is idle" do
+      result =
+        Task.execute(
+          "call_idle_backlog",
+          %{
+            "description" => "Idle backlog task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "steer_backlog"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "idle backlog output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncIdleSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
 
-      assert followup.session_key == "agent:main:main"
-      assert followup.agent_id == "main"
-      assert followup.meta.task_id == result.details.task_id
-      assert followup.meta.run_id == result.details.run_id
-      assert followup.meta.task_auto_followup == true
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
 
-      assert followup.meta["async_followups"] == [
-               %{
-                 source: :task,
-                 task_id: result.details.task_id,
-                 run_id: result.details.run_id,
-                 delivery: :steer_backlog
-               }
-             ]
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.details.delivery == :followup
+      assert message.content =~ "Idle backlog task"
+      assert message.content =~ "idle backlog output"
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
     test "queue_mode interrupt still uses router when a streaming parent session exists" do
@@ -999,6 +1054,147 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         "timeout" -> assert join_result.details.snapshot.mode == :wait_all
         "completed" -> assert join_result.details.mode == "wait_all"
       end
+    end
+  end
+
+  describe "join suppresses async auto followups" do
+    test "joining a running task prevents the late live-session followup" do
+      release_ref = make_ref()
+      test_pid = self()
+
+      create_result =
+        Task.execute(
+          "call_join_suppresses_followup",
+          %{
+            "description" => "Suppress followup task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "followup"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            send(test_pid, {:task_worker_pid, self()})
+
+            receive do
+              {:release_task, ^release_ref} ->
+                %AgentCore.Types.AgentToolResult{
+                  content: [%Ai.Types.TextContent{text: "joined output"}],
+                  details: %{status: "completed"}
+                }
+            after
+              5_000 ->
+                %AgentCore.Types.AgentToolResult{
+                  content: [%Ai.Types.TextContent{text: "timed out waiting for test release"}],
+                  details: %{status: "error"}
+                }
+            end
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      task_id = create_result.details.task_id
+      assert_receive {:task_worker_pid, worker_pid}, 1_000
+
+      join_task =
+        Elixir.Task.async(fn ->
+          Task.execute(
+            "call_join_waiting",
+            %{"action" => "join", "task_ids" => [task_id], "mode" => "wait_all"},
+            nil,
+            nil,
+            "/tmp",
+            []
+          )
+        end)
+
+      Process.sleep(50)
+      send(worker_pid, {:release_task, release_ref})
+
+      join_result = Elixir.Task.await(join_task, 5_000)
+
+      assert %AgentCore.Types.AgentToolResult{} = join_result
+      assert join_result.details.status == "completed"
+      [content] = join_result.content
+      assert content.text =~ "Joined 1 task(s)."
+      assert content.text =~ "joined output"
+
+      refute_receive {:session_async_followup, _message}, 300
+    end
+  end
+
+  describe "join result summaries" do
+    test "join surfaces completed task outputs in content text" do
+      run_a = RunGraph.new_run(%{type: :task, description: "count apps"})
+      run_b = RunGraph.new_run(%{type: :task, description: "check outbox"})
+      task_a = TaskStore.new_task(%{description: "count apps", run_id: run_a})
+      task_b = TaskStore.new_task(%{description: "check outbox", run_id: run_b})
+
+      assert :ok =
+               RunGraph.finish(run_a, %AgentCore.Types.AgentToolResult{
+                 content: [%Ai.Types.TextContent{text: "dirs=18"}],
+                 details: %{status: "completed"}
+               })
+
+      assert :ok =
+               RunGraph.finish(run_b, %AgentCore.Types.AgentToolResult{
+                 content: [%Ai.Types.TextContent{text: "outbox=yes"}],
+                 details: %{status: "completed"}
+               })
+
+      result =
+        Task.execute(
+          "join_call",
+          %{"action" => "join", "task_ids" => [task_a, task_b], "mode" => "wait_all"},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      [content] = result.content
+      assert content.text =~ "Joined 2 task(s)."
+      assert content.text =~ "TASK_RESULTS_JSON:"
+      assert content.text =~ ~s("description":"count apps")
+      assert content.text =~ ~s("status":"completed")
+      assert content.text =~ ~s("output":"dirs=18")
+      assert content.text =~ ~s("description":"check outbox")
+      assert content.text =~ ~s("output":"outbox=yes")
+      assert content.text =~ "- count apps: completed: dirs=18"
+      assert content.text =~ "- check outbox: completed: outbox=yes"
+    end
+
+    test "join surfaces task errors in content text" do
+      run_id = RunGraph.new_run(%{type: :task, description: "check outbox"})
+      task_id = TaskStore.new_task(%{description: "check outbox", run_id: run_id})
+
+      assert :ok = RunGraph.fail(run_id, {:assistant_error, "HTTP 400"})
+
+      result =
+        Task.execute(
+          "join_call_error",
+          %{"action" => "join", "task_ids" => [task_id], "mode" => "wait_all"},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      [content] = result.content
+      assert content.text =~ "TASK_RESULTS_JSON:"
+      assert content.text =~ ~s("description":"check outbox")
+      assert content.text =~ ~s("status":"error")
+      assert content.text =~ ~s("error":"{:assistant_error, \\"HTTP 400\\"}")
+      assert content.text =~ "- check outbox: error:"
+      assert content.text =~ "HTTP 400"
     end
   end
 

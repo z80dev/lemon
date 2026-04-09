@@ -6,6 +6,8 @@ defmodule CodingAgent.Tools.Task.Result do
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
 
+  @max_structured_join_output_bytes 4096
+
   @spec do_poll(map()) :: AgentToolResult.t() | {:error, String.t()}
   def do_poll(params) do
     task_id = Map.get(params, "task_id")
@@ -27,6 +29,7 @@ defmodule CodingAgent.Tools.Task.Result do
   def do_join(params) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
+         :ok <- suppress_auto_followups(task_ids),
          {:ok, run_ids} <- resolve_run_ids(task_ids),
          {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
       build_join_result(task_ids, join_result)
@@ -38,7 +41,14 @@ defmodule CodingAgent.Tools.Task.Result do
   @spec build_async_result(String.t(), String.t(), String.t() | nil) :: AgentToolResult.t()
   def build_async_result(task_id, description, run_id) do
     %AgentToolResult{
-      content: [%TextContent{text: "Task queued: #{description} (#{task_id})"}],
+      content: [
+        %TextContent{
+          text:
+            "Task queued: #{description} (#{task_id})\n" <>
+              "If you need this result before you answer, call task again with action=join and " <>
+              "task_ids=[\"#{task_id}\"] (or include this id in a larger task_ids list)."
+        }
+      ],
       details: %{
         task_id: task_id,
         status: "queued",
@@ -133,6 +143,11 @@ defmodule CodingAgent.Tools.Task.Result do
 
   defp validate_join_mode(params) do
     {:ok, Map.get(params, "mode") |> normalize_join_mode()}
+  end
+
+  defp suppress_auto_followups(task_ids) do
+    Enum.each(task_ids, &TaskStore.suppress_auto_followup/1)
+    :ok
   end
 
   defp build_poll_result(task_id, record, events) do
@@ -298,8 +313,13 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
+    summary = join_summary_text(runs)
+    structured = join_structured_text(runs)
+
     %AgentToolResult{
-      content: [%TextContent{text: "Joined #{length(task_ids)} task(s)."}],
+      content: [
+        %TextContent{text: "Joined #{length(task_ids)} task(s)." <> structured <> summary}
+      ],
       details: %{
         status: "completed",
         mode: "wait_all",
@@ -310,8 +330,11 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
+    summary = join_summary_text([run])
+    structured = join_structured_text([run])
+
     %AgentToolResult{
-      content: [%TextContent{text: "One task completed."}],
+      content: [%TextContent{text: "One task completed." <> structured <> summary}],
       details: %{
         status: "completed",
         mode: "wait_any",
@@ -334,6 +357,133 @@ defmodule CodingAgent.Tools.Task.Result do
 
       true ->
         trimmed
+    end
+  end
+
+  defp join_summary_text(runs) when is_list(runs) do
+    lines =
+      runs
+      |> Enum.map(&join_summary_line/1)
+      |> Enum.reject(&is_nil/1)
+
+    if lines == [], do: "", else: "\n" <> Enum.join(lines, "\n")
+  end
+
+  defp join_summary_text(_), do: ""
+
+  defp join_structured_text(runs) when is_list(runs) do
+    payload =
+      runs
+      |> Enum.map(&join_structured_entry/1)
+      |> Jason.encode!()
+
+    "\nTASK_RESULTS_JSON: " <> payload
+  rescue
+    _ -> ""
+  end
+
+  defp join_structured_text(_), do: ""
+
+  defp join_summary_line(%{description: description, status: :completed, result: result} = run) do
+    preview =
+      result
+      |> build_result_preview()
+      |> truncate_join_preview()
+
+    base = join_summary_prefix(run, description)
+    "#{base}completed: #{preview}"
+  end
+
+  defp join_summary_line(%{description: description, status: :error, error: error} = run) do
+    preview =
+      error
+      |> inspect(limit: 40)
+      |> truncate_join_preview()
+
+    base = join_summary_prefix(run, description)
+    "#{base}error: #{preview}"
+  end
+
+  defp join_summary_line(%{description: description, status: status} = run) do
+    base = join_summary_prefix(run, description)
+    "#{base}status: #{status}"
+  end
+
+  defp join_summary_line(_), do: nil
+
+  defp join_structured_entry(%{description: description, status: :completed, result: result} = run) do
+    %{
+      description: description || run[:id] || "task",
+      status: "completed",
+      output: join_structured_output(result)
+    }
+  end
+
+  defp join_structured_entry(%{description: description, status: :error, error: error} = run) do
+    %{
+      description: description || run[:id] || "task",
+      status: "error",
+      error: inspect(error, limit: 80)
+    }
+  end
+
+  defp join_structured_entry(%{description: description, status: status} = run) do
+    %{
+      description: description || run[:id] || "task",
+      status: to_string(status)
+    }
+  end
+
+  defp join_structured_entry(_run), do: %{description: "task", status: "unknown"}
+
+  defp join_summary_prefix(run, description) do
+    label =
+      description ||
+        run[:id] ||
+        "task"
+
+    "- #{label}: "
+  end
+
+  defp truncate_join_preview(text) when is_binary(text) do
+    text = String.trim(text)
+    max_len = 240
+
+    cond do
+      text == "" -> "(empty)"
+      String.length(text) > max_len -> String.slice(text, 0, max_len) <> "..."
+      true -> text
+    end
+  end
+
+  defp truncate_join_preview(other), do: inspect(other, limit: 40)
+
+  defp join_structured_output(%AgentToolResult{content: content}) do
+    content
+    |> extract_text()
+    |> truncate_structured_join_output()
+  end
+
+  defp join_structured_output(result) when is_binary(result) do
+    truncate_structured_join_output(result)
+  end
+
+  defp join_structured_output(result) do
+    result
+    |> inspect(limit: 80)
+    |> truncate_structured_join_output()
+  end
+
+  defp truncate_structured_join_output(text) when is_binary(text) do
+    cond do
+      text == "" ->
+        ""
+
+      byte_size(text) <= @max_structured_join_output_bytes ->
+        text
+
+      true ->
+        binary_part(text, 0, @max_structured_join_output_bytes) <> "..."
     end
   end
 end

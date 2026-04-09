@@ -98,6 +98,27 @@ defmodule CodingAgent.TaskStore do
   end
 
   @doc """
+  Suppress async auto followup delivery for a task that is being explicitly joined.
+  """
+  @spec suppress_auto_followup(task_id()) :: :ok
+  def suppress_auto_followup(task_id) when is_binary(task_id) do
+    update_record(task_id, fn record ->
+      Map.put(record, :auto_followup_suppressed_at, System.system_time(:second))
+    end)
+  end
+
+  @doc """
+  Return whether async auto followup delivery has been suppressed for this task.
+  """
+  @spec auto_followup_suppressed?(task_id()) :: boolean()
+  def auto_followup_suppressed?(task_id) when is_binary(task_id) do
+    case get(task_id) do
+      {:ok, record, _events} -> not is_nil(Map.get(record, :auto_followup_suppressed_at))
+      _ -> false
+    end
+  end
+
+  @doc """
   Get task record and recent events.
   """
   @spec get(task_id()) :: {:ok, map(), [term()]} | {:error, :not_found}

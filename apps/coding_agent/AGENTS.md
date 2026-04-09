@@ -165,7 +165,14 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 - `CodingAgent.Tools.Task.Async` for background lifecycle and task/run bookkeeping
 - `CodingAgent.Tools.Task.Runner` for CLI/internal execution paths
 - `CodingAgent.Tools.Task.Followup` for async followup routing
+- `CodingAgent.Tools.Task.FastPath` for direct-provider routing of pure text Codex/Claude tasks
+- `CodingAgent.Tools.Task.Workspace` for choosing inherited-vs-scratch cwd for external tasks
 - `CodingAgent.Tools.Task.Result` for poll/join/result shaping
+
+`CodingAgent.Tools.Task` now defaults omitted `async` to `true`, matching the tool contract. External tasks that look like pure text/reasoning work (for example joke/riddle prompts) auto-run in a per-task scratch workspace unless the caller explicitly sets `cwd`, which avoids making Codex/Claude scan an unrelated repo or home directory. For pure text Codex/Claude tasks with no explicit `cwd` and no role, `Task.FastPath` bypasses the CLI entirely and calls the provider directly, which removes the large CLI startup/reconnect penalty while leaving coding/workspace-aware tasks on the normal external-runner path. Prompts that explicitly require tools such as `bash`, `read`, or `grep` are excluded from that fast path so task-tool requests cannot silently degrade into text-only provider calls. Internal task runs also infer a restrictive `tool_policy` plus a verification-prefixed prompt when the request explicitly says `use ... tools only`, so tool-constrained subtasks do not answer from model priors with the default full toolset. The fast path covers both default models and compatible shorthand/direct-provider model hints such as `haiku`, `sonnet`, and `anthropic:...`.
+When an internal task omits `model`, `Task.Params` resolves the inherited model from the live parent session before falling back to captured tool opts, so Telegram/session-scoped `/model` overrides still propagate into async child sessions.
+Internal task child sessions now have a bounded completion wait in `Task.Runner`; if a provider stream wedges or the child session dies without a terminal event, the task fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
+Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Join results now surface each child task's visible output/error directly in the returned text, not only in hidden `details`, and also include a `TASK_RESULTS_JSON` block so parent models can copy exact child outputs instead of re-summarizing them from prose.
 
 Child sessions launched through `CodingAgent.Tools.Task` can now receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`).
 `CodingAgent.CliRunners.LemonRunner` also preserves task-tool result metadata such as async
@@ -558,6 +565,7 @@ CodingAgent.Mentions.parse("@research find auth endpoints", cwd)
 The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before execution.
 `Task` also supports per-run routing controls for async followups (`session_key`, `agent_id`, `queue_mode`, `meta`) while keeping execution local/CLI-oriented.
 `Agent` keeps delegated-run submission `queue_mode` separate from delegated-completion `followup_queue_mode`; omitted completion modes resolve through `:coding_agent, :async_followups` before falling back to `:followup`.
+With the default `:steer_backlog` config, live streaming parent sessions now attempt in-session steer delivery before router backlog fallback so async task/agent completions can converge back into the active turn.
 
 ## Common Tasks
 
@@ -793,3 +801,4 @@ If the central resolver module is unavailable at runtime (mixed-version or parti
 - Use `async: false` for tests that modify global state (extensions, ETS tables, ProcessManager)
 - `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache
+Task-tool normalization is intentionally tolerant of provider variance: if a model supplies a prompt but omits the optional-looking `description` field, `CodingAgent.Tools.Task.Params` derives a short description from the prompt instead of rejecting the task call. Bash-only internal tasks also have a direct fast path for both backticked `Run \`cmd\`` prompts and plain `Run this exact command and return the output: cmd` phrasing so tool-using providers do not pay for a full child session just to execute one shell command.

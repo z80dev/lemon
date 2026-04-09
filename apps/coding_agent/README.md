@@ -139,6 +139,8 @@ CodingAgent.Supervisor (one_for_one)
 
 **Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
+Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no role may skip the CLI entirely and call the provider directly instead. Tasks that explicitly ask to use tools such as `bash`, `read`, or `grep` stay on the normal runner path so they cannot silently bypass tool execution. Internal task runs also infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. The fast path also keeps compatible model hints such as `haiku`, `sonnet`, and direct provider model specs off the slow CLI startup path. For internal bash-only tasks, the fast path now accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks off the slower child-session path.
+
 ### Budget and Resource Management
 
 | Module | Description |
@@ -187,6 +189,13 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
+
+The task tool defaults omitted `async` to `true`. For external engines, pure text/reasoning tasks without an explicit `cwd` are routed into a per-task scratch workspace so Codex/Claude do not spend startup time loading unrelated repo context. Pure text Codex/Claude tasks with no explicit `cwd`, role, or model override also take a direct-provider fast path instead of spawning the CLI, which removes most of the latency for simple conversational subtasks while keeping coding/workspace-aware and tool-requiring tasks on the normal external-runner path.
+When a provider omits the task `description` field but sends a valid `prompt`, Lemon now derives a short description from that prompt instead of rejecting the task call outright.
+When an internal task omits `model`, the child session now inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
+Internal task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+
+For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` now suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Joined task results now include each child task's visible output/error in the returned text plus a `TASK_RESULTS_JSON` block so the parent model can aggregate exact child outputs instead of inferring them from hidden metadata or prose alone. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions now attempt an in-session steer first before falling back to router backlog semantics.
 
 ### Subagents and Commands
 

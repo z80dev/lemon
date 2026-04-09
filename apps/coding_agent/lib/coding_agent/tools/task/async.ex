@@ -126,35 +126,43 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_finish_run(run_id, tool_result)
         emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
         maybe_record_budget_completion(run_id, tool_result)
-        Followup.maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
         TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
-        Followup.maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
         TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
-        Followup.maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
         TaskStore.finish(task_id, other)
         maybe_finish_run(run_id, other)
         emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, other)
-        Followup.maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
 
       other ->
         TaskStore.fail(task_id, other)
         maybe_fail_run(run_id, other)
         emit_task_terminal_event(task_id, run_id, {:error, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: other})
-        Followup.maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
+    end
+  end
+
+  defp maybe_send_async_followup(followup_context, task_id, run_id, outcome) do
+    if is_binary(task_id) and task_id != "" and TaskStore.auto_followup_suppressed?(task_id) do
+      :ok
+    else
+      Followup.maybe_send_async_followup(followup_context, task_id, run_id, outcome)
     end
   end
 
