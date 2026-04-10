@@ -6,7 +6,8 @@ defmodule CodingAgent.Tools.Task.Result do
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
 
-  @max_structured_join_output_bytes 4096
+  @max_structured_join_output_bytes 32_768
+  @max_total_join_output_bytes 65_536
 
   @spec do_poll(map()) :: AgentToolResult.t() | {:error, String.t()}
   def do_poll(params) do
@@ -22,6 +23,23 @@ defmodule CodingAgent.Tools.Task.Result do
       end
     else
       {:error, "task_id is required for action=poll"}
+    end
+  end
+
+  @spec do_get(map()) :: AgentToolResult.t() | {:error, String.t()}
+  def do_get(params) do
+    task_id = Map.get(params, "task_id")
+
+    if is_binary(task_id) do
+      case TaskStore.get(task_id) do
+        {:ok, record, events} ->
+          build_get_result(task_id, record, events)
+
+        {:error, :not_found} ->
+          {:error, "Unknown task_id: #{task_id}"}
+      end
+    else
+      {:error, "task_id is required for action=get"}
     end
   end
 
@@ -231,6 +249,74 @@ defmodule CodingAgent.Tools.Task.Result do
     end)
   end
 
+  defp build_get_result(task_id, record, events) do
+    status = Map.get(record, :status, :unknown)
+    result = Map.get(record, :result)
+    error = Map.get(record, :error)
+    description = Map.get(record, :description)
+    engine = Map.get(record, :engine)
+
+    {content, details} =
+      case status do
+        :completed ->
+          case result do
+            %AgentToolResult{} = r ->
+              {r.content,
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 description: description,
+                 result: r,
+                 events: events
+               }}
+
+            other ->
+              text = safe_get_result_text(other)
+
+              {[%TextContent{text: text}],
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 description: description,
+                 result: inspect(other, limit: 500),
+                 events: events
+               }}
+          end
+
+        :error ->
+          {[%TextContent{text: "Task error: #{inspect(error)}"}],
+           %{
+             task_id: task_id,
+             status: "error",
+             description: description,
+             error: error,
+             events: events
+           }}
+
+        other_status ->
+          text = latest_event_text(events) || "Task status: #{other_status}"
+
+          {[%TextContent{text: text}],
+           %{
+             task_id: task_id,
+             status: to_string(other_status),
+             description: description,
+             events: events
+           }}
+      end
+
+    details =
+      case Map.get(record, :run_id) do
+        nil -> details
+        run_id -> Map.put(details, :run_id, run_id)
+      end
+
+    details =
+      if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
+
+    %AgentToolResult{content: content, details: details}
+  end
+
   defp latest_event_current_action(events) do
     events
     |> Enum.reverse()
@@ -377,7 +463,13 @@ defmodule CodingAgent.Tools.Task.Result do
       |> Enum.map(&join_structured_entry/1)
       |> Jason.encode!()
 
-    "\nTASK_RESULTS_JSON: " <> payload
+    json_text = "\nTASK_RESULTS_JSON: " <> payload
+
+    if byte_size(json_text) > @max_total_join_output_bytes do
+      "\nTASK_RESULTS_JSON: " <> binary_part(json_text, 0, @max_total_join_output_bytes) <> "..."
+    else
+      json_text
+    end
   rescue
     _ -> ""
   end
@@ -446,13 +538,13 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp truncate_join_preview(text) when is_binary(text) do
-    text = String.trim(text)
-    max_len = 240
+    safe_text = safe_to_string(text)
+    max_len = 1000
 
     cond do
-      text == "" -> "(empty)"
-      String.length(text) > max_len -> String.slice(text, 0, max_len) <> "..."
-      true -> text
+      safe_text == "" -> "(empty)"
+      String.length(safe_text) > max_len -> String.slice(safe_text, 0, max_len) <> "..."
+      true -> safe_text
     end
   end
 
@@ -475,6 +567,8 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp truncate_structured_join_output(text) when is_binary(text) do
+    text = safe_to_string(text)
+
     cond do
       text == "" ->
         ""
@@ -486,4 +580,26 @@ defmodule CodingAgent.Tools.Task.Result do
         binary_part(text, 0, @max_structured_join_output_bytes) <> "..."
     end
   end
+
+  # Safely converts binary to UTF-8 string, handling non-UTF8 data.
+  # Returns "" on failure so downstream String functions never raise.
+  defp safe_to_string(binary) when is_binary(binary) do
+    String.trim(binary)
+  rescue
+    ArgumentError -> inspect(binary, limit: 200)
+  end
+
+  defp safe_to_string(other), do: inspect(other, limit: 200)
+
+  # Extract text content from a task result for action=get.
+  # Handles binary, AgentToolResult, maps with answer keys, and anything else.
+  defp safe_get_result_text(result) when is_binary(result), do: safe_to_string(result)
+
+  defp safe_get_result_text(%AgentToolResult{content: content}) do
+    extract_text(content) || ""
+  end
+
+  defp safe_get_result_text(%{answer: answer}) when is_binary(answer), do: safe_to_string(answer)
+  defp safe_get_result_text(%{"answer" => answer}) when is_binary(answer), do: safe_to_string(answer)
+  defp safe_get_result_text(other), do: inspect(other, limit: 500)
 end

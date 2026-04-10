@@ -65,6 +65,8 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   def maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
 
+  @followup_max_answer_chars 2000
+
   @spec task_auto_followup_text(map(), String.t() | nil, String.t() | nil, term()) :: String.t()
   def task_auto_followup_text(followup_context, task_id, run_id, outcome) do
     description =
@@ -114,7 +116,14 @@ defmodule CodingAgent.Tools.Task.Followup do
         if trimmed == "" do
           "#{base} completed.#{duration_str}"
         else
-          "#{base} completed.#{duration_str}\n\n#{answer}"
+          truncated_answer = truncate_followup_answer(trimmed)
+
+          if truncated_answer != trimmed do
+            "#{base} completed.#{duration_str}\n\n#{truncated_answer}\n\n" <>
+              "(Output truncated. Use task with action=get and task_id=\"#{task_id}\" to retrieve the full result.)"
+          else
+            "#{base} completed.#{duration_str}\n\n#{answer}"
+          end
         end
 
       %{ok: false, error: error, answer: answer} ->
@@ -123,10 +132,34 @@ defmodule CodingAgent.Tools.Task.Followup do
         if trimmed == "" do
           "#{base} failed: #{format_error(error)}#{duration_str}"
         else
-          "#{base} failed: #{format_error(error)}#{duration_str}\n\nPartial output:\n#{answer}"
+          truncated_answer = truncate_followup_answer(trimmed)
+
+          if truncated_answer != trimmed do
+            "#{base} failed: #{format_error(error)}#{duration_str}\n\nPartial output (truncated):\n#{truncated_answer}\n\n" <>
+              "(Use task with action=get and task_id=\"#{task_id}\" to retrieve the full result.)"
+          else
+            "#{base} failed: #{format_error(error)}#{duration_str}\n\nPartial output:\n#{answer}"
+          end
         end
     end
   end
+
+  defp truncate_followup_answer(text) when is_binary(text) do
+    trimmed =
+      try do
+        String.trim(text)
+      rescue
+        ArgumentError -> inspect(text, limit: 200)
+      end
+
+    if String.length(trimmed) > @followup_max_answer_chars do
+      String.slice(trimmed, 0, @followup_max_answer_chars) <> "..."
+    else
+      trimmed
+    end
+  end
+
+  defp truncate_followup_answer(_), do: ""
 
   defp build_engine_label(nil, _model), do: ""
   defp build_engine_label("internal", _model), do: ""

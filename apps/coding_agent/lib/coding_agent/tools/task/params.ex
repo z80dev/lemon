@@ -203,14 +203,15 @@ defmodule CodingAgent.Tools.Task.Params do
         "1. Launch with async=true -> get task_id immediately\n" <>
         "2. Continue the user conversation without waiting\n" <>
         "3. Poll with action=poll and task_id to check status, OR\n" <>
-        "4. Use action=join with multiple task_ids to wait for completion\n\n" <>
+        "4. Use action=join with multiple task_ids to wait for completion\n" <>
+        "5. Use action=get with task_id to retrieve the full stored result of a completed task\n\n" <>
         "**Coordination rule:**\n" <>
         "- If you launch subtasks and still need one final answer in this same turn, keep the task_ids and call action=join before you respond.\n" <>
         "- Do not rely on auto_followup alone for same-turn aggregation.\n\n" <>
         "**Parameters:**\n" <>
-        "- action: run (default), poll, or join\n" <>
+        "- action: run (default), poll, join, or get\n" <>
         "- async: true (default, recommended) = non-blocking, false = wait for completion\n" <>
-        "- task_id: required when action=poll\n" <>
+        "- task_id: required when action=poll or action=get\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
         "- engine: Which executor runs the task\n" <>

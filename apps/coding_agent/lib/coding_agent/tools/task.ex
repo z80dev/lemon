@@ -27,8 +27,8 @@ defmodule CodingAgent.Tools.Task do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "description" => "Action to perform: run (default), poll, or join",
-            "enum" => ["run", "poll", "join"]
+            "description" => "Action to perform: run (default), poll, join, or get",
+            "enum" => ["run", "poll", "join", "get"]
           },
           "description" => %{
             "type" => "string",
@@ -40,7 +40,7 @@ defmodule CodingAgent.Tools.Task do
           },
           "task_id" => %{
             "type" => "string",
-            "description" => "Task id to poll (when action=poll)"
+            "description" => "Task id to poll (when action=poll) or get (when action=get)"
           },
           "task_ids" => %{
             "type" => "array",
@@ -135,6 +135,7 @@ defmodule CodingAgent.Tools.Task do
       case Params.normalize_action(Map.get(params, "action")) do
         "poll" -> Result.do_poll(params)
         "join" -> Result.do_join(params)
+        "get" -> Result.do_get(params)
         _ -> do_execute(tool_call_id, params, signal, on_update, cwd, opts)
       end
     end
