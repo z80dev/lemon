@@ -176,43 +176,36 @@ defmodule CodingAgent.Tools.Task.Result do
 
   defp build_poll_result(task_id, record, events) do
     status = Map.get(record, :status, :unknown)
+    current_action = latest_event_current_action(events)
 
-    preview =
+    {content_text, preview} =
       case status do
         :completed ->
-          Map.get(record, :result)
-          |> visible_output_text()
-          |> truncate_poll_preview()
+          preview =
+            Map.get(record, :result)
+            |> visible_output_text()
+            |> truncate_poll_preview()
+
+          {poll_content_text(status, preview, Map.get(record, :error)), preview}
 
         :error ->
-          ""
+          {poll_content_text(status, nil, Map.get(record, :error)), nil}
 
         _ ->
-          events
-          |> latest_event_visible_text()
-          |> truncate_poll_preview()
+          {nonterminal_content_text(status, events), nil}
       end
 
     details =
       record
       |> base_task_details(task_id)
+      |> maybe_put_current_action(current_action)
       |> maybe_put_preview(preview)
       |> maybe_put_error(Map.get(record, :error))
 
     %AgentToolResult{
-      content: [%TextContent{text: poll_content_text(status, preview, Map.get(record, :error))}],
+      content: [%TextContent{text: content_text}],
       details: details
     }
-  end
-
-  defp latest_event_visible_text(events) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %AgentToolResult{content: content} -> visible_content_text(content)
-      %{content: content} -> visible_content_text(content)
-      _ -> nil
-    end)
   end
 
   defp build_get_result(task_id, record, events) do
@@ -232,16 +225,13 @@ defmodule CodingAgent.Tools.Task.Result do
           "Task failed: #{format_error(error)}"
 
         other_status ->
-          case latest_event_visible_text(events) do
-            nil -> "Task status: #{other_status}"
-            "" -> "Task status: #{other_status}"
-            text -> text
-          end
+          nonterminal_content_text(other_status, events)
       end
 
     details =
       record
       |> base_task_details(task_id)
+      |> maybe_put_current_action(latest_event_current_action(events))
       |> maybe_put_error(error)
 
     %AgentToolResult{content: [%TextContent{text: content_text}], details: details}
@@ -469,6 +459,9 @@ defmodule CodingAgent.Tools.Task.Result do
   defp maybe_put_preview(details, ""), do: details
   defp maybe_put_preview(details, preview), do: Map.put(details, :preview, preview)
 
+  defp maybe_put_current_action(details, nil), do: details
+  defp maybe_put_current_action(details, current_action), do: Map.put(details, :current_action, current_action)
+
   defp maybe_put_error(details, nil), do: details
   defp maybe_put_error(details, error), do: Map.put(details, :error, format_error(error))
 
@@ -483,6 +476,47 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp poll_content_text(status, preview, _error), do: "Status: #{status}\n#{preview}"
+
+  defp nonterminal_content_text(status, events) do
+    action = latest_event_current_action(events)
+
+    case action_kind(action) do
+      nil -> "Task status: #{status}"
+      kind -> "Task status: #{status}\nCurrent action: #{kind}"
+    end
+  end
+
+  defp latest_event_current_action(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{details: details} when is_map(details) ->
+        normalize_current_action(details[:current_action] || details["current_action"])
+
+      %{details: details} when is_map(details) ->
+        normalize_current_action(details[:current_action] || details["current_action"])
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp normalize_current_action(%{title: title, kind: kind, phase: phase})
+       when is_binary(title) and title != "" and is_binary(kind) and kind != "" and
+              is_binary(phase) and phase != "" do
+    %{title: title, kind: kind, phase: phase}
+  end
+
+  defp normalize_current_action(%{"title" => title, "kind" => kind, "phase" => phase})
+       when is_binary(title) and title != "" and is_binary(kind) and kind != "" and
+              is_binary(phase) and phase != "" do
+    %{title: title, kind: kind, phase: phase}
+  end
+
+  defp normalize_current_action(_), do: nil
+
+  defp action_kind(%{kind: kind}) when is_binary(kind) and kind != "", do: kind
+  defp action_kind(_), do: nil
 
   defp truncate_poll_preview(nil), do: nil
 

@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   alias CodingAgent.AsyncFollowups
   alias Elixir.CodingAgent.Tools.Task
+  alias Elixir.CodingAgent.Tools.Task.Followup
   alias Elixir.CodingAgent.TaskStore
   alias Elixir.CodingAgent.RunGraph
   alias CodingAgent.Messages
@@ -115,9 +116,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert is_binary(result.details.task_id)
       assert is_binary(result.details.run_id)
       assert [%Ai.Types.TextContent{text: text}] = result.content
-      assert text =~ "Task queued: Default async task"
-      assert text =~ "action=join"
-      assert text =~ result.details.task_id
+      assert text == "Task queued: #{result.details.task_id}"
 
       assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
       assert record.description == "Default async task"
@@ -335,8 +334,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :followup
-      assert message.content =~ "Idle followup task"
-      assert message.content =~ "idle output"
+      assert message.content == "idle output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -372,8 +370,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :steer
-      assert message.content =~ "Backlog routing task"
-      assert message.content =~ "override output"
+      assert message.content == "override output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -409,8 +406,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :followup
-      assert message.content =~ "Idle backlog task"
-      assert message.content =~ "idle backlog output"
+      assert message.content == "idle backlog output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -761,15 +757,19 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       refute Map.has_key?(poll_result.details, :action_detail)
     end
 
-    test "poll preview strips stored thinking text" do
+    test "poll for running tasks returns status text and structured current_action" do
       task_id = TaskStore.new_task(%{description: "Poll preview task", engine: "internal"})
+      TaskStore.mark_running(task_id)
 
       TaskStore.append_event(task_id, %AgentCore.Types.AgentToolResult{
         content: [
           %Ai.Types.TextContent{text: "visible preview"},
           %Ai.Types.TextContent{text: "\n[thinking] hidden preview"}
         ],
-        details: %{status: "running"}
+        details: %{
+          status: "running",
+          current_action: %{title: "visible preview", kind: "tool", phase: "updated"}
+        }
       })
 
       result =
@@ -784,8 +784,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert %AgentCore.Types.AgentToolResult{} = result
       assert [%Ai.Types.TextContent{text: text}] = result.content
-      assert text =~ "visible preview"
+      assert text == "Task status: running\nCurrent action: tool"
+      refute text =~ "visible preview"
       refute text =~ "[thinking]"
+      assert result.details.current_action.title == "visible preview"
+      assert result.details.current_action.kind == "tool"
     end
   end
 
@@ -1378,6 +1381,44 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   # ============================================================================
 
   describe "task_auto_followup_text formatting" do
+    test "sending a followup also terminalizes the task and run" do
+      run_id = RunGraph.new_run(%{type: :task, description: "Backfill terminal state"})
+      task_id = TaskStore.new_task(%{description: "Backfill terminal state", run_id: run_id})
+      assert :ok = RunGraph.mark_running(run_id)
+      assert :ok = TaskStore.mark_running(task_id)
+
+      outcome =
+        {:ok,
+         %AgentCore.Types.AgentToolResult{
+           content: [%Ai.Types.TextContent{text: "Recovered final answer"}],
+           details: %{status: "completed"}
+         }}
+
+      assert :ok =
+               Followup.maybe_send_async_followup(
+                 %{
+                   auto_followup: true,
+                   queue_mode: :followup,
+                   session_module: __MODULE__.TaskAsyncSessionSpy,
+                   session_pid: self(),
+                   session_key: "agent:main:main",
+                   agent_id: "main"
+                 },
+                 task_id,
+                 run_id,
+                 outcome
+               )
+
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content == "Recovered final answer"
+
+      assert {:ok, %{status: :completed, result: task_result}, _events} = TaskStore.get(task_id)
+      assert [%Ai.Types.TextContent{text: "Recovered final answer"}] = task_result.content
+
+      assert {:ok, %{status: :completed, result: run_result}} = RunGraph.get(run_id)
+      assert [%Ai.Types.TextContent{text: "Recovered final answer"}] = run_result.content
+    end
+
     test "formats successful completion with answer" do
       result =
         Task.execute(

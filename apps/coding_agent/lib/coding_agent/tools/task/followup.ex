@@ -5,6 +5,8 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   alias AgentCore.Types.AgentToolResult
   alias CodingAgent.AsyncFollowups
+  alias CodingAgent.RunGraph
+  alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.{RunRequest, SessionKey}
 
@@ -20,6 +22,7 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   def maybe_send_async_followup(followup_context, task_id, run_id, outcome)
       when is_map(followup_context) do
+    ensure_terminal_state(task_id, run_id, outcome)
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
     queue_mode = Map.get(followup_context, :queue_mode, :followup)
     session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
@@ -101,6 +104,84 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   defp empty_followup_fallback("", fallback), do: fallback
   defp empty_followup_fallback(text, _fallback), do: text
+
+  defp ensure_terminal_state(task_id, run_id, outcome) do
+    case outcome do
+      {:ok, %AgentToolResult{} = result} ->
+        maybe_finish_task(task_id, result)
+        maybe_finish_run(run_id, result)
+
+      {:ok, {:error, reason}} ->
+        maybe_fail_task(task_id, reason)
+        maybe_fail_run(run_id, reason)
+
+      {:error, reason} ->
+        maybe_fail_task(task_id, reason)
+        maybe_fail_run(run_id, reason)
+
+      {:ok, other} ->
+        maybe_finish_task(task_id, other)
+        maybe_finish_run(run_id, other)
+
+      other ->
+        maybe_fail_task(task_id, other)
+        maybe_fail_run(run_id, other)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_finish_task(task_id, result) when is_binary(task_id) and task_id != "" do
+    case TaskStore.get(task_id) do
+      {:ok, %{status: status}, _events} when status in [:queued, :running] ->
+        TaskStore.finish(task_id, result)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_finish_task(_task_id, _result), do: :ok
+
+  defp maybe_fail_task(task_id, reason) when is_binary(task_id) and task_id != "" do
+    case TaskStore.get(task_id) do
+      {:ok, %{status: status}, _events} when status in [:queued, :running] ->
+        TaskStore.fail(task_id, reason)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_fail_task(_task_id, _reason), do: :ok
+
+  defp maybe_finish_run(run_id, result) when is_binary(run_id) and run_id != "" do
+    case RunGraph.get(run_id) do
+      {:ok, %{status: status}} when status in [:queued, :running] ->
+        _ = RunGraph.finish(run_id, result)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_finish_run(_run_id, _result), do: :ok
+
+  defp maybe_fail_run(run_id, reason) when is_binary(run_id) and run_id != "" do
+    case RunGraph.get(run_id) do
+      {:ok, %{status: status}} when status in [:queued, :running] ->
+        _ = RunGraph.fail(run_id, reason)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_fail_run(_run_id, _reason), do: :ok
 
   defp send_async_followup_to_live_session(
          followup_context,
