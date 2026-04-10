@@ -270,10 +270,9 @@ defmodule CodingAgent.Tools.AgentTest do
     [llm_message] = Messages.to_llm([message])
     assert %Ai.Types.UserMessage{} = llm_message
     assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
-    assert llm_message.content =~ "Source: agent (ID: #{result.details.task_id})"
-    assert llm_message.content =~ "Run: #{result.details.run_id}"
-    assert llm_message.content =~ "Delivery: followup"
     assert llm_message.content =~ message.content
+    refute llm_message.content =~ result.details.task_id
+    refute llm_message.content =~ result.details.run_id
 
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end

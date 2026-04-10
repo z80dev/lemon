@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   alias AgentCore.Types.AgentToolResult
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.Result
   alias LemonCore.{RunRequest, SessionKey}
 
   @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
@@ -68,79 +68,17 @@ defmodule CodingAgent.Tools.Task.Followup do
   @followup_max_answer_chars 2000
 
   @spec task_auto_followup_text(map(), String.t() | nil, String.t() | nil, term()) :: String.t()
-  def task_auto_followup_text(followup_context, task_id, run_id, outcome) do
-    description =
-      followup_context
-      |> Map.get(:description)
-      |> Params.normalize_optional_string()
-
-    summary =
-      if is_binary(description) and description != "" do
-        description
-      else
-        "background task"
-      end
-
-    engine = Map.get(followup_context, :engine)
-    model = Map.get(followup_context, :model)
-    role = Map.get(followup_context, :role)
-
-    base = "[task #{task_id}] #{summary}"
-
-    engine_str = build_engine_label(engine, model)
-    role_str = if is_binary(role) and role != "", do: " | role: #{role}", else: ""
-
-    paren_content =
-      if engine_str != "" or role_str != "" do
-        inner = String.trim(String.trim(engine_str) <> " " <> String.trim(role_str))
-        " (#{inner})"
-      else
-        ""
-      end
-
-    base = base <> paren_content
-
-    base =
-      if is_binary(run_id) and run_id != "" do
-        base <> " run=#{short_id(run_id)}"
-      else
-        base
-      end
-
-    duration_str = maybe_task_duration(followup_context, task_id)
-
+  def task_auto_followup_text(_followup_context, _task_id, _run_id, outcome) do
     case normalize_followup_outcome(outcome) do
       %{ok: true, answer: answer} when is_binary(answer) ->
-        trimmed = String.trim(answer)
-
-        if trimmed == "" do
-          "#{base} completed.#{duration_str}"
-        else
-          truncated_answer = truncate_followup_answer(trimmed)
-
-          if truncated_answer != trimmed do
-            "#{base} completed.#{duration_str}\n\n#{truncated_answer}\n\n" <>
-              "(Output truncated. Use task with action=get and task_id=\"#{task_id}\" to retrieve the full result.)"
-          else
-            "#{base} completed.#{duration_str}\n\n#{answer}"
-          end
-        end
+        answer
+        |> truncate_followup_answer()
+        |> empty_followup_fallback("Task completed.")
 
       %{ok: false, error: error, answer: answer} ->
-        trimmed = if is_binary(answer), do: String.trim(answer), else: ""
-
-        if trimmed == "" do
-          "#{base} failed: #{format_error(error)}#{duration_str}"
-        else
-          truncated_answer = truncate_followup_answer(trimmed)
-
-          if truncated_answer != trimmed do
-            "#{base} failed: #{format_error(error)}#{duration_str}\n\nPartial output (truncated):\n#{truncated_answer}\n\n" <>
-              "(Use task with action=get and task_id=\"#{task_id}\" to retrieve the full result.)"
-          else
-            "#{base} failed: #{format_error(error)}#{duration_str}\n\nPartial output:\n#{answer}"
-          end
-        end
+        answer
+        |> truncate_followup_answer()
+        |> empty_followup_fallback("Task failed: #{format_error(error)}")
     end
   end
 
@@ -161,41 +99,8 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   defp truncate_followup_answer(_), do: ""
 
-  defp build_engine_label(nil, _model), do: ""
-  defp build_engine_label("internal", _model), do: ""
-
-  defp build_engine_label(engine, model) when is_binary(engine) do
-    if is_binary(model) and model != "", do: "#{engine}/#{model}", else: engine
-  end
-
-  defp maybe_task_duration(_followup_context, task_id) do
-    case CodingAgent.TaskStore.get(task_id) do
-      {:ok, record, _events} ->
-        started_at = Map.get(record, :started_at)
-        completed_at = Map.get(record, :completed_at)
-
-        cond do
-          is_integer(started_at) and is_integer(completed_at) ->
-            ms = (completed_at - started_at) * 1000
-            " #{format_duration(ms)}"
-
-          true ->
-            ""
-        end
-
-      _ ->
-        ""
-    end
-  rescue
-    _ -> ""
-  end
-
-  defp format_duration(ms) when ms < 1000, do: "#{ms}ms"
-  defp format_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
-  defp format_duration(ms), do: "#{Float.round(ms / 60_000, 1)}m"
-
-  defp short_id(id) when byte_size(id) > 8, do: String.slice(id, 0, 8)
-  defp short_id(id), do: id
+  defp empty_followup_fallback("", fallback), do: fallback
+  defp empty_followup_fallback(text, _fallback), do: text
 
   defp send_async_followup_to_live_session(
          followup_context,
@@ -282,7 +187,7 @@ defmodule CodingAgent.Tools.Task.Followup do
   end
 
   defp normalize_followup_outcome({:ok, %AgentToolResult{} = result}) do
-    answer = AgentCore.get_text(result)
+    answer = Result.visible_output_text(result)
     details = result.details || %{}
     status = details[:status] || details["status"]
     error = details[:error] || details["error"]
@@ -313,11 +218,11 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp normalize_followup_answer(answer) when is_binary(answer), do: answer
 
   defp normalize_followup_answer(%AgentToolResult{} = result),
-    do: AgentCore.get_text(result) || ""
+    do: Result.visible_output_text(result)
 
   defp normalize_followup_answer(%{answer: answer}) when is_binary(answer), do: answer
   defp normalize_followup_answer(%{"answer" => answer}) when is_binary(answer), do: answer
-  defp normalize_followup_answer(other), do: inspect(other)
+  defp normalize_followup_answer(other), do: Result.visible_output_text(other)
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)

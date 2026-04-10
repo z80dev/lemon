@@ -4,7 +4,6 @@ defmodule CodingAgent.Tools.Task.Runner do
   require Logger
 
   alias AgentCore.AbortSignal
-  alias Ai.Types.Context
 
   alias AgentCore.CliRunners.{
     ClaudeSubagent,
@@ -16,14 +15,10 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.TextContent
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Coordinator
-  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
-  alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
-  alias CodingAgent.Tools.Task.FastPath
   alias CodingAgent.Tools.Task.Result
 
   @await_poll_ms 200
@@ -130,155 +125,6 @@ defmodule CodingAgent.Tools.Task.Runner do
 
         tool_result
       end
-    end
-  end
-
-  @spec execute_via_direct_provider(
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          (AgentToolResult.t() -> :ok) | nil,
-          reference() | nil,
-          keyword()
-        ) :: AgentToolResult.t() | {:error, term()}
-  def execute_via_direct_provider(
-        engine,
-        prompt,
-        cwd,
-        description,
-        role_id,
-        model,
-        on_update,
-        signal,
-        opts \\ []
-      ) do
-    role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
-    provider_model = FastPath.direct_model_spec(%{engine: engine, model: model})
-    system_prompt = role_prompt || FastPath.default_system_prompt(engine)
-    override = Keyword.get(opts, :direct_provider_override)
-
-    Logger.info(
-      "Task tool direct provider start engine=#{engine} description=#{inspect(description)} model=#{inspect(provider_model)} cwd=#{inspect(cwd)}"
-    )
-
-    maybe_emit_cli_update(
-      on_update,
-      description,
-      engine,
-      "started",
-      "Calling direct #{engine} provider"
-    )
-
-    result =
-      cond do
-        AbortSignal.aborted?(signal) ->
-          {:error, "Task aborted"}
-
-        is_function(override, 1) ->
-          override.(%{
-            engine: engine,
-            prompt: prompt,
-            cwd: cwd,
-            description: description,
-            role_id: role_id,
-            role_prompt: role_prompt,
-            system_prompt: system_prompt,
-            model: provider_model
-          })
-
-        true ->
-          run_direct_provider(engine, prompt, cwd, description, system_prompt, provider_model)
-      end
-
-    case result do
-      %AgentToolResult{} = tool_result ->
-        Logger.info(
-          "Task tool direct provider completed engine=#{engine} description=#{inspect(description)} answer_bytes=#{byte_size(Result.extract_text(tool_result.content) || "")}"
-        )
-
-        maybe_emit_cli_update(
-          on_update,
-          description,
-          engine,
-          "completed",
-          "Completed: direct #{engine} provider",
-          %{execution_path: "direct_provider"}
-        )
-
-        tool_result
-
-      {:error, reason} ->
-        Logger.warning(
-          "Task tool direct provider error engine=#{engine} description=#{inspect(description)} error=#{inspect(reason)}"
-        )
-
-        maybe_emit_cli_update(on_update, description, engine, "error", format_cli_error(reason))
-        {:error, %{message: format_cli_error(reason), execution_path: "direct_provider"}}
-    end
-    |> then(&maybe_apply_abort_result(&1, signal))
-  end
-
-  @spec execute_via_internal_bash_fast_path(
-          String.t() | nil,
-          String.t(),
-          String.t(),
-          String.t(),
-          (AgentToolResult.t() -> :ok) | nil,
-          reference() | nil
-        ) :: AgentToolResult.t() | {:error, term()}
-  def execute_via_internal_bash_fast_path(command, prompt, cwd, description, on_update, signal) do
-    if is_binary(command) and command != "" do
-      maybe_emit_action_update(
-        on_update,
-        description,
-        "internal",
-        command,
-        :command,
-        "started",
-        %{command: command, execution_path: "internal_bash_fast_path"}
-      )
-
-      case BashExecutor.execute(command, cwd, signal: signal, timeout: :timer.minutes(30)) do
-        {:ok, result} ->
-          maybe_emit_action_update(
-            on_update,
-            description,
-            "internal",
-            "Completed: ``",
-            :command,
-            "completed",
-            %{command: command, result: result, execution_path: "internal_bash_fast_path"}
-          )
-
-          output =
-            result.output
-            |> to_string()
-            |> String.trim()
-
-          with :ok <- verify_internal_bash_fast_path_output(prompt, output, result.exit_code) do
-            %AgentToolResult{
-              content: [%TextContent{text: output}],
-              details: %{
-                description: description,
-                status: "completed",
-                engine: "internal",
-                execution_path: "internal_bash_fast_path",
-                exit_code: result.exit_code
-              }
-            }
-          else
-            {:error, reason} ->
-              {:error, reason}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, "No bash command found for internal bash fast path"}
     end
   end
 
@@ -514,16 +360,6 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp maybe_apply_abort_result({:error, _} = error, _signal), do: error
-
-  defp maybe_apply_abort_result(%AgentToolResult{} = result, signal) do
-    if AbortSignal.aborted?(signal) do
-      {:error, %{message: "Task aborted", answer: Result.extract_text(result.content) || ""}}
-    else
-      result
-    end
-  end
-
   defp extract_action_detail_text(detail) when is_map(detail) do
     cond do
       is_binary(Map.get(detail, :message)) -> Map.get(detail, :message)
@@ -561,49 +397,6 @@ defmodule CodingAgent.Tools.Task.Runner do
         end
     end
   end
-
-  defp run_direct_provider(_engine, _prompt, _cwd, _description, _system_prompt, nil) do
-    {:error, "No direct-provider model configured"}
-  end
-
-  defp run_direct_provider(engine, prompt, cwd, description, system_prompt, model_spec) do
-    settings = SettingsManager.load(cwd)
-    model = ModelResolver.resolve_session_model(model_spec, settings)
-    resolved_api_key = ModelResolver.build_get_api_key(settings).(model.provider)
-
-    stream_opts =
-      model
-      |> ModelResolver.build_stream_options(settings, nil, cwd)
-      |> maybe_put_api_key(resolved_api_key)
-
-    context =
-      Ai.new_context(system_prompt: system_prompt)
-      |> Context.add_user_message(prompt)
-
-    case Ai.complete(model, context, stream_opts) do
-      {:ok, message} ->
-        %AgentToolResult{
-          content: [%TextContent{text: Ai.get_text(message)}],
-          details: %{
-            description: description,
-            status: "completed",
-            engine: engine,
-            model: model.id,
-            provider: model.provider,
-            execution_path: "direct_provider"
-          }
-        }
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp maybe_put_api_key(stream_opts, api_key) when is_binary(api_key) and api_key != "" do
-    %{stream_opts | api_key: api_key}
-  end
-
-  defp maybe_put_api_key(stream_opts, _api_key), do: stream_opts
 
   defp await_result(
          session,
@@ -896,33 +689,6 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp task_session_timeout_error(timeout_ms) do
     "Task session timed out after #{timeout_ms}ms waiting for completion"
-  end
-
-  defp verify_internal_bash_fast_path_output(_prompt, _output, exit_code) when exit_code != 0 do
-    {:error, "Bash fast-path command exited with code #{exit_code}"}
-  end
-
-  defp verify_internal_bash_fast_path_output(prompt, output, 0) do
-    cond do
-      String.contains?(prompt, "return the absolute path only") and
-          not String.starts_with?(output, "/") ->
-        {:error, "Bash fast-path output was not an absolute path"}
-
-      String.contains?(prompt, "return the number only") and not Regex.match?(~r/^\d+$/, output) ->
-        {:error, "Bash fast-path output was not a number"}
-
-      String.contains?(prompt, "return exactly `yes` or `no`") and output not in ["yes", "no"] ->
-        {:error, "Bash fast-path output was not yes/no"}
-
-      true ->
-        case Regex.run(~r/return exactly `([^`]+)`/i, prompt, capture: :all_but_first) do
-          [expected] when output != expected ->
-            {:error, "Bash fast-path output did not match the expected value"}
-
-          _ ->
-            :ok
-        end
-    end
   end
 
   defp maybe_timeout_fallback_payload(session, last_text, last_thinking, last_tool_text) do

@@ -154,8 +154,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
-      assert followup.prompt =~ "Idle steer task"
       assert followup.prompt =~ "idle steer output"
+      refute followup.prompt =~ "Idle steer task"
 
       assert followup.meta["async_followups"] == [
                %{
@@ -199,9 +199,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.custom_type == "async_followup"
-      assert message.content =~ "[task #{result.details.task_id}]"
-      assert message.content =~ "Live followup task"
-      assert message.content =~ "task output"
+      assert message.content == "task output"
       assert message.details.source == :task
       assert message.details.task_id == result.details.task_id
       assert message.details.run_id == result.details.run_id
@@ -210,10 +208,9 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       [llm_message] = Messages.to_llm([message])
       assert %Ai.Types.UserMessage{} = llm_message
       assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
-      assert llm_message.content =~ "Source: task (ID: #{result.details.task_id})"
-      assert llm_message.content =~ "Run: #{result.details.run_id}"
-      assert llm_message.content =~ "Delivery: followup"
       assert llm_message.content =~ message.content
+      refute llm_message.content =~ result.details.task_id
+      refute llm_message.content =~ result.details.run_id
 
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
@@ -293,8 +290,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.session_key == "agent:main:main"
       assert followup.agent_id == "main"
       assert followup.cwd == parent_cwd
-      assert followup.prompt =~ "Router followup task"
       assert followup.prompt =~ "router output"
+      refute followup.prompt =~ "Router followup task"
 
       assert followup.meta["async_followups"] == [
                %{
@@ -494,8 +491,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = result
       refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 1}, 1_000
-      assert followup.prompt =~ "Collect routing task"
       assert followup.prompt =~ "collect output"
+      refute followup.prompt =~ "Collect routing task"
 
       assert followup.meta["async_followups"] == [
                %{
@@ -758,6 +755,73 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = poll_result
       assert poll_result.details.status in ["queued", "running", "completed"]
       assert poll_result.details.task_id == task_id
+      refute Map.has_key?(poll_result.details, :events)
+      refute Map.has_key?(poll_result.details, :result)
+      refute Map.has_key?(poll_result.details, :current_action)
+      refute Map.has_key?(poll_result.details, :action_detail)
+    end
+
+    test "poll preview strips stored thinking text" do
+      task_id = TaskStore.new_task(%{description: "Poll preview task", engine: "internal"})
+
+      TaskStore.append_event(task_id, %AgentCore.Types.AgentToolResult{
+        content: [
+          %Ai.Types.TextContent{text: "visible preview"},
+          %Ai.Types.TextContent{text: "\n[thinking] hidden preview"}
+        ],
+        details: %{status: "running"}
+      })
+
+      result =
+        Task.execute(
+          "call_poll_preview",
+          %{"action" => "poll", "task_id" => task_id},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert [%Ai.Types.TextContent{text: text}] = result.content
+      assert text =~ "visible preview"
+      refute text =~ "[thinking]"
+    end
+  end
+
+  describe "execute/6 - get action" do
+    test "get returns only final output text plus metadata" do
+      task_id =
+        TaskStore.new_task(%{description: "Get task", engine: "internal", run_id: "run_get"})
+
+      TaskStore.finish(
+        task_id,
+        %AgentCore.Types.AgentToolResult{
+          content: [
+            %Ai.Types.TextContent{text: "final answer"},
+            %Ai.Types.TextContent{text: "\n[thinking] hidden chain"}
+          ],
+          details: %{status: "completed"}
+        }
+      )
+
+      result =
+        Task.execute(
+          "call_get",
+          %{"action" => "get", "task_id" => task_id},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert [%Ai.Types.TextContent{text: "final answer"}] = result.content
+      assert result.details.task_id == task_id
+      assert result.details.run_id == "run_get"
+      assert result.details.engine == "internal"
+      refute Map.has_key?(result.details, :events)
+      refute Map.has_key?(result.details, :result)
     end
   end
 
@@ -1122,7 +1186,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %AgentCore.Types.AgentToolResult{} = join_result
       assert join_result.details.status == "completed"
       [content] = join_result.content
-      assert content.text =~ "Joined 1 task(s)."
+      assert content.text =~ "status: completed"
       assert content.text =~ "joined output"
 
       refute_receive {:session_async_followup, _message}, 300
@@ -1160,15 +1224,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert %AgentCore.Types.AgentToolResult{} = result
       [content] = result.content
-      assert content.text =~ "Joined 2 task(s)."
-      assert content.text =~ "TASK_RESULTS_JSON:"
-      assert content.text =~ ~s("description":"count apps")
-      assert content.text =~ ~s("status":"completed")
-      assert content.text =~ ~s("output":"dirs=18")
-      assert content.text =~ ~s("description":"check outbox")
-      assert content.text =~ ~s("output":"outbox=yes")
-      assert content.text =~ "- count apps: completed: dirs=18"
-      assert content.text =~ "- check outbox: completed: outbox=yes"
+      assert content.text =~ "description: count apps"
+      assert content.text =~ "status: completed"
+      assert content.text =~ "dirs=18"
+      assert content.text =~ "description: check outbox"
+      assert content.text =~ "outbox=yes"
+      refute content.text =~ "TASK_RESULTS_JSON:"
+      refute Map.has_key?(result.details, :runs)
+      assert Enum.all?(result.details.tasks, &(not Map.has_key?(&1, :result)))
     end
 
     test "join surfaces task errors in content text" do
@@ -1189,12 +1252,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert %AgentCore.Types.AgentToolResult{} = result
       [content] = result.content
-      assert content.text =~ "TASK_RESULTS_JSON:"
-      assert content.text =~ ~s("description":"check outbox")
-      assert content.text =~ ~s("status":"error")
-      assert content.text =~ ~s("error":"{:assistant_error, \\"HTTP 400\\"}")
-      assert content.text =~ "- check outbox: error:"
+      assert content.text =~ "description: check outbox"
+      assert content.text =~ "status: error"
+      assert content.text =~ "Task failed:"
       assert content.text =~ "HTTP 400"
+      refute content.text =~ "TASK_RESULTS_JSON:"
     end
   end
 
@@ -1343,15 +1405,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      task_id = result.details.task_id
-      run_id = result.details.run_id
+      _task_id = result.details.task_id
+      _run_id = result.details.run_id
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content =~ "[task #{task_id}]"
-      assert message.content =~ "Build widget"
-      assert message.content =~ "run="
-      assert message.content =~ "completed."
-      assert message.content =~ "Widget built successfully"
+      assert message.content == "Widget built successfully"
     end
 
     test "formats failed task with error" do
@@ -1378,13 +1436,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      task_id = result.details.task_id
+      _task_id = result.details.task_id
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content =~ "[task #{task_id}]"
-      assert message.content =~ "Broken task"
-      assert message.content =~ "failed:"
-      assert message.content =~ "connection refused"
+      assert message.content == "Task failed: connection refused"
     end
 
     test "formats completion with empty answer" do
@@ -1414,13 +1469,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      task_id = result.details.task_id
+      _task_id = result.details.task_id
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content =~ "[task #{task_id}]"
-      assert message.content =~ "completed."
-      # Should NOT contain trailing content after "completed."
-      refute message.content =~ "completed.\n\n\n"
+      assert message.content == "Task completed."
     end
 
     test "formats failure with partial output" do
@@ -1450,14 +1502,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      task_id = result.details.task_id
+      _task_id = result.details.task_id
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content =~ "[task #{task_id}]"
-      assert message.content =~ "failed:"
-      assert message.content =~ "timeout"
-      assert message.content =~ "Partial output:"
-      assert message.content =~ "Got halfway done"
+      assert message.content == "Got halfway done"
     end
   end
 

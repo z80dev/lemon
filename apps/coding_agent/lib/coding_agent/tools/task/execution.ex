@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.Session
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Async, FastPath, Followup, Runner, Workspace}
+  alias CodingAgent.Tools.Task.{Async, Followup, Runner}
 
   @spec run(
           String.t() | nil,
@@ -42,13 +42,14 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   defp build_execution_context(tool_call_id, validated, cwd, opts) do
-    description = Map.get(validated, :description)
-    prompt = Map.get(validated, :prompt)
-    role_id = Map.get(validated, :role_id)
-    engine = Map.get(validated, :engine)
-    async? = Map.get(validated, :async)
-    parent_session_key = Map.get(validated, :session_key) || Keyword.get(opts, :session_key)
-    parent_agent_id = Map.get(validated, :agent_id) || Keyword.get(opts, :agent_id)
+    description = validated.description
+    prompt = validated.prompt
+    role_id = validated.role_id
+    engine = validated.engine
+    async? = validated.async
+    effective_cwd = validated.cwd || cwd
+    parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
+    parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
     coordinator = Keyword.get(opts, :coordinator)
     parent_run_id = Keyword.get(opts, :parent_run_id)
     root_action_id = Keyword.get(opts, :root_action_id) || tool_call_id
@@ -70,15 +71,12 @@ defmodule CodingAgent.Tools.Task.Execution do
           parent_run_id: parent_run_id,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
-          engine: engine || "internal",
+          engine: validated.engine || "internal",
           role: role_id,
-          queue_mode: Map.get(validated, :queue_mode),
-          meta: Map.get(validated, :meta)
+          queue_mode: validated.queue_mode,
+          meta: validated.meta
         })
       end
-
-    effective_cwd =
-      Workspace.resolve_effective_cwd(validated, cwd, task_id: task_id, run_id: run_id)
 
     lifecycle_context = %{
       task_id: task_id,
@@ -89,10 +87,10 @@ defmodule CodingAgent.Tools.Task.Execution do
       root_action_id: root_action_id,
       surface: surface,
       description: description,
-      engine: engine || "internal",
+      engine: validated.engine || "internal",
       role: role_id,
-      queue_mode: Map.get(validated, :resolved_queue_mode),
-      meta: Map.get(validated, :meta)
+      queue_mode: validated.resolved_queue_mode,
+      meta: validated.meta
     }
 
     maybe_create_progress_binding(task_id, run_id, lifecycle_context)
@@ -107,16 +105,16 @@ defmodule CodingAgent.Tools.Task.Execution do
     end
 
     followup_context = %{
-      auto_followup: Map.get(validated, :auto_followup),
+      auto_followup: validated.auto_followup,
       description: description,
       cwd: cwd,
       parent_session_key: parent_session_key,
       parent_agent_id: parent_agent_id,
-      queue_mode: Map.get(validated, :resolved_queue_mode),
-      meta: Map.get(validated, :meta),
-      engine: engine || "internal",
+      queue_mode: validated.resolved_queue_mode,
+      meta: validated.meta,
+      engine: validated.engine || "internal",
       role: role_id,
-      model: Map.get(validated, :model),
+      model: validated.model,
       session_pid: Keyword.get(opts, :session_pid),
       session_module: Keyword.get(opts, :session_module, Session),
       run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
@@ -150,29 +148,6 @@ defmodule CodingAgent.Tools.Task.Execution do
         is_function(run_override, 2) ->
           run_override.(on_update_safe, signal)
 
-        FastPath.use_internal_bash_fast_path?(execution.validated) ->
-          Runner.execute_via_internal_bash_fast_path(
-            FastPath.extract_internal_bash_command(execution.validated),
-            execution.prompt,
-            execution.effective_cwd,
-            execution.description,
-            on_update_safe,
-            signal
-          )
-
-        FastPath.use_direct_provider?(execution.validated) ->
-          Runner.execute_via_direct_provider(
-            execution.engine,
-            execution.prompt,
-            execution.effective_cwd,
-            execution.description,
-            execution.role_id,
-            Map.get(execution.validated, :model),
-            on_update_safe,
-            signal,
-            direct_provider_override: Keyword.get(opts, :direct_provider_override)
-          )
-
         execution.engine in ["codex", "claude", "kimi", "opencode", "pi"] ->
           Runner.execute_via_cli_engine(
             execution.engine,
@@ -180,7 +155,7 @@ defmodule CodingAgent.Tools.Task.Execution do
             execution.effective_cwd,
             execution.description,
             execution.role_id,
-            Map.get(execution.validated, :model),
+            execution.validated.model,
             on_update_safe,
             signal
           )

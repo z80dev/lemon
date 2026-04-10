@@ -113,9 +113,6 @@ defmodule CodingAgent.Session.PersistenceTest do
 
     assert %Ai.Types.UserMessage{} = llm_message
     assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
-    assert llm_message.content =~ "Source: task (ID: task-123)"
-    assert llm_message.content =~ "Run: run-123"
-    assert llm_message.content =~ "Delivery: steer_backlog"
     assert llm_message.content =~ "task completed"
   end
 
@@ -189,9 +186,6 @@ defmodule CodingAgent.Session.PersistenceTest do
           false
       end)
 
-    assert llm_followup.content =~ "Source: task (ID: task-123)"
-    assert llm_followup.content =~ "Run: run-123"
-    assert llm_followup.content =~ "Delivery: router"
     assert llm_followup.content =~ "[task task-123] delegated work completed"
   end
 

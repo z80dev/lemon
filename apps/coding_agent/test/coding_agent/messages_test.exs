@@ -320,10 +320,10 @@ defmodule CodingAgent.MessagesTest do
       assert %Ai.Types.UserMessage{} = result
       assert result.timestamp == 123
       assert result.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
-      assert result.content =~ "Source: task (ID: task-123)"
-      assert result.content =~ "Run: run-123"
-      assert result.content =~ "Delivery: steer_backlog"
       assert_async_followup_envelope(result.content, original_content)
+      refute result.content =~ "task-123"
+      refute result.content =~ "run-123"
+      refute result.content =~ "steer_backlog"
     end
 
     test "wraps async followup custom messages with fallback values for missing metadata" do
@@ -341,9 +341,6 @@ defmodule CodingAgent.MessagesTest do
 
       [result] = Messages.to_llm([msg])
       assert %Ai.Types.UserMessage{} = result
-      assert result.content =~ "Source: agent (ID: unknown)"
-      assert result.content =~ "Run: unknown"
-      assert result.content =~ "Delivery: unknown"
       assert_async_followup_envelope(result.content, "")
     end
 
@@ -366,7 +363,6 @@ defmodule CodingAgent.MessagesTest do
 
       [result] = Messages.to_llm([msg])
       assert %Ai.Types.UserMessage{} = result
-      assert result.content =~ "Delivery: followup"
       assert result.content =~ "\n````\n"
       assert_async_followup_envelope(result.content, original_content)
     end

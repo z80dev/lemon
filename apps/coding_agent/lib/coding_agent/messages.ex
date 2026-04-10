@@ -482,16 +482,12 @@ defmodule CodingAgent.Messages do
   end
 
   defp format_async_followup_for_llm(%CustomMessage{} = msg) do
-    details = msg.details || %{}
     content = get_text(msg) || ""
     fence = markdown_code_fence(content)
 
     Enum.join(
       [
         "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]",
-        "Source: #{async_followup_detail(details, "source")} (ID: #{async_followup_detail(details, "task_id")})",
-        "Run: #{async_followup_detail(details, "run_id")}",
-        "Delivery: #{async_followup_detail(details, "delivery")}",
         "---",
         fence,
         content,
@@ -500,24 +496,6 @@ defmodule CodingAgent.Messages do
       "\n"
     )
   end
-
-  defp async_followup_detail(details, "source") when is_map(details),
-    do: normalize_async_followup_detail(Map.get(details, "source", Map.get(details, :source)))
-
-  defp async_followup_detail(details, "task_id") when is_map(details),
-    do: normalize_async_followup_detail(Map.get(details, "task_id", Map.get(details, :task_id)))
-
-  defp async_followup_detail(details, "run_id") when is_map(details),
-    do: normalize_async_followup_detail(Map.get(details, "run_id", Map.get(details, :run_id)))
-
-  defp async_followup_detail(details, "delivery") when is_map(details),
-    do: normalize_async_followup_detail(Map.get(details, "delivery", Map.get(details, :delivery)))
-
-  defp async_followup_detail(_details, _key), do: "unknown"
-
-  defp normalize_async_followup_detail(nil), do: "unknown"
-  defp normalize_async_followup_detail(value) when is_atom(value), do: Atom.to_string(value)
-  defp normalize_async_followup_detail(value), do: to_string(value)
 
   defp markdown_code_fence(content) when is_binary(content) do
     max_backticks =

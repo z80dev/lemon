@@ -133,6 +133,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
+
         {effective_prompt, effective_tool_policy} =
           apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy)
 
@@ -225,8 +226,6 @@ defmodule CodingAgent.Tools.Task.Params do
         "- thinking_level: Optional thinking level override for internal engine\n" <>
         "- role: Optional specialization that applies to ANY engine\n" <>
         "- cwd: Optional working directory override\n" <>
-        "  - External text-only tasks without an explicit cwd automatically use a scratch workspace so CLI runners do not waste time scanning a repo they do not need.\n" <>
-        "  - Pure text-only Codex/Claude tasks without explicit cwd/role may skip the CLI entirely and call the provider directly to avoid CLI startup latency. Compatible model hints such as \"haiku\", \"sonnet\", and direct provider model specs stay on the fast path.\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>
         "- session_key/agent_id: Optional async followup routing overrides\n" <>
         "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>

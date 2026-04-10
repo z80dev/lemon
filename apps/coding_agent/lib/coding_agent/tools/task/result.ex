@@ -6,8 +6,7 @@ defmodule CodingAgent.Tools.Task.Result do
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
 
-  @max_structured_join_output_bytes 32_768
-  @max_total_join_output_bytes 65_536
+  @max_poll_preview_chars 500
 
   @spec do_poll(map()) :: AgentToolResult.t() | {:error, String.t()}
   def do_poll(params) do
@@ -59,14 +58,7 @@ defmodule CodingAgent.Tools.Task.Result do
   @spec build_async_result(String.t(), String.t(), String.t() | nil) :: AgentToolResult.t()
   def build_async_result(task_id, description, run_id) do
     %AgentToolResult{
-      content: [
-        %TextContent{
-          text:
-            "Task queued: #{description} (#{task_id})\n" <>
-              "If you need this result before you answer, call task again with action=join and " <>
-              "task_ids=[\"#{task_id}\"] (or include this id in a larger task_ids list)."
-        }
-      ],
+      content: [%TextContent{text: "Task queued: #{task_id}"}],
       details: %{
         task_id: task_id,
         status: "queued",
@@ -129,6 +121,20 @@ defmodule CodingAgent.Tools.Task.Result do
   def build_result_preview(result) when is_binary(result), do: result
   def build_result_preview(result), do: inspect(result, limit: 100)
 
+  @spec visible_output_text(term()) :: String.t()
+  def visible_output_text(result) when is_binary(result), do: safe_to_string(result)
+
+  def visible_output_text(%AgentToolResult{content: content}) do
+    visible_content_text(content)
+  end
+
+  def visible_output_text(%{answer: answer}) when is_binary(answer), do: safe_to_string(answer)
+
+  def visible_output_text(%{"answer" => answer}) when is_binary(answer),
+    do: safe_to_string(answer)
+
+  def visible_output_text(other), do: inspect(other, limit: 500)
+
   @spec normalize_join_mode(term()) :: :wait_all | :wait_any
   def normalize_join_mode(nil), do: :wait_all
   def normalize_join_mode("wait_all"), do: :wait_all
@@ -170,81 +176,41 @@ defmodule CodingAgent.Tools.Task.Result do
 
   defp build_poll_result(task_id, record, events) do
     status = Map.get(record, :status, :unknown)
-    current_action = latest_event_current_action(events)
-    action_detail = latest_event_action_detail(events, Map.get(record, :run_id))
-    engine = latest_event_engine(events) || Map.get(record, :engine)
 
-    {content, details} =
+    preview =
       case status do
         :completed ->
-          case Map.get(record, :result) do
-            %AgentToolResult{} = result ->
-              {result.content,
-               %{
-                 task_id: task_id,
-                 status: "completed",
-                 result: result,
-                 events: Enum.take(events, -5)
-               }}
-
-            other ->
-              {[%TextContent{text: "Task completed."}],
-               %{
-                 task_id: task_id,
-                 status: "completed",
-                 result: other,
-                 events: Enum.take(events, -5)
-               }}
-          end
+          Map.get(record, :result)
+          |> visible_output_text()
+          |> truncate_poll_preview()
 
         :error ->
-          error = Map.get(record, :error)
-
-          {[%TextContent{text: "Task error: #{inspect(error)}"}],
-           %{
-             task_id: task_id,
-             status: "error",
-             error: error,
-             events: Enum.take(events, -5)
-           }}
+          ""
 
         _ ->
-          text = latest_event_text(events) || "Task status: #{status}"
-
-          {[%TextContent{text: text}],
-           %{
-             task_id: task_id,
-             status: to_string(status),
-             events: Enum.take(events, -5)
-           }}
+          events
+          |> latest_event_visible_text()
+          |> truncate_poll_preview()
       end
 
     details =
-      case Map.get(record, :run_id) do
-        nil -> details
-        run_id -> Map.put(details, :run_id, run_id)
-      end
+      record
+      |> base_task_details(task_id)
+      |> maybe_put_preview(preview)
+      |> maybe_put_error(Map.get(record, :error))
 
-    details =
-      if is_map(current_action),
-        do: Map.put(details, :current_action, current_action),
-        else: details
-
-    details =
-      if is_map(action_detail), do: Map.put(details, :action_detail, action_detail), else: details
-
-    details =
-      if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
-
-    %AgentToolResult{content: content, details: details}
+    %AgentToolResult{
+      content: [%TextContent{text: poll_content_text(status, preview, Map.get(record, :error))}],
+      details: details
+    }
   end
 
-  defp latest_event_text(events) do
+  defp latest_event_visible_text(events) do
     events
     |> Enum.reverse()
     |> Enum.find_value(fn
-      %AgentToolResult{content: content} -> extract_text(content)
-      %{content: content} -> extract_text(content)
+      %AgentToolResult{content: content} -> visible_content_text(content)
+      %{content: content} -> visible_content_text(content)
       _ -> nil
     end)
   end
@@ -253,126 +219,33 @@ defmodule CodingAgent.Tools.Task.Result do
     status = Map.get(record, :status, :unknown)
     result = Map.get(record, :result)
     error = Map.get(record, :error)
-    description = Map.get(record, :description)
-    engine = Map.get(record, :engine)
 
-    {content, details} =
+    content_text =
       case status do
         :completed ->
-          case result do
-            %AgentToolResult{} = r ->
-              {r.content,
-               %{
-                 task_id: task_id,
-                 status: "completed",
-                 description: description,
-                 result: r,
-                 events: events
-               }}
-
-            other ->
-              text = safe_get_result_text(other)
-
-              {[%TextContent{text: text}],
-               %{
-                 task_id: task_id,
-                 status: "completed",
-                 description: description,
-                 result: inspect(other, limit: 500),
-                 events: events
-               }}
+          case visible_output_text(result) do
+            "" -> "Task completed."
+            text -> text
           end
 
         :error ->
-          {[%TextContent{text: "Task error: #{inspect(error)}"}],
-           %{
-             task_id: task_id,
-             status: "error",
-             description: description,
-             error: error,
-             events: events
-           }}
+          "Task failed: #{format_error(error)}"
 
         other_status ->
-          text = latest_event_text(events) || "Task status: #{other_status}"
-
-          {[%TextContent{text: text}],
-           %{
-             task_id: task_id,
-             status: to_string(other_status),
-             description: description,
-             events: events
-           }}
+          case latest_event_visible_text(events) do
+            nil -> "Task status: #{other_status}"
+            "" -> "Task status: #{other_status}"
+            text -> text
+          end
       end
 
     details =
-      case Map.get(record, :run_id) do
-        nil -> details
-        run_id -> Map.put(details, :run_id, run_id)
-      end
+      record
+      |> base_task_details(task_id)
+      |> maybe_put_error(error)
 
-    details =
-      if is_binary(engine) and engine != "", do: Map.put(details, :engine, engine), else: details
-
-    %AgentToolResult{content: content, details: details}
+    %AgentToolResult{content: [%TextContent{text: content_text}], details: details}
   end
-
-  defp latest_event_current_action(events) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %AgentToolResult{details: details} when is_map(details) ->
-        Map.get(details, :current_action) || Map.get(details, "current_action")
-
-      %{details: details} when is_map(details) ->
-        Map.get(details, :current_action) || Map.get(details, "current_action")
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp latest_event_action_detail(events, child_run_id) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %AgentToolResult{details: details} when is_map(details) ->
-        details |> extract_action_detail() |> maybe_put_child_run_id(child_run_id)
-
-      %{details: details} when is_map(details) ->
-        details |> extract_action_detail() |> maybe_put_child_run_id(child_run_id)
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp latest_event_engine(events) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %AgentToolResult{details: details} when is_map(details) ->
-        Map.get(details, :engine) || Map.get(details, "engine")
-
-      %{details: details} when is_map(details) ->
-        Map.get(details, :engine) || Map.get(details, "engine")
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp extract_action_detail(details) when is_map(details) do
-    action_detail = Map.get(details, :action_detail) || Map.get(details, "action_detail")
-    if is_map(action_detail), do: action_detail, else: nil
-  end
-
-  defp maybe_put_child_run_id(action_detail, child_run_id)
-       when is_map(action_detail) and is_binary(child_run_id) do
-    Map.put_new(action_detail, :child_run_id, child_run_id)
-  end
-
-  defp maybe_put_child_run_id(action_detail, _child_run_id), do: action_detail
 
   defp resolve_run_ids(task_ids) do
     run_ids =
@@ -399,33 +272,29 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
-    summary = join_summary_text(runs)
-    structured = join_structured_text(runs)
+    tasks = join_tasks(task_ids, runs)
 
     %AgentToolResult{
-      content: [
-        %TextContent{text: "Joined #{length(task_ids)} task(s)." <> structured <> summary}
-      ],
+      content: [%TextContent{text: join_tasks_text(tasks)}],
       details: %{
         status: "completed",
         mode: "wait_all",
         task_ids: task_ids,
-        runs: runs
+        tasks: join_task_details(tasks)
       }
     }
   end
 
   defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
-    summary = join_summary_text([run])
-    structured = join_structured_text([run])
+    task = join_task_for_run(task_ids, run)
 
     %AgentToolResult{
-      content: [%TextContent{text: "One task completed." <> structured <> summary}],
+      content: [%TextContent{text: join_tasks_text([task])}],
       details: %{
         status: "completed",
         mode: "wait_any",
         task_ids: task_ids,
-        run: run
+        tasks: join_task_details([task])
       }
     }
   end
@@ -446,139 +315,110 @@ defmodule CodingAgent.Tools.Task.Result do
     end
   end
 
-  defp join_summary_text(runs) when is_list(runs) do
-    lines =
-      runs
-      |> Enum.map(&join_summary_line/1)
-      |> Enum.reject(&is_nil/1)
+  defp join_tasks(task_ids, runs) do
+    runs_by_id =
+      Map.new(runs, fn run ->
+        {run[:id], run}
+      end)
 
-    if lines == [], do: "", else: "\n" <> Enum.join(lines, "\n")
+    Enum.map(task_ids, fn task_id ->
+      case TaskStore.get(task_id) do
+        {:ok, record, _events} ->
+          build_join_task(task_id, record, Map.get(runs_by_id, Map.get(record, :run_id), %{}))
+
+        {:error, :not_found} ->
+          %{
+            task_id: task_id,
+            status: "unknown",
+            output: "",
+            error: "Unknown task_id: #{task_id}"
+          }
+      end
+    end)
   end
 
-  defp join_summary_text(_), do: ""
+  defp join_task_for_run(task_ids, run) do
+    Enum.find_value(task_ids, fn task_id ->
+      case TaskStore.get(task_id) do
+        {:ok, record, _events} ->
+          if Map.get(record, :run_id) == run[:id] do
+            build_join_task(task_id, record, run)
+          end
 
-  defp join_structured_text(runs) when is_list(runs) do
-    payload =
-      runs
-      |> Enum.map(&join_structured_entry/1)
-      |> Jason.encode!()
-
-    json_text = "\nTASK_RESULTS_JSON: " <> payload
-
-    if byte_size(json_text) > @max_total_join_output_bytes do
-      "\nTASK_RESULTS_JSON: " <> binary_part(json_text, 0, @max_total_join_output_bytes) <> "..."
-    else
-      json_text
-    end
-  rescue
-    _ -> ""
+        {:error, :not_found} ->
+          nil
+      end
+    end) ||
+      build_join_task(nil, %{}, run)
   end
 
-  defp join_structured_text(_), do: ""
+  defp build_join_task(task_id, record, run) do
+    status = run[:status] || Map.get(record, :status, :unknown)
 
-  defp join_summary_line(%{description: description, status: :completed, result: result} = run) do
-    preview =
-      result
-      |> build_result_preview()
-      |> truncate_join_preview()
-
-    base = join_summary_prefix(run, description)
-    "#{base}completed: #{preview}"
-  end
-
-  defp join_summary_line(%{description: description, status: :error, error: error} = run) do
-    preview =
-      error
-      |> inspect(limit: 40)
-      |> truncate_join_preview()
-
-    base = join_summary_prefix(run, description)
-    "#{base}error: #{preview}"
-  end
-
-  defp join_summary_line(%{description: description, status: status} = run) do
-    base = join_summary_prefix(run, description)
-    "#{base}status: #{status}"
-  end
-
-  defp join_summary_line(_), do: nil
-
-  defp join_structured_entry(%{description: description, status: :completed, result: result} = run) do
     %{
-      description: description || run[:id] || "task",
-      status: "completed",
-      output: join_structured_output(result)
+      task_id: task_id,
+      run_id: Map.get(record, :run_id) || run[:id],
+      description: Map.get(record, :description) || run[:description],
+      engine: Map.get(record, :engine),
+      status: to_string(status),
+      output: join_output_for_status(status, run),
+      error: join_error_for_status(status, run)
     }
   end
 
-  defp join_structured_entry(%{description: description, status: :error, error: error} = run) do
-    %{
-      description: description || run[:id] || "task",
-      status: "error",
-      error: inspect(error, limit: 80)
-    }
+  defp join_output_for_status(:completed, run), do: visible_output_text(run[:result])
+  defp join_output_for_status("completed", run), do: visible_output_text(run[:result])
+  defp join_output_for_status(_, _run), do: ""
+
+  defp join_error_for_status(:error, run), do: format_error(run[:error])
+  defp join_error_for_status("error", run), do: format_error(run[:error])
+  defp join_error_for_status(_, _run), do: nil
+
+  defp join_tasks_text(tasks) do
+    tasks
+    |> Enum.map(&join_task_text/1)
+    |> Enum.join("\n\n")
   end
 
-  defp join_structured_entry(%{description: description, status: status} = run) do
-    %{
-      description: description || run[:id] || "task",
-      status: to_string(status)
-    }
+  defp join_task_text(task) do
+    metadata_lines =
+      [
+        {"description", Map.get(task, :description) || "task"},
+        {"task_id", Map.get(task, :task_id)},
+        {"run_id", Map.get(task, :run_id)},
+        {"engine", Map.get(task, :engine)},
+        {"status", Map.get(task, :status)}
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Enum.map(fn {key, value} -> "#{key}: #{value}" end)
+
+    body =
+      case Map.get(task, :status) do
+        "completed" ->
+          case Map.get(task, :output) do
+            nil -> ""
+            "" -> ""
+            output -> output
+          end
+
+        "error" ->
+          "Task failed: #{Map.get(task, :error)}"
+
+        status ->
+          "Task status: #{status}"
+      end
+
+    Enum.join(metadata_lines, "\n") <>
+      if(body == "", do: "", else: "\n\n" <> body)
   end
 
-  defp join_structured_entry(_run), do: %{description: "task", status: "unknown"}
-
-  defp join_summary_prefix(run, description) do
-    label =
-      description ||
-        run[:id] ||
-        "task"
-
-    "- #{label}: "
-  end
-
-  defp truncate_join_preview(text) when is_binary(text) do
-    safe_text = safe_to_string(text)
-    max_len = 1000
-
-    cond do
-      safe_text == "" -> "(empty)"
-      String.length(safe_text) > max_len -> String.slice(safe_text, 0, max_len) <> "..."
-      true -> safe_text
-    end
-  end
-
-  defp truncate_join_preview(other), do: inspect(other, limit: 40)
-
-  defp join_structured_output(%AgentToolResult{content: content}) do
-    content
-    |> extract_text()
-    |> truncate_structured_join_output()
-  end
-
-  defp join_structured_output(result) when is_binary(result) do
-    truncate_structured_join_output(result)
-  end
-
-  defp join_structured_output(result) do
-    result
-    |> inspect(limit: 80)
-    |> truncate_structured_join_output()
-  end
-
-  defp truncate_structured_join_output(text) when is_binary(text) do
-    text = safe_to_string(text)
-
-    cond do
-      text == "" ->
-        ""
-
-      byte_size(text) <= @max_structured_join_output_bytes ->
-        text
-
-      true ->
-        binary_part(text, 0, @max_structured_join_output_bytes) <> "..."
-    end
+  defp join_task_details(tasks) do
+    Enum.map(tasks, fn task ->
+      task
+      |> Map.take([:task_id, :run_id, :description, :engine, :status])
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Map.new()
+    end)
   end
 
   # Safely converts binary to UTF-8 string, handling non-UTF8 data.
@@ -591,15 +431,76 @@ defmodule CodingAgent.Tools.Task.Result do
 
   defp safe_to_string(other), do: inspect(other, limit: 200)
 
-  # Extract text content from a task result for action=get.
-  # Handles binary, AgentToolResult, maps with answer keys, and anything else.
-  defp safe_get_result_text(result) when is_binary(result), do: safe_to_string(result)
-
-  defp safe_get_result_text(%AgentToolResult{content: content}) do
-    extract_text(content) || ""
+  defp visible_content_text(content) when is_list(content) do
+    content
+    |> Enum.flat_map(fn
+      %TextContent{text: text} when is_binary(text) -> [text]
+      %{text: text} when is_binary(text) -> [text]
+      _ -> []
+    end)
+    |> Enum.reject(&thinking_marker_text?/1)
+    |> Enum.join("")
+    |> safe_to_string()
   end
 
-  defp safe_get_result_text(%{answer: answer}) when is_binary(answer), do: safe_to_string(answer)
-  defp safe_get_result_text(%{"answer" => answer}) when is_binary(answer), do: safe_to_string(answer)
-  defp safe_get_result_text(other), do: inspect(other, limit: 500)
+  defp visible_content_text(_), do: ""
+
+  defp thinking_marker_text?(text) when is_binary(text) do
+    text
+    |> String.trim_leading()
+    |> String.starts_with?("[thinking]")
+  rescue
+    _ -> false
+  end
+
+  defp base_task_details(record, task_id) do
+    %{
+      task_id: task_id,
+      status: Map.get(record, :status, :unknown) |> to_string(),
+      description: Map.get(record, :description),
+      engine: Map.get(record, :engine),
+      run_id: Map.get(record, :run_id)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Map.new()
+  end
+
+  defp maybe_put_preview(details, nil), do: details
+  defp maybe_put_preview(details, ""), do: details
+  defp maybe_put_preview(details, preview), do: Map.put(details, :preview, preview)
+
+  defp maybe_put_error(details, nil), do: details
+  defp maybe_put_error(details, error), do: Map.put(details, :error, format_error(error))
+
+  defp poll_content_text(:completed, preview, _error) when preview in [nil, ""],
+    do: "Status: completed"
+
+  defp poll_content_text(:completed, preview, _error), do: "Status: completed\n#{preview}"
+  defp poll_content_text(:error, _preview, error), do: "Status: error\n#{format_error(error)}"
+
+  defp poll_content_text(status, preview, _error) when preview in [nil, ""] do
+    "Status: #{status}"
+  end
+
+  defp poll_content_text(status, preview, _error), do: "Status: #{status}\n#{preview}"
+
+  defp truncate_poll_preview(nil), do: nil
+
+  defp truncate_poll_preview(text) when is_binary(text) do
+    text = safe_to_string(text)
+
+    cond do
+      text == "" ->
+        nil
+
+      String.length(text) > @max_poll_preview_chars ->
+        String.slice(text, 0, @max_poll_preview_chars) <> "..."
+
+      true ->
+        text
+    end
+  end
+
+  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason), do: inspect(reason)
 end
