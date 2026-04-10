@@ -27,7 +27,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias CodingAgent.Tools.Task.Result
 
   @await_poll_ms 200
-  @default_task_session_timeout_ms :timer.minutes(2)
+  @default_task_session_timeout_ms nil
 
   @spec execute_via_coordinator(term(), String.t(), String.t(), String.t() | nil) ::
           AgentToolResult.t() | {:error, String.t()}
@@ -241,7 +241,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         %{command: command, execution_path: "internal_bash_fast_path"}
       )
 
-      case BashExecutor.execute(command, cwd, signal: signal, timeout: :timer.minutes(2)) do
+      case BashExecutor.execute(command, cwd, signal: signal, timeout: :timer.minutes(30)) do
         {:ok, result} ->
           maybe_emit_action_update(
             on_update,
@@ -401,7 +401,7 @@ defmodule CodingAgent.Tools.Task.Runner do
       unsubscribe = Session.subscribe(session)
       session_ref = Process.monitor(session)
       timeout_ms = task_session_timeout_ms(opts)
-      deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+      deadline_ms = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms, else: nil
 
       try do
         case Session.prompt(session, prompt) do
@@ -882,11 +882,15 @@ defmodule CodingAgent.Tools.Task.Runner do
     deadline_ms - System.monotonic_time(:millisecond)
   end
 
+  defp await_timeout(nil, poll_ms), do: poll_ms
+
   defp await_timeout(deadline_ms, poll_ms) do
     remaining_task_session_ms(deadline_ms)
     |> min(poll_ms)
     |> max(0)
   end
+
+  defp task_session_timeout_error(nil), do: "Task session timed out waiting for completion"
 
   defp task_session_timeout_error(timeout_ms) do
     "Task session timed out after #{timeout_ms}ms waiting for completion"
@@ -898,7 +902,8 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp verify_internal_bash_fast_path_output(prompt, output, 0) do
     cond do
-      String.contains?(prompt, "return the absolute path only") and not String.starts_with?(output, "/") ->
+      String.contains?(prompt, "return the absolute path only") and
+          not String.starts_with?(output, "/") ->
         {:error, "Bash fast-path output was not an absolute path"}
 
       String.contains?(prompt, "return the number only") and not Regex.match?(~r/^\d+$/, output) ->
@@ -1014,7 +1019,9 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp extract_serialized_thinking(_), do: ""
 
-  defp extract_tool_result_text(%AgentToolResult{content: content}), do: Result.extract_text(content)
+  defp extract_tool_result_text(%AgentToolResult{content: content}),
+    do: Result.extract_text(content)
+
   defp extract_tool_result_text(%{content: content}), do: Result.extract_text(content)
   defp extract_tool_result_text(text) when is_binary(text), do: text
   defp extract_tool_result_text(_), do: nil
