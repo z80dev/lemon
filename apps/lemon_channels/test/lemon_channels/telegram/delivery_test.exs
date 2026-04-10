@@ -48,29 +48,6 @@ defmodule LemonChannels.Telegram.DeliveryTest do
     :ok
   end
 
-  test "enqueue_edit/4 publishes edit payload and notify callback" do
-    ref = make_ref()
-
-    assert :ok ==
-             Delivery.enqueue_edit(123, 456, "edited text",
-               notify_pid: self(),
-               notify_ref: ref,
-               notify_tag: :delivery_test_notify
-             )
-
-    assert_receive {:delivered,
-                    %OutboundPayload{
-                      channel_id: "telegram",
-                      kind: :edit,
-                      peer: %{id: "123"},
-                      content: %{message_id: "456", text: "edited text"},
-                      meta: %{notify_tag: :delivery_test_notify}
-                    }},
-                   1_000
-
-    assert_receive {:delivery_test_notify, ^ref, {:ok, _result}}, 1_000
-  end
-
   test "enqueue_send/3 includes reply_to and thread metadata" do
     assert :ok ==
              Delivery.enqueue_send(321, "hello",
@@ -109,42 +86,5 @@ defmodule LemonChannels.Telegram.DeliveryTest do
                       meta: %{reply_markup: ^reply_markup}
                     }},
                    1_000
-  end
-
-  test "enqueue_fallback/5 preserves idempotency and notify tag" do
-    ref = make_ref()
-    idempotency_key = "fallback-key-#{System.unique_integer([:positive])}"
-
-    assert {:ok, _enqueue_ref} =
-             Delivery.enqueue_fallback(
-               {:fallback, :run, :send},
-               1,
-               {:send, 123, %{text: "fallback helper send"}},
-               fallback_payload("fallback helper send", idempotency_key: idempotency_key),
-               notify: {self(), ref, :delivery_test_notify}
-             )
-
-    assert_receive {:delivered,
-                    %OutboundPayload{
-                      idempotency_key: ^idempotency_key,
-                      notify_pid: notify_pid,
-                      notify_ref: ^ref,
-                      meta: %{notify_tag: :delivery_test_notify}
-                    }},
-                   1_000
-
-    assert notify_pid == self()
-    assert_receive {:delivery_test_notify, ^ref, {:ok, _result}}, 1_000
-  end
-
-  defp fallback_payload(content, opts) do
-    %OutboundPayload{
-      channel_id: "telegram",
-      account_id: "default",
-      peer: %{kind: :dm, id: "123", thread_id: nil},
-      kind: :text,
-      content: content,
-      idempotency_key: opts[:idempotency_key]
-    }
   end
 end

@@ -324,10 +324,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     _ -> false
   end
 
-  @doc false
-  def should_auto_put_document?(state, inbound),
-    do: should_auto_put_media?(state, inbound)
-
   @doc """
   Handle a single bare media upload via auto-put.
 
@@ -376,10 +372,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   rescue
     _ -> {:error, :crash}
   end
-
-  @doc false
-  def handle_document_auto_put(state, inbound),
-    do: handle_media_auto_put(state, inbound)
 
   # ---------------------------------------------------------------------------
   # /file command handlers
@@ -676,10 +668,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   rescue
     _ -> {:error, "Failed to download the file from Telegram."}
   end
-
-  @doc false
-  def download_document_bytes(state, inbound),
-    do: download_media_bytes(state, inbound)
 
   def enforce_bytes_limit(bytes, cfg, key, default_max) when is_binary(bytes) do
     max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max

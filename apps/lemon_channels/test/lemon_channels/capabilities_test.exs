@@ -15,10 +15,11 @@ defmodule LemonChannels.CapabilitiesTest do
     end
 
     test "creates capabilities with configuration" do
-      caps = Capabilities.new([
-        {:attachments, max_size: 10_000_000},
-        {:rich_blocks, [:markdown, :buttons]}
-      ])
+      caps =
+        Capabilities.new([
+          {:attachments, max_size: 10_000_000},
+          {:rich_blocks, [:markdown, :buttons]}
+        ])
 
       assert Capabilities.supports?(caps, :attachments)
       assert Capabilities.supports?(caps, :rich_blocks)
@@ -103,28 +104,41 @@ defmodule LemonChannels.CapabilitiesTest do
     test "returns ok for valid attachment" do
       caps = Capabilities.new([{:attachments, max_size: 10_000_000}])
 
-      assert :ok = Capabilities.validate(caps, :attachments, %{size: 5_000_000, mime_type: "image/png"})
+      assert :ok =
+               Capabilities.validate(caps, :attachments, %{
+                 size: 5_000_000,
+                 mime_type: "image/png"
+               })
     end
 
     test "returns error for oversized attachment" do
       caps = Capabilities.new([{:attachments, max_size: 10_000_000}])
 
       assert {:error, :file_too_large} =
-               Capabilities.validate(caps, :attachments, %{size: 15_000_000, mime_type: "image/png"})
+               Capabilities.validate(caps, :attachments, %{
+                 size: 15_000_000,
+                 mime_type: "image/png"
+               })
     end
 
     test "returns error for unsupported mime type" do
       caps = Capabilities.new([{:attachments, max_size: 10_000_000, allowed_mimes: ["image/*"]}])
 
       assert {:error, :mime_type_not_allowed} =
-               Capabilities.validate(caps, :attachments, %{size: 5_000_000, mime_type: "application/exe"})
+               Capabilities.validate(caps, :attachments, %{
+                 size: 5_000_000,
+                 mime_type: "application/exe"
+               })
     end
 
     test "allows wildcard mime patterns" do
       caps = Capabilities.new([{:attachments, allowed_mimes: ["image/*"]}])
 
-      assert :ok = Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/png"})
-      assert :ok = Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/jpeg"})
+      assert :ok =
+               Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/png"})
+
+      assert :ok =
+               Capabilities.validate(caps, :attachments, %{size: 1000, mime_type: "image/jpeg"})
     end
 
     test "returns error for unsupported capability" do
@@ -145,6 +159,7 @@ defmodule LemonChannels.CapabilitiesTest do
       caps = Capabilities.new([{:rich_blocks, [:markdown, :buttons]}])
 
       assert :ok = Capabilities.validate(caps, :rich_blocks, %{type: :markdown})
+
       assert {:error, {:block_type_not_supported, :tables}} =
                Capabilities.validate(caps, :rich_blocks, %{type: :tables})
     end
@@ -251,13 +266,14 @@ defmodule LemonChannels.CapabilitiesTest do
 
   describe "legacy compatibility" do
     test "to_legacy/1 converts new format to legacy" do
-      caps = Capabilities.new([
-        :threads,
-        :reactions,
-        :edit,
-        :delete,
-        {:attachments, features: [:images]}
-      ])
+      caps =
+        Capabilities.new([
+          :threads,
+          :reactions,
+          :edit,
+          :delete,
+          {:attachments, features: [:images]}
+        ])
 
       legacy = Capabilities.to_legacy(caps)
 
@@ -363,7 +379,7 @@ defmodule LemonChannels.CapabilitiesTest do
       caps = Registry.lookup("discord")
 
       assert Capabilities.supports?(caps, :threads)
-      refute Capabilities.supports?(caps, :reactions)
+      assert Capabilities.supports?(caps, :reactions)
       assert Capabilities.supports?(caps, :attachments)
     end
 

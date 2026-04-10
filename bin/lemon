@@ -175,6 +175,21 @@ if [[ -n "$DEBUG" ]]; then
   export LEMON_LOG_LEVEL=debug
 fi
 
+# On Linux and other non-keychain environments, prefer the canonical local
+# secrets file over whatever stale session env may have been inherited.
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  LOCAL_MASTER_KEY_FILE="$HOME/.lemon/secrets_master_key"
+
+  if [[ -r "$LOCAL_MASTER_KEY_FILE" ]]; then
+    LOCAL_MASTER_KEY="$(cat "$LOCAL_MASTER_KEY_FILE")"
+
+    if [[ -n "$LOCAL_MASTER_KEY" ]]; then
+      export LEMON_SECRETS_MASTER_KEY="$LOCAL_MASTER_KEY"
+      info "Loaded secrets master key from $LOCAL_MASTER_KEY_FILE."
+    fi
+  fi
+fi
+
 # Some environments deny keychain reads from long-lived BEAM processes or rely
 # on an env-provided master key. Preloading the master key before boot makes
 # secrets resolution deterministic for the unified runtime too.

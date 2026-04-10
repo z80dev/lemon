@@ -9,7 +9,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
 
   alias LemonChannels.Adapters.Telegram.Transport.{
     InboundContext,
-    MessageBuffer,
     RuntimeState,
     UpdateProcessor
   }
@@ -80,9 +79,4 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
   end
 
   def run(_event, state), do: {state, [:noop]}
-
-  @spec buffered_inbound(map()) :: map()
-  def buffered_inbound(buffer) when is_map(buffer) do
-    MessageBuffer.build_inbound(buffer)
-  end
 end

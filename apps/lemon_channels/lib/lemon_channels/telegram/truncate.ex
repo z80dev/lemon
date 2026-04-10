@@ -17,9 +17,9 @@ defmodule LemonChannels.Telegram.Truncate do
 
   ## Legacy Truncation
 
-  `truncate_for_telegram/1,2` still exists for backward-compatibility and
-  simple truncation use-cases (e.g. status messages). New outbound text
-  flows should prefer `split_messages/1,2`.
+  `truncate_for_telegram/1` still exists for simple truncation use-cases
+  such as status messages. New outbound text flows should prefer
+  `split_messages/1`.
   """
 
   @telegram_max_length 4096
@@ -43,25 +43,18 @@ defmodule LemonChannels.Telegram.Truncate do
   """
   @spec split_messages(String.t()) :: [String.t()]
   def split_messages(text) when is_binary(text) do
-    split_messages(text, nil)
+    if String.length(text) <= @telegram_max_length do
+      [text]
+    else
+      do_split(text)
+    end
   end
 
   def split_messages(text), do: [to_string(text)]
 
-  @spec split_messages(String.t(), module() | nil) :: [String.t()]
-  def split_messages(text, engine_module) when is_binary(text) do
-    if String.length(text) <= @telegram_max_length do
-      [text]
-    else
-      do_split(text, engine_module)
-    end
-  end
-
-  def split_messages(text, _engine_module), do: [to_string(text)]
-
-  defp do_split(text, engine_module) do
+  defp do_split(text) do
     # Extract resume lines — they go on the last chunk only
-    {content, resume_lines} = extract_resume(text, engine_module)
+    {content, resume_lines} = extract_resume(text)
     resume_text = Enum.join(resume_lines, "\n")
 
     chunks = split_content_loop(content, [])
@@ -77,9 +70,9 @@ defmodule LemonChannels.Telegram.Truncate do
   end
 
   # Extract resume lines from the end of text, returning {remaining_content, resume_lines}
-  defp extract_resume(text, engine_module) do
+  defp extract_resume(text) do
     lines = String.split(text, "\n")
-    {content_lines, resume_lines} = split_trailing_resume_lines(lines, engine_module)
+    {content_lines, resume_lines} = split_trailing_resume_lines(lines)
 
     case resume_lines do
       [] ->
@@ -225,13 +218,7 @@ defmodule LemonChannels.Telegram.Truncate do
   @doc """
   Truncate text to fit within Telegram's message limit while preserving resume lines.
 
-  The engine module is used to identify resume lines via its `is_resume_line/1` callback.
   Resume lines at the end of the message are preserved even if truncation is needed.
-
-  ## Parameters
-
-  - `text` - The message text to potentially truncate
-  - `engine_module` - The engine module implementing `is_resume_line/1`
 
   ## Returns
 
@@ -240,55 +227,31 @@ defmodule LemonChannels.Telegram.Truncate do
   ## Examples
 
       iex> short_text = "Hello world"
-      iex> Truncate.truncate_for_telegram(short_text, LemonChannels.Telegram.Truncate)
+      iex> Truncate.truncate_for_telegram(short_text)
       "Hello world"
 
       iex> long_text = String.duplicate("x", 5000) <> "\\nlemon resume abc123"
-      iex> result = Truncate.truncate_for_telegram(long_text, LemonChannels.Telegram.Truncate)
+      iex> result = Truncate.truncate_for_telegram(long_text)
       iex> String.length(result) <= 4096
       true
       iex> String.ends_with?(result, "lemon resume abc123")
       true
 
   """
-  @spec truncate_for_telegram(String.t(), module()) :: String.t()
-  def truncate_for_telegram(text, engine_module) when is_binary(text) do
-    if String.length(text) <= @telegram_max_length do
-      text
-    else
-      do_truncate(text, engine_module)
-    end
-  end
-
-  def truncate_for_telegram(text, _engine_module), do: text
-
-  @doc """
-  Truncate text to fit within Telegram's message limit (engine-agnostic version).
-
-  Uses a generic resume line detector that recognizes all common resume patterns.
-
-  ## Parameters
-
-  - `text` - The message text to potentially truncate
-
-  ## Returns
-
-  The (possibly truncated) text that fits within Telegram's 4096 character limit.
-  """
   @spec truncate_for_telegram(String.t()) :: String.t()
   def truncate_for_telegram(text) when is_binary(text) do
     if String.length(text) <= @telegram_max_length do
       text
     else
-      do_truncate(text, nil)
+      do_truncate(text)
     end
   end
 
   def truncate_for_telegram(text), do: text
 
-  defp do_truncate(text, engine_module) do
+  defp do_truncate(text) do
     lines = String.split(text, "\n")
-    {content_lines, resume_lines} = split_trailing_resume_lines(lines, engine_module)
+    {content_lines, resume_lines} = split_trailing_resume_lines(lines)
 
     {content_lines, resume_lines} =
       case resume_lines do
@@ -358,39 +321,25 @@ defmodule LemonChannels.Telegram.Truncate do
   end
 
   # Split lines into content and trailing resume lines
-  defp split_trailing_resume_lines(lines, engine_module) do
-    {resume_rev, content_rev} = split_resume_lines(Enum.reverse(lines), engine_module, [])
+  defp split_trailing_resume_lines(lines) do
+    {resume_rev, content_rev} = split_resume_lines(Enum.reverse(lines), [])
     {Enum.reverse(content_rev), resume_rev}
   end
 
-  defp split_resume_lines([], _engine_module, resume_acc), do: {resume_acc, []}
+  defp split_resume_lines([], resume_acc), do: {resume_acc, []}
 
-  defp split_resume_lines([line | rest], engine_module, resume_acc) do
+  defp split_resume_lines([line | rest], resume_acc) do
     trimmed = String.trim(line)
 
     cond do
       trimmed == "" && resume_acc != [] ->
-        split_resume_lines(rest, engine_module, [line | resume_acc])
+        split_resume_lines(rest, [line | resume_acc])
 
-      is_resume_line?(line, engine_module) ->
-        split_resume_lines(rest, engine_module, [line | resume_acc])
+      resume_line?(line) ->
+        split_resume_lines(rest, [line | resume_acc])
 
       true ->
         {resume_acc, [line | rest]}
-    end
-  end
-
-  defp is_resume_line?(line, nil) do
-    resume_line?(line)
-  end
-
-  defp is_resume_line?(line, engine_module) when is_atom(engine_module) do
-    cond do
-      function_exported?(engine_module, :is_resume_line, 1) ->
-        engine_module.is_resume_line(line) or resume_line?(line)
-
-      true ->
-        resume_line?(line)
     end
   end
 

@@ -69,7 +69,7 @@ Releases are written to `_build/prod/rel/<profile>/`.
 | `LEMON_CONTROL_PLANE_PORT` | `4040` | Control-plane HTTP port |
 | `LEMON_WEB_PORT` | `4080` | Web UI HTTP port |
 | `LEMON_SIM_UI_PORT` | `4090` | Sim UI HTTP port |
-| `LEMON_SECRETS_MASTER_KEY` | *(keychain)* | Override secrets master key |
+| `LEMON_SECRETS_MASTER_KEY` | *(keychain/file)* | Override secrets master key. On local Linux source runs, `bin/lemon` will normalize this from `~/.lemon/secrets_master_key` when that file exists. |
 | `LEMON_PATH` | *(source-relative)* | Override Lemon root directory |
 
 ### Verify health

@@ -10,8 +10,6 @@ defmodule LemonChannels.Telegram.Delivery do
   @default_notify_tag :outbox_delivered
 
   @type chat_id :: integer() | binary()
-  @type message_id :: integer() | binary()
-
   @type enqueue_opt ::
           {:account_id, binary()}
           | {:thread_id, integer() | binary()}
@@ -29,28 +27,6 @@ defmodule LemonChannels.Telegram.Delivery do
           | {:notify_ref, reference()}
           | {:notify_tag, atom()}
 
-  @type fallback_opt ::
-          {:context, map()}
-          | {:notify, {pid(), reference(), atom()}}
-          | {:on_failure, (OutboundPayload.t(), term(), map() -> term())}
-
-  @doc false
-  @spec enqueue_fallback(
-          key :: term(),
-          priority :: integer(),
-          op :: term(),
-          fallback_payload :: OutboundPayload.t(),
-          opts :: [fallback_opt()]
-        ) :: {:ok, reference()} | {:error, term()}
-  def enqueue_fallback(_key, _priority, _op, %OutboundPayload{} = fallback_payload, opts \\ [])
-      when is_list(opts) do
-    notify = fallback_notify(opts[:notify])
-
-    fallback_payload
-    |> attach_fallback_notify(notify)
-    |> enqueue_channels()
-  end
-
   @spec enqueue_send(chat_id(), binary(), [enqueue_opt()]) :: :ok | {:error, term()}
   def enqueue_send(chat_id, text, opts \\ []) when is_list(opts) do
     notify = notify_details(opts)
@@ -64,29 +40,6 @@ defmodule LemonChannels.Telegram.Delivery do
         content: normalize_text(text),
         idempotency_key: opts[:idempotency_key],
         reply_to: optional_string_id(reply_to_opt(opts)),
-        meta: build_meta(opts, notify),
-        notify_pid: notify.pid,
-        notify_ref: notify.ref
-      }
-
-    case enqueue_channels(payload) do
-      {:ok, _ref} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @spec enqueue_edit(chat_id(), message_id(), binary(), [enqueue_opt()]) :: :ok | {:error, term()}
-  def enqueue_edit(chat_id, message_id, text, opts \\ []) when is_list(opts) do
-    notify = notify_details(opts)
-
-    payload =
-      %OutboundPayload{
-        channel_id: @channel_id,
-        account_id: account_id(opts),
-        peer: build_peer(chat_id, opts),
-        kind: :edit,
-        content: %{message_id: string_id(message_id), text: normalize_text(text)},
-        idempotency_key: opts[:idempotency_key],
         meta: build_meta(opts, notify),
         notify_pid: notify.pid,
         notify_ref: notify.ref
@@ -148,7 +101,10 @@ defmodule LemonChannels.Telegram.Delivery do
 
   defp notify_details(opts) when is_list(opts) do
     cond do
-      match?({pid, ref, tag} when is_pid(pid) and is_reference(ref) and is_atom(tag), opts[:notify]) ->
+      match?(
+        {pid, ref, tag} when is_pid(pid) and is_reference(ref) and is_atom(tag),
+        opts[:notify]
+      ) ->
         {pid, ref, tag} = opts[:notify]
         %{enabled?: true, pid: pid, ref: ref, tag: tag}
 
@@ -157,28 +113,17 @@ defmodule LemonChannels.Telegram.Delivery do
         %{enabled?: true, pid: pid, ref: ref, tag: opts[:notify_tag] || @default_notify_tag}
 
       is_pid(opts[:notify_pid]) and is_reference(opts[:notify_ref]) ->
-        %{enabled?: true, pid: opts[:notify_pid], ref: opts[:notify_ref], tag: opts[:notify_tag] || @default_notify_tag}
+        %{
+          enabled?: true,
+          pid: opts[:notify_pid],
+          ref: opts[:notify_ref],
+          tag: opts[:notify_tag] || @default_notify_tag
+        }
 
       true ->
         %{enabled?: false, pid: nil, ref: nil, tag: nil}
     end
   end
-
-  defp fallback_notify({pid, ref, tag})
-       when is_pid(pid) and is_reference(ref) and is_atom(tag),
-       do: %{enabled?: true, pid: pid, ref: ref, tag: tag}
-
-  defp fallback_notify(_notify), do: %{enabled?: false, pid: nil, ref: nil, tag: nil}
-
-  defp attach_fallback_notify(
-         %OutboundPayload{} = payload,
-         %{enabled?: true, pid: pid, ref: ref, tag: tag}
-       ) do
-    meta = payload.meta || %{}
-    %{payload | notify_pid: pid, notify_ref: ref, meta: Map.put(meta, :notify_tag, tag)}
-  end
-
-  defp attach_fallback_notify(%OutboundPayload{} = payload, _notify), do: payload
 
   defp thread_id_opt(opts), do: opts[:thread_id] || opts[:topic_id]
   defp reply_to_opt(opts), do: opts[:reply_to_message_id] || opts[:reply_to]

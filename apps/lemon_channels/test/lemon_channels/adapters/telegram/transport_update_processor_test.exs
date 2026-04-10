@@ -12,13 +12,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     :ok
   end
 
-  test "route_authorized_inbound drops duplicate inbound updates after first accept" do
+  test "route_authorized_inbound_action drops duplicate inbound updates after first accept" do
     state = transport_state()
-
-    handle_fn = fn _state, inbound ->
-      send(self(), {:accepted_inbound, inbound.meta[:update_id], inbound.message.id})
-      state
-    end
 
     inbound =
       UpdateProcessor.prepare_inbound(
@@ -28,14 +23,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
         9001
       )
 
-    _state_after_first = UpdateProcessor.route_authorized_inbound(state, inbound, handle_fn)
-
-    assert_receive {:accepted_inbound, 9001, "10"}, 200
-
-    _state_after_second =
-      UpdateProcessor.route_authorized_inbound(state, inbound, handle_fn)
-
-    refute_receive {:accepted_inbound, 9001, "10"}, 200
+    assert {:ok, accepted} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
+    assert accepted.meta[:update_id] == 9001
+    assert accepted.message.id == "10"
+    assert {:seen, ^accepted} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
   end
 
   test "prepare_inbound preserves reply_to_text and update metadata" do

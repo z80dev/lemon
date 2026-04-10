@@ -278,7 +278,7 @@ Secrets are encrypted at rest with AES-256-GCM. Per-secret encryption keys are d
 3. `~/.lemon/secrets_master_key` file -- local non-keychain fallback
 4. Fail with `:missing_master_key`
 
-The unified source runtime (`./bin/lemon`) should also be launched with a valid `LEMON_SECRETS_MASTER_KEY` on Linux or other non-keychain environments; otherwise apps may start but later fail to decrypt provider and transport secrets.
+For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. `./bin/lemon` normalizes `LEMON_SECRETS_MASTER_KEY` from that file before boot so stale inherited shell env does not override the working local key.
 
 ### API
 

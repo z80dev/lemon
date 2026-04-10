@@ -110,13 +110,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
 
   def reflection_session_key(_), do: "telegram:new_reflection"
 
-  @spec fetch_run_history_for_memory(term(), keyword()) :: list()
-  def fetch_run_history_for_memory(session_key, opts) do
-    RunStore.history(session_key, limit: Keyword.get(opts, :limit, 8))
-  rescue
-    _ -> []
-  end
-
   @spec format_run_history_transcript(list(), keyword()) :: binary()
   def format_run_history_transcript(history, opts) when is_list(history) do
     max_chars = Keyword.get(opts, :max_chars, 12_000)

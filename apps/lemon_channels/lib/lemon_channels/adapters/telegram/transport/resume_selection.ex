@@ -471,9 +471,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   defp parse_explicit_resume(_), do: nil
 
-  @spec format_resume_line(ResumeToken.t()) :: String.t()
-  def format_resume_line(%ResumeToken{} = resume), do: ResumeToken.format_plain(resume)
-
   @spec format_session_ref(ResumeToken.t()) :: String.t()
   def format_session_ref(%ResumeToken{} = resume) do
     token = resume.value || ""

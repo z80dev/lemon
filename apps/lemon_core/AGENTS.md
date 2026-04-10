@@ -166,6 +166,8 @@ Secrets are encrypted at rest with AES-256-GCM. The encryption key is derived vi
 3. `~/.lemon/secrets_master_key` file (local non-keychain fallback)
 4. Fail with `:missing_master_key`
 
+For local Linux/dev runs, `~/.lemon/secrets_master_key` should be treated as the canonical master key file. `./bin/lemon` normalizes `LEMON_SECRETS_MASTER_KEY` from that file before boot so stale desktop/session env does not win accidentally.
+
 For a path-by-path audit matrix (including error and fallback semantics), see `docs/security/secrets-keychain-audit-matrix.md`.
 
 ### API Usage

@@ -32,17 +32,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportResumeSelectionTest do
     assert {nil, ^text} = ResumeSelection.extract_explicit_resume_and_strip(text)
   end
 
-  test "format helpers produce stable session references" do
-    resume = %ResumeToken{engine: "claude", value: "token-123"}
-
-    assert ResumeSelection.format_resume_line(resume) == "claude --resume token-123"
-    assert ResumeSelection.format_session_ref(resume) == "claude: token-123"
-  end
-
-  test "format_resume_line/1 uses quoted pi syntax" do
+  test "format_session_ref/1 produces stable session references" do
     resume = %ResumeToken{engine: "pi", value: "token with spaces"}
 
-    assert ResumeSelection.format_resume_line(resume) == ~s(pi --session "token with spaces")
+    assert ResumeSelection.format_session_ref(resume) == "pi: token with spaces"
   end
 
   test "handle_resume_command forwards prompt text with structured resume metadata" do

@@ -21,28 +21,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Check authorization and deduplication, then hand off to the inbound handler.
-
-  The `handle_fn` callback receives `(state, inbound)` and returns the
-  updated state. This allows the main GenServer to supply its own
-  `handle_inbound_message/2`.
-  """
-  def route_authorized_inbound(state, inbound, handle_fn) do
-    case route_authorized_inbound_action(state, inbound) do
-      {:ok, inbound} ->
-        handle_fn.(state, inbound)
-
-      {:drop, why, inbound} ->
-        maybe_log_drop(state, inbound, why)
-        state
-
-      {:seen, inbound} ->
-        maybe_log_drop(state, inbound, :dedupe)
-        state
-    end
-  end
-
-  @doc """
   Return the authorized inbound routing decision without performing side effects.
   """
   @spec route_authorized_inbound_action(map(), map()) ::
@@ -358,7 +336,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
 
     %{inbound | message: message, meta: meta}
   end
-
 
   defp parse_queue_override(text, allow_override) do
     if allow_override do

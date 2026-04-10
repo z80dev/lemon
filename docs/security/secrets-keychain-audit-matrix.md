@@ -36,11 +36,12 @@ Additional nuance:
 
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
+- The core library precedence above is unchanged, but the local source launcher `bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
 
 ## Operator Notes
 
 - `mix lemon.secrets.init` is the preferred bootstrap path on macOS (stores generated key in keychain).
-- Non-macOS environments should set `LEMON_SECRETS_MASTER_KEY` explicitly.
+- For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
 

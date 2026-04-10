@@ -20,8 +20,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportSharedDedupeTest do
   test "same message id in different threads is not treated as a duplicate" do
     uniq = Integer.to_string(System.unique_integer([:positive]))
 
-    key_a = TransportShared.message_dedupe_key("chat-" <> uniq, "topic-a", "42")
-    key_b = TransportShared.message_dedupe_key("chat-" <> uniq, "topic-b", "42")
+    key_a = {"chat-" <> uniq, "topic-a", "42"}
+    key_b = {"chat-" <> uniq, "topic-b", "42"}
 
     assert :new == TransportShared.check_and_mark_dedupe(:channels, key_a, 60_000)
     assert :seen == TransportShared.check_and_mark_dedupe(:channels, key_a, 60_000)
