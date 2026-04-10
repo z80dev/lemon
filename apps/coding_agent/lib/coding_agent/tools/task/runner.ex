@@ -878,6 +878,8 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
+  defp remaining_task_session_ms(nil), do: :infinity
+
   defp remaining_task_session_ms(deadline_ms) do
     deadline_ms - System.monotonic_time(:millisecond)
   end
