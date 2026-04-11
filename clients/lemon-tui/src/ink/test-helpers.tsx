@@ -105,7 +105,6 @@ export function renderWithContext(
   const connection = opts?.connection || createMockConnection();
   const theme = opts?.theme || 'lemon';
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const connAsAny = connection as any;
 
   const result = render(

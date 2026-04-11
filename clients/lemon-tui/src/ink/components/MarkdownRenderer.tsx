@@ -217,7 +217,7 @@ function renderInline(text: string, ctx: InlineContext): React.ReactNode[] {
 
   // Remaining text
   if (lastIndex < text.length) {
-    nodes.push(<Text key={key++}>{text.slice(lastIndex)}</Text>);
+    nodes.push(<Text key={key}>{text.slice(lastIndex)}</Text>);
   }
 
   return nodes.length > 0 ? nodes : [<Text key={0}>{text}</Text>];

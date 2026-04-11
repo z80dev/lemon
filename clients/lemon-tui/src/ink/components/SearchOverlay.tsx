@@ -67,7 +67,7 @@ function highlightMatch(text: string, query: string, accentColor: string): React
   }
 
   if (lastIndex < text.length) {
-    nodes.push(<Text key={key++}>{text.slice(lastIndex)}</Text>);
+    nodes.push(<Text key={key}>{text.slice(lastIndex)}</Text>);
   }
 
   return nodes;

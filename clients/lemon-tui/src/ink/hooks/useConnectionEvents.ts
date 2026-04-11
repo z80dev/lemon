@@ -137,14 +137,12 @@ export function useConnectionEvents(
     connection.on('ready', onReady);
     connection.on('message', onMessage);
     connection.on('error', onError);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     connection.on('close', onClose as any);
 
     return () => {
       connection.removeListener('ready', onReady);
       connection.removeListener('message', onMessage);
       connection.removeListener('error', onError);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       connection.removeListener('close', onClose as any);
     };
   }, [connection, store]);
