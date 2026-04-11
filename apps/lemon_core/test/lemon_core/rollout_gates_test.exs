@@ -1,4 +1,4 @@
-defmodule LemonCore.RolloutGateTest do
+defmodule LemonCore.RolloutGateStoreTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.RolloutGate

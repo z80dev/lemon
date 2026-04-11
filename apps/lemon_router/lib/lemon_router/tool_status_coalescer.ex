@@ -19,6 +19,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   @default_idle_ms 400
   @default_max_latency_ms 1200
+  @status_text_max_length 4096
 
   @max_actions 40
 
@@ -649,9 +650,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp telegram_max_length do
-    LemonChannels.Telegram.Truncate.max_length()
-  rescue
-    _ -> 4096
+    @status_text_max_length
   end
 
   defp any_running_action?(%__MODULE__{} = state) do

@@ -10,19 +10,19 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 
 | `agent_core` | `ai`, `lemon_core` |
 | `ai` | `lemon_core` |
-| `coding_agent` | `agent_core`, `ai`, `lemon_core`, `lemon_skills` |
+| `coding_agent` | `agent_core`, `ai`, `lemon_ai_runtime`, `lemon_core`, `lemon_skills` |
 | `coding_agent_ui` | `coding_agent` |
 | `lemon_ai_runtime` | `ai`, `lemon_core` |
 | `lemon_automation` | `lemon_core`, `lemon_router` |
-| `lemon_channels` | `lemon_core` |
+| `lemon_channels` | `lemon_ai_runtime`, `lemon_core` |
 | `lemon_control_plane` | `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_gateway`, `lemon_router`, `lemon_skills` |
 | `lemon_core` | *(none)* |
 | `lemon_gateway` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core` |
 | `lemon_mcp` | `agent_core`, `coding_agent` |
 | `lemon_router` | `agent_core`, `ai`, `coding_agent`, `lemon_channels`, `lemon_core`, `lemon_gateway` |
 | `lemon_services` | *(none)* |
-| `lemon_sim` | `agent_core`, `ai`, `lemon_core` |
-| `lemon_sim_ui` | `lemon_core`, `lemon_sim` |
+| `lemon_sim` | `agent_core`, `ai`, `lemon_ai_runtime`, `lemon_core` |
+| `lemon_sim_ui` | `ai`, `lemon_core`, `lemon_sim` |
 | `lemon_skills` | `agent_core`, `ai`, `lemon_channels`, `lemon_core` |
 | `lemon_web` | `lemon_core`, `lemon_router` |
 | `market_intel` | `agent_core`, `lemon_channels`, `lemon_core` |

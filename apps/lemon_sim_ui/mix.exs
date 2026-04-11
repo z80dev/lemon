@@ -29,6 +29,7 @@ defmodule LemonSimUi.MixProject do
 
   defp deps do
     [
+      {:ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_sim, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},

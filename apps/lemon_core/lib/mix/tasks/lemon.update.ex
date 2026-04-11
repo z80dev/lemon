@@ -1,6 +1,9 @@
 defmodule Mix.Tasks.Lemon.Update do
   use Mix.Task
 
+  @builtin_seeder :"Elixir.LemonSkills.BuiltinSeeder"
+  @skills_migrator :"Elixir.LemonSkills.Migrator"
+
   alias LemonCore.Config.Modular
   alias LemonCore.Update.{ConfigMigrator, Version}
 
@@ -151,12 +154,12 @@ defmodule Mix.Tasks.Lemon.Update do
         if verbose?, do: shell.info("Skill sync: --check mode, skipping.")
         :ok
 
-      Code.ensure_loaded?(LemonSkills.BuiltinSeeder) ->
+      Code.ensure_loaded?(@builtin_seeder) ->
         shell.info("Skill sync: refreshing bundled skills ...")
-        apply(LemonSkills.BuiltinSeeder, :seed!, [])
+        apply(@builtin_seeder, :seed!, [])
 
-        if Code.ensure_loaded?(LemonSkills.Migrator) do
-          case apply(LemonSkills.Migrator, :migrate, []) do
+        if Code.ensure_loaded?(@skills_migrator) do
+          case apply(@skills_migrator, :migrate, []) do
             {:ok, %{classified: n}} when n > 0 ->
               shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
 

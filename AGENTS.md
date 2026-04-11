@@ -273,11 +273,13 @@ lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_sk
 lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent, lemon_channels*
 lemon_automation ─────→ lemon_core, lemon_router
-lemon_channels ───────→ lemon_core
-coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
+lemon_channels ───────→ lemon_core, lemon_ai_runtime
+coding_agent ─────────→ lemon_core, agent_core, ai, lemon_ai_runtime, lemon_skills
 agent_core ───────────→ lemon_core, ai
+lemon_ai_runtime ─────→ ai, lemon_core
 lemon_mcp ────────────→ coding_agent, agent_core
-lemon_sim ────────────→ lemon_core, agent_core, ai
+lemon_sim ────────────→ lemon_core, agent_core, ai, lemon_ai_runtime
+lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
 lemon_web ────────────→ lemon_core, lemon_router
 market_intel ─────────→ lemon_core, agent_core, lemon_channels*

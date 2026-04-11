@@ -3,7 +3,7 @@ defmodule LemonSkills.InstallerTest do
 
   alias LemonSkills.Installer
 
-  defmodule WarnReviewer do
+  defmodule InstallerWarnReviewer do
     def review(_content, _opts) do
       {:ok,
        {:warn,
@@ -405,7 +405,7 @@ defmodule LemonSkills.InstallerTest do
     } do
       Application.put_env(:lemon_skills, :require_approval, false)
       Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
-      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, InstallerWarnReviewer)
 
       result =
         with_mock_config(tmp_dir, fn ->
@@ -429,7 +429,7 @@ defmodule LemonSkills.InstallerTest do
     } do
       Application.put_env(:lemon_skills, :require_approval, false)
       Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
-      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, InstallerWarnReviewer)
 
       install_path = Path.join([tmp_dir, ".lemon", "skill", "test-skill"])
 
@@ -455,7 +455,7 @@ defmodule LemonSkills.InstallerTest do
     } do
       Application.put_env(:lemon_skills, :require_approval, false)
       Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
-      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, InstallerWarnReviewer)
 
       skill_name = "test-skill"
       dest_dir = Path.join([tmp_dir, ".lemon", "skill", skill_name])
@@ -507,7 +507,7 @@ defmodule LemonSkills.InstallerTest do
     } do
       Application.put_env(:lemon_skills, :require_approval, false)
       Application.put_env(:lemon_skills, :audit_llm, enabled: true, model: "gpt-4o")
-      Application.put_env(:lemon_skills, :audit_llm_reviewer, WarnReviewer)
+      Application.put_env(:lemon_skills, :audit_llm_reviewer, InstallerWarnReviewer)
 
       result =
         with_mock_config(tmp_dir, fn ->

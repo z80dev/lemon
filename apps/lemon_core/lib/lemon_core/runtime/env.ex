@@ -24,6 +24,8 @@ defmodule LemonCore.Runtime.Env do
   @default_control_port 4040
   @default_web_port 4080
   @default_sim_port 4090
+  @lemon_web_endpoint :"Elixir.LemonWeb.Endpoint"
+  @lemon_sim_ui_endpoint :"Elixir.LemonSimUi.Endpoint"
 
   defstruct control_port: @default_control_port,
             web_port: @default_web_port,
@@ -194,23 +196,23 @@ defmodule LemonCore.Runtime.Env do
   end
 
   defp apply_web_port(port) do
-    existing = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
+    existing = Application.get_env(:lemon_web, @lemon_web_endpoint, [])
     existing_http = Keyword.get(existing, :http, [])
     merged_http = Keyword.merge(existing_http, ip: {127, 0, 0, 1}, port: port)
 
     Application.put_env(
       :lemon_web,
-      LemonWeb.Endpoint,
+      @lemon_web_endpoint,
       Keyword.put(existing, :http, merged_http)
     )
   end
 
   defp apply_sim_port(port) do
-    existing = Application.get_env(:lemon_sim_ui, LemonSimUi.Endpoint, [])
+    existing = Application.get_env(:lemon_sim_ui, @lemon_sim_ui_endpoint, [])
 
     Application.put_env(
       :lemon_sim_ui,
-      LemonSimUi.Endpoint,
+      @lemon_sim_ui_endpoint,
       Keyword.merge(existing, server: true, http: [ip: {127, 0, 0, 1}, port: port])
     )
   end

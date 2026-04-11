@@ -38,6 +38,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_router: ["LemonRouter"],
     lemon_ai_runtime: ["LemonAiRuntime"],
     lemon_sim: ["LemonSim"],
+    lemon_sim_ui: ["LemonSimUi"],
     lemon_services: ["LemonServices"],
     lemon_skills: ["LemonSkills"],
     lemon_web: ["LemonWeb"],
