@@ -210,6 +210,5 @@ max_documents  = 10000    # Hard cap before oldest documents are pruned
 
 - [`docs/user-guide/memory.md`](memory.md) — Memory documents and session search
 - [`docs/user-guide/skills.md`](skills.md) — Full skills user guide
-- [`docs/memory/session_search_and_feedback.md`](../memory/session_search_and_feedback.md) — Internal design notes
 
 *Last reviewed: 2026-03-16*

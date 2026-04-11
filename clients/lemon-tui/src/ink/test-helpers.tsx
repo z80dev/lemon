@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { render } from 'ink-testing-library';
+import { vi } from 'vitest';
 import { AppProvider } from './context/AppContext.js';
 import { ThemeProvider } from './context/ThemeContext.js';
 import { StateStore } from '../state.js';
@@ -36,6 +37,36 @@ export function createMockConnection() {
 }
 
 export type MockConnection = ReturnType<typeof createMockConnection>;
+type TestRenderStream = {
+  frames: string[];
+  write: (frame: string) => void;
+  lastFrame: () => string | undefined;
+};
+
+type TestRenderStdin = {
+  isTTY: boolean;
+  write: (data: string) => void;
+  setEncoding: () => void;
+  setRawMode: () => void;
+  resume: () => void;
+  pause: () => void;
+  ref: () => void;
+  unref: () => void;
+  read: () => string | null;
+};
+
+export type RenderWithContextResult = {
+  rerender: (tree: React.ReactElement) => void;
+  unmount: () => void;
+  cleanup: () => void;
+  stdout: TestRenderStream;
+  stderr: TestRenderStream;
+  stdin: TestRenderStdin;
+  frames: string[];
+  lastFrame: () => string | undefined;
+  store: StateStore;
+  connection: MockConnection;
+};
 
 /**
  * Creates a StateStore with optional initial ready state.
@@ -69,7 +100,7 @@ export function renderWithContext(
     connection?: MockConnection;
     theme?: string;
   }
-) {
+): RenderWithContextResult {
   const store = opts?.store || createTestStore();
   const connection = opts?.connection || createMockConnection();
   const theme = opts?.theme || 'lemon';

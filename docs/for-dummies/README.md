@@ -46,7 +46,7 @@ provides config, storage, and the event bus that connects everything.
 
 This guide assumes you:
 
-- Have Lemon installed and running (see the main [README](../../README.md) for setup)
+- Have Lemon installed and running (see the main [README](https://github.com/z80dev/lemon/blob/main/README.md) for setup)
 - Have a Telegram bot configured and can send it messages
 - Are curious about how things work under the hood
 

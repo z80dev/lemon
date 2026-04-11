@@ -78,12 +78,6 @@
     max_age_days: 90
   },
   %{
-    path: "docs/benchmarks.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 90
-  },
-  %{
     path: "docs/config.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
@@ -94,18 +88,6 @@
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
     max_age_days: 90
-  },
-  %{
-    path: "docs/remote-cli-task-execution-plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-18],
-    max_age_days: 60
-  },
-  %{
-    path: "docs/pr3_execution_request_boundary.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-23],
-    max_age_days: 60
   },
   %{
     path: "docs/subagent-parent-questions.md",
@@ -138,57 +120,15 @@
     max_age_days: 90
   },
   %{
-    path: "docs/quality_harness.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
-    max_age_days: 60
-  },
-  %{
     path: "docs/skills.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
     max_age_days: 90
   },
   %{
-    path: "docs/missions.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/missions_phase1_plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/lemon-cli-implementation-plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/M7_02_quick_reference.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
-    max_age_days: 90
-  },
-  %{
-    path: "docs/testing/lemonade-stand-stress-test.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 30
-  },
-  %{
     path: "docs/testing/deterministic-test-patterns.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],
-    max_age_days: 45
-  },
-  %{
-    path: "docs/testing/missing-tests-plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
     max_age_days: 45
   },
   %{
@@ -228,24 +168,6 @@
     max_age_days: 90
   },
   %{
-    path: "docs/agent-loop/README.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 45
-  },
-  %{
-    path: "docs/agent-loop/GOALS.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 45
-  },
-  %{
-    path: "docs/agent-loop/RUN_LOG.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
-    max_age_days: 45
-  },
-  %{
     path: "docs/contributor/ownership.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
@@ -258,18 +180,6 @@
     max_age_days: 90
   },
   %{
-    path: "docs/product/runtime_plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
-    max_age_days: 60
-  },
-  %{
-    path: "docs/product/skill_bundle_audit_plan.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
-    max_age_days: 45
-  },
-  %{
     path: "docs/skills_v2.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
@@ -279,12 +189,6 @@
     path: "docs/reference/skill-manifest-v2.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-17],
-    max_age_days: 60
-  },
-  %{
-    path: "docs/memory/session_search_and_feedback.md",
-    owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
     max_age_days: 60
   },
   %{
@@ -327,6 +231,18 @@
     path: "docs/architecture/overview.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-03-19-ai-boundary-extraction-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-19],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-03-26-async-followup-delivery-and-provenance-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-26],
     max_age_days: 60
   },
   %{
