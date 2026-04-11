@@ -288,6 +288,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.session_key == "agent:main:main"
       assert followup.agent_id == "main"
+      assert followup.engine_id == "echo"
       assert followup.cwd == parent_cwd
       assert followup.prompt =~ "router output"
       refute followup.prompt =~ "Router followup task"
@@ -300,6 +301,50 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
                  delivery: :followup
                }
              ]
+    end
+
+    test "queue_mode followup preserves long router followup output" do
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
+
+      long_output =
+        "START_LONG_ROUTER\n" <>
+          String.duplicate("router followup body ", 300) <>
+          "\nEND_LONG_ROUTER"
+
+      result =
+        Task.execute(
+          "call_router_followup_long",
+          %{
+            "description" => "Long router followup task",
+            "prompt" => "Return a long completion",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "followup"
+          },
+          nil,
+          nil,
+          "/tmp/task_async_long_router",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: long_output}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: dead_pid,
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
+      assert followup.engine_id == "echo"
+      assert followup.prompt == long_output
+      assert String.length(followup.prompt) > 2_000
     end
 
     test "queue_mode followup uses the live session even when the parent is idle" do
@@ -1451,6 +1496,45 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.content == "Widget built successfully"
+    end
+
+    test "formats successful completion with long answer without truncation" do
+      long_output =
+        "START_LONG_LIVE\n" <>
+          String.duplicate("live followup body ", 300) <>
+          "\nEND_LONG_LIVE"
+
+      result =
+        Task.execute(
+          "call_fmt_long_success",
+          %{
+            "description" => "Build long widget",
+            "prompt" => "Build it with a long answer",
+            "async" => true,
+            "auto_followup" => true,
+            "queue_mode" => "followup"
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: long_output}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
+      assert message.content == long_output
+      assert String.length(message.content) > 2_000
     end
 
     test "formats failed task with error" do

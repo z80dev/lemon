@@ -58,6 +58,9 @@ defmodule Ai.Providers.OpenAICompletions do
 
   require Logger
 
+  @max_retries 3
+  @base_retry_delay_ms 400
+
   # ============================================================================
   # Provider Behaviour Implementation
   # ============================================================================
@@ -94,7 +97,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
       EventStream.push_async(stream, {:start, output})
 
-      output = stream_request(stream, output, url, headers, params)
+      output = stream_request_with_retries(stream, output, url, headers, params)
 
       if output.stop_reason in [:error, :aborted] do
         EventStream.error(stream, output)
@@ -853,34 +856,71 @@ defmodule Ai.Providers.OpenAICompletions do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request(stream, output, url, headers, params) do
-    # Use Req for HTTP with SSE streaming
-    request =
-      Req.new(
-        method: :post,
-        url: url,
-        headers: headers,
-        json: params,
-        receive_timeout: 120_000,
-        into: :self
-      )
-
-    case Req.request(request) do
+  defp stream_request_with_retries(stream, initial_output, url, headers, params, attempt \\ 0) do
+    case stream_request(url, headers, params) do
       {:ok, response} ->
-        if response.status in 200..299 do
-          process_sse_stream(stream, output, response)
-        else
-          body = response.body
-          error_msg = extract_error_message(body)
-          %{output | stop_reason: :error, error_message: "HTTP #{response.status}: #{error_msg}"}
+        cond do
+          response.status in 200..299 ->
+            output = process_sse_stream(stream, initial_output, response)
+
+            if attempt < @max_retries and retryable_stream_output_error?(output) do
+              Process.sleep(retry_delay_ms(attempt))
+
+              stream_request_with_retries(
+                stream,
+                initial_output,
+                url,
+                headers,
+                params,
+                attempt + 1
+              )
+            else
+              output
+            end
+
+          attempt < @max_retries and
+              Ai.Providers.RetryHelper.retryable_http_status?(response.status) ->
+            Process.sleep(retry_delay_ms(attempt))
+            stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
+
+          true ->
+            body = response.body
+            error_msg = extract_error_message(body)
+
+            %{
+              initial_output
+              | stop_reason: :error,
+                error_message: "HTTP #{response.status}: #{error_msg}"
+            }
         end
 
-      {:error, %Req.TransportError{reason: reason}} ->
-        %{output | stop_reason: :error, error_message: "Transport error: #{inspect(reason)}"}
+      {:error, %Req.TransportError{reason: reason} = error} ->
+        if attempt < @max_retries and Ai.Providers.RetryHelper.retryable_transport_error?(error) do
+          Process.sleep(retry_delay_ms(attempt))
+          stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
+        else
+          %{
+            initial_output
+            | stop_reason: :error,
+              error_message: "Transport error: #{inspect(reason)}"
+          }
+        end
 
       {:error, error} ->
-        %{output | stop_reason: :error, error_message: "Request error: #{inspect(error)}"}
+        %{initial_output | stop_reason: :error, error_message: "Request error: #{inspect(error)}"}
     end
+  end
+
+  defp stream_request(url, headers, params) do
+    Req.new(
+      method: :post,
+      url: url,
+      headers: headers,
+      json: params,
+      receive_timeout: 120_000,
+      into: :self
+    )
+    |> Req.request()
   end
 
   defp process_sse_stream(stream, output, response) do
@@ -998,6 +1038,38 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp process_sse_line(_stream, state, _line), do: state
+
+  defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
+    Ai.Providers.RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
+  end
+
+  defp retryable_stream_output_error?(
+         %AssistantMessage{
+           stop_reason: :error,
+           error_message: error_message
+         } = output
+       )
+       when is_binary(error_message) do
+    not meaningful_output?(output) and retryable_stream_error_message?(error_message)
+  end
+
+  defp retryable_stream_output_error?(_), do: false
+
+  defp meaningful_output?(%AssistantMessage{content: content}) when is_list(content),
+    do: content != []
+
+  defp meaningful_output?(_), do: false
+
+  defp retryable_stream_error_message?(message) when is_binary(message) do
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "timeout") or
+      String.contains?(downcased, ":closed") or
+      String.contains?(downcased, "econnrefused") or
+      String.contains?(downcased, "econnreset") or
+      String.contains?(downcased, "nxdomain") or
+      String.contains?(downcased, "unreachable")
+  end
 
   defp process_event_data(stream, state, data) do
     state = process_usage(state, data)

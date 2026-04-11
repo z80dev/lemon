@@ -207,6 +207,78 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
+  test "retries retryable transport errors before succeeding" do
+    test_pid = self()
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      attempt =
+        Agent.get_and_update(attempts, fn count ->
+          next = count + 1
+          {next, next}
+        end)
+
+      send(test_pid, {:transport_attempt, attempt})
+
+      case attempt do
+        1 -> Req.Test.transport_error(conn, :closed)
+        _ -> Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end
+    end)
+
+    model = %Model{
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/coding/paas/v4"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert_receive {:transport_attempt, 1}, 1000
+    assert_receive {:transport_attempt, 2}, 1500
+    assert {:ok, _result} = EventStream.result(stream, 2000)
+  end
+
+  test "retries retryable HTTP failures before succeeding" do
+    test_pid = self()
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      attempt =
+        Agent.get_and_update(attempts, fn count ->
+          next = count + 1
+          {next, next}
+        end)
+
+      send(test_pid, {:http_attempt, attempt})
+
+      case attempt do
+        1 -> Plug.Conn.send_resp(conn, 503, ~s({"error":"temporary overload"}))
+        _ -> Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end
+    end)
+
+    model = %Model{
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/coding/paas/v4"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert_receive {:http_attempt, 1}, 1000
+    assert_receive {:http_attempt, 2}, 1500
+    assert {:ok, _result} = EventStream.result(stream, 2000)
+  end
+
   test "merges headers with opts overriding model headers" do
     test_pid = self()
 

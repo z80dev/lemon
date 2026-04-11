@@ -68,24 +68,22 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   def maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
 
-  @followup_max_answer_chars 2000
-
   @spec task_auto_followup_text(map(), String.t() | nil, String.t() | nil, term()) :: String.t()
   def task_auto_followup_text(_followup_context, _task_id, _run_id, outcome) do
     case normalize_followup_outcome(outcome) do
       %{ok: true, answer: answer} when is_binary(answer) ->
         answer
-        |> truncate_followup_answer()
+        |> normalize_followup_text()
         |> empty_followup_fallback("Task completed.")
 
       %{ok: false, error: error, answer: answer} ->
         answer
-        |> truncate_followup_answer()
+        |> normalize_followup_text()
         |> empty_followup_fallback("Task failed: #{format_error(error)}")
     end
   end
 
-  defp truncate_followup_answer(text) when is_binary(text) do
+  defp normalize_followup_text(text) when is_binary(text) do
     trimmed =
       try do
         String.trim(text)
@@ -93,14 +91,10 @@ defmodule CodingAgent.Tools.Task.Followup do
         ArgumentError -> inspect(text, limit: 200)
       end
 
-    if String.length(trimmed) > @followup_max_answer_chars do
-      String.slice(trimmed, 0, @followup_max_answer_chars) <> "..."
-    else
-      trimmed
-    end
+    trimmed
   end
 
-  defp truncate_followup_answer(_), do: ""
+  defp normalize_followup_text(_), do: ""
 
   defp empty_followup_fallback("", fallback), do: fallback
   defp empty_followup_fallback(text, _fallback), do: text
@@ -230,6 +224,7 @@ defmodule CodingAgent.Tools.Task.Followup do
           origin: :node,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
+          engine_id: "echo",
           prompt: text,
           queue_mode: queue_mode,
           cwd: cwd,

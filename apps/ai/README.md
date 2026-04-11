@@ -74,7 +74,7 @@ Ai.Supervisor (one_for_one)
 | Module | `api_id` | Covers |
 |--------|----------|--------|
 | `Ai.Providers.Anthropic` | `:anthropic_messages` | Anthropic Claude (also Kimi, OpenCode, MiniMax Anthropic-compat via same wire format) |
-| `Ai.Providers.OpenAICompletions` | `:openai_completions` | OpenAI Chat Completions and compatible APIs (Groq, Mistral, xAI, Cerebras, OpenRouter, HuggingFace, etc.) |
+| `Ai.Providers.OpenAICompletions` | `:openai_completions` | OpenAI Chat Completions and compatible APIs (Groq, Mistral, xAI, Cerebras, OpenRouter, HuggingFace, etc.); retries transient startup HTTP/transport failures before surfacing an error |
 | `Ai.Providers.OpenAIResponses` | `:openai_responses` | OpenAI Responses API |
 | `Ai.Providers.OpenAICodexResponses` | `:openai_codex_responses` | OpenAI Codex (ChatGPT JWT auth) |
 | `Ai.Providers.AzureOpenAIResponses` | `:azure_openai_responses` | Azure OpenAI |
