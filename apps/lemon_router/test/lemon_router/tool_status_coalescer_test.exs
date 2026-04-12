@@ -581,7 +581,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
                       kind: :edit,
-                      content: %{message_id: "1001", text: text}
+                      content: %{message_id: "1001", text: text},
+                      meta: %{run_id: ^run_id, intent_kind: :tool_status_snapshot}
                     }},
                    1_000
 
@@ -644,7 +645,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
                       kind: :edit,
-                      content: %{message_id: "1001", text: text}
+                      content: %{message_id: "1001", text: text},
+                      meta: %{run_id: ^run_id, intent_kind: :tool_status_snapshot}
                     }},
                    1_000
 

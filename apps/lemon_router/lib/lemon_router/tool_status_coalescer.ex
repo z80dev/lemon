@@ -643,8 +643,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
         if available_for_prefix <= 0 do
           text
         else
-          prefix_tail = String.slice(prefix, -available_for_prefix, available_for_prefix)
-          "…" <> prefix_tail <> separator <> text
+          prefix_head = String.slice(prefix, 0, available_for_prefix)
+          prefix_head <> "…" <> separator <> text
         end
     end
   end
