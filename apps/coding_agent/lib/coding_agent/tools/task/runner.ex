@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias AgentCore.CliRunners.{
     ClaudeSubagent,
     CodexSubagent,
+    DroidSubagent,
     KimiSubagent,
     OpencodeSubagent,
     PiSubagent
@@ -61,14 +62,26 @@ defmodule CodingAgent.Tools.Task.Runner do
           String.t(),
           String.t() | nil,
           String.t() | nil,
+          String.t() | nil,
           (AgentToolResult.t() -> :ok) | nil,
           reference() | nil
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute_via_cli_engine(engine, prompt, cwd, description, role_id, model, on_update, signal) do
+  def execute_via_cli_engine(
+        engine,
+        prompt,
+        cwd,
+        description,
+        role_id,
+        model,
+        thinking_level,
+        on_update,
+        signal
+      ) do
     {module, engine_label} =
       case engine do
         "codex" -> {CodexSubagent, "codex"}
         "claude" -> {ClaudeSubagent, "claude"}
+        "droid" -> {DroidSubagent, "droid"}
         "kimi" -> {KimiSubagent, "kimi"}
         "opencode" -> {OpencodeSubagent, "opencode"}
         "pi" -> {PiSubagent, "pi"}
@@ -77,11 +90,17 @@ defmodule CodingAgent.Tools.Task.Runner do
     role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
 
     Logger.info(
-      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} cwd=#{inspect(cwd)}"
+      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} thinking_level=#{inspect(thinking_level)} cwd=#{inspect(cwd)}"
     )
 
     with {:ok, session} <-
-           module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt, model: model) do
+           module.start(
+             prompt: prompt,
+             cwd: cwd,
+             role_prompt: role_prompt,
+             model: model,
+             thinking_level: thinking_level
+           ) do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
 
       result =
@@ -95,6 +114,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         engine: engine_label,
         role: role_id,
         model: model,
+        thinking_level: thinking_level,
         resume_token: result.resume_token,
         error: result.error,
         stderr: result[:stderr]

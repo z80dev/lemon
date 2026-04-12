@@ -12,6 +12,11 @@ defmodule Lemon.Reload do
   It also exposes `reload_system/1` for orchestrated reload workflows under one
   global lock: app reloads, extension reloads, and `code_change/3` callbacks for
   live OTP processes.
+
+  When callers pass `compile: true`, source-based runtimes first run `mix compile`
+  inside the live node before reloading modules from disk. Releases still support
+  BEAM reload, but explicit source compilation is unavailable there because Mix is
+  not running.
   """
 
   @lock_key {__MODULE__, :reload_lock}
@@ -20,6 +25,12 @@ defmodule Lemon.Reload do
   @type skip_item :: %{target: module() | String.t() | atom(), reason: term()}
 
   @type reload_kind :: :module | :app | :extension | :code_change | :system
+  @type compile_metadata :: %{
+          ran: true,
+          source: :mix | :custom,
+          force: boolean(),
+          duration_ms: non_neg_integer()
+        }
 
   @type result :: %{
           kind: reload_kind(),
@@ -36,7 +47,10 @@ defmodule Lemon.Reload do
   def reload_module(module, opts \\ []) when is_atom(module) do
     with_reload_lock(opts, fn ->
       telemetry_span(:module, module, fn ->
-        do_reload_module(module)
+        with {:ok, compile_meta} <- maybe_compile_sources(opts),
+             {:ok, result} <- do_reload_module(module) do
+          {:ok, maybe_put_compile_metadata(result, compile_meta)}
+        end
       end)
     end)
   end
@@ -79,7 +93,10 @@ defmodule Lemon.Reload do
   def reload_app(app, opts \\ []) when is_atom(app) do
     with_reload_lock(opts, fn ->
       telemetry_span(:app, app, fn ->
-        do_reload_app(app)
+        with {:ok, compile_meta} <- maybe_compile_sources(opts),
+             {:ok, result} <- do_reload_app(app) do
+          {:ok, maybe_put_compile_metadata(result, compile_meta)}
+        end
       end)
     end)
   end
@@ -105,44 +122,50 @@ defmodule Lemon.Reload do
       telemetry_span(:system, :system, fn ->
         started = System.monotonic_time()
 
-        apps = normalize_atom_list(Keyword.get(opts, :apps, []))
-        extension_paths = normalize_string_list(Keyword.get(opts, :extensions, []))
+        with {:ok, compile_meta} <- maybe_compile_sources(opts) do
+          apps = normalize_atom_list(Keyword.get(opts, :apps, []))
+          extension_paths = normalize_string_list(Keyword.get(opts, :extensions, []))
 
-        code_change_targets =
-          opts
-          |> Keyword.get(:code_change_targets, [])
-          |> List.wrap()
+          code_change_targets =
+            opts
+            |> Keyword.get(:code_change_targets, [])
+            |> List.wrap()
 
-        app_results = Enum.map(apps, &unwrap(do_reload_app(&1)))
-        extension_results = Enum.map(extension_paths, &unwrap(do_reload_extension(&1)))
-        code_change_results = Enum.map(code_change_targets, &do_change_code_target/1)
+          app_results = Enum.map(apps, &unwrap(do_reload_app(&1)))
+          extension_results = Enum.map(extension_paths, &unwrap(do_reload_extension(&1)))
+          code_change_results = Enum.map(code_change_targets, &do_change_code_target/1)
 
-        results = app_results ++ extension_results ++ code_change_results
+          results = app_results ++ extension_results ++ code_change_results
 
-        reloaded =
-          results
-          |> Enum.flat_map(&Map.get(&1, :reloaded, []))
-          |> Enum.uniq()
+          reloaded =
+            results
+            |> Enum.flat_map(&Map.get(&1, :reloaded, []))
+            |> Enum.uniq()
 
-        skipped = Enum.flat_map(results, &Map.get(&1, :skipped, []))
-        errors = Enum.flat_map(results, &Map.get(&1, :errors, []))
+          skipped = Enum.flat_map(results, &Map.get(&1, :skipped, []))
+          errors = Enum.flat_map(results, &Map.get(&1, :errors, []))
 
-        {:ok,
-         %{
-           kind: :system,
-           target: :system,
-           status: status_for(reloaded, skipped, errors),
-           reloaded: reloaded,
-           skipped: skipped,
-           errors: errors,
-           duration_ms: elapsed_ms(started),
-           metadata: %{
-             results: results,
-             app_count: length(apps),
-             extension_count: length(extension_paths),
-             code_change_count: length(code_change_targets)
-           }
-         }}
+          {:ok,
+           %{
+             kind: :system,
+             target: :system,
+             status: status_for(reloaded, skipped, errors),
+             reloaded: reloaded,
+             skipped: skipped,
+             errors: errors,
+             duration_ms: elapsed_ms(started),
+             metadata:
+               maybe_put_compile_metadata(
+                 %{
+                   results: results,
+                   app_count: length(apps),
+                   extension_count: length(extension_paths),
+                   code_change_count: length(code_change_targets)
+                 },
+                 compile_meta
+               )
+           }}
+        end
       end)
     end)
   end
@@ -477,6 +500,65 @@ defmodule Lemon.Reload do
     end
   end
 
+  defp maybe_compile_sources(opts) do
+    if Keyword.get(opts, :compile, false) do
+      compile_force = Keyword.get(opts, :compile_force, Keyword.get(opts, :force, false))
+      compile_fn = Keyword.get(opts, :compile_fn)
+      started = System.monotonic_time()
+
+      cond do
+        is_function(compile_fn, 0) ->
+          case compile_fn.() do
+            :ok ->
+              {:ok,
+               %{
+                 ran: true,
+                 source: :custom,
+                 force: compile_force,
+                 duration_ms: elapsed_ms(started)
+               }}
+
+            {:error, reason} ->
+              {:error, {:compile_failed, reason}}
+
+            other ->
+              {:error, {:compile_failed, other}}
+          end
+
+        mix_available?() ->
+          try do
+            Mix.Task.reenable("compile")
+            args = if compile_force, do: ["--force"], else: []
+            _ = Mix.Task.run("compile", args)
+
+            {:ok,
+             %{
+               ran: true,
+               source: :mix,
+               force: compile_force,
+               duration_ms: elapsed_ms(started)
+             }}
+          rescue
+            e ->
+              {:error, {:compile_failed, Exception.message(e)}}
+          catch
+            kind, value ->
+              {:error, {:compile_failed, {kind, value}}}
+          end
+
+        true ->
+          {:error, :mix_unavailable}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp mix_available? do
+    Code.ensure_loaded?(Mix.Task) and function_exported?(Mix.Task, :run, 2) and
+      function_exported?(Mix.Task, :reenable, 1)
+  end
+
   defp with_reload_lock(opts, fun) do
     lock_nodes = Keyword.get(opts, :lock_nodes, [node()])
     retries = Keyword.get(opts, :lock_retries, 0)
@@ -514,6 +596,16 @@ defmodule Lemon.Reload do
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&Path.expand/1)
     |> Enum.uniq()
+  end
+
+  defp maybe_put_compile_metadata(result_or_metadata, nil), do: result_or_metadata
+
+  defp maybe_put_compile_metadata(%{metadata: metadata} = result, compile_meta) do
+    %{result | metadata: Map.put(metadata || %{}, :compile, compile_meta)}
+  end
+
+  defp maybe_put_compile_metadata(metadata, compile_meta) when is_map(metadata) do
+    Map.put(metadata, :compile, compile_meta)
   end
 
   defp ok_result(kind, target, reloaded, skipped, errors, started, metadata) do

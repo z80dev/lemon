@@ -334,7 +334,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
       assert {:error, message} = result
       assert message =~ "Engine must be one of:"
 
-      for engine <- ["internal", "codex", "claude", "kimi", "opencode", "pi"] do
+      for engine <- ["internal", "codex", "claude", "droid", "kimi", "opencode", "pi"] do
         assert message =~ engine
       end
     end
@@ -1321,7 +1321,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
     test "tool description lists supported engines", %{tmp_dir: tmp_dir} do
       tool = TaskTool.tool(tmp_dir, [])
 
-      for engine <- ["internal", "codex", "claude", "kimi", "opencode", "pi"] do
+      for engine <- ["internal", "codex", "claude", "droid", "kimi", "opencode", "pi"] do
         assert tool.description =~ "\"#{engine}\""
       end
     end

@@ -181,6 +181,7 @@ defmodule LemonControlPlane.Methods.SystemReload do
     opts = []
 
     opts = if params["force"] == true, do: Keyword.put(opts, :force, true), else: opts
+    opts = if params["compile"] == true, do: Keyword.put(opts, :compile, true), else: opts
 
     opts
   end

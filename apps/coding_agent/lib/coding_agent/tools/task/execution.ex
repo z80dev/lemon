@@ -148,7 +148,7 @@ defmodule CodingAgent.Tools.Task.Execution do
         is_function(run_override, 2) ->
           run_override.(on_update_safe, signal)
 
-        execution.engine in ["codex", "claude", "kimi", "opencode", "pi"] ->
+        execution.engine in ["codex", "claude", "droid", "kimi", "opencode", "pi"] ->
           Runner.execute_via_cli_engine(
             execution.engine,
             execution.prompt,
@@ -156,6 +156,7 @@ defmodule CodingAgent.Tools.Task.Execution do
             execution.description,
             execution.role_id,
             execution.validated.model,
+            execution.validated.thinking_level,
             on_update_safe,
             signal
           )

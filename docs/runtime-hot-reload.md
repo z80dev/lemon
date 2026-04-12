@@ -32,6 +32,8 @@ This prevents overlapping reload operations from racing against each other.
 - `extension` - compile and load one `.ex` / `.exs` extension file
 - `all` (default) - orchestrated reload path (apps + extensions + code_change)
 
+When `compile: true` is passed on source-based runtimes, Lemon first runs `mix compile` inside the live node and then reloads the requested modules/apps from the newly built BEAM files.
+
 ### Example Requests
 
 ```json
@@ -39,7 +41,7 @@ This prevents overlapping reload operations from racing against each other.
 ```
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"system.reload","params":{"scope":"all","apps":["lemon_core"],"extensions":["/tmp/my_extension.ex"]}}
+{"jsonrpc":"2.0","id":2,"method":"system.reload","params":{"scope":"all","apps":["lemon_core"],"extensions":["/tmp/my_extension.ex"],"compile":true}}
 ```
 
 ## Result Shape

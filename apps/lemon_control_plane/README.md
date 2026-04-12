@@ -252,7 +252,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | `usage.cost` | read | Cost breakdown for a date range |
 | `system-presence` | read | Current presence data |
 | `system-event` | write | Emit a system event |
-| `system.reload` | admin | Runtime reload of module/app/extension/all scopes |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes; `compile: true` recompiles source first on mix-run nodes |
 | `update.run` | admin | Trigger a system update (capability-gated) |
 
 ### Agent Management

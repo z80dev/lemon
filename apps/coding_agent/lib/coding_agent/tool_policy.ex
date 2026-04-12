@@ -313,6 +313,7 @@ defmodule CodingAgent.ToolPolicy do
   def engine_policy(:internal), do: from_profile(:full_access)
   def engine_policy(:codex), do: from_profile(:subagent_restricted)
   def engine_policy(:claude), do: from_profile(:subagent_restricted)
+  def engine_policy(:droid), do: from_profile(:subagent_restricted)
   def engine_policy(:kimi), do: from_profile(:subagent_restricted)
   def engine_policy(:opencode), do: from_profile(:subagent_restricted)
   def engine_policy(:pi), do: from_profile(:subagent_restricted)

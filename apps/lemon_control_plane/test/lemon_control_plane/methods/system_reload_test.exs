@@ -59,6 +59,15 @@ defmodule LemonControlPlane.Methods.SystemReloadTest do
       assert is_list(payload["results"])
     end
 
+    test "accepts compile flag for app reload" do
+      {:ok, payload} =
+        SystemReload.handle(%{"scope" => "app", "app" => "lemon_core", "compile" => true}, %{})
+
+      assert payload["kind"] == "app"
+      assert payload["status"] in ["ok", "partial", "error"]
+      assert get_in(payload, ["metadata", :compile, :ran]) == true
+    end
+
     test "returns invalid_request when app param missing" do
       assert {:error, {:invalid_request, message}} =
                SystemReload.handle(%{"scope" => "app"}, %{})

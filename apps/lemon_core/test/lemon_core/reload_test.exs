@@ -89,6 +89,15 @@ defmodule LemonCore.ReloadTest do
       assert {:ok, result} = Reload.reload_app(:lemon_core, force: true)
       assert result.kind == :app
     end
+
+    test "can compile before reloading an app" do
+      assert {:ok, result} =
+               Reload.reload_app(:lemon_core, compile: true, compile_fn: fn -> :ok end)
+
+      assert result.kind == :app
+      assert result.metadata.compile.ran == true
+      assert result.metadata.compile.source == :custom
+    end
   end
 
   describe "reload_extension/2" do
@@ -192,6 +201,19 @@ defmodule LemonCore.ReloadTest do
       assert result.kind == :system
       assert result.status == :error
       assert length(result.errors) >= 3
+    end
+
+    test "can compile before unified reload" do
+      assert {:ok, result} =
+               Reload.reload_system(
+                 apps: [:lemon_core],
+                 compile: true,
+                 compile_fn: fn -> :ok end
+               )
+
+      assert result.kind == :system
+      assert result.metadata.compile.ran == true
+      assert result.metadata.compile.source == :custom
     end
   end
 

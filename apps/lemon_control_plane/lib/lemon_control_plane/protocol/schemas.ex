@@ -708,6 +708,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "app" => %{"type" => "string"},
         "path" => %{"type" => "string"},
         "force" => %{"type" => "boolean"},
+        "compile" => %{"type" => "boolean"},
         "apps" => %{"type" => "array"},
         "extensions" => %{"type" => "array"}
       },
@@ -721,7 +722,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "path" => :string,
         "apps" => :list,
         "extensions" => :list,
-        "force" => :boolean
+        "force" => :boolean,
+        "compile" => :boolean
       }
     },
 

@@ -208,6 +208,7 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
              ]
 
       assert properties["module"]["type"] == "string"
+      assert properties["compile"]["type"] == "boolean"
       assert properties["app"]["type"] == "string"
       assert properties["path"]["type"] == "string"
       assert properties["force"]["type"] == "boolean"

@@ -180,7 +180,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"} =
+      assert {:error, "Engine must be one of: internal, codex, claude, droid, kimi, opencode, pi"} =
                result
     end
 
@@ -217,7 +217,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"} =
+      assert {:error, "Engine must be one of: internal, codex, claude, droid, kimi, opencode, pi"} =
                result
     end
 

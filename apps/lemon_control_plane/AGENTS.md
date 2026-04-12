@@ -189,7 +189,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `usage.cost` | read | Cost breakdown for a date range |
 | `system-presence` | read | Current presence data |
 | `system-event` | write | Emit a system event |
-| `system.reload` | admin | Runtime reload of module/app/extension/all scopes |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes; `compile: true` recompiles source first on mix-run nodes |
 | `update.run` | admin | Trigger a system update |
 
 ### Session Management
@@ -256,7 +256,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `config.patch` | admin | Partial config update |
 | `config.schema` | read | Get config schema |
 | `config.reload` | admin | Reload configuration |
-| `system.reload` | admin | Runtime reload of module/app/extension/all scopes |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes; `compile: true` recompiles source first on mix-run nodes |
 | `secrets.list` | read | List secret metadata (no values) |
 | `secrets.set` | admin | Store secret |
 | `secrets.delete` | admin | Remove secret |

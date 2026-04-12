@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
-  @valid_engines ["internal", "codex", "claude", "kimi", "opencode", "pi"]
+  @valid_engines ["internal", "codex", "claude", "droid", "kimi", "opencode", "pi"]
   @tool_only_guardrail_known_tools [
     "bash",
     "read",
@@ -219,11 +219,12 @@ defmodule CodingAgent.Tools.Task.Params do
         "  - \"internal\" (default): Lemon's built-in agent\n" <>
         "  - \"codex\": OpenAI Codex CLI\n" <>
         "  - \"claude\": Claude Code CLI\n" <>
+        "  - \"droid\": Factory Droid CLI\n" <>
         "  - \"kimi\": Kimi CLI\n" <>
         "  - \"opencode\": Opencode CLI\n" <>
         "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
         "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
-        "- thinking_level: Optional thinking level override for internal engine\n" <>
+        "- thinking_level: Optional thinking level override for internal engine or Droid reasoning effort\n" <>
         "- role: Optional specialization that applies to ANY engine\n" <>
         "- cwd: Optional working directory override\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>

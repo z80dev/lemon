@@ -201,6 +201,13 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "bash")
     end
 
+    test "droid is restricted" do
+      policy = ToolPolicy.engine_policy(:droid)
+
+      refute ToolPolicy.allowed?(policy, "bash")
+      refute ToolPolicy.allowed?(policy, "write")
+    end
+
     test "kimi is restricted" do
       policy = ToolPolicy.engine_policy(:kimi)
 
