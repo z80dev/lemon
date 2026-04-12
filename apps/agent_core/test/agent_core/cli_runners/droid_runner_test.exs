@@ -7,6 +7,7 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
   alias AgentCore.CliRunners.DroidSchema.{
     DroidCompletionEvent,
     DroidMessageEvent,
+    DroidReasoningEvent,
     DroidSystemEvent,
     DroidToolCallEvent,
     DroidToolResultEvent
@@ -141,6 +142,14 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
                DroidRunner.decode_line(json)
     end
 
+    test "decodes reasoning events" do
+      json =
+        ~s|{"type":"reasoning","id":"r_1","text":"Let me think...","timestamp":1,"session_id":"sess_1"}|
+
+      assert {:ok, %DroidReasoningEvent{id: "r_1", text: "Let me think...", session_id: "sess_1"}} =
+               DroidRunner.decode_line(json)
+    end
+
     test "decodes tool events" do
       call_json =
         ~s|{"type":"tool_call","id":"tc_1","messageId":"msg_1","toolId":"grep","toolName":"grep","parameters":{"pattern":"pong"},"timestamp":1,"session_id":"sess_1"}|
@@ -197,12 +206,48 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
     end
 
     test "tracks assistant messages without emitting events" do
-      state = RunnerState.new("/tmp/project")
+      state =
+        RunnerState.new("/tmp/project")
+        |> Map.put(:pending_reasoning, %{"r_1" => "Let me think..."})
+
       event = %DroidMessageEvent{role: "assistant", text: "pong", session_id: "sess_abc"}
 
-      assert {[], state, []} = DroidRunner.translate_event(event, state)
+      {[completed], state, []} = DroidRunner.translate_event(event, state)
+
+      assert %ActionEvent{phase: :completed, ok: true, action: %{kind: :note, id: "r_1"}} =
+               completed
+
       assert state.last_assistant_text == "pong"
       assert state.found_session == ResumeToken.new("droid", "sess_abc")
+      assert state.pending_reasoning == %{}
+    end
+
+    test "translates reasoning events to note lifecycle events" do
+      state = RunnerState.new("/tmp/project")
+      event = %DroidReasoningEvent{id: "r_1", text: "Let me think...", session_id: "sess_abc"}
+
+      {[started], state, []} = DroidRunner.translate_event(event, state)
+
+      assert %ActionEvent{phase: :started, action: action} = started
+      assert action.kind == :note
+      assert action.id == "r_1"
+      assert action.title == "Let me think..."
+      assert action.detail.text == "Let me think..."
+      assert state.pending_reasoning == %{"r_1" => "Let me think..."}
+
+      update = %DroidReasoningEvent{
+        id: "r_1",
+        text: "Let me think some more...",
+        session_id: "sess_abc"
+      }
+
+      {[updated], state, []} = DroidRunner.translate_event(update, state)
+
+      assert %ActionEvent{phase: :updated, action: action} = updated
+      assert action.kind == :note
+      assert action.id == "r_1"
+      assert action.title == "Let me think some more..."
+      assert state.pending_reasoning == %{"r_1" => "Let me think some more..."}
     end
 
     test "translates tool call and result events to action lifecycle events" do
@@ -241,6 +286,7 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
         RunnerState.new("/tmp/project")
         |> Map.put(:found_session, ResumeToken.new("droid", "sess_abc"))
         |> Map.put(:last_assistant_text, "fallback answer")
+        |> Map.put(:pending_reasoning, %{"r_1" => "Let me think..."})
 
       event = %DroidCompletionEvent{
         finalText: "pong",
@@ -251,7 +297,9 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
 
       {events, state, opts} = DroidRunner.translate_event(event, state)
 
-      assert [%CompletedEvent{} = completed] = events
+      assert [%ActionEvent{} = reasoning_completed, %CompletedEvent{} = completed] = events
+      assert reasoning_completed.phase == :completed
+      assert reasoning_completed.action.kind == :note
       assert completed.ok == true
       assert completed.answer == "pong"
       assert completed.resume == ResumeToken.new("droid", "sess_abc")
@@ -267,10 +315,17 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
         RunnerState.new("/tmp/project")
         |> Map.put(:found_session, ResumeToken.new("droid", "sess_abc"))
         |> Map.put(:last_assistant_text, "partial")
+        |> Map.put(:pending_reasoning, %{"r_1" => "Let me think..."})
 
       {events, _state} = DroidRunner.handle_exit_error(2, state)
 
-      assert length(events) == 2
+      assert length(events) == 3
+
+      assert Enum.any?(
+               events,
+               &match?(%ActionEvent{phase: :completed, action: %{kind: :note}}, &1)
+             )
+
       assert Enum.any?(events, &match?(%ActionEvent{action: %{kind: :warning}}, &1))
 
       assert Enum.any?(events, fn
@@ -287,53 +342,14 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
         RunnerState.new("/tmp/project")
         |> Map.put(:found_session, ResumeToken.new("droid", "sess_abc"))
         |> Map.put(:last_assistant_text, "partial")
+        |> Map.put(:pending_reasoning, %{"r_1" => "Let me think..."})
 
-      {[event], _state} = DroidRunner.handle_stream_end(state)
+      {[reasoning_event, event], _state} = DroidRunner.handle_stream_end(state)
 
+      assert %ActionEvent{phase: :completed, action: %{kind: :note}} = reasoning_event
       assert %CompletedEvent{ok: false, answer: "partial"} = event
       assert event.resume.engine == "droid"
       assert event.resume.value == "sess_abc"
-    end
-  end
-
-  @tag :integration
-  @tag :live
-  @tag timeout: 120_000
-  test "live smoke test returns a completion event" do
-    cond do
-      is_nil(System.find_executable("droid")) ->
-        {:skip, "droid CLI not installed"}
-
-      System.get_env("FACTORY_API_KEY") in [nil, ""] ->
-        {:skip, "FACTORY_API_KEY not configured"}
-
-      true ->
-        tmp_dir = Path.join(System.tmp_dir!(), "droid_test_#{System.unique_integer([:positive])}")
-        File.mkdir_p!(tmp_dir)
-        on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-        {:ok, pid} =
-          DroidRunner.start_link(
-            prompt: "respond with just the word pong",
-            cwd: tmp_dir,
-            timeout: 120_000
-          )
-
-        events =
-          pid
-          |> DroidRunner.stream()
-          |> AgentCore.EventStream.events()
-          |> Enum.to_list()
-
-        assert Enum.any?(events, &match?({:cli_event, %StartedEvent{engine: "droid"}}, &1))
-
-        assert Enum.any?(events, fn
-                 {:cli_event, %CompletedEvent{ok: true, answer: answer}} ->
-                   String.contains?(String.downcase(answer), "pong")
-
-                 _ ->
-                   false
-               end)
     end
   end
 end

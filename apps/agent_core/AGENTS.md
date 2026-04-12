@@ -69,6 +69,8 @@ AgentCore.Supervisor (:one_for_one)
 | `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_schema.ex` | JSON event parsing for each engine's output format. |
 | `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_subagent.ex` | Subagent wrappers integrating runners with `SubagentSupervisor`. |
 
+`DroidRunner` now treats Droid `reasoning` JSON blocks as note-style action events, matching the way other runners surface non-final thinking output instead of logging them as unknown event types.
+
 ## Common Modification Patterns
 
 ### Adding a new tool
@@ -256,6 +258,7 @@ end
 - `test/agent_core/abort_signal_test.exs` -- Abort signal ETS operations.
 - `test/agent_core/context_test.exs` -- Context estimation and truncation.
 - `test/agent_core/cli_runners/jsonl_runner_test.exs` -- Base runner behavior.
+- `test/agent_core/cli_runners/{claude,codex,droid,kimi}_integration_test.exs` -- Live CLI integration coverage for the JSON runner/subagent path.
 
 ## Gotchas and Important Invariants
 

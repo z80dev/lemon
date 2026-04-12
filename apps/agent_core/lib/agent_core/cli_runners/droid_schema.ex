@@ -45,6 +45,23 @@ defmodule AgentCore.CliRunners.DroidSchema do
               session_id: nil
   end
 
+  defmodule DroidReasoningEvent do
+    @moduledoc false
+    @type t :: %__MODULE__{
+            type: :reasoning,
+            id: String.t() | nil,
+            text: String.t() | nil,
+            timestamp: integer() | nil,
+            session_id: String.t() | nil
+          }
+
+    defstruct type: :reasoning,
+              id: nil,
+              text: nil,
+              timestamp: nil,
+              session_id: nil
+  end
+
   defmodule DroidToolCallEvent do
     @moduledoc false
     @type t :: %__MODULE__{
@@ -113,6 +130,7 @@ defmodule AgentCore.CliRunners.DroidSchema do
   @type droid_event ::
           DroidSystemEvent.t()
           | DroidMessageEvent.t()
+          | DroidReasoningEvent.t()
           | DroidToolCallEvent.t()
           | DroidToolResultEvent.t()
           | DroidCompletionEvent.t()
@@ -142,6 +160,15 @@ defmodule AgentCore.CliRunners.DroidSchema do
         {:ok,
          %DroidMessageEvent{
            role: Map.get(data, "role"),
+           id: Map.get(data, "id"),
+           text: Map.get(data, "text"),
+           timestamp: Map.get(data, "timestamp"),
+           session_id: Map.get(data, "session_id")
+         }}
+
+      "reasoning" ->
+        {:ok,
+         %DroidReasoningEvent{
            id: Map.get(data, "id"),
            text: Map.get(data, "text"),
            timestamp: Map.get(data, "timestamp"),

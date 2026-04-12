@@ -448,6 +448,7 @@ mix test apps/agent_core --include integration
 
 # Specific CLI runner integration test
 mix test apps/agent_core/test/agent_core/cli_runners/claude_integration_test.exs --include integration
+mix test apps/agent_core/test/agent_core/cli_runners/droid_integration_test.exs --include integration
 ```
 
 ### Test Organization

@@ -10,6 +10,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
   alias AgentCore.CliRunners.DroidSchema.{
     DroidCompletionEvent,
     DroidMessageEvent,
+    DroidReasoningEvent,
     DroidSystemEvent,
     DroidToolCallEvent,
     DroidToolResultEvent
@@ -30,6 +31,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
       :found_session,
       :last_assistant_text,
       :pending_actions,
+      :pending_reasoning,
       :cwd,
       :config,
       :model_override,
@@ -46,6 +48,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
         found_session: nil,
         last_assistant_text: nil,
         pending_actions: %{},
+        pending_reasoning: %{},
         cwd: cwd || File.cwd!(),
         config: config,
         model_override: normalize_model(Keyword.get(opts, :model)),
@@ -185,12 +188,42 @@ defmodule AgentCore.CliRunners.DroidRunner do
         %DroidMessageEvent{role: "assistant", text: text, session_id: session_id},
         state
       ) do
-    state =
+    {reasoning_events, state} =
       state
       |> maybe_capture_session(session_id)
       |> maybe_capture_assistant_text(text)
+      |> flush_reasoning_notes()
 
-    {[], state, []}
+    {reasoning_events, state, []}
+  end
+
+  def translate_event(
+        %DroidReasoningEvent{id: id, text: text, session_id: session_id},
+        state
+      ) do
+    state = maybe_capture_session(state, session_id)
+    action_id = normalize_reasoning_id(id)
+    title = normalize_reasoning_title(text)
+    detail = %{text: normalize_reasoning_text(text)}
+
+    {phase, pending_reasoning} =
+      if Map.has_key?(state.pending_reasoning, action_id) do
+        {:updated, Map.put(state.pending_reasoning, action_id, title)}
+      else
+        {:started, Map.put(state.pending_reasoning, action_id, title)}
+      end
+
+    {event, factory} =
+      EventFactory.action(state.factory,
+        phase: phase,
+        action_id: action_id,
+        kind: :note,
+        title: title,
+        detail: detail
+      )
+
+    state = %{state | factory: factory, pending_reasoning: pending_reasoning}
+    {[event], state, []}
   end
 
   def translate_event(
@@ -266,6 +299,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
       ) do
     token = capture_session(state.found_session, session_id)
     answer = normalize_answer(final_text || state.last_assistant_text)
+    {reasoning_events, state} = flush_reasoning_notes(%{state | found_session: token})
 
     Introspection.record(
       :engine_output_observed,
@@ -293,13 +327,15 @@ defmodule AgentCore.CliRunners.DroidRunner do
       EventFactory.completed_ok(state.factory, answer, resume: token, usage: usage)
 
     state = %{state | factory: factory, found_session: token}
-    {[event], state, [done: true] ++ maybe_found_session_opt(token)}
+    {reasoning_events ++ [event], state, [done: true] ++ maybe_found_session_opt(token)}
   end
 
   def translate_event(_data, state), do: {[], state, []}
 
   @impl true
   def handle_exit_error(exit_code, state) do
+    {reasoning_events, state} = flush_reasoning_notes(state)
+
     Introspection.record(
       :engine_subprocess_exited,
       %{engine: @engine, exit_code: exit_code, ok: false},
@@ -317,18 +353,19 @@ defmodule AgentCore.CliRunners.DroidRunner do
       )
 
     state = %{state | factory: factory}
-    {[note_event, completed_event], state}
+    {reasoning_events ++ [note_event, completed_event], state}
   end
 
   @impl true
   def handle_stream_end(state) do
+    {reasoning_events, state} = flush_reasoning_notes(state)
     answer = normalize_answer(state.last_assistant_text)
 
     cond do
       state.found_session == nil ->
         message = "droid exec finished but no session_id was captured"
         {event, factory} = EventFactory.completed_error(state.factory, message, answer: answer)
-        {[event], %{state | factory: factory}}
+        {reasoning_events ++ [event], %{state | factory: factory}}
 
       true ->
         message = "droid exec ended without a completion event"
@@ -339,7 +376,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
             resume: state.found_session
           )
 
-        {[event], %{state | factory: factory}}
+        {reasoning_events ++ [event], %{state | factory: factory}}
     end
   end
 
@@ -456,8 +493,43 @@ defmodule AgentCore.CliRunners.DroidRunner do
 
   defp maybe_capture_assistant_text(state, _), do: state
 
+  defp flush_reasoning_notes(%RunnerState{pending_reasoning: pending_reasoning} = state)
+       when map_size(pending_reasoning) == 0 do
+    {[], state}
+  end
+
+  defp flush_reasoning_notes(%RunnerState{pending_reasoning: pending_reasoning} = state) do
+    {events, factory} =
+      Enum.reduce(pending_reasoning, {[], state.factory}, fn {action_id, title},
+                                                             {events, factory} ->
+        {event, factory} =
+          EventFactory.action_completed(factory, action_id, :note, title, true,
+            detail: %{text: title}
+          )
+
+        {events ++ [event], factory}
+      end)
+
+    {events, %{state | factory: factory, pending_reasoning: %{}}}
+  end
+
   defp normalize_action_id(id) when is_binary(id) and id != "", do: id
   defp normalize_action_id(_), do: "droid.tool.#{:erlang.unique_integer([:positive])}"
+
+  defp normalize_reasoning_id(id) when is_binary(id) and id != "", do: id
+  defp normalize_reasoning_id(_), do: "droid.reasoning.#{:erlang.unique_integer([:positive])}"
+
+  defp normalize_reasoning_text(text) when is_binary(text), do: String.trim(text)
+  defp normalize_reasoning_text(_), do: ""
+
+  defp normalize_reasoning_title(text) do
+    text
+    |> normalize_reasoning_text()
+    |> case do
+      "" -> "Reasoning"
+      normalized -> String.slice(normalized, 0, 100)
+    end
+  end
 
   defp normalize_tool_name(name) when is_binary(name) and name != "", do: name
   defp normalize_tool_name(_), do: "tool"
