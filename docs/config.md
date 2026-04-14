@@ -53,8 +53,8 @@ auto_approve = false
 model = "gpt-4.1"
 
 [runtime.cli.droid]
-# Optional model override passed to `droid exec -m`.
-model = "builder-v1"
+# Optional model override passed to `droid exec -m`. When omitted, Lemon defaults Droid to `glm-5.1`.
+model = "glm-5.1"
 # Optional reasoning effort passed to `--reasoning-effort`.
 reasoning_effort = "medium"
 # Optional tool allow/deny lists passed to `--enabled-tools` / `--disabled-tools`.

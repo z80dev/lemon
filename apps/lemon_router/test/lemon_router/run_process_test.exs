@@ -824,6 +824,37 @@ defmodule LemonRouter.RunProcessTest do
       assert eventually(fn -> not Process.alive?(pid) end)
     end
 
+    test "watchdog can be disabled with zero timeout" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_request(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 0
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      refute_receive %LemonCore.Event{type: :run_completed}, 150
+      assert Process.alive?(pid)
+
+      GenServer.stop(pid)
+    end
+
     test "telegram run enters keepalive confirmation window before timeout" do
       run_id = "run_#{System.unique_integer([:positive])}"
 

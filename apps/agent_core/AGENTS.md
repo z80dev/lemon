@@ -69,7 +69,7 @@ AgentCore.Supervisor (:one_for_one)
 | `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_schema.ex` | JSON event parsing for each engine's output format. |
 | `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_subagent.ex` | Subagent wrappers integrating runners with `SubagentSupervisor`. |
 
-`DroidRunner` now treats Droid `reasoning` JSON blocks as note-style action events, matching the way other runners surface non-final thinking output instead of logging them as unknown event types.
+`DroidRunner` now treats Droid `reasoning` JSON blocks as note-style action events, matching the way other runners surface non-final thinking output instead of logging them as unknown event types. When callers do not pass a model override and no runtime config override is set, the runner itself defaults Droid to `glm-5.1` so Lemon does not silently inherit whatever the local CLI default happens to be.
 
 ## Common Modification Patterns
 

@@ -15,24 +15,23 @@ defmodule LemonRouter.RunProcess.Watchdog do
   @default_run_idle_watchdog_timeout_ms 2 * 60 * 60 * 1000
   @default_run_idle_watchdog_confirm_timeout_ms 5 * 60 * 1000
 
-  @spec resolve_run_watchdog_timeout_ms(keyword()) :: pos_integer()
+  @spec resolve_run_watchdog_timeout_ms(keyword()) :: pos_integer() | nil
   def resolve_run_watchdog_timeout_ms(opts) do
     timeout_ms =
-      opts[:run_watchdog_timeout_ms] ||
-        Application.get_env(
-          :lemon_router,
-          :run_process_idle_watchdog_timeout_ms,
-          nil
-        ) ||
-        Application.get_env(
-          :lemon_router,
-          :run_process_watchdog_timeout_ms,
-          @default_run_idle_watchdog_timeout_ms
-        )
+      first_present([
+        get_opt(opts, :run_watchdog_timeout_ms),
+        Application.get_env(:lemon_router, :run_process_idle_watchdog_timeout_ms, :unset),
+        Application.get_env(:lemon_router, :run_process_watchdog_timeout_ms, :unset)
+      ])
 
-    if is_integer(timeout_ms) and timeout_ms > 0,
-      do: timeout_ms,
-      else: @default_run_idle_watchdog_timeout_ms
+    case timeout_ms do
+      value when is_integer(value) and value > 0 -> value
+      0 -> nil
+      false -> nil
+      nil -> @default_run_idle_watchdog_timeout_ms
+      :unset -> @default_run_idle_watchdog_timeout_ms
+      _ -> @default_run_idle_watchdog_timeout_ms
+    end
   end
 
   @spec resolve_run_watchdog_confirm_timeout_ms(keyword()) :: pos_integer()
@@ -51,6 +50,22 @@ defmodule LemonRouter.RunProcess.Watchdog do
   end
 
   @spec schedule_run_watchdog(map()) :: map()
+  def schedule_run_watchdog(%{run_watchdog_timeout_ms: timeout_ms} = state)
+      when not is_integer(timeout_ms) or timeout_ms <= 0 do
+    now_ms = LemonCore.Clock.now_ms()
+    _ = cancel_run_watchdog_timer(state)
+
+    run_started_at_ms =
+      if is_integer(state.run_started_at_ms), do: state.run_started_at_ms, else: now_ms
+
+    %{
+      state
+      | run_started_at_ms: run_started_at_ms,
+        run_last_activity_at_ms: now_ms,
+        run_watchdog_ref: nil
+    }
+  end
+
   def schedule_run_watchdog(state) do
     timeout_ms = state.run_watchdog_timeout_ms || @default_run_idle_watchdog_timeout_ms
     now_ms = LemonCore.Clock.now_ms()
@@ -234,4 +249,12 @@ defmodule LemonRouter.RunProcess.Watchdog do
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
+
+  defp first_present(values) do
+    Enum.find(values, :unset, &(&1 != :unset))
+  end
+
+  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key, :unset)
+  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key, :unset)
+  defp get_opt(_, _), do: :unset
 end

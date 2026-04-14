@@ -23,6 +23,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
   alias LemonCore.ResumeToken
 
   @engine "droid"
+  @default_model "glm-5.1"
 
   defmodule RunnerState do
     @moduledoc false
@@ -427,10 +428,20 @@ defmodule AgentCore.CliRunners.DroidRunner do
 
   defp droid_model(%RunnerState{model_override: model}) when is_binary(model), do: model
 
-  defp droid_model(%RunnerState{config: %LemonConfig{} = cfg}),
-    do: get_in(cfg.agent || %{}, [:cli, :droid, :model])
+  defp droid_model(%RunnerState{config: %LemonConfig{} = cfg}) do
+    case get_in(cfg.agent || %{}, [:cli, :droid, :model]) do
+      model when is_binary(model) ->
+        case String.trim(model) do
+          "" -> @default_model
+          trimmed -> trimmed
+        end
 
-  defp droid_model(_), do: nil
+      _ ->
+        @default_model
+    end
+  end
+
+  defp droid_model(_), do: @default_model
 
   defp droid_reasoning_effort(%RunnerState{reasoning_effort_override: effort})
        when is_binary(effort), do: effort

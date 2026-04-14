@@ -21,8 +21,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
   @default_max_latency_ms 1200
   @status_text_max_length 4096
 
-  @max_actions 40
-
   defstruct [
     :session_key,
     :channel_id,
@@ -91,8 +89,19 @@ defmodule LemonRouter.ToolStatusCoalescer do
   explicit that the event originated from a bridged child run rather than the
   parent run's native engine event stream.
   """
-  def ingest_projected_child_action(session_key, channel_id, parent_run_id, surface, projected_event, opts \\ []) do
-    ingest_action(session_key, channel_id, parent_run_id, projected_event,
+  def ingest_projected_child_action(
+        session_key,
+        channel_id,
+        parent_run_id,
+        surface,
+        projected_event,
+        opts \\ []
+      ) do
+    ingest_action(
+      session_key,
+      channel_id,
+      parent_run_id,
+      projected_event,
       Keyword.merge(opts, surface: surface)
     )
   end
@@ -126,12 +135,17 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     existing_child_run_id = existing_detail[:child_run_id] || existing_detail["child_run_id"]
     incoming_child_run_id = incoming_detail[:child_run_id] || incoming_detail["child_run_id"]
-    existing_parent = existing_detail[:parent_tool_use_id] || existing_detail["parent_tool_use_id"]
-    incoming_parent = incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
+
+    existing_parent =
+      existing_detail[:parent_tool_use_id] || existing_detail["parent_tool_use_id"]
+
+    incoming_parent =
+      incoming_detail[:parent_tool_use_id] || incoming_detail["parent_tool_use_id"]
 
     is_binary(existing_child_run_id) and is_binary(incoming_child_run_id) and
       existing_child_run_id == incoming_child_run_id and existing_parent == incoming_parent and
-      normalize_embedded_kind(to_string(existing[:kind])) == normalize_embedded_kind(to_string(incoming[:kind])) and
+      normalize_embedded_kind(to_string(existing[:kind])) ==
+        normalize_embedded_kind(to_string(incoming[:kind])) and
       normalize_title(existing[:title]) == normalize_title(incoming[:title])
   end
 
@@ -957,15 +971,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     id = equivalent_action_id(actions, data) || id
     actions = Map.put(actions, id, data)
     order = if id in order, do: order, else: order ++ [id]
-
-    if length(order) > @max_actions do
-      drop = length(order) - @max_actions
-      {dropped, kept} = Enum.split(order, drop)
-      actions = Enum.reduce(dropped, actions, fn old_id, acc -> Map.delete(acc, old_id) end)
-      {actions, kept}
-    else
-      {actions, order}
-    end
+    {actions, order}
   end
 
   defp elapsed_since(nil), do: nil

@@ -157,6 +157,32 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
   end
 
+  test "retains more than forty actions" do
+    session_key = "agent:test:telegram:bot:dm:many-actions"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    for idx <- 1..45 do
+      ev = %{
+        engine: "lemon",
+        action: %{id: "a#{idx}", kind: "tool", title: "Action #{idx}", detail: %{}},
+        phase: :started,
+        ok: nil,
+        message: nil,
+        level: nil
+      }
+
+      assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    end
+
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+
+    assert length(state.order) == 45
+    assert Enum.take(state.order, 3) == ["a1", "a2", "a3"]
+    assert Enum.take(state.order, -3) == ["a43", "a44", "a45"]
+  end
+
   test "does not overwrite status_msg_id with nil meta updates" do
     session_key = "agent:test3:telegram:bot:dm:789"
     channel_id = "telegram"
@@ -451,7 +477,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       level: nil
     }
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
 
     assert :ok =
              ToolStatusCoalescer.ingest_projected_child_action(
@@ -462,10 +491,16 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                projected
              )
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_completed, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, poll_completed,
+               surface: surface
+             )
+
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
 
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+    [{pid, _}] =
+      Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+
     state = :sys.get_state(pid)
 
     matching_children =
@@ -737,7 +772,11 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         id: "taskproj:child_1:read_1",
         kind: "tool",
         title: "Read: AGENTS.md",
-        detail: %{parent_tool_use_id: "task_root", child_run_id: "child_1", task_id: "task-store-1"}
+        detail: %{
+          parent_tool_use_id: "task_root",
+          child_run_id: "child_1",
+          task_id: "task-store-1"
+        }
       },
       phase: :completed,
       ok: true,
@@ -745,7 +784,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       level: nil
     }
 
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started, surface: surface)
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               surface: surface
+             )
 
     assert :ok =
              ToolStatusCoalescer.ingest_projected_child_action(
@@ -758,7 +800,9 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id, surface: surface)
 
-    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+    [{pid, _}] =
+      Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id, surface})
+
     state = :sys.get_state(pid)
 
     assert String.contains?(state.last_text, "task(codex): inspect repo")

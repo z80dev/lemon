@@ -33,6 +33,8 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
                "-o",
                "stream-json",
                "--skip-permissions-unsafe",
+               "-m",
+               "glm-5.1",
                "--cwd",
                "/tmp/project",
                "respond with pong"
@@ -85,6 +87,13 @@ defmodule AgentCore.CliRunners.DroidRunnerTest do
                "/tmp/project",
                "continue"
              ]
+    end
+
+    test "falls back to glm-5.1 when no override or config is present" do
+      state = RunnerState.new("/tmp/project")
+      {_cmd, args} = DroidRunner.build_command("prompt", nil, state)
+
+      assert Enum.at(args, Enum.find_index(args, &(&1 == "-m")) + 1) == "glm-5.1"
     end
 
     test "prefers runtime overrides over config" do

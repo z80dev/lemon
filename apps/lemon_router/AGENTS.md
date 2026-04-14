@@ -178,11 +178,17 @@ of creating blank standalone `task:` status entries.
 Generated images and explicit file-send requests are tracked in
 `RunProcess.ArtifactTracker`; channels still receive them only through
 `auto_send_files` metadata on the answer finalization path.
+The router tool-status coalescer no longer drops older actions after a fixed count;
+it keeps the full in-memory action order and leaves presentation budgeting to
+the renderer/channel layer.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize
 `:run_completed`, but only after a short completion grace window so a real late `:run_completed`
 from the bus can win over the synthetic fallback.
+Run idle watchdog timeouts can be disabled by setting the resolved timeout to `0`
+(for example in tests or local long-running task flows), which leaves runs alive until
+the gateway or user explicitly ends them.
 
 ### Change compaction behavior
 
