@@ -370,9 +370,9 @@ defmodule LemonSim.Examples.StockMarket.Market do
     dollar_pressure =
       Enum.reduce(trades, Enum.into(stock_names(), %{}, &{&1, 0.0}), fn {_player_id, trade},
                                                                         acc ->
-        stock = get(trade, :stock)
-        action = get(trade, :action)
-        quantity = (get(trade, :quantity) || 0) * 1.0
+        stock = trade.stock
+        action = trade.action
+        quantity = trade.quantity * 1.0
         price = get_stock_price(stocks, stock) * 1.0
 
         case {action, stock} do
@@ -390,9 +390,9 @@ defmodule LemonSim.Examples.StockMarket.Market do
     call_pressure = aggregate_market_calls(market_calls)
 
     Enum.into(stocks, %{}, fn {ticker, stock_data} ->
-      current = get(stock_data, :price, 0) * 1.0
-      volatility = get(stock_data, :volatility, 1.0)
-      history = get(stock_data, :history, [])
+      current = stock_data.price * 1.0
+      volatility = Map.get(stock_data, :volatility, 1.0)
+      history = Map.get(stock_data, :history, [])
       target = Map.get(round_targets, ticker, current)
 
       # Log-scaled dollar flow (diminishing returns for large trades)
@@ -440,9 +440,9 @@ defmodule LemonSim.Examples.StockMarket.Market do
       if is_nil(player) do
         {acc_players, acc_log}
       else
-        action = get(trade, :action, "hold")
-        stock = get(trade, :stock)
-        quantity = get(trade, :quantity, 0)
+        action = trade.action
+        stock = trade.stock
+        quantity = trade.quantity
         price = get_stock_price(stocks, stock)
 
         case action do
@@ -509,11 +509,11 @@ defmodule LemonSim.Examples.StockMarket.Market do
   @spec update_reputations(map(), list(), map()) :: {map(), list()}
   def update_reputations(players, market_calls, price_changes) do
     Enum.reduce(market_calls, {players, []}, fn call, {acc_players, acc_updates} ->
-      player_id = get(call, :player)
-      stock = get(call, :stock)
-      stance = get(call, :stance)
-      confidence = get(call, :confidence, 1)
-      change = price_changes |> Map.get(stock, %{}) |> get(:change, 0)
+      player_id = call.player
+      stock = call.stock
+      stance = call.stance
+      confidence = Map.get(call, :confidence, 1)
+      change = price_changes |> Map.get(stock, %{}) |> Map.get(:change, 0)
 
       accurate? =
         case stance do
@@ -530,11 +530,11 @@ defmodule LemonSim.Examples.StockMarket.Market do
           if player do
             next_reputation =
               player
-              |> get(:reputation, @initial_reputation)
+              |> Map.get(:reputation, @initial_reputation)
               |> Kernel.+(reputation_delta)
               |> clamp(10, 100)
 
-            history = get(player, :reputation_history, [@initial_reputation])
+            history = Map.get(player, :reputation_history, [@initial_reputation])
 
             player
             |> Map.put(:reputation, next_reputation)
@@ -550,7 +550,7 @@ defmodule LemonSim.Examples.StockMarket.Market do
         accurate: accurate?,
         delta: reputation_delta,
         reputation:
-          updated_players |> Map.get(player_id, %{}) |> get(:reputation, @initial_reputation)
+          updated_players |> Map.get(player_id, %{}) |> Map.get(:reputation, @initial_reputation)
       }
 
       {updated_players, acc_updates ++ [update_entry]}
@@ -915,10 +915,10 @@ defmodule LemonSim.Examples.StockMarket.Market do
 
   defp aggregate_market_calls(market_calls) do
     Enum.reduce(market_calls, %{}, fn call, acc ->
-      stock = get(call, :stock)
-      stance = get(call, :stance)
-      confidence = max(get(call, :confidence, 1), 1)
-      reputation = get(call, :reputation, @initial_reputation)
+      stock = call.stock
+      stance = call.stance
+      confidence = max(Map.get(call, :confidence, 1), 1)
+      reputation = Map.get(call, :reputation, @initial_reputation)
       weight = confidence * (0.5 + reputation / 50)
 
       effect =

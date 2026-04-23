@@ -59,6 +59,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 - `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
 - `State.version` tracks all state mutations, not just appended events.
 - When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
+- After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.
 - Werewolf has two distinct information views by design: player/projector context hides live `cast_vote` events and private night actions, while replay/video rendering is audience-omniscient and may show all roles plus hidden night decisions.
 - Werewolf player/projector context is name-first: assigned display names should be used in public discussion/history, while tool calls still use stable internal ids such as `player_4`.
 - Werewolf run scripts should use the onboarded Gemini CLI provider (`:google_gemini_cli`, user-facing alias `gemini`) plus Codex (`:"openai-codex"`) and Kimi models. `:google` is the separate AI Studio provider and will not use `mix lemon.onboard gemini` credentials.

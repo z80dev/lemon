@@ -39,13 +39,13 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
   end
 
   defp build_tier_metrics(tier_id, tier, demand_history, message_log, winner) do
-    total_cost = get(tier, :total_cost, 0.0)
-    cost_history = get(tier, :cost_history, [])
-    order_history = get(tier, :order_history, [])
-    orders_received = get(tier, :orders_received, 0)
-    orders_fulfilled = get(tier, :orders_fulfilled, 0)
+    total_cost = Map.get(tier, :total_cost, 0.0)
+    cost_history = Map.get(tier, :cost_history, [])
+    order_history = Map.get(tier, :order_history, [])
+    orders_received = Map.get(tier, :orders_received, 0)
+    orders_fulfilled = Map.get(tier, :orders_fulfilled, 0)
 
-    order_quantities = Enum.map(order_history, &get(&1, :quantity, 0))
+    order_quantities = Enum.map(order_history, &Map.get(&1, :quantity, 0))
     fill_rate = DemandModel.fill_rate(orders_fulfilled, orders_received)
     bullwhip = DemandModel.bullwhip_ratio(order_quantities, demand_history)
 
@@ -53,7 +53,9 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
       if cost_history == [] do
         0.0
       else
-        total_inv = Enum.sum(Enum.map(cost_history, fn c -> get(c, :inventory_snapshot, 0.0) end))
+        total_inv =
+          Enum.sum(Enum.map(cost_history, fn c -> Map.get(c, :inventory_snapshot, 0.0) end))
+
         total_inv / length(cost_history)
       end
 
@@ -64,12 +66,12 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
 
     messages_sent =
       Enum.count(message_log, fn log ->
-        get(log, :from, nil) == tier_id
+        Map.get(log, :from) == tier_id
       end)
 
-    total_holding = Enum.sum(Enum.map(cost_history, fn c -> get(c, :holding, 0.0) end))
-    total_stockout = Enum.sum(Enum.map(cost_history, fn c -> get(c, :stockout, 0.0) end))
-    total_ordering = Enum.sum(Enum.map(cost_history, fn c -> get(c, :ordering, 0.0) end))
+    total_holding = Enum.sum(Enum.map(cost_history, fn c -> Map.get(c, :holding, 0.0) end))
+    total_stockout = Enum.sum(Enum.map(cost_history, fn c -> Map.get(c, :stockout, 0.0) end))
+    total_ordering = Enum.sum(Enum.map(cost_history, fn c -> Map.get(c, :ordering, 0.0) end))
 
     %{
       role: tier_id,
@@ -92,14 +94,14 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     all_costs =
       Enum.map(@tier_order, fn tier_id ->
         tier = Map.get(tiers, tier_id, %{})
-        get(tier, :total_cost, 0.0)
+        Map.get(tier, :total_cost, 0.0)
       end)
 
     computed_total = if total_chain_cost, do: total_chain_cost, else: Enum.sum(all_costs)
 
     retailer = Map.get(tiers, "retailer", %{})
-    retailer_fulfilled = get(retailer, :orders_fulfilled, 0)
-    retailer_received = get(retailer, :orders_received, 0)
+    retailer_fulfilled = Map.get(retailer, :orders_fulfilled, 0)
+    retailer_received = Map.get(retailer, :orders_received, 0)
     end_to_end_fill_rate = DemandModel.fill_rate(retailer_fulfilled, retailer_received)
 
     avg_demand =

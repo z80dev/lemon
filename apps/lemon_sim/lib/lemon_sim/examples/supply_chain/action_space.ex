@@ -130,8 +130,8 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
       },
       label: "Send Forecast",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        recipient = Map.get(params, "recipient", Map.get(params, :recipient))
-        forecast = Map.get(params, "forecast", Map.get(params, :forecast, %{}))
+        recipient = params["recipient"]
+        forecast = params["forecast"]
         event = Events.send_forecast(actor_id, recipient, forecast)
 
         {:ok,
@@ -167,7 +167,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
       },
       label: "Request Info",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        target = Map.get(params, "target", Map.get(params, :target))
+        target = params["target"]
         event = Events.request_info(actor_id, target)
 
         {:ok,
@@ -210,7 +210,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
   defp order_tools(world, actor_id) do
     tiers = get(world, :tiers, %{})
     tier = Map.get(tiers, actor_id, %{})
-    safety_stock = get(tier, :safety_stock, 0)
+    safety_stock = Map.get(tier, :safety_stock, 0)
 
     [
       place_order_tool(actor_id, safety_stock),
@@ -253,7 +253,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
       },
       label: "Place Order",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        quantity = Map.get(params, "quantity", Map.get(params, :quantity, 0))
+        quantity = params["quantity"]
         event = Events.place_order(actor_id, quantity)
 
         {:ok,
@@ -286,7 +286,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
       },
       label: "Adjust Safety Stock",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        target = Map.get(params, "target_minimum", Map.get(params, :target_minimum, 0))
+        target = params["target_minimum"]
         event = Events.adjust_safety_stock(actor_id, target)
 
         {:ok,
@@ -325,7 +325,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
       },
       label: "Expedite Order",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        quantity = Map.get(params, "quantity", Map.get(params, :quantity, 0))
+        quantity = params["quantity"]
         event = Events.expedite_order(actor_id, quantity)
 
         {:ok,

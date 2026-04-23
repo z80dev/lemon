@@ -123,10 +123,10 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
       },
       label: "Broadcast Call",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        stock = Map.get(params, "stock", Map.get(params, :stock, "NOVA"))
-        stance = Map.get(params, "stance", Map.get(params, :stance, "bullish"))
-        confidence = Map.get(params, "confidence", Map.get(params, :confidence, 3))
-        thesis = Map.get(params, "thesis", Map.get(params, :thesis, ""))
+        stock = params["stock"]
+        stance = params["stance"]
+        confidence = params["confidence"]
+        thesis = params["thesis"]
 
         event = Events.broadcast_market_call(actor_id, stock, stance, confidence, thesis)
 
@@ -225,22 +225,11 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
       },
       label: "Place Trade",
       execute: fn _tool_call_id, params, _signal, _on_update ->
-        action = Map.get(params, "action", Map.get(params, :action, "hold"))
-        stock = Map.get(params, "stock", Map.get(params, :stock))
-        quantity = Map.get(params, "quantity", Map.get(params, :quantity, 0))
+        action = params["action"]
+        stock = params["stock"] || ""
+        quantity = min(params["quantity"] || 0, max_order)
 
-        # Ensure quantity is an integer, clamped to order limit
-        quantity =
-          cond do
-            is_integer(quantity) -> quantity
-            is_float(quantity) -> trunc(quantity)
-            is_binary(quantity) -> String.to_integer(quantity)
-            true -> 0
-          end
-
-        quantity = min(quantity, max_order)
-
-        event = Events.place_trade(actor_id, action, stock || "", quantity)
+        event = Events.place_trade(actor_id, action, stock, quantity)
 
         message =
           case action do

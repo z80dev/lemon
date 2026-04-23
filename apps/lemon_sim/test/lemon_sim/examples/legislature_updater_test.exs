@@ -455,12 +455,19 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
     assert next_state.world.session == 2
     assert next_state.world.phase == "caucus"
 
+    bill_results =
+      next_state.recent_events
+      |> Enum.filter(&(&1.kind == "bill_voted"))
+      |> Enum.into(%{}, fn event ->
+        {event.payload["bill_id"], event.payload["passed"]}
+      end)
+
     # Infrastructure: 4 yes, 1 no -> passed
-    assert next_state.world.bills["infrastructure"].status == "passed"
+    assert bill_results["infrastructure"] == true
     # Healthcare: 4 yes, 1 no -> passed
-    assert next_state.world.bills["healthcare"].status == "passed"
+    assert bill_results["healthcare"] == true
     # Defense: 2 yes, 3 no -> failed
-    assert next_state.world.bills["defense"].status == "failed"
+    assert bill_results["defense"] == false
 
     # Scores should be non-zero
     assert Enum.any?(next_state.world.scores, fn {_k, v} -> v > 0 end)
@@ -603,6 +610,6 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
                []
              )
 
-    assert msg =~ "voted"
+    assert msg =~ "votes"
   end
 end

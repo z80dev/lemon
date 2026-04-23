@@ -43,7 +43,8 @@ defmodule LemonSim.Examples.StockMarketUpdaterTest do
     players = state.world.players
     round = state.world.round
     trading_order = players |> Map.keys() |> Enum.sort()
-    initial_reputation = players["player_1"].reputation
+    [lead_trader, second_trader | _] = trading_order
+    initial_reputation = players[lead_trader].reputation
 
     state =
       %{
@@ -56,7 +57,7 @@ defmodule LemonSim.Examples.StockMarketUpdaterTest do
               market_calls: [
                 %{
                   round: round,
-                  player: "player_1",
+                  player: lead_trader,
                   stock: "NOVA",
                   stance: "bullish",
                   confidence: 4,
@@ -65,12 +66,12 @@ defmodule LemonSim.Examples.StockMarketUpdaterTest do
                 },
                 %{
                   round: round,
-                  player: "player_2",
+                  player: second_trader,
                   stock: "SAFE",
                   stance: "bearish",
                   confidence: 2,
                   thesis: "Duration risk",
-                  reputation: players["player_2"].reputation
+                  reputation: players[second_trader].reputation
                 }
               ]
           }
@@ -79,7 +80,7 @@ defmodule LemonSim.Examples.StockMarketUpdaterTest do
     {:ok, next_state, {:decide, _}} =
       Enum.reduce(trading_order, {:ok, state, nil}, fn actor_id, {:ok, acc_state, _} ->
         event =
-          if actor_id == "player_1" do
+          if actor_id == lead_trader do
             Events.place_trade(actor_id, "short", "PULSE", 5)
           else
             Events.place_trade(actor_id, "hold", "", 0)
@@ -95,7 +96,7 @@ defmodule LemonSim.Examples.StockMarketUpdaterTest do
     assert length(next_state.world.round_summaries) == 1
     assert List.last(next_state.world.round_summaries).market_call_count == 2
     assert List.last(next_state.world.round_summaries).trade_count == 1
-    assert next_state.world.players["player_1"].reputation != initial_reputation
-    assert Enum.any?(next_state.world.players["player_1"].trade_history, &(&1.action == "short"))
+    assert next_state.world.players[lead_trader].reputation != initial_reputation
+    assert Enum.any?(next_state.world.players[lead_trader].trade_history, &(&1.action == "short"))
   end
 end

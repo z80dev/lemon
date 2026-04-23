@@ -550,20 +550,18 @@ defmodule LemonSim.Examples.SupplyChain.Updater do
 
   defp process_arrivals(tiers, tier_id, current_round, events_acc) do
     tier = Map.get(tiers, tier_id, %{})
-    incoming = get(tier, :incoming_deliveries, [])
+    incoming = Map.get(tier, :incoming_deliveries, [])
 
     {arriving, still_pending} =
-      Enum.split_with(incoming, fn delivery ->
-        Map.get(delivery, :arrive_round, Map.get(delivery, "arrive_round", 999)) <= current_round
-      end)
+      Enum.split_with(incoming, fn delivery -> delivery.arrive_round <= current_round end)
 
     total_arriving =
-      Enum.sum(Enum.map(arriving, fn d -> Map.get(d, :quantity, Map.get(d, "quantity", 0)) end))
+      Enum.sum(Enum.map(arriving, & &1.quantity))
 
     if total_arriving > 0 do
       updated_tier =
         tier
-        |> Map.put(:inventory, get(tier, :inventory, 0) + total_arriving)
+        |> Map.put(:inventory, Map.get(tier, :inventory, 0) + total_arriving)
         |> Map.put(:incoming_deliveries, still_pending)
 
       arrival_event = Events.delivery_arrived(tier_id, total_arriving)
