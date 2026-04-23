@@ -134,6 +134,7 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
 
     assert {:ok, secret} =
              GoogleAntigravityOAuth.login_device_flow(
+               listen_for_callback: false,
                on_auth: fn url, _instructions -> send(self(), {:auth_url, url}) end,
                on_prompt: fn _prompt ->
                  receive do

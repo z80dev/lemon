@@ -339,13 +339,10 @@ defmodule LemonSkills.Registry do
         entry.enabled and not Config.skill_disabled?(entry.key, cwd)
       end)
       |> Enum.map(fn entry ->
-        score =
-          calculate_relevance(entry, context_lower, context_words) +
-            source_priority_bonus(entry)
-
-        {entry, score}
+        {entry, calculate_relevance(entry, context_lower, context_words)}
       end)
       |> Enum.filter(fn {_entry, score} -> score > 0 end)
+      |> Enum.map(fn {entry, score} -> {entry, score + source_priority_bonus(entry)} end)
       |> Enum.sort_by(fn {_entry, score} -> score end, :desc)
       |> Enum.take(max_results)
       |> Enum.map(fn {entry, _score} -> entry end)
@@ -532,10 +529,17 @@ defmodule LemonSkills.Registry do
         do: 30,
         else: 0
 
+    name_word_matches =
+      context_words
+      |> Enum.count(fn word ->
+        String.contains?(key_lower, word) or String.contains?(name_lower, word)
+      end)
+
     name_score =
       exact_name_match
       |> max(partial_name_match)
       |> max(context_in_name_match)
+      |> Kernel.+(name_word_matches * 40)
 
     # Keyword matches (strong signal for curated skills)
     keyword_score =

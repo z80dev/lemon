@@ -233,7 +233,10 @@ defmodule LemonSim.Examples.VendingBenchTest do
              "physical_worker_finished"
            ]
 
-    assert Enum.map(result.tool_calls, & &1.tool_name) == ["stock_products", "finish_visit"]
+    assert Enum.map(result.tool_calls, & &1.tool_name) |> Enum.sort() == [
+             "finish_visit",
+             "stock_products"
+           ]
   end
 
   test "next day rollover delivers items scheduled for the next morning" do

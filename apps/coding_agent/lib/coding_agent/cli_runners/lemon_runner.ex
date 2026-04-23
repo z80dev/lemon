@@ -200,13 +200,14 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
     extra_tools = Keyword.get(opts, :extra_tools)
     stream_fn = Keyword.get(opts, :stream_fn)
+    owner = Keyword.get(opts, :owner, self())
 
     # Create the event stream
     {:ok, stream} =
       EventStream.start_link(
         max_queue: 10_000,
         drop_strategy: :drop_oldest,
-        owner: self(),
+        owner: owner,
         timeout: timeout
       )
 

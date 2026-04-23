@@ -166,12 +166,12 @@ defmodule Ai.Providers.AnthropicStreamingTest do
           ]
         }
       ],
-      "max_tokens" => 123,
+      "max_tokens" => 8192,
       "stream" => true,
       "system" => [
         %{"type" => "text", "text" => "System", "cache_control" => %{"type" => "ephemeral"}}
       ],
-      "temperature" => 0.2,
+      "temperature" => 1,
       "tools" => [
         %{
           "name" => "lookup",
@@ -384,16 +384,12 @@ defmodule Ai.Providers.AnthropicStreamingTest do
         sse_event("message_stop", %{})
 
     Req.Test.stub(__MODULE__, fn conn ->
-      if conn.host == "example.test" and conn.request_path == "/v1/messages" do
-        attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
+      attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
 
-        if attempt == 1 do
-          Plug.Conn.send_resp(conn, 400, "")
-        else
-          Plug.Conn.send_resp(conn, 200, body)
-        end
+      if attempt == 1 do
+        Plug.Conn.send_resp(conn, 400, "")
       else
-        Plug.Conn.send_resp(conn, 404, "not found")
+        Plug.Conn.send_resp(conn, 200, body)
       end
     end)
 

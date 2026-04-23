@@ -40,7 +40,7 @@ defmodule LemonSimUi.AdminSimControllerTest do
 
     assert body["sim_id"] == sim_id
     assert body["domain"] == "tic_tac_toe"
-    assert body["admin_url"] =~ "/sims/#{sim_id}"
+    assert body["admin_url"] =~ "/admin/sims/#{sim_id}"
     assert body["watch_url"] == nil
     assert %State{} = Store.get_state(sim_id)
   end

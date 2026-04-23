@@ -255,7 +255,7 @@ policy = LemonCore.PolicyStore.get_runtime()
 # Progress mapping (scope + Telegram message ID -> run_id)
 :ok = LemonCore.ProgressStore.put_run(scope, progress_msg_id, run_id)
 run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
-:ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)
+:ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)  # synchronous delete
 
 # Introspection events (canonical envelope + filtered queries)
 :ok =

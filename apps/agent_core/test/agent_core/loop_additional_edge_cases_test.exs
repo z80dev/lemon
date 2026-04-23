@@ -330,12 +330,15 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
   describe "abort during tool collection" do
     test "abort terminates remaining tool tasks" do
+      test_pid = self()
+
       slow_tool = %AgentTool{
         name: "slow_tool",
         description: "Slow tool",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Slow",
-        execute: fn _id, _params, _signal, _on_update ->
+        execute: fn id, _params, _signal, _on_update ->
+          send(test_pid, {:slow_tool_started, id})
           Process.sleep(500)
 
           %AgentToolResult{
@@ -363,11 +366,8 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       stream = Loop.agent_loop([user_message("Run slow")], context, config, signal, nil)
 
-      # Abort after a short delay
-      Task.start(fn ->
-        Process.sleep(50)
-        AbortSignal.abort(signal)
-      end)
+      assert_receive {:slow_tool_started, _id}, 1_000
+      AbortSignal.abort(signal)
 
       start = System.monotonic_time(:millisecond)
       events = EventStream.events(stream) |> Enum.to_list()

@@ -9,7 +9,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   alias LemonChannels.{BindingResolver, GatewayConfig}
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
-  alias LemonCore.{InboundMessage, RouterBridge, SessionKey}
+  alias LemonCore.{EngineCatalog, InboundMessage, RouterBridge, SessionKey}
   alias LemonCore.Secrets
 
   @default_poll_interval_ms 1_500
@@ -359,7 +359,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     scope = %ChatScope{transport: :xmtp, chat_id: normalized.wallet_address, topic_id: nil}
     agent_id = BindingResolver.resolve_agent_id(scope)
 
-    engine_id = BindingResolver.resolve_engine(scope, nil, nil)
+    {engine_hint, prompt} = parse_engine_directive(normalized.prompt)
+    engine_id = BindingResolver.resolve_engine(scope, engine_hint, nil)
     queue_mode = BindingResolver.resolve_queue_mode(scope) || :collect
     cwd = BindingResolver.resolve_cwd(scope)
 
@@ -369,7 +370,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
         engine_id: engine_id,
         queue_mode: queue_mode,
         cwd: cwd,
-        prompt: normalized.prompt
+        prompt: prompt
       })
 
     Logger.info(
@@ -1152,7 +1153,15 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     wallet_address = normalized.wallet_address || "0xunknown"
     conversation_id = normalized.conversation_id || "unknown"
     agent_id = normalize_blank(fetch_meta(extra, :agent_id)) || "default"
-    prompt = normalize_blank(fetch_meta(extra, :prompt)) || normalized.prompt || ""
+    raw_prompt = normalize_blank(fetch_meta(extra, :prompt)) || normalized.prompt || ""
+    {engine_hint, prompt} = parse_engine_directive(raw_prompt)
+
+    extra =
+      if normalize_blank(fetch_meta(extra, :engine_id)) == nil and is_binary(engine_hint) do
+        Map.put(extra, :engine_id, engine_hint)
+      else
+        extra
+      end
 
     session_key =
       SessionKey.channel_peer(%{
@@ -1220,6 +1229,29 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     }
     |> drop_nil_values()
   end
+
+  defp parse_engine_directive(prompt) when is_binary(prompt) do
+    trimmed = String.trim(prompt)
+
+    case Regex.run(~r{^/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$}, trimmed) do
+      [_, engine] ->
+        case EngineCatalog.normalize(engine) do
+          nil -> {nil, prompt}
+          engine_id -> {engine_id, ""}
+        end
+
+      [_, engine, rest] ->
+        case EngineCatalog.normalize(engine) do
+          nil -> {nil, prompt}
+          engine_id -> {engine_id, String.trim(rest)}
+        end
+
+      _ ->
+        {nil, prompt}
+    end
+  end
+
+  defp parse_engine_directive(prompt), do: {nil, prompt || ""}
 
   defp route_to_router(%InboundMessage{} = inbound) do
     case RouterBridge.handle_inbound(inbound) do

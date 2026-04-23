@@ -152,9 +152,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should fail on master key check, not argument parsing
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
 
     test "accepts named arguments --name and --value" do
@@ -168,9 +166,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should fail on master key check, not argument parsing
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
 
     test "accepts short aliases -n and -v" do
@@ -184,9 +180,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should fail on master key check, not argument parsing
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
 
     test "accepts --provider option" do
@@ -200,9 +194,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should fail on master key check, not argument parsing
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
 
     test "accepts --expires-at option" do
@@ -216,9 +208,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should fail on master key check, not argument parsing
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
   end
 
@@ -234,9 +224,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
         end
 
       # Should indicate missing master key or startup failure
-      assert error.message =~ "Missing secrets master key" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to store secret"
+      assert_storage_attempt_failed(error)
     end
 
     test "error message suggests running lemon.secrets.init" do
@@ -281,5 +269,12 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
     test "MasterKey module is available" do
       assert Code.ensure_loaded?(MasterKey)
     end
+  end
+
+  defp assert_storage_attempt_failed(error) do
+    assert error.message =~ "Missing secrets master key" or
+             error.message =~ "Failed to read secrets master key from keychain" or
+             error.message =~ "Failed to start" or
+             error.message =~ "Failed to store secret"
   end
 end

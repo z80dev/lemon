@@ -12,9 +12,32 @@ defmodule LemonGateway.ConfigLoader do
 
   @spec load() :: map()
   def load do
-    LemonCore.GatewayConfig.load()
+    load_gateway()
     |> parse_gateway()
   end
+
+  defp load_gateway do
+    if test_env?() do
+      case Application.get_env(:lemon_gateway, LemonGateway.Config) do
+        nil -> LemonCore.GatewayConfig.load()
+        config -> normalize_test_config(config)
+      end
+    else
+      LemonCore.GatewayConfig.load()
+    end
+  end
+
+  defp test_env? do
+    function_exported?(Mix, :env, 0) and Mix.env() == :test
+  end
+
+  defp normalize_test_config(config) when is_map(config), do: config
+
+  defp normalize_test_config(config) when is_list(config) do
+    if Keyword.keyword?(config), do: Enum.into(config, %{}), else: %{bindings: config}
+  end
+
+  defp normalize_test_config(_), do: %{}
 
   defp parse_gateway(gateway) when is_map(gateway) do
     projects = parse_projects(fetch(gateway, :projects) || %{})

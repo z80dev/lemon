@@ -94,16 +94,19 @@ defmodule LemonCore.ApplicationTest do
       assert Phoenix.PubSub.Supervisor in child_ids
       assert LemonCore.ConfigCache in child_ids
       assert LemonCore.Store in child_ids
+      assert LemonCore.RunHistoryStore in child_ids
+      assert LemonCore.MemoryStore in child_ids
+      assert LemonCore.MemoryIngest in child_ids
       assert LemonCore.ConfigReloader in child_ids
       assert LemonCore.ConfigReloader.Watcher in child_ids
       assert LemonCore.Browser.LocalServer in child_ids
     end
 
-    test "supervisor has exactly 7 children" do
+    test "supervisor has exactly 9 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 7
+      assert length(children) == 9
     end
 
     test "children include both workers and supervisors" do
@@ -136,6 +139,9 @@ defmodule LemonCore.ApplicationTest do
       # Others are workers
       assert {_, :worker} = child_map[LemonCore.ConfigCache]
       assert {_, :worker} = child_map[LemonCore.Store]
+      assert {_, :worker} = child_map[LemonCore.RunHistoryStore]
+      assert {_, :worker} = child_map[LemonCore.MemoryStore]
+      assert {_, :worker} = child_map[LemonCore.MemoryIngest]
       assert {_, :worker} = child_map[LemonCore.ConfigReloader]
       assert {_, :worker} = child_map[LemonCore.ConfigReloader.Watcher]
       assert {_, :worker} = child_map[LemonCore.Browser.LocalServer]

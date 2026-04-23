@@ -74,12 +74,14 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       msg = make_inbound("api", "pc_test", "hello")
       meta = msg.meta || %{}
 
-      # Seed run history for the session (key format: {session_key, timestamp_ms, run_id})
-      LemonCore.Store.put(
-        :run_history,
-        {session_key, System.system_time(:millisecond), "run1"},
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run1",
         %{summary: %{prompt: "What is 2+2?", answer: "4"}}
       )
+
+      _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
 
       # Set a fresh pending compaction marker
       PendingCompactionStore.put(session_key, %{
@@ -103,8 +105,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       assert new_msg.message.text =~ "What is 2+2?"
       assert new_msg.message.text =~ "hello"
 
-      # Clean up — run_history keys are tuple-keyed; deleting all matching entries
-      # isn't critical for test isolation since session_keys are unique per test.
+      LemonCore.RunHistoryStore.delete_session(session_key)
     end
 
     test "deletes stale marker and does not modify the prompt" do
@@ -179,12 +180,14 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       session_key = "agent:test-agent:api:default:dm:#{peer_id}"
       msg = make_inbound("api", peer_id, "continue please")
 
-      # Seed run history (key format: {session_key, timestamp_ms, run_id})
-      LemonCore.Store.put(
-        :run_history,
-        {session_key, System.system_time(:millisecond), "run1"},
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run1",
         %{summary: %{prompt: "previous task", answer: "I completed the task"}}
       )
+
+      _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
 
       PendingCompactionStore.put(session_key, %{
         reason: "near_limit",
@@ -209,8 +212,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       # Marker should be consumed
       assert PendingCompactionStore.get(session_key) == nil
 
-      # Clean up — run_history keys are tuple-keyed; deleting all matching entries
-      # isn't critical for test isolation since session_keys are unique per test.
+      LemonCore.RunHistoryStore.delete_session(session_key)
     end
   end
 

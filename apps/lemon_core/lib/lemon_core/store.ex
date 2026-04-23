@@ -136,7 +136,12 @@ defmodule LemonCore.Store do
   @spec delete_progress_mapping(term(), integer()) :: :ok
   def delete_progress_mapping(scope, progress_msg_id) do
     ReadCache.delete(:progress, {scope, progress_msg_id})
-    GenServer.cast(__MODULE__, {:delete_progress_mapping, scope, progress_msg_id})
+
+    safe_store_call({:delete_progress_mapping, scope, progress_msg_id}, :ok,
+      op: :delete_progress_mapping,
+      table: :progress,
+      key: {scope, progress_msg_id}
+    )
   end
 
   # Generic Table API (for use by other lemon_* apps)
@@ -559,6 +564,24 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:delete_progress_mapping, scope, progress_msg_id}, _from, state) do
+    key = {scope, progress_msg_id}
+
+    case state.backend.delete(state.backend_state, :progress, key) do
+      {:ok, backend_state} ->
+        ReadCache.delete(:progress, key)
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:delete, :progress, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:delete, :progress, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
   def handle_call({:get_run, run_id}, _from, state) do
     case state.backend.get(state.backend_state, :runs, run_id) do
       {:ok, value, backend_state} ->
@@ -833,7 +856,13 @@ defmodule LemonCore.Store do
                   # Async memory ingest — non-fatal, feature-flagged
                   LemonCore.MemoryIngest.ingest(run_id, record, summary)
 
-                  update_sessions_index(state.backend, backend_state, session_key, summary, started_at)
+                  update_sessions_index(
+                    state.backend,
+                    backend_state,
+                    session_key,
+                    summary,
+                    started_at
+                  )
 
                 true ->
                   backend_state

@@ -56,6 +56,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
              {:index_known_target, ^update},
              {:handle_callback_query, callback_query}
            ] = actions
+
     assert callback_query["id"] == "cb-1"
     assert state.account_id == "default"
 
@@ -78,7 +79,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
 
   test "stale debounce flush does not submit and current debounce flush does" do
     inbound = inbound_message(800, 61, "first")
-    state = %{account_id: "default", buffers: %{}, media_groups: %{}, debounce_ms: 5}
+    state = %{account_id: "default", buffers: %{}, media_groups: %{}, debounce_ms: 5_000}
 
     state = LemonChannels.Adapters.Telegram.Transport.MessageBuffer.enqueue_buffer(state, inbound)
     key = LemonChannels.Adapters.Telegram.Transport.Commands.scope_key(inbound)
@@ -93,6 +94,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
 
     current_ref = state.buffers[key].debounce_ref
     current_timer_ref = state.buffers[key].timer_ref
+    on_exit(fn -> Process.cancel_timer(current_timer_ref) end)
+
     refute first_ref == current_ref
     refute first_timer_ref == current_timer_ref
 

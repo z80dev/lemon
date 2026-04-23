@@ -403,7 +403,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :tool
-      assert action.title == "Read: file.ex"
+      assert action.title == "read: `/path/to/file.ex`"
     end
 
     test "translates Write tool to file_change kind" do
@@ -421,7 +421,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :file_change
-      assert action.title == "Write: new.ex"
+      assert action.title == "/path/to/new.ex"
     end
 
     test "translates Edit tool to file_change kind" do
@@ -439,7 +439,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :file_change
-      assert action.title == "Edit: edit.ex"
+      assert action.title == "/path/to/edit.ex"
     end
 
     test "translates Glob tool correctly" do
@@ -455,7 +455,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :tool
-      assert action.title == "Glob: **/*.ex"
+      assert action.title == "glob: `**/*.ex`"
     end
 
     test "translates Grep tool correctly" do
@@ -471,7 +471,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :tool
-      assert action.title == "Grep: defmodule"
+      assert action.title == "grep: defmodule"
     end
 
     test "translates WebSearch tool correctly" do
@@ -506,8 +506,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       {events, _state, _opts} = ClaudeRunner.translate_event(event, state)
 
       assert [%ActionEvent{action: action}] = events
-      assert action.kind == :tool
-      assert action.title == "Fetch: https://example.com"
+      assert action.kind == :web_search
+      assert action.title == "https://example.com"
     end
 
     test "translates Task tool as subagent" do
@@ -529,7 +529,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       assert [%ActionEvent{action: action}] = events
       assert action.kind == :subagent
-      assert action.title == "Task: Implement the feature with tests"
+      assert action.title == "Implement the feature with tests"
     end
 
     test "preserves parent_tool_use_id on nested tool actions" do
@@ -563,8 +563,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       {events, _state, _opts} = ClaudeRunner.translate_event(event, state)
 
       assert [%ActionEvent{action: action}] = events
-      # "Task: " (6 chars) + 40 chars = 46 chars max
-      assert String.length(action.title) == 46
+      assert String.length(action.title) == 100
     end
 
     test "handles unknown tool types" do

@@ -370,13 +370,21 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
     assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}, 400
     assert topic_msg == "Trigger mode set to all for this topic."
-    assert TriggerMode.resolve("default", chat_id, topic_id).mode == :all
+
+    assert_eventually(fn ->
+      TriggerMode.resolve("default", chat_id, topic_id).mode == :all
+    end)
 
     assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
     assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 400
     assert clear_msg == "Cleared topic trigger override."
 
-    resolved = TriggerMode.resolve("default", chat_id, topic_id)
+    resolved =
+      assert_eventually(fn ->
+        resolved = TriggerMode.resolve("default", chat_id, topic_id)
+        if resolved.mode == :mentions and resolved.topic_mode == nil, do: resolved
+      end)
+
     assert resolved.mode == :mentions
     assert resolved.chat_mode == :mentions
     assert resolved.topic_mode == nil
@@ -408,7 +416,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
   defp set_bindings(bindings) do
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
-    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :bindings, bindings))
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.put(existing, :bindings, bindings)
+    )
   end
 
   defp restore_gateway_env(nil) do
@@ -457,5 +470,33 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     end
   catch
     :exit, _ -> :ok
+  end
+
+  defp assert_eventually(fun, timeout \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_assert_eventually(fun, deadline)
+  end
+
+  defp do_assert_eventually(fun, deadline) do
+    case fun.() do
+      false -> retry_assert_eventually(fun, deadline, false)
+      nil -> retry_assert_eventually(fun, deadline, nil)
+      result -> result
+    end
+  rescue
+    error ->
+      retry_assert_eventually(fun, deadline, error)
+  catch
+    kind, value ->
+      retry_assert_eventually(fun, deadline, {kind, value})
+  end
+
+  defp retry_assert_eventually(fun, deadline, last_result) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      flunk("condition was not met before timeout, last result: #{inspect(last_result)}")
+    else
+      Process.sleep(20)
+      do_assert_eventually(fun, deadline)
+    end
   end
 end

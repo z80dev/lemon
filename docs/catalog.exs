@@ -128,7 +128,7 @@
   %{
     path: "docs/testing/deterministic-test-patterns.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-04-23],
     max_age_days: 45
   },
   %{
@@ -243,6 +243,12 @@
     path: "docs/plans/2026-03-26-async-followup-delivery-and-provenance-plan.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-26],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-04-12-subagent-reasoning-surfacing-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-04-12],
     max_age_days: 60
   },
   %{

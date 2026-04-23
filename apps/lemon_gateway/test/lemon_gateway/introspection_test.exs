@@ -14,10 +14,43 @@ defmodule LemonGateway.IntrospectionTest do
 
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
+    original_config = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    original_engines = Application.get_env(:lemon_gateway, :engines)
+    original_transports = Application.get_env(:lemon_gateway, :transports)
+    original_commands = Application.get_env(:lemon_gateway, :commands)
+
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
-    on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
+
+    _ = Application.stop(:lemon_gateway)
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_telegram: false,
+      require_engine_lock: false
+    })
+
+    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
+    Application.put_env(:lemon_gateway, :transports, [])
+    Application.put_env(:lemon_gateway, :commands, [])
+
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+    on_exit(fn ->
+      Application.stop(:lemon_gateway)
+      Application.put_env(:lemon_core, :introspection, original)
+      restore_env(LemonGateway.Config, original_config)
+      restore_env(:engines, original_engines)
+      restore_env(:transports, original_transports)
+      restore_env(:commands, original_commands)
+      Application.ensure_all_started(:lemon_gateway)
+    end)
+
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:lemon_gateway, key)
+  defp restore_env(key, value), do: Application.put_env(:lemon_gateway, key, value)
 
   defp unique_token, do: System.unique_integer([:positive, :monotonic])
 

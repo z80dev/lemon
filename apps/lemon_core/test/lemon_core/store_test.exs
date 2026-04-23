@@ -28,7 +28,7 @@ defmodule LemonCore.StoreTest do
   end
 
   defp unique_token do
-    System.unique_integer([:positive, :monotonic])
+    System.system_time(:microsecond) + System.unique_integer([:positive, :monotonic])
   end
 
   defp scope(token, name), do: {:store_test, token, name}
@@ -289,8 +289,7 @@ defmodule LemonCore.StoreTest do
       assert :ok = Store.append_introspection_event(middle)
       assert :ok = Store.append_introspection_event(newest)
 
-      all_events = Store.list_introspection_events(limit: 10)
-      matching = Enum.filter(all_events, &(&1.run_id == run_id))
+      matching = Store.list_introspection_events(run_id: run_id, limit: 10)
 
       assert Enum.map(matching, & &1.event_id) == [
                newest.event_id,

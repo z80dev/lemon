@@ -16,7 +16,7 @@ defmodule LemonCore.Secrets.Keychain do
 
   @spec get_master_key(keyword()) :: {:ok, String.t()} | {:error, term()}
   def get_master_key(opts \\ []) do
-    if available?() do
+    if available?(opts) do
       args = ["find-generic-password", "-s", service(opts), "-a", account(opts), "-w"]
 
       case run_security(args, opts) do
@@ -33,7 +33,7 @@ defmodule LemonCore.Secrets.Keychain do
   def put_master_key(value, opts \\ [])
 
   def put_master_key(value, opts) when is_binary(value) do
-    if available?() do
+    if available?(opts) do
       args = [
         "add-generic-password",
         "-U",
@@ -58,7 +58,7 @@ defmodule LemonCore.Secrets.Keychain do
 
   @spec delete_master_key(keyword()) :: :ok | {:error, term()}
   def delete_master_key(opts \\ []) do
-    if available?() do
+    if available?(opts) do
       args = ["delete-generic-password", "-s", service(opts), "-a", account(opts)]
 
       case run_security(args, opts) do
@@ -72,6 +72,7 @@ defmodule LemonCore.Secrets.Keychain do
 
   defp service(opts), do: Keyword.get(opts, :service, @default_service)
   defp account(opts), do: Keyword.get(opts, :account, @default_account)
+  defp available?(opts), do: Keyword.has_key?(opts, :runner) or available?()
 
   defp run_security(args, opts) do
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)

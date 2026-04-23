@@ -119,29 +119,37 @@ defmodule LemonCore.Runtime.EnvTest do
 
   describe "apply_ports/1" do
     test "apply_web_port preserves existing :http options beyond ip and port" do
-      # Set up a pre-existing :http config with extra transport options
-      Application.put_env(:lemon_web, LemonWeb.Endpoint,
-        http: [transport_options: [num_acceptors: 10], keyfile: "priv/cert/key.pem"]
-      )
+      original_endpoint_config = Application.get_env(:lemon_web, LemonWeb.Endpoint)
 
-      env = %Env{
-        control_port: 4040,
-        web_port: 9090,
-        sim_port: 4090
-      }
+      try do
+        # Set up a pre-existing :http config with extra transport options
+        Application.put_env(:lemon_web, LemonWeb.Endpoint,
+          http: [transport_options: [num_acceptors: 10], keyfile: "priv/cert/key.pem"]
+        )
 
-      Env.apply_ports(env)
+        env = %Env{
+          control_port: 4040,
+          web_port: 9090,
+          sim_port: 4090
+        }
 
-      result = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
-      http = Keyword.get(result, :http, [])
+        Env.apply_ports(env)
 
-      assert http[:port] == 9090
-      assert http[:ip] == {127, 0, 0, 1}
-      # Extra options must survive the port apply
-      assert http[:transport_options] == [num_acceptors: 10]
-      assert http[:keyfile] == "priv/cert/key.pem"
-    after
-      Application.delete_env(:lemon_web, LemonWeb.Endpoint)
+        result = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
+        http = Keyword.get(result, :http, [])
+
+        assert http[:port] == 9090
+        assert http[:ip] == {127, 0, 0, 1}
+        # Extra options must survive the port apply
+        assert http[:transport_options] == [num_acceptors: 10]
+        assert http[:keyfile] == "priv/cert/key.pem"
+      after
+        if original_endpoint_config == nil do
+          Application.delete_env(:lemon_web, LemonWeb.Endpoint)
+        else
+          Application.put_env(:lemon_web, LemonWeb.Endpoint, original_endpoint_config)
+        end
+      end
     end
   end
 

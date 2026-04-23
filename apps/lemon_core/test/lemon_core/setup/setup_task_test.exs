@@ -32,9 +32,9 @@ defmodule LemonCore.Setup.SetupTaskTest do
   end
 
   describe "gateway subcommand" do
-    test "prints info about M1-06" do
+    test "prints available gateway transports in non-interactive mode" do
       {io, get_log} = collect_io()
-      SetupTask.run_with_io(["gateway"], io)
+      SetupTask.run_with_io(["gateway", "--non-interactive"], io)
       log = get_log.()
       assert Enum.any?(log, fn {_, msg} -> String.contains?(msg, "gateway") end)
     end

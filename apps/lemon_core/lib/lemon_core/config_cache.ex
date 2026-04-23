@@ -51,7 +51,9 @@ defmodule LemonCore.ConfigCache do
 
     case :ets.lookup(@table, key) do
       [] ->
-        GenServer.call(__MODULE__, {:load, cwd}, call_timeout(opts))
+        __MODULE__
+        |> GenServer.call({:load, cwd}, call_timeout(opts))
+        |> reply_or_raise()
 
       [{^key, base, fingerprint, _loaded_at, checked_at}] ->
         if now - checked_at < interval do
@@ -63,7 +65,9 @@ defmodule LemonCore.ConfigCache do
             _ = :ets.update_element(@table, key, {5, now})
             base
           else
-            GenServer.call(__MODULE__, {:reload, cwd}, call_timeout(opts))
+            __MODULE__
+            |> GenServer.call({:reload, cwd}, call_timeout(opts))
+            |> reply_or_raise()
           end
         end
     end
@@ -88,7 +92,10 @@ defmodule LemonCore.ConfigCache do
   @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
   def reload(cwd \\ nil, opts \\ []) do
     ensure_available!()
-    GenServer.call(__MODULE__, {:reload, cwd, opts}, call_timeout(opts))
+
+    __MODULE__
+    |> GenServer.call({:reload, cwd, opts}, call_timeout(opts))
+    |> reply_or_raise()
   end
 
   @doc """
@@ -136,9 +143,14 @@ defmodule LemonCore.ConfigCache do
         {:reply, base, state}
 
       [] ->
-        {base, fp} = load_base(cwd, paths)
-        _ = :ets.insert(@table, {key, base, fp, now, now})
-        {:reply, base, state}
+        case safe_load_base(cwd, paths) do
+          {:ok, base, fp} ->
+            _ = :ets.insert(@table, {key, base, fp, now, now})
+            {:reply, base, state}
+
+          {:error, exception, stacktrace} ->
+            {:reply, {:error, exception, stacktrace}, state}
+        end
     end
   end
 
@@ -151,15 +163,21 @@ defmodule LemonCore.ConfigCache do
     paths = config_paths(cwd)
     key = cache_key(paths)
     now = now_ms()
-    {base, fp} = load_base(cwd, paths)
-    _ = :ets.insert(@table, {key, base, fp, now, now})
 
-    # Optionally validate and log warnings
-    if Keyword.get(opts, :validate, false) do
-      validate_config(base)
+    case safe_load_base(cwd, paths) do
+      {:ok, base, fp} ->
+        _ = :ets.insert(@table, {key, base, fp, now, now})
+
+        # Optionally validate and log warnings
+        if Keyword.get(opts, :validate, false) do
+          validate_config(base)
+        end
+
+        {:reply, base, state}
+
+      {:error, exception, stacktrace} ->
+        {:reply, {:error, exception, stacktrace}, state}
     end
-
-    {:reply, base, state}
   end
 
   defp load_base(cwd, paths) do
@@ -167,6 +185,19 @@ defmodule LemonCore.ConfigCache do
     fp = fingerprint(paths)
     {base, fp}
   end
+
+  defp safe_load_base(cwd, paths) do
+    try do
+      {base, fp} = load_base(cwd, paths)
+      {:ok, base, fp}
+    rescue
+      exception ->
+        {:error, exception, __STACKTRACE__}
+    end
+  end
+
+  defp reply_or_raise({:error, exception, stacktrace}), do: reraise(exception, stacktrace)
+  defp reply_or_raise(reply), do: reply
 
   defp validate_config(base_config) do
     # Validate the legacy config struct directly

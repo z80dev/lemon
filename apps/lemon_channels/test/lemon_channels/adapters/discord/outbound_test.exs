@@ -35,6 +35,7 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
 
   setup do
     old = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_config_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
@@ -43,7 +44,7 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
     })
 
     on_exit(fn ->
-      Application.delete_env(:lemon_core, :config_test_mode)
+      restore_env(:lemon_core, :config_test_mode, old_config_test_mode)
 
       if old == nil do
         Application.delete_env(:lemon_gateway, @gateway_config_key)
@@ -54,6 +55,9 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
 
     :ok
   end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
   test "text delivery posts to the Discord thread channel when thread_id is present" do
     payload =

@@ -7,12 +7,19 @@ defmodule LemonGateway.FarcasterTransportTest do
   alias LemonCore.Store
   alias LemonGateway.Transports.Farcaster.FrameServer
 
+  defmodule FarcasterTransportRunOrchestrator do
+    def submit(%LemonCore.RunRequest{run_id: run_id}), do: {:ok, run_id}
+  end
+
   @action_path "/frames/farcaster/actions"
   @frame_image_url "https://example.test/frame.png"
   @session_table :farcaster_frame_sessions
 
   setup do
     ensure_store_started()
+    original_router_bridge = Application.get_env(:lemon_core, :router_bridge)
+
+    LemonCore.RouterBridge.configure(run_orchestrator: FarcasterTransportRunOrchestrator)
 
     farcaster_cfg = %{
       action_path: @action_path,
@@ -26,6 +33,7 @@ defmodule LemonGateway.FarcasterTransportTest do
     on_exit(fn ->
       clear_frame_sessions()
       Process.delete({LemonGateway.Transports.Farcaster, :config_override})
+      restore_env(:lemon_core, :router_bridge, original_router_bridge)
     end)
 
     :ok
@@ -225,4 +233,7 @@ defmodule LemonGateway.FarcasterTransportTest do
 
     :ok
   end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end

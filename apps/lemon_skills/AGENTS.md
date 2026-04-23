@@ -117,11 +117,12 @@ When listing/getting, project skills override global skills on key collision. Sk
 - Exact name match: 100
 - Partial name match: 50
 - Context contains name: 30
+- Key/name word match: 40/word
 - Exact keyword match: 40/word
 - Partial keyword match: 20/word
 - Description word match: 10/word
 - Body content word match: 2/word
-- Project-source bonus: +1000
+- Project-source bonus: +1000 after a positive relevance match
 
 Body content is truncated to 10,000 chars before scoring to avoid performance issues with large SKILL.md files.
 

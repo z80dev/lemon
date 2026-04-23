@@ -35,6 +35,8 @@ defmodule LemonCore.Setup.GatewayTest do
 
   describe "Adapter behaviour" do
     test "Telegram implements all required callbacks" do
+      Code.ensure_loaded!(Telegram)
+
       assert function_exported?(Telegram, :name, 0)
       assert function_exported?(Telegram, :description, 0)
       assert function_exported?(Telegram, :run, 2)

@@ -332,12 +332,30 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
     case provider_to_atom(provider) do
-      nil -> nil
-      provider_atom -> Ai.Models.get_model(provider_atom, model_id)
+      nil ->
+        nil
+
+      provider_atom ->
+        Ai.Models.get_model(provider_atom, model_id) || provider_model(provider_atom, model_id)
     end
   end
 
   defp lookup_model(_provider, _model_id), do: nil
+
+  defp provider_model(provider_atom, model_id) do
+    template = Ai.Models.get_models(provider_atom) |> List.first()
+    base = Ai.Models.find_by_id(model_id) || template
+
+    if base do
+      %{
+        base
+        | id: model_id,
+          provider: provider_atom,
+          api: (template && template.api) || provider_atom,
+          base_url: (template && template.base_url) || base.base_url
+      }
+    end
+  end
 
   # Extract provider atoms from the settings' configured providers map.
   # Only returns providers that have some form of API key configured.

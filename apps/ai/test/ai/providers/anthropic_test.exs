@@ -92,6 +92,28 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
     end
   end
 
+  defp with_anthropic_auth_disabled(fun) when is_function(fun, 0) do
+    tmp_home =
+      Path.join(System.tmp_dir!(), "anthropic_no_auth_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(tmp_home)
+
+    try do
+      with_env(
+        %{
+          "ANTHROPIC_API_KEY" => nil,
+          "ANTHROPIC_TOKEN" => nil,
+          "CLAUDE_CODE_OAUTH_TOKEN" => nil,
+          "HOME" => tmp_home,
+          "LEMON_SECRETS_MASTER_KEY" => Base.encode64(:crypto.strong_rand_bytes(32))
+        },
+        fun
+      )
+    after
+      File.rm_rf!(tmp_home)
+    end
+  end
+
   # ============================================================================
   # Provider Callback Tests
   # ============================================================================
@@ -896,7 +918,7 @@ defmodule Ai.Providers.Anthropic.ComprehensiveTest do
 
   describe "error handling" do
     test "returns error when API key is missing" do
-      with_env(%{"ANTHROPIC_API_KEY" => nil}, fn ->
+      with_anthropic_auth_disabled(fn ->
         Req.Test.stub(__MODULE__, fn conn ->
           Plug.Conn.send_resp(conn, 200, minimal_success_body())
         end)

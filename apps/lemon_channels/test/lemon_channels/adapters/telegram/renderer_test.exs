@@ -298,6 +298,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
 
     assert eventually(fn ->
              entry = PresentationState.get(route, run_id, :answer)
+
              is_nil(entry.deferred_chunks) and is_nil(entry.deferred_text) and
                entry.last_text_hash == 222
            end)
@@ -317,7 +318,8 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                     %LemonChannels.OutboundPayload{
                       kind: :text,
                       content: first_chunk,
-                      reply_to: "55"
+                      reply_to: "55",
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
@@ -325,7 +327,8 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                     %LemonChannels.OutboundPayload{
                       kind: :text,
                       content: second_chunk,
-                      reply_to: "55"
+                      reply_to: "55",
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
@@ -347,7 +350,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                intent(run_id, route, :final_text, %{text: long_text, seq: 2}, %{user_msg_id: "42"})
              )
 
-    refute_receive {:delivered, _payload}, 150
+    refute_receive {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}}, 150
 
     :persistent_term.put({TelegramRendererPlugin, :block_edit}, true)
 
@@ -561,7 +564,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                     %LemonChannels.OutboundPayload{
                       kind: :edit,
                       content: %{message_id: "3101", text: "hello newest"}
-                   }},
+                    }},
                    1_000
   end
 
@@ -570,7 +573,9 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     run_id = "run-#{System.unique_integer([:positive])}"
 
     assert :ok =
-             Renderer.dispatch(intent(run_id, route, :final_text, %{text: "stable final", seq: 2}))
+             Renderer.dispatch(
+               intent(run_id, route, :final_text, %{text: "stable final", seq: 2})
+             )
 
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
@@ -584,7 +589,9 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
            end)
 
     assert :ok =
-             Renderer.dispatch(intent(run_id, route, :final_text, %{text: "stable final", seq: 3}))
+             Renderer.dispatch(
+               intent(run_id, route, :final_text, %{text: "stable final", seq: 3})
+             )
 
     refute_receive {:delivered,
                     %LemonChannels.OutboundPayload{

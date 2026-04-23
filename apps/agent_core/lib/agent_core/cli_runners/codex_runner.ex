@@ -682,12 +682,15 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   defp codex_auto_approve?(state) do
-    case get_codex_config(state, :auto_approve, nil) do
-      nil ->
-        false
+    case System.get_env("LEMON_CODEX_AUTO_APPROVE") do
+      value when value in ["1", "true", "TRUE", "yes", "YES"] ->
+        true
 
-      value ->
-        value == true
+      _ ->
+        case get_codex_config(state, :auto_approve, nil) do
+          nil -> false
+          value -> value == true
+        end
     end
   end
 
@@ -702,6 +705,16 @@ defmodule AgentCore.CliRunners.CodexRunner do
   defp get_codex_config(_state, _key, default), do: default
 
   defp codex_extra_args(state) do
+    case System.get_env("LEMON_CODEX_EXTRA_ARGS") do
+      value when is_binary(value) and value != "" ->
+        String.split(value, ~r/\s+/, trim: true)
+
+      _ ->
+        codex_config_extra_args(state)
+    end
+  end
+
+  defp codex_config_extra_args(state) do
     case get_codex_config(state, :extra_args, ["-c", "notify=[]"]) do
       list when is_list(list) -> Enum.map(list, &to_string/1)
       value when is_binary(value) -> String.split(value, ~r/\s+/, trim: true)

@@ -13,12 +13,12 @@ defmodule LemonSimUi.AccessControlTest do
   end
 
   test "admin dashboard requires a token", %{conn: conn} do
-    conn = get(conn, "/")
+    conn = get(conn, "/admin")
     assert response(conn, 401) == "Unauthorized"
   end
 
   test "admin dashboard accepts token via query string", %{conn: conn} do
-    conn = get(conn, "/?token=test-sim-ui-token")
+    conn = get(conn, "/admin?token=test-sim-ui-token")
     assert html_response(conn, 200) =~ "LemonSim"
   end
 

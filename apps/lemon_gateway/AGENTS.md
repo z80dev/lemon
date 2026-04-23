@@ -107,7 +107,7 @@ Gateway config comes from the canonical TOML `[gateway]` section only, via `Lemo
 | File | Module | Notes |
 |------|--------|-------|
 | `lib/lemon_gateway/config.ex` | `Config` | GenServer holding all runtime config. Access via `Config.get/0` or `Config.get(:key)`. |
-| `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Loads from `LemonCore.GatewayConfig.load/0` and parses into typed structs (Project, Binding, queue, SMS, email, etc.) |
+| `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Loads from `LemonCore.GatewayConfig.load/0` and parses into typed structs (Project, Binding, queue, SMS, email, etc.); in test env only, honors `Application.get_env(:lemon_gateway, LemonGateway.Config)` as a full replacement override. |
 | `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves engine/cwd/agent metadata for gateway-owned transports. Delegates to `LemonCore.BindingResolver`. |
 | `lib/lemon_gateway/engine_directive.ex` | `EngineDirective` | Strips `/claude`, `/codex`, `/lemon`, etc. from user input to select engine |
 | `lib/lemon_gateway/engine_registry.ex` | `EngineRegistry` | GenServer: engine ID -> module mapping. Also does cross-engine resume token extraction. |

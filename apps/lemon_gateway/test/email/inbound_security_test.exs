@@ -8,6 +8,10 @@ defmodule LemonGateway.EmailInboundSecurityTest do
   alias LemonCore.Store
   alias LemonGateway.Transports.Email.Inbound
 
+  defmodule EmailInboundSecurityRunOrchestrator do
+    def submit(%LemonCore.RunRequest{run_id: run_id}), do: {:ok, run_id}
+  end
+
   @attachments_dir Path.join(System.tmp_dir!(), "lemon_gateway_email_attachments")
   @message_thread_table :email_message_threads
   @thread_state_table :email_thread_state
@@ -17,6 +21,9 @@ defmodule LemonGateway.EmailInboundSecurityTest do
 
     File.rm_rf(@attachments_dir)
     original_attachment_cap = Application.get_env(:lemon_gateway, :email_attachment_max_bytes)
+    original_router_bridge = Application.get_env(:lemon_core, :router_bridge)
+
+    LemonCore.RouterBridge.configure(run_orchestrator: EmailInboundSecurityRunOrchestrator)
 
     clear_table(@message_thread_table)
     clear_table(@thread_state_table)
@@ -24,6 +31,7 @@ defmodule LemonGateway.EmailInboundSecurityTest do
     on_exit(fn ->
       File.rm_rf(@attachments_dir)
       restore_env(:lemon_gateway, :email_attachment_max_bytes, original_attachment_cap)
+      restore_env(:lemon_core, :router_bridge, original_router_bridge)
       clear_table(@message_thread_table)
       clear_table(@thread_state_table)
     end)
@@ -132,8 +140,11 @@ defmodule LemonGateway.EmailInboundSecurityTest do
     assert File.read!(copied_path) == "upload-bytes"
 
     if match?({:unix, _}, :os.type()) do
-      assert {:ok, stat} = File.stat(copied_path)
-      assert (stat.mode &&& 0o777) == 0o600
+      assert_eventually(fn ->
+        with {:ok, stat} <- File.stat(copied_path) do
+          (stat.mode &&& 0o777) == 0o600
+        end
+      end)
     end
 
     File.rm(source)
