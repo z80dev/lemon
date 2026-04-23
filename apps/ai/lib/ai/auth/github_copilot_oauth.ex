@@ -5,12 +5,10 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
   Provides:
   - Device-code login flow (URL + user code) for onboarding
   - Copilot token refresh using stored GitHub OAuth access token
-  - Secret payload encoding/decoding for encrypted Lemon secrets storage
+  - Secret payload encoding/decoding
   """
 
   require Logger
-
-  alias LemonCore.Secrets
 
   @default_client_id_b64 "SXYxLmI1MDdhMDhjODdlY2ZlOTg="
   @default_domain "github.com"
@@ -34,12 +32,12 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
           | {:on_auth, (String.t(), String.t() | nil -> any())}
           | {:on_progress, (String.t() -> any())}
           | {:enable_models, boolean()}
+          | {:persist_secret, (String.t(), String.t() -> any())}
 
   @doc """
   Run GitHub Copilot OAuth device flow.
 
-  Returns an OAuth secret payload map suitable for `encode_secret/1` and
-  storage in `LemonCore.Secrets`.
+  Returns an OAuth secret payload map suitable for `encode_secret/1`.
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
@@ -84,7 +82,7 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
   end
 
   @doc """
-  Encode OAuth secret payload to JSON for encrypted secret storage.
+  Encode OAuth secret payload to JSON.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
   def encode_secret(secret) when is_map(secret) do
@@ -100,14 +98,16 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value)
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
+
+  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]) do
       if changed? do
-        persist_secret(secret_name, refreshed_secret)
+        persist_secret(secret_name, refreshed_secret, opts)
       end
 
       {:ok, access_token}
@@ -270,18 +270,24 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
     end
   end
 
-  defp persist_secret(secret_name, secret) do
-    case Secrets.set(secret_name, encode_secret(secret), provider: "github_copilot_oauth") do
-      {:ok, _} ->
+  defp persist_secret(secret_name, secret, opts) do
+    encoded = encode_secret(secret)
+
+    case Keyword.get(opts, :persist_secret) do
+      callback when is_function(callback, 2) ->
+        callback.(secret_name, encoded)
         :ok
 
-      {:error, reason} ->
-        Logger.debug(
-          "Failed to persist refreshed GitHub Copilot secret #{secret_name}: #{inspect(reason)}"
-        )
-
+      _ ->
         :ok
     end
+  rescue
+    reason ->
+      Logger.debug(
+        "Failed to persist refreshed GitHub Copilot secret #{secret_name}: #{inspect(reason)}"
+      )
+
+      :ok
   end
 
   # ----------------------------------------------------------------------------

@@ -503,5 +503,4 @@ defmodule CodingAgent.Tools.Find do
         relative
     end
   end
-
 end

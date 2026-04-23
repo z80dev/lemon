@@ -5,11 +5,8 @@ defmodule Ai.Auth.AnthropicOAuth do
 
   require Logger
 
-  alias LemonCore.Secrets
-
   @secret_type "anthropic_oauth"
   @legacy_secret_types ["onboarding_anthropic_oauth"]
-  @default_secret_names ["llm_anthropic_api_key"]
   @near_expiry_ms 60_000
   @oauth_client_id "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
   @oauth_token_urls [
@@ -24,6 +21,7 @@ defmodule Ai.Auth.AnthropicOAuth do
   @type login_opt ::
           {:on_progress, (String.t() -> any())}
           | {:on_prompt, (String.t() | map() -> String.t() | charlist() | nil)}
+          | {:persist_secret, (String.t(), String.t() -> any())}
 
   @spec encode_secret(oauth_secret()) :: String.t()
   def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
@@ -74,14 +72,16 @@ defmodule Ai.Auth.AnthropicOAuth do
 
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value)
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
+
+  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]) do
       if changed? do
-        persist_secret(secret_name, refreshed_secret)
+        persist_secret(secret_name, refreshed_secret, opts)
       end
 
       {:ok, access_token}
@@ -92,14 +92,13 @@ defmodule Ai.Auth.AnthropicOAuth do
     end
   end
 
-  def resolve_api_key_from_secret(_, _), do: {:error, :invalid_secret_value}
+  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @spec resolve_access_token() :: String.t() | nil
   def resolve_access_token do
     claude_code_secret = current_claude_code_secret()
 
     resolve_env_token(claude_code_secret) ||
-      resolve_default_secret_token() ||
       access_token_from_secret(claude_code_secret)
   end
 
@@ -224,16 +223,22 @@ defmodule Ai.Auth.AnthropicOAuth do
 
   defp parse_refresh_response(_), do: {:error, :invalid_refresh_response}
 
-  defp persist_secret(secret_name, secret) do
-    case Secrets.set(secret_name, encode_secret(secret), provider: "anthropic_oauth") do
-      {:ok, _metadata} ->
+  defp persist_secret(secret_name, secret, opts) do
+    encoded = encode_secret(secret)
+
+    case Keyword.get(opts, :persist_secret) do
+      callback when is_function(callback, 2) ->
+        callback.(secret_name, encoded)
         :ok
 
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to persist refreshed Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
-        )
+      _ ->
+        :ok
     end
+  rescue
+    reason ->
+      Logger.warning(
+        "Failed to persist refreshed Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
+      )
   end
 
   defp resolve_env_token(claude_code_secret \\ nil) do
@@ -251,21 +256,6 @@ defmodule Ai.Auth.AnthropicOAuth do
 
             true ->
               trimmed
-          end
-
-        _ ->
-          nil
-      end
-    end)
-  end
-
-  defp resolve_default_secret_token do
-    Enum.find_value(@default_secret_names, fn secret_name ->
-      case Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
-        {:ok, value, _source} ->
-          case resolve_api_key_from_secret(secret_name, value) do
-            {:ok, access_token} -> access_token
-            _ -> nil
           end
 
         _ ->

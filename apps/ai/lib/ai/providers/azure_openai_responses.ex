@@ -14,9 +14,9 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   ## Configuration
 
-  Azure-specific settings should be resolved through canonical Lemon config
-  before requests reach this provider. Stream options still take precedence for
-  per-request overrides.
+  Azure-specific settings should be resolved by the caller before requests
+  reach this provider. Stream options still take precedence for per-request
+  overrides.
 
   ## Usage
 
@@ -55,7 +55,6 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   alias Ai.Providers.OpenAIResponsesShared
   alias Ai.Providers.SSEParser
   import Ai.Providers.AssistantMessageHelper
-  alias LemonCore.Secrets
 
   require Logger
 
@@ -85,7 +84,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   @impl true
   def get_env_api_key do
-    Secrets.fetch_value("AZURE_OPENAI_API_KEY")
+    System.get_env("AZURE_OPENAI_API_KEY")
   end
 
   @impl true
@@ -94,18 +93,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   end
 
   defp do_stream(stream, model, context, opts) do
-    # Resolve provider config from canonical config + env + secrets
-    resolved =
-      try do
-        LemonCore.ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, opts)
-      rescue
-        e ->
-          Logger.warning(
-            "Failed to resolve Azure OpenAI provider config: #{Exception.message(e)}"
-          )
-
-          %{}
-      end
+    resolved = provider_options(:azure_openai_responses, opts)
 
     deployment_name = resolve_deployment_name(model, opts, resolved)
     output = init_assistant_message(model, api_override: :azure_openai_responses)
@@ -216,6 +204,12 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   defp build_default_base_url(resource_name) do
     "https://#{resource_name}.openai.azure.com/openai/v1"
   end
+
+  defp provider_options(key, %StreamOptions{provider_options: options}) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp normalize_base_url(url) do
     String.trim_trailing(url, "/")
@@ -404,9 +398,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
     end
   end
 
-
   # ============================================================================
   # Helpers
   # ============================================================================
-
 end

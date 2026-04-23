@@ -18,26 +18,25 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
 
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
+    prev_client_id = System.get_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID")
+    prev_client_secret = System.get_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET")
 
-    assert {:ok, _} =
-             Secrets.set(
-               "google_antigravity_oauth_client_id",
-               "test-antigravity-client-id",
-               provider: "test"
-             )
-
-    assert {:ok, _} =
-             Secrets.set(
-               "google_antigravity_oauth_client_secret",
-               "test-antigravity-client-secret",
-               provider: "test"
-             )
+    System.put_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID", "test-antigravity-client-id")
+    System.put_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET", "test-antigravity-client-secret")
 
     on_exit(fn ->
       Req.default_options(previous_defaults)
       Req.Test.set_req_test_to_private(%{})
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      if prev_client_id,
+        do: System.put_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID", prev_client_id),
+        else: System.delete_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID")
+
+      if prev_client_secret,
+        do: System.put_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET", prev_client_secret),
+        else: System.delete_env("GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET")
     end)
 
     :ok
@@ -73,8 +72,9 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
     assert decoded["projectId"] == "proj-123"
   end
 
-  test "resolve_api_key_from_secret refreshes near-expiry token and persists updated secret" do
+  test "resolve_api_key_from_secret refreshes near-expiry token and calls persistence callback" do
     secret_name = "llm_google_antigravity_api_key"
+    test_pid = self()
 
     original_payload =
       Jason.encode!(%{
@@ -86,8 +86,6 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
         "created_at_ms" => System.system_time(:millisecond),
         "updated_at_ms" => System.system_time(:millisecond)
       })
-
-    assert {:ok, _} = Secrets.set(secret_name, original_payload)
 
     Req.Test.stub(__MODULE__, fn conn ->
       assert conn.request_path == "/token"
@@ -104,13 +102,19 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
     end)
 
     assert {:ok, api_key_json} =
-             GoogleAntigravityOAuth.resolve_api_key_from_secret(secret_name, original_payload)
+             GoogleAntigravityOAuth.resolve_api_key_from_secret(
+               secret_name,
+               original_payload,
+               persist_secret: fn name, value ->
+                 send(test_pid, {:persisted_secret, name, value})
+               end
+             )
 
     assert {:ok, decoded_api_key} = Jason.decode(api_key_json)
     assert decoded_api_key["token"] == "fresh-token"
     assert decoded_api_key["projectId"] == "proj-123"
 
-    assert {:ok, refreshed_payload} = Secrets.get(secret_name)
+    assert_receive {:persisted_secret, ^secret_name, refreshed_payload}, 1000
     assert {:ok, decoded_secret} = Jason.decode(refreshed_payload)
     assert decoded_secret["access_token"] == "fresh-token"
     assert decoded_secret["refresh_token"] == "fresh-refresh-token"
@@ -176,6 +180,7 @@ defmodule Ai.Auth.GoogleAntigravityOAuthTest do
              GoogleAntigravityOAuth.login_device_flow(
                redirect_uri: redirect_uri,
                callback_timeout_ms: 2_000,
+               local_callback_listener: LemonCore.Onboarding.LocalCallbackListener,
                on_auth: fn url, _instructions ->
                  state = extract_query_param(url, "state")
 

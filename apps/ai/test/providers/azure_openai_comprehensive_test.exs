@@ -285,10 +285,8 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses api-version from environment variable" do
+    test "uses api-version from provider_options" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_API_VERSION", "2025-01-01")
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:request_query, conn.query_string})
@@ -297,14 +295,17 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       model = base_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
+
+      opts = %StreamOptions{
+        api_key: "test-key",
+        provider_options: %{azure_openai_responses: %{api_version: "2025-01-01"}}
+      }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
 
       assert_receive {:request_query, query}, 1000
       assert String.contains?(query, "api-version=2025-01-01")
 
-      System.delete_env("AZURE_OPENAI_API_VERSION")
       EventStream.result(stream, 1000)
     end
 
@@ -349,10 +350,8 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses AZURE_OPENAI_BASE_URL from environment" do
+    test "uses base_url from provider_options" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_BASE_URL", "https://envresource.openai.azure.com/openai/v1")
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:request_host, conn.host})
@@ -361,21 +360,26 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       model = %{base_model() | base_url: nil}
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
+
+      opts = %StreamOptions{
+        api_key: "test-key",
+        provider_options: %{
+          azure_openai_responses: %{
+            base_url: "https://resolvedresource.openai.azure.com/openai/v1"
+          }
+        }
+      }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
 
       assert_receive {:request_host, host}, 1000
-      assert host == "envresource.openai.azure.com"
+      assert host == "resolvedresource.openai.azure.com"
 
-      System.delete_env("AZURE_OPENAI_BASE_URL")
       EventStream.result(stream, 1000)
     end
 
-    test "builds URL from AZURE_OPENAI_RESOURCE_NAME" do
+    test "builds URL from resource_name in provider_options" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_RESOURCE_NAME", "myazureresource")
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:request_host, conn.host})
@@ -384,14 +388,17 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       model = %{base_model() | base_url: nil}
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
+
+      opts = %StreamOptions{
+        api_key: "test-key",
+        provider_options: %{azure_openai_responses: %{resource_name: "resolvedresource"}}
+      }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
 
       assert_receive {:request_host, host}, 1000
-      assert host == "myazureresource.openai.azure.com"
+      assert host == "resolvedresource.openai.azure.com"
 
-      System.delete_env("AZURE_OPENAI_RESOURCE_NAME")
       EventStream.result(stream, 1000)
     end
 
@@ -495,61 +502,8 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses deployment name from environment mapping" do
+    test "uses deployment name from provider_options mapping" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4o=gpt4o-prod-deployment")
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
-      end)
-
-      model = %{base_model() | id: "gpt-4o"}
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
-
-      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["model"] == "gpt4o-prod-deployment"
-
-      System.delete_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
-      EventStream.result(stream, 1000)
-    end
-
-    test "handles multiple deployment mappings" do
-      test_pid = self()
-
-      System.put_env(
-        "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
-        "gpt-4o=gpt4o-prod,gpt-3.5-turbo=gpt35-prod,o1-mini=o1mini-deploy"
-      )
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
-      end)
-
-      model = %{base_model() | id: "o1-mini"}
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
-
-      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["model"] == "o1mini-deploy"
-
-      System.delete_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
-      EventStream.result(stream, 1000)
-    end
-
-    test "opts deployment name takes precedence over env mapping" do
-      test_pid = self()
-
-      System.put_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4o=env-deployment")
 
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -562,7 +516,74 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       opts = %StreamOptions{
         api_key: "test-key",
-        thinking_budgets: %{azure_deployment_name: "opts-deployment"}
+        provider_options: %{
+          azure_openai_responses: %{
+            deployment_name_map: %{"gpt-4o" => "gpt4o-prod-deployment"}
+          }
+        }
+      }
+
+      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
+
+      assert_receive {:request_body, body}, 1000
+      assert body["model"] == "gpt4o-prod-deployment"
+
+      EventStream.result(stream, 1000)
+    end
+
+    test "handles multiple deployment mappings" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %{base_model() | id: "o1-mini"}
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      opts = %StreamOptions{
+        api_key: "test-key",
+        provider_options: %{
+          azure_openai_responses: %{
+            deployment_name_map: %{
+              "gpt-4o" => "gpt4o-prod",
+              "gpt-3.5-turbo" => "gpt35-prod",
+              "o1-mini" => "o1mini-deploy"
+            }
+          }
+        }
+      }
+
+      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
+
+      assert_receive {:request_body, body}, 1000
+      assert body["model"] == "o1mini-deploy"
+
+      EventStream.result(stream, 1000)
+    end
+
+    test "opts deployment name takes precedence over provider_options mapping" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %{base_model() | id: "gpt-4o"}
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      opts = %StreamOptions{
+        api_key: "test-key",
+        thinking_budgets: %{azure_deployment_name: "opts-deployment"},
+        provider_options: %{
+          azure_openai_responses: %{
+            deployment_name_map: %{"gpt-4o" => "resolved-deployment"}
+          }
+        }
       }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
@@ -570,7 +591,6 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       assert_receive {:request_body, body}, 1000
       assert body["model"] == "opts-deployment"
 
-      System.delete_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
       EventStream.result(stream, 1000)
     end
   end
@@ -1887,11 +1907,9 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
   # API Key Environment Variable Tests
   # ============================================================================
 
-  describe "API key from environment" do
-    test "uses AZURE_OPENAI_API_KEY from environment" do
+  describe "resolved API key" do
+    test "uses api_key from provider_options" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_API_KEY", "env-api-key-123")
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:request_headers, conn.req_headers})
@@ -1900,23 +1918,22 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       model = base_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      # No api_key in opts
-      opts = %StreamOptions{}
+
+      opts = %StreamOptions{
+        provider_options: %{azure_openai_responses: %{api_key: "resolved-api-key-123"}}
+      }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
 
       assert_receive {:request_headers, headers}, 1000
       headers_map = Map.new(headers)
-      assert headers_map["api-key"] == "env-api-key-123"
+      assert headers_map["api-key"] == "resolved-api-key-123"
 
-      System.delete_env("AZURE_OPENAI_API_KEY")
       EventStream.result(stream, 1000)
     end
 
-    test "opts api_key takes precedence over environment" do
+    test "opts api_key takes precedence over provider_options" do
       test_pid = self()
-
-      System.put_env("AZURE_OPENAI_API_KEY", "env-api-key")
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:request_headers, conn.req_headers})
@@ -1925,7 +1942,11 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
       model = base_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "opts-api-key"}
+
+      opts = %StreamOptions{
+        api_key: "opts-api-key",
+        provider_options: %{azure_openai_responses: %{api_key: "resolved-api-key"}}
+      }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
 
@@ -1933,7 +1954,6 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       headers_map = Map.new(headers)
       assert headers_map["api-key"] == "opts-api-key"
 
-      System.delete_env("AZURE_OPENAI_API_KEY")
       EventStream.result(stream, 1000)
     end
   end

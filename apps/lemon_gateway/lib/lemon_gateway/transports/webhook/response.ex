@@ -254,7 +254,11 @@ defmodule LemonGateway.Transports.Webhook.Response do
   end
 
   defp backoff_delay_ms(retry_config, attempt) do
-    LemonCore.Retry.capped_backoff(retry_config.backoff_ms, max(attempt - 1, 0), retry_config.backoff_max_ms)
+    LemonCore.Retry.capped_backoff(
+      retry_config.backoff_ms,
+      max(attempt - 1, 0),
+      retry_config.backoff_max_ms
+    )
   end
 
   defp callback_payload(run_ctx, run_payload) do

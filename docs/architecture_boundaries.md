@@ -9,7 +9,7 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | --- | --- |
 
 | `agent_core` | `ai`, `lemon_core` |
-| `ai` | `lemon_core` |
+| `ai` | *(none)* |
 | `coding_agent` | `agent_core`, `ai`, `lemon_ai_runtime`, `lemon_core`, `lemon_skills` |
 | `coding_agent_ui` | `coding_agent` |
 | `lemon_ai_runtime` | `ai`, `lemon_core` |

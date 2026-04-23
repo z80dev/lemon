@@ -460,7 +460,9 @@ defmodule CodingAgent.Tools.Task.Result do
   defp maybe_put_preview(details, preview), do: Map.put(details, :preview, preview)
 
   defp maybe_put_current_action(details, nil), do: details
-  defp maybe_put_current_action(details, current_action), do: Map.put(details, :current_action, current_action)
+
+  defp maybe_put_current_action(details, current_action),
+    do: Map.put(details, :current_action, current_action)
 
   defp maybe_put_error(details, nil), do: details
   defp maybe_put_error(details, error), do: Map.put(details, :error, format_error(error))

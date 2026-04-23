@@ -129,46 +129,15 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
-  test "uses canonical provider config secret and base_url for zai provider" do
+  test "uses resolved provider_options api_key and base_url for zai provider" do
     test_pid = self()
-    prev_home = System.get_env("HOME")
-    prev_secret = System.get_env("llm_zai_api_key")
     prev_zai = System.get_env("ZAI_API_KEY")
     prev_openai = System.get_env("OPENAI_API_KEY")
 
-    tmp_home =
-      Path.join(System.tmp_dir!(), "openai_completions_zai_#{System.unique_integer([:positive])}")
-
-    global_dir = Path.join(tmp_home, ".lemon")
-    project_dir = Path.join(tmp_home, "project")
-
-    File.mkdir_p!(global_dir)
-    File.mkdir_p!(project_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [providers.zai]
-    api_key_secret = "llm_zai_api_key"
-    base_url = "https://override.zai.test/v4"
-    """)
-
-    System.put_env("HOME", tmp_home)
-    System.put_env("llm_zai_api_key", "zai-secret-ref-key")
     System.delete_env("ZAI_API_KEY")
     System.delete_env("OPENAI_API_KEY")
 
     on_exit(fn ->
-      if is_binary(prev_home) do
-        System.put_env("HOME", prev_home)
-      else
-        System.delete_env("HOME")
-      end
-
-      if is_binary(prev_secret) do
-        System.put_env("llm_zai_api_key", prev_secret)
-      else
-        System.delete_env("llm_zai_api_key")
-      end
-
       if is_binary(prev_zai) do
         System.put_env("ZAI_API_KEY", prev_zai)
       else
@@ -180,8 +149,6 @@ defmodule Ai.Providers.OpenAICompletionsTest do
       else
         System.delete_env("OPENAI_API_KEY")
       end
-
-      File.rm_rf!(tmp_home)
     end)
 
     Req.Test.stub(__MODULE__, fn conn ->
@@ -199,11 +166,19 @@ defmodule Ai.Providers.OpenAICompletionsTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} =
-      OpenAICompletions.stream(model, context, %StreamOptions{cwd: project_dir})
+    opts = %StreamOptions{
+      provider_options: %{
+        zai: %{
+          api_key: "zai-resolved-key",
+          base_url: "https://override.zai.test/v4"
+        }
+      }
+    }
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, opts)
 
     assert_receive {:request, "override.zai.test", "/v4/chat/completions", headers}, 1000
-    assert Map.new(headers)["authorization"] == "Bearer zai-secret-ref-key"
+    assert Map.new(headers)["authorization"] == "Bearer zai-resolved-key"
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 

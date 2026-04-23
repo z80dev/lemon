@@ -61,7 +61,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       Task.start(fn ->
         Ai.EventStream.push(stream, {:start, response})
         Ai.EventStream.push(stream, {:text_start, 0, response})
-        Ai.EventStream.push(stream, {:text_delta, 0, CodingAgent.Messages.get_text(response), response})
+
+        Ai.EventStream.push(
+          stream,
+          {:text_delta, 0, CodingAgent.Messages.get_text(response), response}
+        )
+
         Ai.EventStream.push(stream, {:text_end, 0, response})
         Process.sleep(delay_ms)
         Ai.EventStream.push(stream, {:done, response.stop_reason, response})

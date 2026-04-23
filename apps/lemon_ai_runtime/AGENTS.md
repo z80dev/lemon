@@ -6,7 +6,9 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 
 - This app now owns Lemon-facing runtime credential lookup and provider-specific
   stream option shaping in addition to the auth facade.
-- It exposes `LemonAiRuntime.Auth.*` modules that delegate to `Ai.Auth.*`.
+- It exposes `LemonAiRuntime.Auth.*` modules that own Lemon secret persistence
+  and local OAuth callback integration while delegating protocol work to
+  `Ai.Auth.*`.
 - It exposes `LemonAiRuntime.Credentials`, `LemonAiRuntime.ProviderNames`, and
   `LemonAiRuntime.StreamOptions` for Lemon-owned callers.
 - It has no OTP application callback or supervision tree.
@@ -23,7 +25,9 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 
 ## Ownership and dependencies
 
-- `apps/ai` owns provider protocol modules and OAuth protocol primitives.
+- `apps/ai` owns provider protocol modules and OAuth protocol primitives, but
+  it must not depend on Lemon config, secrets, or persistence.
 - `apps/ai` continues to own `Ai.Auth.OAuthPKCE`.
-- `apps/ai` continues to own existing provider-specific auth helpers for now.
+- `apps/ai` continues to own existing provider-specific auth helpers as pure
+  protocol helpers for now.
 - Lemon-owned apps should use this façade to avoid hard-coding `Ai.Auth.*` references.

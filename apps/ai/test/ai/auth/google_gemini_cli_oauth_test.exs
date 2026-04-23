@@ -69,8 +69,9 @@ defmodule Ai.Auth.GoogleGeminiCliOAuthTest do
     assert decoded["projectId"] == "managed-project-123"
   end
 
-  test "resolve_api_key_from_secret refreshes near-expiry token and persists updated secret" do
+  test "resolve_api_key_from_secret refreshes near-expiry token and calls persistence callback" do
     secret_name = "llm_google_gemini_cli_api_key"
+    test_pid = self()
 
     original_payload =
       Jason.encode!(%{
@@ -84,8 +85,6 @@ defmodule Ai.Auth.GoogleGeminiCliOAuthTest do
         "created_at_ms" => System.system_time(:millisecond),
         "updated_at_ms" => System.system_time(:millisecond)
       })
-
-    assert {:ok, _} = Secrets.set(secret_name, original_payload)
 
     Req.Test.stub(__MODULE__, fn conn ->
       assert conn.request_path == "/token"
@@ -102,13 +101,19 @@ defmodule Ai.Auth.GoogleGeminiCliOAuthTest do
     end)
 
     assert {:ok, api_key_json} =
-             GoogleGeminiCliOAuth.resolve_api_key_from_secret(secret_name, original_payload)
+             GoogleGeminiCliOAuth.resolve_api_key_from_secret(
+               secret_name,
+               original_payload,
+               persist_secret: fn name, value ->
+                 send(test_pid, {:persisted_secret, name, value})
+               end
+             )
 
     assert {:ok, decoded_api_key} = Jason.decode(api_key_json)
     assert decoded_api_key["token"] == "fresh-token"
     assert decoded_api_key["projectId"] == "managed-project-123"
 
-    assert {:ok, refreshed_payload} = Secrets.get(secret_name)
+    assert_receive {:persisted_secret, ^secret_name, refreshed_payload}, 1000
     assert {:ok, decoded_secret} = Jason.decode(refreshed_payload)
     assert decoded_secret["access_token"] == "fresh-token"
     assert decoded_secret["refresh_token"] == "fresh-refresh-token"

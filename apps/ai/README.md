@@ -94,15 +94,17 @@ Ai.Supervisor (one_for_one)
 
 ### Auth Modules
 
-The `Ai.Auth.*` modules remain in `apps/ai`; external Lemon apps should call the
-`LemonAiRuntime.Auth.*` façade modules instead of depending directly on `Ai.Auth.*`.
+The `Ai.Auth.*` modules remain in `apps/ai` as provider protocol helpers only.
+They do not read or write Lemon secrets/config. External Lemon apps should call
+the `LemonAiRuntime.Auth.*` façade modules for stored credentials, refresh
+persistence, and local OAuth callback handling.
 
 | Module | Purpose |
 |--------|---------|
-| `Ai.Auth.OAuthSecretResolver` | Central dispatcher -- routes encrypted secret payloads to provider-specific OAuth resolvers |
+| `Ai.Auth.OAuthSecretResolver` | Central dispatcher for encoded OAuth payloads |
 | `Ai.Auth.GitHubCopilotOAuth` | GitHub Copilot device-code login, Copilot token refresh, secret encoding/decoding |
 | `Ai.Auth.GoogleAntigravityOAuth` | Google Antigravity PKCE OAuth: authorize URL, token exchange/refresh, secret resolver |
-| `Ai.Auth.GoogleGeminiCliOAuth` | Google Gemini CLI PKCE OAuth: authorize URL, token exchange/refresh, Code Assist project onboarding, secret resolver |
+| `Ai.Auth.GoogleGeminiCliOAuth` | Google Gemini CLI PKCE OAuth: authorize URL, token exchange/refresh, Code Assist project setup, secret resolver |
 | `Ai.Auth.OpenAICodexOAuth` | OpenAI Codex PKCE OAuth: authorize URL, code exchange, token refresh, JWT extraction |
 | `Ai.Auth.OAuthPKCE` | PKCE verifier/challenge generation utility |
 
@@ -394,16 +396,17 @@ Events emitted by `Ai.EventStream`:
 
 ## Environment Variables
 
-Provider env vars are consumed through Lemon's central config resolution path.
-That includes OpenAI-compatible providers that share `Ai.Providers.OpenAICompletions`.
-New provider code should not add direct `System.get_env/1` fallbacks for
-config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
+Lemon callers resolve config, secrets, and OAuth state through
+`LemonAiRuntime` before invoking `Ai`. Providers consume concrete values from
+`Ai.Types.StreamOptions` (`api_key`, `headers`, `project`, `location`,
+`service_account_json`, and `provider_options`) and only use process env vars as
+standalone fallback behavior.
 
 | Variable | Provider/Module | Purpose |
 |----------|-----------------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic | API authentication |
 | `OPENAI_API_KEY` | OpenAI family | API authentication |
-| `OPENAI_CODEX_API_KEY` / `CHATGPT_TOKEN` | OpenAI Codex | JWT token (env-first; also supports OAuth secret payloads) |
+| `OPENAI_CODEX_API_KEY` / `CHATGPT_TOKEN` | OpenAI Codex | JWT token |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Override OAuth client ID |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI | API authentication |
 | `AZURE_OPENAI_BASE_URL` | Azure OpenAI | Full base URL (optional) |
@@ -418,10 +421,10 @@ config-backed values when `LemonCore.ProviderConfigResolver` can resolve them.
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex | GCP region |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex | Inline service account JSON |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex | Service account JSON file path |
-| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client ID |
-| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client secret |
-| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for OAuth client ID |
-| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for OAuth client secret |
+| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client ID fallback |
+| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client secret fallback |
+| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleAntigravityOAuth` | OAuth client ID fallback |
+| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | OAuth client secret fallback |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP trace logging |
 | `LEMON_AI_DEBUG` | Anthropic | Set to `"1"` to log raw SSE events |
 | `LEMON_AI_DEBUG_FILE` | Anthropic | SSE log file path (default: `/tmp/lemon_anthropic_sse.log`) |
@@ -496,7 +499,6 @@ Ai.ProviderRegistry.register(:my_provider_api, Ai.Providers.MyProvider)
 
 | Dependency | Purpose |
 |------------|---------|
-| `lemon_core` (umbrella) | Shared primitives: `LemonCore.Telemetry.emit/3`, `LemonCore.Secrets`, `LemonCore.Introspection` |
 | `req ~> 0.5` | HTTP client with streaming support; `Req.Test` for test mocking |
 | `jason ~> 1.4` | JSON encoding/decoding |
 | `nimble_options ~> 1.1` | Options validation |

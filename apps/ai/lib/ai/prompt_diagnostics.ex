@@ -19,7 +19,6 @@ defmodule Ai.PromptDiagnostics do
   """
 
   alias Ai.Types.{AssistantMessage, Context, Model, StreamOptions}
-  alias LemonCore.Introspection
 
   require Logger
 
@@ -156,16 +155,23 @@ defmodule Ai.PromptDiagnostics do
   defp record_introspection(data, %StreamOptions{} = opts) do
     headers = opts.headers || %{}
 
-    Introspection.record(
-      :ai_llm_call,
-      data,
-      engine: "ai",
-      session_key: trace_header(headers, "x-lemon-session-key"),
-      agent_id: trace_header(headers, "x-lemon-agent-id"),
-      run_id: trace_header(headers, "x-lemon-run-id")
+    :telemetry.execute(
+      [:ai, :prompt_diagnostics, :llm_call],
+      %{system_time: System.system_time()},
+      %{
+        data: data,
+        engine: "ai",
+        session_key: trace_header(headers, "x-lemon-session-key"),
+        agent_id: trace_header(headers, "x-lemon-agent-id"),
+        run_id: trace_header(headers, "x-lemon-run-id")
+      }
     )
 
     :ok
+  rescue
+    e ->
+      Logger.debug("Failed to emit prompt diagnostics telemetry event: #{inspect(e)}")
+      :ok
   end
 
   defp trace_header(headers, key) when is_map(headers) do

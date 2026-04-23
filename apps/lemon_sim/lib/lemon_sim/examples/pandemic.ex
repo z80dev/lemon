@@ -645,7 +645,10 @@ defmodule LemonSim.Examples.Pandemic do
 
   defp resolve_secret_api_key(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
-    case LemonAiRuntime.Auth.OAuthSecretResolver.resolve_api_key_from_secret(secret_name, secret_value) do
+    case LemonAiRuntime.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
+           secret_name,
+           secret_value
+         ) do
       {:ok, resolved_api_key} when is_binary(resolved_api_key) and resolved_api_key != "" ->
         resolved_api_key
 

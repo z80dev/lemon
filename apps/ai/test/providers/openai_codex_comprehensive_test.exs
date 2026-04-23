@@ -20,7 +20,6 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAICodexResponses
-  alias LemonCore.{Secrets, Store}
 
   alias Ai.Types.{
     AssistantMessage,
@@ -169,10 +168,9 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       assert OpenAICodexResponses.get_env_api_key() == nil
     end
 
-    test "get_env_api_key reads OAuth secret from store when env vars are missing" do
+    test "get_env_api_key ignores Lemon secret store when env vars are missing" do
       prev_codex = System.get_env("OPENAI_CODEX_API_KEY")
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
-      prev_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
 
       on_exit(fn ->
         if prev_codex,
@@ -182,44 +180,13 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         if prev_chatgpt,
           do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
           else: System.delete_env("CHATGPT_TOKEN")
-
-        if prev_master_key,
-          do: System.put_env("LEMON_SECRETS_MASTER_KEY", prev_master_key),
-          else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
-
-        clear_secrets_table()
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
-      clear_secrets_table()
 
-      System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
-
-      payload =
-        Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
-
-      token = "x." <> Base.encode64(payload) <> ".y"
-
-      oauth_secret =
-        Jason.encode!(%{
-          "type" => "onboarding_openai_codex_oauth",
-          "access_token" => token,
-          "refresh_token" => "rt_test",
-          "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
-        })
-
-      assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
-
-      assert OpenAICodexResponses.get_env_api_key() == token
+      assert OpenAICodexResponses.get_env_api_key() == nil
     end
-  end
-
-  defp clear_secrets_table do
-    Store.list(Secrets.table())
-    |> Enum.each(fn {key, _value} ->
-      Store.delete(Secrets.table(), key)
-    end)
   end
 
   # ============================================================================

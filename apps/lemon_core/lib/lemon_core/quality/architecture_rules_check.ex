@@ -452,7 +452,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     %{
       code: :forbidden_provider_direct_env,
       message:
-        "Provider modules must resolve config-backed provider env vars via LemonCore.ProviderConfigResolver",
+        "Provider modules must receive config-backed provider values through LemonAiRuntime-built StreamOptions",
       files: [
         "apps/ai/lib/ai/providers/google_vertex.ex",
         "apps/ai/lib/ai/providers/azure_openai_responses.ex",

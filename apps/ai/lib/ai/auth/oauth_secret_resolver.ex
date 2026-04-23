@@ -16,10 +16,12 @@ defmodule Ai.Auth.OAuthSecretResolver do
 
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value)
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
+
+  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     Enum.reduce_while(@resolvers, :ignore, fn resolver, _acc ->
-      case resolver.resolve_api_key_from_secret(secret_name, secret_value) do
+      case resolver.resolve_api_key_from_secret(secret_name, secret_value, opts) do
         :ignore ->
           {:cont, :ignore}
 
@@ -32,5 +34,5 @@ defmodule Ai.Auth.OAuthSecretResolver do
     end)
   end
 
-  def resolve_api_key_from_secret(_, _), do: {:error, :invalid_secret_value}
+  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 end

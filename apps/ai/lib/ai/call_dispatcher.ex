@@ -76,7 +76,7 @@ defmodule Ai.CallDispatcher do
   def dispatch(provider, callback) when is_atom(provider) and is_function(callback, 0) do
     start_time = System.monotonic_time()
 
-    LemonCore.Telemetry.emit(
+    :telemetry.execute(
       [:ai, :dispatcher, :dispatch],
       %{system_time: System.system_time()},
       %{provider: provider}
@@ -91,7 +91,7 @@ defmodule Ai.CallDispatcher do
       duration = System.monotonic_time() - start_time
       retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
 
-      LemonCore.Telemetry.emit(
+      :telemetry.execute(
         [:ai, :dispatcher, :rejected],
         %{duration: duration, system_time: System.system_time()},
         %{provider: provider, reason: :circuit_open, retry_after_ms: retry_after_ms}
@@ -124,7 +124,7 @@ defmodule Ai.CallDispatcher do
             {:error, :rate_limited} = error ->
               duration = System.monotonic_time() - start_time
 
-              LemonCore.Telemetry.emit(
+              :telemetry.execute(
                 [:ai, :dispatcher, :rejected],
                 %{duration: duration, system_time: System.system_time()},
                 %{provider: provider, reason: :rate_limited}
@@ -137,7 +137,7 @@ defmodule Ai.CallDispatcher do
         {:error, :max_concurrency} = error ->
           duration = System.monotonic_time() - start_time
 
-          LemonCore.Telemetry.emit(
+          :telemetry.execute(
             [:ai, :dispatcher, :rejected],
             %{duration: duration, system_time: System.system_time()},
             %{provider: provider, reason: :max_concurrency}

@@ -205,6 +205,7 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
     [entry] = SessionManager.entries(loaded)
 
     assert entry.type == :custom_message
+
     assert entry.details == %{
              "role" => "custom",
              "custom_type" => "nested",

@@ -100,27 +100,13 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
     assert OpenAICodexOAuth.resolve_access_token() == "env-token"
   end
 
-  test "resolve_access_token reads default oauth secret when env vars are missing" do
-    oauth_secret =
-      Jason.encode!(%{
-        "type" => "openai_codex_oauth",
-        "refresh_token" => "refresh-token",
-        "access_token" => make_jwt("acc_secret", 3_600),
-        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
-        "account_id" => "acc_secret",
-        "created_at_ms" => System.system_time(:millisecond),
-        "updated_at_ms" => System.system_time(:millisecond)
-      })
-
-    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
-
-    token = OpenAICodexOAuth.resolve_access_token()
-    assert is_binary(token)
-    assert String.starts_with?(token, "ey") or String.contains?(token, ".")
+  test "resolve_access_token returns nil when env vars are missing" do
+    assert OpenAICodexOAuth.resolve_access_token() == nil
   end
 
-  test "resolve_api_key_from_secret refreshes near-expiry token and persists updated secret" do
+  test "resolve_api_key_from_secret refreshes near-expiry token and calls persistence callback" do
     secret_name = "llm_openai_codex_api_key"
+    test_pid = self()
 
     original_payload =
       Jason.encode!(%{
@@ -132,8 +118,6 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
         "created_at_ms" => System.system_time(:millisecond),
         "updated_at_ms" => System.system_time(:millisecond)
       })
-
-    assert {:ok, _} = Secrets.set(secret_name, original_payload)
 
     Req.Test.stub(__MODULE__, fn conn ->
       assert conn.request_path == "/oauth/token"
@@ -150,11 +134,17 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
     end)
 
     assert {:ok, refreshed_token} =
-             OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, original_payload)
+             OpenAICodexOAuth.resolve_api_key_from_secret(
+               secret_name,
+               original_payload,
+               persist_secret: fn name, value ->
+                 send(test_pid, {:persisted_secret, name, value})
+               end
+             )
 
     assert is_binary(refreshed_token)
 
-    assert {:ok, refreshed_payload} = Secrets.get(secret_name)
+    assert_receive {:persisted_secret, ^secret_name, refreshed_payload}, 1000
     assert {:ok, decoded} = Jason.decode(refreshed_payload)
     assert decoded["refresh_token"] == "fresh-refresh-token"
     assert decoded["account_id"] == "acc_new"
@@ -218,6 +208,7 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
              OpenAICodexOAuth.login_device_flow(
                redirect_uri: redirect_uri,
                callback_timeout_ms: 2_000,
+               local_callback_listener: LemonCore.Onboarding.LocalCallbackListener,
                on_auth: fn url, _instructions ->
                  state = extract_query_param(url, "state")
 

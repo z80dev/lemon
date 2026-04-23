@@ -284,7 +284,6 @@ defmodule CodingAgent.Tools.WebDownload do
 
   defp elapsed_ms(started_ms), do: System.monotonic_time(:millisecond) - started_ms
 
-
   defp json_result(payload) do
     ExternalContent.untrusted_json_result(payload)
   end

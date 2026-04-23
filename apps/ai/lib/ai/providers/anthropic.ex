@@ -23,7 +23,6 @@ defmodule Ai.Providers.Anthropic do
 
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
-  alias LemonCore.{ProviderConfigResolver, Secrets}
   import Ai.Providers.AssistantMessageHelper
 
   alias Ai.Types.{
@@ -56,7 +55,7 @@ defmodule Ai.Providers.Anthropic do
 
   @impl true
   def get_env_api_key do
-    Secrets.fetch_value("ANTHROPIC_API_KEY")
+    System.get_env("ANTHROPIC_API_KEY")
   end
 
   @impl true
@@ -219,16 +218,12 @@ defmodule Ai.Providers.Anthropic do
         api_key
 
       true ->
-        maybe_oauth_key(model.provider)
+        ""
     end
   end
 
   defp resolve_provider_options(model, opts) do
-    model.provider
-    |> normalize_provider_id()
-    |> ProviderConfigResolver.resolve_for_provider(Map.from_struct(opts))
-  rescue
-    _ -> %{}
+    provider_options(opts, normalize_provider_id(model.provider))
   end
 
   defp normalize_provider_id(provider) when is_atom(provider), do: provider
@@ -237,14 +232,6 @@ defmodule Ai.Providers.Anthropic do
     provider
     |> String.replace("-", "_")
     |> String.to_atom()
-  end
-
-  defp maybe_oauth_key(provider) do
-    if anthropic_oauth_provider?(provider) do
-      Ai.Auth.AnthropicOAuth.resolve_access_token() || ""
-    else
-      ""
-    end
   end
 
   defp get_provider_env_api_key(provider) do
@@ -269,11 +256,17 @@ defmodule Ai.Providers.Anthropic do
   defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
 
   defp env_value(name) when is_binary(name) do
-    case Secrets.fetch_value(name) do
+    case System.get_env(name) do
       value when is_binary(value) and value != "" -> value
       _ -> nil
     end
   end
+
+  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp missing_api_key_error(:kimi),
     do:

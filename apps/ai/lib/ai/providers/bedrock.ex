@@ -7,9 +7,9 @@ defmodule Ai.Providers.Bedrock do
 
   ## Configuration
 
-  AWS credentials and region should be resolved through canonical Lemon config
-  before requests reach this provider. Stream options still take precedence for
-  per-request overrides.
+  AWS credentials and region should be resolved by the caller before requests
+  reach this provider. Stream options still take precedence for per-request
+  overrides.
 
   ## Usage
 
@@ -59,18 +59,15 @@ defmodule Ai.Providers.Bedrock do
   # ============================================================================
 
   defp do_stream(stream, model, context, opts) do
-    output = init_assistant_message(model, api_override: :bedrock_converse_stream, provider_override: model.provider || :amazon)
+    output =
+      init_assistant_message(model,
+        api_override: :bedrock_converse_stream,
+        provider_override: model.provider || :amazon
+      )
+
     trace_id = HttpTrace.new_trace_id("bedrock")
 
-    # Resolve provider config from canonical config + env + secrets
-    resolved =
-      try do
-        LemonCore.ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, opts)
-      rescue
-        e ->
-          Logger.warning("Failed to resolve Bedrock provider config: #{Exception.message(e)}")
-          %{}
-      end
+    resolved = provider_options(opts, :bedrock_converse_stream)
 
     resolved_headers = Map.get(resolved, :headers, %{})
 
@@ -160,7 +157,6 @@ defmodule Ai.Providers.Bedrock do
     end
   end
 
-
   # ============================================================================
   # AWS Configuration
   # ============================================================================
@@ -170,6 +166,12 @@ defmodule Ai.Providers.Bedrock do
       Map.get(resolved_headers, "aws_region") ||
       "us-east-1"
   end
+
+  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp get_credentials(opts, resolved_headers) do
     access_key =

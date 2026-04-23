@@ -808,7 +808,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_query(_), do: {:error, "Query is required"}
 
-
   defp enforce_rate_limit do
     ensure_rate_limit_table()
     now = System.monotonic_time(:millisecond)

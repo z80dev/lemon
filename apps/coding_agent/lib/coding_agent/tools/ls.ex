@@ -425,5 +425,4 @@ defmodule CodingAgent.Tools.Ls do
     x = if (bits &&& 0o1) != 0, do: "x", else: "-"
     "#{r}#{w}#{x}"
   end
-
 end

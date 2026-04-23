@@ -367,7 +367,7 @@ defmodule Ai.ContextCompactor do
   # ============================================================================
 
   defp emit_telemetry(event, metadata) do
-    LemonCore.Telemetry.emit(
+    :telemetry.execute(
       [:ai, :context_compactor, event],
       %{system_time: System.system_time()},
       metadata

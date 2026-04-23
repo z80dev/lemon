@@ -183,5 +183,4 @@ defmodule LemonSim.Examples.SpaceStation.VideoGenerator do
   defp format_file_size(bytes) when bytes < 1024, do: "#{bytes} B"
   defp format_file_size(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1024, 1)} KB"
   defp format_file_size(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
-
 end

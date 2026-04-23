@@ -437,5 +437,4 @@ defmodule CodingAgent.Tools.Read do
     end)
     |> Enum.join("\n")
   end
-
 end

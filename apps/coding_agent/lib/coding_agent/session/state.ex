@@ -107,7 +107,8 @@ defmodule CodingAgent.Session.State do
       | custom_type: normalize_custom_type(message.custom_type),
         content: normalize_custom_content(message.content),
         display: normalize_display(message.display),
-        details: merge_async_followup_details(message.details, details_async_followups(message.details)),
+        details:
+          merge_async_followup_details(message.details, details_async_followups(message.details)),
         timestamp: normalize_timestamp(message.timestamp)
     }
   end

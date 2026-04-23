@@ -9,8 +9,6 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   require Logger
 
   alias Ai.Auth.OAuthPKCE
-  alias LemonCore.Secrets
-  alias LemonCore.Onboarding.LocalCallbackListener
 
   @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
   @authorize_url "https://auth.openai.com/oauth/authorize"
@@ -21,7 +19,6 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   @secret_type "openai_codex_oauth"
   @legacy_secret_types ["onboarding_openai_codex_oauth"]
   @near_expiry_ms 10 * 60 * 1000
-  @default_secret_names ["llm_openai_codex_api_key"]
   @default_callback_timeout_ms 120_000
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
@@ -34,6 +31,8 @@ defmodule Ai.Auth.OpenAICodexOAuth do
           | {:state, String.t()}
           | {:callback_timeout_ms, pos_integer()}
           | {:listen_for_callback, boolean()}
+          | {:local_callback_listener, module()}
+          | {:persist_secret, (String.t(), String.t() -> any())}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -54,7 +53,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   Run OpenAI Codex OAuth flow.
 
   When the redirect URI is local (`http://localhost:1455/auth/callback` by default),
-  Lemon listens for the browser callback automatically and falls back to manual
+  A local listener can capture the browser callback automatically and fall back to manual
   paste only if that listener cannot complete the flow.
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
@@ -203,7 +202,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   def exchange_code_for_secret(_, _, _), do: {:error, :invalid_authorization_input}
 
   @doc """
-  Encode OAuth secret payload for encrypted `LemonCore.Secrets` storage.
+  Encode OAuth secret payload for storage by the caller.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
   def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
@@ -235,14 +234,16 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value)
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
+
+  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]) do
       if changed? do
-        persist_secret(secret_name, refreshed_secret)
+        persist_secret(secret_name, refreshed_secret, opts)
       end
 
       {:ok, access_token}
@@ -253,44 +254,19 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     end
   end
 
-  def resolve_api_key_from_secret(_, _), do: {:error, :invalid_secret_value}
+  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @doc """
-  Resolve a Codex access token using env-first resolution and Lemon secret-store OAuth.
+  Resolve a Codex access token from process environment values.
 
   Resolution order:
-  1. `OPENAI_CODEX_API_KEY` (env first, then same-name Lemon secret)
-  2. `CHATGPT_TOKEN` (env first, then same-name Lemon secret)
-  3. Default Lemon OAuth secret names (for example `llm_openai_codex_api_key`)
+  1. `OPENAI_CODEX_API_KEY`
+  2. `CHATGPT_TOKEN`
   """
   @spec resolve_access_token() :: String.t() | nil
   def resolve_access_token do
-    resolve_named_secret("OPENAI_CODEX_API_KEY", prefer_env: true, env_fallback: true) ||
-      resolve_named_secret("CHATGPT_TOKEN", prefer_env: true, env_fallback: true) ||
-      Enum.find_value(@default_secret_names, fn secret_name ->
-        resolve_named_secret(secret_name, prefer_env: false, env_fallback: false)
-      end)
-  end
-
-  defp resolve_named_secret(secret_name, opts) when is_binary(secret_name) do
-    with {:ok, value, _source} <- Secrets.resolve(secret_name, opts) do
-      case resolve_api_key_from_secret(secret_name, value) do
-        {:ok, api_key} ->
-          api_key
-
-        :ignore ->
-          non_empty_binary(value)
-
-        {:error, reason} ->
-          Logger.debug(
-            "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
-          )
-
-          non_empty_binary(value)
-      end
-    else
-      _ -> nil
-    end
+    non_empty_binary(System.get_env("OPENAI_CODEX_API_KEY")) ||
+      non_empty_binary(System.get_env("CHATGPT_TOKEN"))
   end
 
   defp ensure_fresh_secret(secret) when is_map(secret) do
@@ -389,18 +365,24 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
 
-  defp persist_secret(secret_name, secret) do
-    case Secrets.set(secret_name, encode_secret(secret), provider: "openai_codex_oauth") do
-      {:ok, _} ->
+  defp persist_secret(secret_name, secret, opts) do
+    encoded = encode_secret(secret)
+
+    case Keyword.get(opts, :persist_secret) do
+      callback when is_function(callback, 2) ->
+        callback.(secret_name, encoded)
         :ok
 
-      {:error, reason} ->
-        Logger.debug(
-          "Failed to persist refreshed OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
-        )
-
+      _ ->
         :ok
     end
+  rescue
+    reason ->
+      Logger.debug(
+        "Failed to persist refreshed OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+      )
+
+      :ok
   end
 
   defp post_form(url, body) when is_map(body) do
@@ -531,11 +513,13 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   end
 
   defp maybe_start_local_callback_listener(redirect_uri, opts) do
-    if Keyword.get(opts, :listen_for_callback, true) and
-         LocalCallbackListener.local_redirect_uri?(redirect_uri) do
-      case LocalCallbackListener.start(redirect_uri) do
+    listener_module = Keyword.get(opts, :local_callback_listener)
+
+    if (Keyword.get(opts, :listen_for_callback, true) and listener_module) &&
+         listener_module.local_redirect_uri?(redirect_uri) do
+      case listener_module.start(redirect_uri) do
         {:ok, listener} ->
-          listener
+          {listener_module, listener}
 
         {:error, reason} ->
           _ =
@@ -553,7 +537,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   defp wait_for_local_callback(_opts, _redirect_uri, nil), do: :manual
 
-  defp wait_for_local_callback(opts, redirect_uri, listener) do
+  defp wait_for_local_callback(opts, redirect_uri, {listener_module, listener}) do
     timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
 
     _ =
@@ -562,7 +546,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
         "Waiting for browser callback on #{redirect_uri} ..."
       )
 
-    case LocalCallbackListener.wait(listener, timeout_ms) do
+    case listener_module.wait(listener, timeout_ms) do
       {:ok, callback_url} ->
         _ = notify_progress(opts, "Received browser callback. Finishing sign-in...")
         {:ok, callback_url}
@@ -588,14 +572,16 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   end
 
   defp stop_local_callback_listener(nil), do: :ok
-  defp stop_local_callback_listener(listener), do: LocalCallbackListener.stop(listener)
+
+  defp stop_local_callback_listener({listener_module, listener}),
+    do: listener_module.stop(listener)
 
   defp auth_instructions(_redirect_uri, nil) do
     "Paste the callback URL (or code#state) after browser sign-in."
   end
 
   defp auth_instructions(redirect_uri, _listener) do
-    "After browser sign-in, Lemon will capture the redirect to #{redirect_uri} automatically."
+    "After browser sign-in, the local callback listener will capture the redirect to #{redirect_uri} automatically."
   end
 
   defp format_local_callback_error(:eaddrinuse), do: "port already in use"

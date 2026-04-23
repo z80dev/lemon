@@ -8,8 +8,8 @@ defmodule Ai.Providers.GoogleVertex do
   ## Authentication
 
   Uses Application Default Credentials (ADC) or service account authentication.
-  Project and location should be resolved through canonical Lemon config or
-  passed in stream options.
+  Project and location should be resolved by the caller and passed in stream
+  options.
 
   Authentication is handled via:
   - Application Default Credentials (gcloud auth)
@@ -74,18 +74,7 @@ defmodule Ai.Providers.GoogleVertex do
     output = init_assistant_message(model, api_override: :google_vertex)
 
     try do
-      # Resolve provider config from canonical config + env + secrets
-      resolved =
-        try do
-          LemonCore.ProviderConfigResolver.resolve_for_provider(:google_vertex, opts)
-        rescue
-          e ->
-            Logger.warning(
-              "Failed to resolve Google Vertex provider config: #{Exception.message(e)}"
-            )
-
-            %{}
-        end
+      resolved = provider_options(opts, :google_vertex)
 
       project = resolve_project(opts, resolved)
       location = resolve_location(opts, resolved)
@@ -117,6 +106,12 @@ defmodule Ai.Providers.GoogleVertex do
 
     project
   end
+
+  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp resolve_location(opts, resolved) do
     location = Map.get(opts, :location) || Map.get(resolved, :location)

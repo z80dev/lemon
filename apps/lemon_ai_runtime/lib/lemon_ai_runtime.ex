@@ -23,7 +23,12 @@ defmodule LemonAiRuntime do
   defdelegate provider_has_credentials?(provider, providers_map_or_cfg, opts \\ []),
     to: LemonAiRuntime.Credentials
 
-  @spec build_stream_options(Ai.Types.Model.t(), map() | nil, map() | StreamOptions.t() | nil, String.t() | nil) ::
+  @spec build_stream_options(
+          Ai.Types.Model.t(),
+          map() | nil,
+          map() | StreamOptions.t() | nil,
+          String.t() | nil
+        ) ::
           StreamOptions.t()
   defdelegate build_stream_options(model, providers_map, existing_opts, cwd),
     to: LemonAiRuntime.StreamOptions

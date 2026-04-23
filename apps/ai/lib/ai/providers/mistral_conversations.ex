@@ -19,7 +19,7 @@ defmodule Ai.Providers.MistralConversations do
 
   @impl true
   def get_env_api_key do
-    LemonCore.Secrets.fetch_value("MISTRAL_API_KEY")
+    System.get_env("MISTRAL_API_KEY")
   end
 
   @impl true

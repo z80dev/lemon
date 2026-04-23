@@ -230,7 +230,7 @@ defmodule Ai.CompactingClient do
   defp resolve_provider(_), do: :anthropic
 
   defp emit_telemetry(event, metadata) do
-    LemonCore.Telemetry.emit(
+    :telemetry.execute(
       [:ai, :compacting_client, event],
       %{system_time: System.system_time()},
       metadata

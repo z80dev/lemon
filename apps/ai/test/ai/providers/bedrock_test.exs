@@ -179,10 +179,13 @@ defmodule Ai.Providers.BedrockStreamTest do
       assert output.stop_reason == :error
     end
 
-    test "errors when AWS_SECRET_ACCESS_KEY is missing but access key is set" do
-      System.put_env("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
+    test "errors when AWS_SECRET_ACCESS_KEY is missing but access key is resolved" do
+      opts =
+        default_opts(%{
+          headers: %{"aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE"}
+        })
 
-      {_stream, result} = stream_and_result()
+      {_stream, result} = stream_and_result(default_model(), default_context(), opts)
 
       assert {:error, output} = result
       assert output.error_message == "AWS_SECRET_ACCESS_KEY not found"
@@ -197,13 +200,7 @@ defmodule Ai.Providers.BedrockStreamTest do
       assert output.error_message =~ "ACCESS_KEY_ID"
     end
 
-    test "accepts credentials from opts.headers over env vars" do
-      # Set env vars
-      System.put_env("AWS_ACCESS_KEY_ID", "env-access-key")
-      System.put_env("AWS_SECRET_ACCESS_KEY", "env-secret-key")
-
-      # Override with headers - these will pass credential check
-      # but fail at HTTP level (not a credential error)
+    test "accepts credentials from opts.headers" do
       opts =
         default_opts(%{
           headers: %{
@@ -222,23 +219,36 @@ defmodule Ai.Providers.BedrockStreamTest do
     end
 
     test "session token is optional" do
-      # Set access and secret key but no session token
-      System.put_env("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-      System.put_env("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+      opts =
+        default_opts(%{
+          headers: %{
+            "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+          }
+        })
 
-      {_stream, result} = stream_and_result()
+      {_stream, result} = stream_and_result(default_model(), default_context(), opts)
 
       # Should NOT be a credential error
       assert {:error, output} = result
       refute output.error_message =~ "not found"
     end
 
-    test "accepts session token from env var" do
-      System.put_env("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-      System.put_env("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
-      System.put_env("AWS_SESSION_TOKEN", "FwoGZXIvYXdzEBYaDHqa0AP")
+    test "accepts session token from provider_options" do
+      opts =
+        default_opts(%{
+          provider_options: %{
+            bedrock_converse_stream: %{
+              headers: %{
+                "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
+                "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "aws_session_token" => "FwoGZXIvYXdzEBYaDHqa0AP"
+              }
+            }
+          }
+        })
 
-      {_stream, result} = stream_and_result()
+      {_stream, result} = stream_and_result(default_model(), default_context(), opts)
 
       # Should NOT be a credential error
       assert {:error, output} = result
@@ -325,11 +335,15 @@ defmodule Ai.Providers.BedrockStreamTest do
 
   describe "region handling" do
     test "defaults to us-east-1 when no region configured" do
-      # Provide credentials so we pass credential check and attempt HTTP
-      System.put_env("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-      System.put_env("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+      opts =
+        default_opts(%{
+          headers: %{
+            "aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key" => "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+          }
+        })
 
-      {_stream, {:error, output}} = stream_and_result()
+      {_stream, {:error, output}} = stream_and_result(default_model(), default_context(), opts)
 
       # The error should be from HTTP, not credentials
       # We can't directly verify the region, but we confirm no credential error

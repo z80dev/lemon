@@ -6,8 +6,8 @@ AI extraction.
 
 Current scope:
 
-- `LemonAiRuntime.Auth.*` modules currently delegate to existing `Ai.Auth.*`
-  modules.
+- `LemonAiRuntime.Auth.*` modules own Lemon secret persistence and local OAuth
+  callback integration while reusing pure `Ai.Auth.*` protocol helpers.
 - `LemonAiRuntime.Credentials` owns Lemon-facing provider API key resolution and
   provider availability checks.
 - `LemonAiRuntime.StreamOptions` owns Lemon-facing stream option shaping for
@@ -20,5 +20,6 @@ Current scope:
 - External callers should treat `LemonAiRuntime` as the migration boundary for
   Lemon-owned auth/config/runtime concerns.
 
-Provider protocol implementations still live in `apps/ai`; later slices will
-move more ownership into this app.
+Provider protocol implementations still live in `apps/ai`; they receive
+resolved values through `Ai.Types.StreamOptions` and no longer depend on
+`lemon_core`.

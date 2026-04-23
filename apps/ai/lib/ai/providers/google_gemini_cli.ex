@@ -122,7 +122,6 @@ defmodule Ai.Providers.GoogleGeminiCli do
     end
   end
 
-
   defp parse_credentials(nil, _project_override) do
     raise "Google Cloud Code Assist requires OAuth authentication. Use /login to authenticate."
   end

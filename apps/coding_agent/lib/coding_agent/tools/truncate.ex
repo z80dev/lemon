@@ -501,5 +501,4 @@ defmodule CodingAgent.Tools.Truncate do
       details: Map.put(metadata, :summary, summary)
     }
   end
-
 end

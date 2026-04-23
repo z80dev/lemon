@@ -54,7 +54,6 @@ defmodule Ai.Providers.OpenAICompletions do
   }
 
   alias Ai.EventStream
-  alias LemonCore.{ProviderConfigResolver, Secrets}
 
   require Logger
 
@@ -73,7 +72,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
   @impl Ai.Provider
   def get_env_api_key do
-    Secrets.fetch_value("OPENAI_API_KEY")
+    System.get_env("OPENAI_API_KEY")
   end
 
   @impl Ai.Provider
@@ -156,16 +155,7 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp resolve_provider_options(model, opts) do
-    model.provider
-    |> normalize_provider_id()
-    |> ProviderConfigResolver.resolve_for_provider(Map.from_struct(opts))
-  rescue
-    error ->
-      Logger.warning(
-        "Failed to resolve OpenAI-compatible provider config for #{inspect(model.provider)}: #{Exception.message(error)}"
-      )
-
-      %{}
+    provider_options(opts, normalize_provider_id(model.provider))
   end
 
   defp normalize_provider_id(provider) when is_atom(provider), do: provider
@@ -200,8 +190,14 @@ defmodule Ai.Providers.OpenAICompletions do
         _ -> nil
       end
 
-    if env_var, do: Secrets.fetch_value(env_var), else: nil
+    if env_var, do: System.get_env(env_var), else: nil
   end
+
+  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp build_url(model, resolved_provider_opts) do
     base_url =

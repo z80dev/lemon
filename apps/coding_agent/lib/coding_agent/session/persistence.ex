@@ -96,7 +96,10 @@ defmodule CodingAgent.Session.Persistence do
   end
 
   @spec append_custom_message(Session.t(), CodingAgent.Messages.CustomMessage.t()) :: Session.t()
-  def append_custom_message(%Session{} = session_manager, %CodingAgent.Messages.CustomMessage{} = message) do
+  def append_custom_message(
+        %Session{} = session_manager,
+        %CodingAgent.Messages.CustomMessage{} = message
+      ) do
     session_manager
     |> SessionManager.append_custom_message(MessageSerialization.serialize_message(message))
   end

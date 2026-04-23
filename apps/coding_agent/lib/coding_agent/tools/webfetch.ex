@@ -821,7 +821,6 @@ defmodule CodingAgent.Tools.WebFetch do
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_reason(reason), do: inspect(reason)
 
-
   defp json_result(payload) do
     ExternalContent.untrusted_json_result(payload)
   end

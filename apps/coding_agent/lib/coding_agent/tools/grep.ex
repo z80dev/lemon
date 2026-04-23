@@ -544,5 +544,4 @@ defmodule CodingAgent.Tools.Grep do
   defp format_match(%{file: file, line_number: _line_num, context: context}) do
     "#{file}:\n#{context}"
   end
-
 end

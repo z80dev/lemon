@@ -63,8 +63,10 @@ Ai (main API)
 
 ### Internal Provider Helpers
 
-`Ai.Auth.*` modules are implemented in this app for now and should be consumed via
-`LemonAiRuntime.Auth.*` facades by other apps to avoid direct cross-app auth coupling.
+`Ai.Auth.*` modules are implemented in this app as provider protocol helpers.
+They must not depend on Lemon config, secrets, or persistence. Lemon-owned apps
+should consume `LemonAiRuntime.Auth.*` facades for stored credential lookup,
+refresh persistence, and local OAuth callback handling.
 
 - `Ai.Providers.GoogleShared` - Shared request/response logic for all Google providers
   - Includes async HTTP error-body normalization for streaming calls so provider errors
@@ -82,11 +84,11 @@ Ai (main API)
 - `Ai.Providers.OpenAIResponses` - Direct OpenAI Responses streaming path; when tools are present it now sends explicit `tool_choice: "auto"` and `parallel_tool_calls: true` so GPT-5 family models do not silently skip tool use on task-heavy prompts
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
-- `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
-- `Ai.Auth.GoogleGeminiCliOAuth` - Gemini CLI PKCE OAuth helpers, Code Assist project onboarding, token refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
-- `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
-- `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution (supports both current and legacy onboarding secret payloads)
-- `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific OAuth secret payloads
+- `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, and encoded OAuth payload resolution (`{"token","projectId"}` API key shape)
+- `Ai.Auth.GoogleGeminiCliOAuth` - Gemini CLI PKCE OAuth helpers, Code Assist project setup, token refresh, and encoded OAuth payload resolution (`{"token","projectId"}` API key shape)
+- `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encoded secret payloads
+- `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers, token refresh, and JWT extraction
+- `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific encoded OAuth payloads
 - `Ai.Auth.OAuthPKCE` - PKCE verifier/challenge generation utility
 
 ## Key Types (all defined in `Ai.Types`)
@@ -588,18 +590,17 @@ Run with: `mix test --include integration`
 
 ## Environment Variables
 
-Provider env vars are part of Lemon's canonical override layer and should be
-resolved centrally through `LemonCore.ProviderConfigResolver` / provider config,
-including OpenAI-compatible providers such as OpenAI, ZAI, MiniMax, Fireworks,
-OpenRouter, Groq, xAI, Mistral, and Copilot. Do not add new direct env reads
-inside provider modules.
+Lemon callers resolve config, secrets, and OAuth state through
+`LemonAiRuntime` before calling `Ai`. Providers consume concrete values from
+`Ai.Types.StreamOptions`; process env reads are only standalone fallback
+behavior for direct `ai` usage.
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic provider | API authentication |
 | `OPENAI_API_KEY` | OpenAI providers | API authentication |
-| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | JWT token (env-first; also supports OAuth secret payload values) |
-| `CHATGPT_TOKEN` | OpenAI Codex provider | Fallback token env var (env-first; also supports OAuth secret payload values) |
+| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | JWT token fallback |
+| `CHATGPT_TOKEN` | OpenAI Codex provider | Fallback JWT token env var |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI provider | API authentication |
 | `AZURE_OPENAI_BASE_URL` | Azure OpenAI provider | Full base URL (optional) |
 | `AZURE_OPENAI_RESOURCE_NAME` | Azure OpenAI provider | Resource name (if no base URL) |
@@ -614,7 +615,7 @@ inside provider modules.
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex provider | Inline service account JSON |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex provider | Service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` / `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client credentials |
-| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials (secret store is primary) |
+| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP request/response logging |
 | `LEMON_AI_DEBUG` | Anthropic provider | Set to `"1"` to log raw SSE to a file |
@@ -627,7 +628,6 @@ inside provider modules.
 
 ## Key Dependencies
 
-- `lemon_core` - Shared primitives and telemetry (`LemonCore.Telemetry.emit/3`)
 - `req` - HTTP client with streaming support (`Req.Test` for test mocking)
 - `jason` - JSON encoding/decoding
 - `nimble_options` - Options validation
@@ -671,9 +671,9 @@ Ai.Supervisor (one_for_one)
 
 ### Changing Auth Behaviour
 
-- API key resolution: each provider's `get_api_key/2` private function checks `opts.api_key`, then provider-specific env vars, then `get_env_api_key/0`
-- OAuth secret payloads: `Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret/2` dispatches to provider-specific resolvers
-- Adding new env var fallbacks: modify the provider's `get_api_key/2` function
+- Lemon API key/config resolution belongs in `LemonAiRuntime`; providers receive concrete values through `Ai.Types.StreamOptions`.
+- Provider OAuth helpers may refresh encoded payloads, but persistence is injected by `LemonAiRuntime.Auth.*`.
+- Adding new Lemon config or secret behavior means updating `apps/lemon_ai_runtime`, not provider modules in this app.
 
 ### Modifying the Streaming Pipeline
 
@@ -690,7 +690,6 @@ Ai.Supervisor (one_for_one)
 
 ## How This App Connects to Other Umbrella Apps
 
-- **`lemon_core`** (dependency): Provides `LemonCore.Telemetry.emit/3` for telemetry events, `LemonCore.Secrets` for secret/credential resolution, and `LemonCore.Introspection` for diagnostics recording
 - **`coding_agent`** (consumer): Uses `Ai.stream/3` and `Ai.complete/3` for LLM calls during coding sessions; resolves models via `Ai.Models`
 - **`agent_core`** (consumer): Orchestrates multi-turn LLM conversations using `Ai.Types.Context`, `Ai.stream/3`, and tool-call handling
 - **`lemon_automation`** (consumer): Uses `Ai` for automated LLM calls in cron jobs and routines

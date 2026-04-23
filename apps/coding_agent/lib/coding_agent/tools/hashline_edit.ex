@@ -274,5 +274,4 @@ defmodule CodingAgent.Tools.HashlineEdit do
   end
 
   defp check_file_access(path), do: FileValidation.check_write_access(path)
-
 end

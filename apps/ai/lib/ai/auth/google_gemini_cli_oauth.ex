@@ -3,15 +3,13 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   Google Gemini CLI OAuth helpers.
 
   Supports PKCE authorization URL generation, localhost callback/manual paste
-  parsing, token exchange + refresh, Code Assist project onboarding, encrypted
+  parsing, token exchange + refresh, Code Assist project setup, encoded
   secret payloads, and API-key resolution for the `google_gemini_cli` provider.
   """
 
   require Logger
 
   alias Ai.Auth.OAuthPKCE
-  alias LemonCore.Onboarding.LocalCallbackListener
-  alias LemonCore.Secrets
 
   @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
   @token_url "https://oauth2.googleapis.com/token"
@@ -56,6 +54,8 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
           | {:project_id, String.t()}
           | {:callback_timeout_ms, pos_integer()}
           | {:listen_for_callback, boolean()}
+          | {:local_callback_listener, module()}
+          | {:persist_secret, (String.t(), String.t() -> any())}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -87,7 +87,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   Run the Gemini CLI OAuth flow.
 
   When the redirect URI is local (`http://localhost:8085/oauth2callback` by default),
-  Lemon listens for the browser callback automatically and falls back to manual
+  A local listener can capture the browser callback automatically and fall back to manual
   paste only if the listener cannot complete the flow.
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
@@ -219,7 +219,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   def exchange_code_for_secret(_, _, _), do: {:error, :invalid_authorization_input}
 
   @doc """
-  Encode OAuth secret payload for encrypted `LemonCore.Secrets` storage.
+  Encode OAuth secret payload for storage by the caller.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
   def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
@@ -252,7 +252,9 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value)
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
+
+  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
@@ -261,7 +263,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
          project_id when is_binary(project_id) and project_id != "" <-
            project_id_from_secret(refreshed_secret) do
       if changed? do
-        persist_secret(secret_name, refreshed_secret)
+        persist_secret(secret_name, refreshed_secret, opts)
       end
 
       {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
@@ -272,7 +274,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
     end
   end
 
-  def resolve_api_key_from_secret(_, _), do: {:error, :invalid_secret_value}
+  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   defp ensure_fresh_secret(secret) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
@@ -599,18 +601,24 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
 
   defp fetch_user_email(_), do: {:ok, nil}
 
-  defp persist_secret(secret_name, secret) do
-    case Secrets.set(secret_name, encode_secret(secret), provider: "google_gemini_cli_oauth") do
-      {:ok, _} ->
+  defp persist_secret(secret_name, secret, opts) do
+    encoded = encode_secret(secret)
+
+    case Keyword.get(opts, :persist_secret) do
+      callback when is_function(callback, 2) ->
+        callback.(secret_name, encoded)
         :ok
 
-      {:error, reason} ->
-        Logger.debug(
-          "Failed to persist refreshed Google Gemini CLI OAuth secret #{secret_name}: #{inspect(reason)}"
-        )
-
+      _ ->
         :ok
     end
+  rescue
+    reason ->
+      Logger.debug(
+        "Failed to persist refreshed Google Gemini CLI OAuth secret #{secret_name}: #{inspect(reason)}"
+      )
+
+      :ok
   end
 
   defp post_form(url, body) when is_map(body) do
@@ -852,15 +860,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
 
   defp resolve_client_credential(secret_names, env_name, default_value)
        when is_list(secret_names) do
-    Enum.find_value(secret_names, fn secret_name ->
-      case Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
-        {:ok, secret_value, _source} ->
-          non_empty_binary(secret_value)
-
-        _ ->
-          nil
-      end
-    end) ||
+    Enum.find_value(secret_names, &non_empty_binary(System.get_env(&1))) ||
       non_empty_binary(System.get_env(env_name)) ||
       default_value
   end
@@ -903,11 +903,13 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   end
 
   defp maybe_start_local_callback_listener(redirect_uri, opts) do
-    if Keyword.get(opts, :listen_for_callback, true) and
-         LocalCallbackListener.local_redirect_uri?(redirect_uri) do
-      case LocalCallbackListener.start(redirect_uri) do
+    listener_module = Keyword.get(opts, :local_callback_listener)
+
+    if (Keyword.get(opts, :listen_for_callback, true) and listener_module) &&
+         listener_module.local_redirect_uri?(redirect_uri) do
+      case listener_module.start(redirect_uri) do
         {:ok, listener} ->
-          listener
+          {listener_module, listener}
 
         {:error, reason} ->
           _ =
@@ -925,7 +927,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
 
   defp wait_for_local_callback(_opts, _redirect_uri, nil), do: :manual
 
-  defp wait_for_local_callback(opts, redirect_uri, listener) do
+  defp wait_for_local_callback(opts, redirect_uri, {listener_module, listener}) do
     timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
 
     _ =
@@ -934,7 +936,7 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
         "Waiting for browser callback on #{redirect_uri} ..."
       )
 
-    case LocalCallbackListener.wait(listener, timeout_ms) do
+    case listener_module.wait(listener, timeout_ms) do
       {:ok, callback_url} ->
         _ = notify_progress(opts, "Received browser callback. Finishing sign-in...")
         {:ok, callback_url}
@@ -960,14 +962,16 @@ defmodule Ai.Auth.GoogleGeminiCliOAuth do
   end
 
   defp stop_local_callback_listener(nil), do: :ok
-  defp stop_local_callback_listener(listener), do: LocalCallbackListener.stop(listener)
+
+  defp stop_local_callback_listener({listener_module, listener}),
+    do: listener_module.stop(listener)
 
   defp auth_instructions(_redirect_uri, nil) do
     "Paste the callback URL (or authorization code) after browser sign-in."
   end
 
   defp auth_instructions(redirect_uri, _listener) do
-    "After browser sign-in, Lemon will capture the redirect to #{redirect_uri} automatically."
+    "After browser sign-in, the local callback listener will capture the redirect to #{redirect_uri} automatically."
   end
 
   defp format_local_callback_error(:eaddrinuse), do: "port already in use"

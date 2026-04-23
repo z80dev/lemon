@@ -26,7 +26,6 @@ defmodule Ai.Providers.Google do
   alias Ai.EventStream
   alias Ai.Providers.GoogleShared
   import Ai.Providers.AssistantMessageHelper
-  alias LemonCore.{ProviderConfigResolver, Secrets}
 
   alias Ai.Types.{
     Context,
@@ -53,9 +52,9 @@ defmodule Ai.Providers.Google do
 
   @impl true
   def get_env_api_key do
-    Secrets.fetch_value("GOOGLE_GENERATIVE_AI_API_KEY") ||
-      Secrets.fetch_value("GOOGLE_API_KEY") ||
-      Secrets.fetch_value("GEMINI_API_KEY")
+    System.get_env("GOOGLE_GENERATIVE_AI_API_KEY") ||
+      System.get_env("GOOGLE_API_KEY") ||
+      System.get_env("GEMINI_API_KEY")
   end
 
   @impl true
@@ -112,14 +111,18 @@ defmodule Ai.Providers.Google do
   end
 
   defp resolve_provider_options(opts) do
-    ProviderConfigResolver.resolve_for_provider(:google, Map.from_struct(opts))
-  rescue
-    _ -> %{}
+    provider_options(opts, :google)
   end
 
-  defp get_provider_env_key(:opencode), do: Secrets.fetch_value("OPENCODE_API_KEY")
-  defp get_provider_env_key("opencode"), do: Secrets.fetch_value("OPENCODE_API_KEY")
+  defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
+  defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
   defp get_provider_env_key(_), do: nil
+
+  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+    Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(_, _), do: %{}
 
   defp build_base_url(%Model{} = model, resolved_provider_opts) do
     cond do

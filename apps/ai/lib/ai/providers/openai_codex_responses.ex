@@ -88,7 +88,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   @impl true
   def get_env_api_key do
-    Ai.Auth.OpenAICodexOAuth.resolve_access_token()
+    System.get_env("OPENAI_CODEX_API_KEY") || System.get_env("CHATGPT_TOKEN")
   end
 
   @impl true

@@ -117,45 +117,15 @@ defmodule Ai.Providers.AnthropicTest do
   end
 
   describe "provider config resolution" do
-    test "uses canonical provider config secret and base_url for minimax" do
+    test "uses resolved provider_options api_key and base_url for minimax" do
       test_pid = self()
-      prev_home = System.get_env("HOME")
-      prev_secret = System.get_env("llm_minimax_api_key")
       prev_minimax = System.get_env("MINIMAX_API_KEY")
       prev_anthropic = System.get_env("ANTHROPIC_API_KEY")
 
-      tmp_home =
-        Path.join(
-          System.tmp_dir!(),
-          "anthropic_minimax_cfg_#{System.unique_integer([:positive])}"
-        )
-
-      global_dir = Path.join(tmp_home, ".lemon")
-      project_dir = Path.join(tmp_home, "project")
-
-      File.mkdir_p!(global_dir)
-      File.mkdir_p!(project_dir)
-
-      File.write!(Path.join(global_dir, "config.toml"), """
-      [providers.minimax]
-      api_key_secret = "llm_minimax_api_key"
-      base_url = "https://override.minimax.test/anthropic"
-      """)
-
-      System.put_env("HOME", tmp_home)
-      System.put_env("llm_minimax_api_key", "minimax-secret-ref-key")
       System.delete_env("MINIMAX_API_KEY")
       System.delete_env("ANTHROPIC_API_KEY")
 
       on_exit(fn ->
-        if is_binary(prev_home),
-          do: System.put_env("HOME", prev_home),
-          else: System.delete_env("HOME")
-
-        if is_binary(prev_secret),
-          do: System.put_env("llm_minimax_api_key", prev_secret),
-          else: System.delete_env("llm_minimax_api_key")
-
         if is_binary(prev_minimax),
           do: System.put_env("MINIMAX_API_KEY", prev_minimax),
           else: System.delete_env("MINIMAX_API_KEY")
@@ -163,8 +133,6 @@ defmodule Ai.Providers.AnthropicTest do
         if is_binary(prev_anthropic),
           do: System.put_env("ANTHROPIC_API_KEY", prev_anthropic),
           else: System.delete_env("ANTHROPIC_API_KEY")
-
-        File.rm_rf!(tmp_home)
       end)
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -176,12 +144,20 @@ defmodule Ai.Providers.AnthropicTest do
       end)
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{cwd: project_dir}
+
+      opts = %StreamOptions{
+        provider_options: %{
+          minimax: %{
+            api_key: "minimax-resolved-key",
+            base_url: "https://override.minimax.test/anthropic"
+          }
+        }
+      }
 
       {:ok, stream} = Anthropic.stream(model(), context, opts)
 
       assert_receive {:request, "override.minimax.test", "/anthropic/v1/messages", headers}, 1000
-      assert Map.new(headers)["x-api-key"] == "minimax-secret-ref-key"
+      assert Map.new(headers)["x-api-key"] == "minimax-resolved-key"
       assert {:ok, _} = EventStream.result(stream, 5_000)
     end
   end
