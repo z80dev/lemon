@@ -34,6 +34,9 @@ jobs:
     name: Product smoke (${{ matrix.profile }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      LEMON_STORE_PATH: ${{ runner.temp }}/lemon-store
+      LEMON_WEB_SECRET_KEY_BASE: product_smoke_secret_key_base_product_smoke_secret_key_base_product_smoke
 
     strategy:
       fail-fast: false

@@ -36,6 +36,8 @@ jobs:
     name: Smoke test (${{ matrix.profile }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      LEMON_STORE_PATH: ${{ runner.temp }}/lemon-store
 
     strategy:
       fail-fast: false
