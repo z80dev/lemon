@@ -251,7 +251,14 @@ defmodule LemonRouter.SurfaceManager do
           {:error, reason} ->
             record_finalize_dispatch(state, :fallback_stream_finalize)
             dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-            maybe_dispatch_fallback_final_text(state, channel_id, resolved_final_text, meta, reason)
+
+            maybe_dispatch_fallback_final_text(
+              state,
+              channel_id,
+              resolved_final_text,
+              meta,
+              reason
+            )
         end
       else
         case stream_coalescer().finalize_run(
@@ -339,7 +346,7 @@ defmodule LemonRouter.SurfaceManager do
     _ -> :ok
   end
 
-  defp coalescer_meta(%{execution_request: %LemonGateway.ExecutionRequest{} = request}) do
+  defp coalescer_meta(%{execution_request: %LemonCore.ExecutionCommand{} = request}) do
     ChannelContext.coalescer_meta_from_request(request)
   end
 
@@ -505,7 +512,7 @@ defmodule LemonRouter.SurfaceManager do
 
   defp attach_task_parent(action_event, _), do: action_event
 
-  defp fanout_routes(%{execution_request: %LemonGateway.ExecutionRequest{meta: meta}})
+  defp fanout_routes(%{execution_request: %LemonCore.ExecutionCommand{meta: meta}})
        when is_map(meta) do
     MapHelpers.get_key(meta, :fanout_routes) || []
   end
@@ -581,7 +588,7 @@ defmodule LemonRouter.SurfaceManager do
     end
   end
 
-  defp request_meta(%{execution_request: %LemonGateway.ExecutionRequest{meta: meta}})
+  defp request_meta(%{execution_request: %LemonCore.ExecutionCommand{meta: meta}})
        when is_map(meta),
        do: meta
 

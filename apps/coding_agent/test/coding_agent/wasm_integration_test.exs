@@ -186,6 +186,12 @@ defmodule CodingAgent.WasmIntegrationTest do
       String.contains?(output, "wasm32-wasip2")
   end
 
+  defp unavailable_wasm_toolchain_error?(output) when is_binary(output) do
+    missing_wasm_target_error?(output) or
+      (String.contains?(output, "wasm-component-ld") and
+         String.contains?(output, "failed to parse core wasm for componentization"))
+  end
+
   test "sidecar discover + invoke smoke", %{tmp_dir: tmp_dir} do
     runtime_path = write_sidecar_with_host_call(tmp_dir)
 
@@ -236,10 +242,10 @@ defmodule CodingAgent.WasmIntegrationTest do
           tool_dir
 
         {:error, {:build_failed, output}} ->
-          if missing_wasm_target_error?(output) do
+          if unavailable_wasm_toolchain_error?(output) do
             IO.puts("""
-            skipping real wasm integration test because `wasm32-wasip2` is unavailable.
-            install it with `rustup target add wasm32-wasip2`.
+            skipping real wasm integration test because the wasm component toolchain is unavailable.
+            install `wasm32-wasip2` with a compatible `wasm-component-ld`.
             """)
 
             nil

@@ -166,7 +166,10 @@ defmodule LemonServices.Runtime.Server do
     # Handle restart policy
     case handle_restart_policy(new_state) do
       {:restart, delay} ->
-        Logger.info("Restarting service #{state.definition.id} in #{delay}ms (attempt #{new_state.restart_count})")
+        Logger.info(
+          "Restarting service #{state.definition.id} in #{delay}ms (attempt #{new_state.restart_count})"
+        )
+
         Process.send_after(self(), :do_start, delay)
         {:noreply, new_state}
 
@@ -268,10 +271,7 @@ defmodule LemonServices.Runtime.Server do
         Process.monitor(port_pid)
 
         new_state =
-          %{new_state |
-            port: port,
-            pid: port_pid
-          }
+          %{new_state | port: port, pid: port_pid}
           |> State.set_status(:running)
 
         broadcast_event(state, :service_started)
@@ -291,6 +291,7 @@ defmodule LemonServices.Runtime.Server do
         case handle_restart_policy(new_state) do
           {:restart, delay} ->
             Process.send_after(self(), :do_start, delay)
+
           :no_restart ->
             :ok
         end
@@ -320,17 +321,21 @@ defmodule LemonServices.Runtime.Server do
   end
 
   defp handle_restart_policy(%{definition: %{restart_policy: :temporary}}), do: :no_restart
+
   defp handle_restart_policy(%{definition: %{restart_policy: :permanent}} = state) do
     delay = Enum.at(@restart_delays, min(state.restart_count, length(@restart_delays) - 1))
     {:restart, delay}
   end
-  defp handle_restart_policy(%{definition: %{restart_policy: :transient}, last_exit_code: 0}), do: :no_restart
+
+  defp handle_restart_policy(%{definition: %{restart_policy: :transient}, last_exit_code: 0}),
+    do: :no_restart
+
   defp handle_restart_policy(%{definition: %{restart_policy: :transient}} = state) do
     delay = Enum.at(@restart_delays, min(state.restart_count, length(@restart_delays) - 1))
     {:restart, delay}
   end
 
-  defp extract_exit_code({:exit_status, status}), do: Bitwise.bsr(status, 8)
+  defp extract_exit_code({:exit_status, status}), do: status
   defp extract_exit_code(_), do: nil
 
   defp broadcast_event(state, event) do
@@ -367,6 +372,7 @@ defmodule LemonServices.Runtime.Server do
 
   defp send_recent_logs(service_id, pid) do
     logs = LogBuffer.get_logs(service_id, 100)
+
     for log <- logs do
       send(pid, {:service_log, service_id, log})
     end

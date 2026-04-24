@@ -4,11 +4,11 @@ Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execu
 
 ## Quick Orientation
 
-LemonGateway is the execution backend behind router-owned conversations. It does NOT render output to channels directly and it does NOT own queue semantics anymore. Router-owned `SessionCoordinator` processes decide collect/followup/steer/interrupt behavior and submit queue-semantic-free `ExecutionRequest` values into the gateway.
+LemonGateway is the execution backend behind router-owned conversations. It does NOT render output to channels directly and it does NOT own queue semantics anymore. Router-owned `SessionCoordinator` processes decide collect/followup/steer/interrupt behavior and submit queue-semantic-free `LemonCore.ExecutionCommand` values through the configured runtime behavior.
 
 Gateway-native transports such as email, Farcaster, and webhook are ingress shims only. They normalize inbound requests to `LemonCore.RunRequest` and submit through `LemonCore.RouterBridge`; they must not call `LemonRouter.*` modules directly.
 
-**Entry point**: `LemonGateway.Runtime.submit_execution(%ExecutionRequest{})`.
+**Entry point**: `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
 The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reintroduce it.
 
 **Core loop**: Router -> `ExecutionRequest` -> Scheduler -> ThreadWorker -> Run -> Engine -> bus events.
@@ -29,7 +29,7 @@ The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reint
                                       |
                           LemonRouter.RunOrchestrator
                                       |
-                         Runtime.submit_execution/1
+                         LemonCore.EngineRuntime.submit_execution/1
                                       |
 +-------------------------------------+---------------------------------+
 |                          Scheduler                                     |
@@ -78,8 +78,8 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | File | Module | What It Does |
 |------|--------|-------------|
 | `lib/lemon_gateway.ex` | `LemonGateway` | Public API facade for execution submission and health helpers. |
-| `lib/lemon_gateway/runtime.ex` | `Runtime` | Submit and cancel API. Preferred entry is `submit_execution/1`. |
-| `lib/lemon_gateway/execution_request.ex` | `ExecutionRequest` | Gateway input contract with no queue-mode semantics. |
+| `lib/lemon_gateway/runtime.ex` | `Runtime` | Implements `LemonCore.EngineRuntime`; converts core commands to gateway-private requests and exposes cancellation/run lookup. |
+| `lib/lemon_gateway/execution_request.ex` | `ExecutionRequest` | Gateway-private adapter shape with no queue-mode semantics. |
 | `lib/lemon_gateway/scheduler.ex` | `Scheduler` | GenServer: thread routing plus slot-based concurrency (`max_concurrent_runs`). |
 | `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-conversation launcher/slot waiter, no collect/followup/interrupt policy. |
 | `lib/lemon_gateway/run.ex` | `Run` | GenServer: engine lifecycle, bus event emission, steer/cancel, lock management |

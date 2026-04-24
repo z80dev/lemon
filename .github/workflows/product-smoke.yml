@@ -34,6 +34,9 @@ jobs:
     name: Product smoke (${{ matrix.profile }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      LEMON_STORE_PATH: /tmp/lemon-store
+      LEMON_WEB_SECRET_KEY_BASE: product_smoke_secret_key_base_product_smoke_secret_key_base_product_smoke
 
     strategy:
       fail-fast: false
@@ -128,21 +131,15 @@ jobs:
           echo "$RESPONSE" | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
+          if d.get('ok') is True:
+              print('Healthz ok')
+              sys.exit(0)
           status = d.get('status', '')
           if status not in ('ok', 'degraded'):
               print(f'::error::Doctor returned unexpected status: {status}')
               sys.exit(1)
           print(f'Doctor status: {status}')
           "
-
-      # ── Skill lint ────────────────────────────────────────────────────────────
-
-      - name: Lint built-in skills
-        run: |
-          MIX_ENV=dev mix deps.get
-          mix lemon.skill.lint
-        env:
-          MIX_ENV: dev
 
       # ── Memory search probe ───────────────────────────────────────────────────
 
@@ -154,7 +151,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -d '{"query":"smoke test","limit":1}' \
-            "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/api/memory/search" 2>&1) || true
+            "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/api/memory/search" 2>&1)
           echo "Memory search response: $RESPONSE"
           # Accept either a results array or a 404/501 if memory search is
           # not enabled in this profile — we only fail on a 5xx or crash.
@@ -165,6 +162,21 @@ jobs:
               exit 1
             fi
           fi
+
+      # ── Skill lint ────────────────────────────────────────────────────────────
+
+      - name: Stop release before Mix checks
+        run: |
+          if [ -n "$RELEASE_BIN" ] && [ -f "$RELEASE_BIN" ]; then
+            "$RELEASE_BIN" stop || true
+          fi
+
+      - name: Lint built-in skills
+        run: |
+          MIX_ENV=dev mix deps.get
+          mix lemon.skill.lint
+        env:
+          MIX_ENV: dev
 
       # ── Adaptive eval gates ───────────────────────────────────────────────────
 

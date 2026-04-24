@@ -48,6 +48,21 @@ if is_binary(uploads_dir) and uploads_dir != "" do
   config :lemon_web, :uploads_dir, uploads_dir
 end
 
+store_path = System.get_env("LEMON_STORE_PATH")
+
+if is_binary(store_path) and store_path != "" do
+  config :lemon_core, :store_runtime_override, backend_opts: [path: store_path]
+  config :lemon_core, LemonCore.RunHistoryStore, path: store_path
+  config :lemon_core, LemonCore.MemoryStore, path: store_path
+  config :lemon_core, LemonCore.RoutingFeedbackStore, path: store_path
+end
+
+control_plane_port = System.get_env("LEMON_CONTROL_PLANE_PORT")
+
+if is_binary(control_plane_port) and control_plane_port != "" do
+  config :lemon_control_plane, :port, String.to_integer(control_plane_port)
+end
+
 # Auto-loop: automatically start and restart games
 if System.get_env("LEMON_SIM_AUTO_LOOP") in ["1", "true", "TRUE"] do
   werewolf_players =

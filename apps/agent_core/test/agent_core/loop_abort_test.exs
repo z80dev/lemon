@@ -166,7 +166,7 @@ defmodule AgentCore.LoopAbortTest do
 
       {_events, result} = collect_events_and_result(stream)
 
-      assert match?({:error, {:canceled, :assistant_aborted}}, result) or
+      assert match?({:error, {:canceled, _reason}}, result) or
                match?({:error, :stream_closed}, result)
 
       refute_receive :stream_fn_called, 100

@@ -3,12 +3,11 @@ defmodule LemonRouter.Submission do
   Router-owned internal queue contract between orchestration and coordination.
 
   `LemonCore.RunRequest` remains the permissive router-facing boundary and
-  `LemonGateway.ExecutionRequest` remains the gateway-facing execution contract.
+  `LemonCore.ExecutionCommand` is the runtime-facing execution contract.
   This struct owns the normalized router handoff in between.
   """
 
-  alias LemonCore.{MapHelpers, RunPhase}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.{ExecutionCommand, MapHelpers, RunPhase}
 
   @enforce_keys [:run_id, :session_key, :conversation_key, :queue_mode, :execution_request]
   defstruct [
@@ -27,9 +26,9 @@ defmodule LemonRouter.Submission do
   @type t :: %__MODULE__{
           run_id: binary(),
           session_key: binary(),
-          conversation_key: ExecutionRequest.conversation_key(),
+          conversation_key: ExecutionCommand.conversation_key(),
           queue_mode: atom() | term(),
-          execution_request: ExecutionRequest.t(),
+          execution_request: ExecutionCommand.t(),
           run_supervisor: module() | pid() | atom(),
           run_process_module: module(),
           run_process_opts: map(),
@@ -55,7 +54,7 @@ defmodule LemonRouter.Submission do
   def new!(attrs) when is_map(attrs) do
     execution_request =
       case MapHelpers.get_key(attrs, :execution_request) do
-        %ExecutionRequest{} = request -> request
+        %ExecutionCommand{} = request -> request
         other -> raise ArgumentError, "submission missing execution_request: #{inspect(other)}"
       end
 

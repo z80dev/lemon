@@ -1,12 +1,14 @@
 defmodule LemonGateway.ExecutionRequest do
   @moduledoc """
-  Queue-semantic-free public execution contract for gateway submission.
+  Gateway-private execution request adapter.
 
-  Router-owned callers hand `%ExecutionRequest{}` values across the
-  router->gateway boundary. Gateway internals still convert these requests into
-  `%LemonGateway.Types.Job{}` before invoking engines.
+  Router-owned callers hand `%LemonCore.ExecutionCommand{}` values to the
+  configured `LemonCore.EngineRuntime`. Gateway keeps this shape internally for
+  the transition period and converts it into `%LemonGateway.Types.Job{}` before
+  invoking engines.
   """
 
+  alias LemonCore.ExecutionCommand
   alias LemonGateway.Types.Job
 
   @enforce_keys [:run_id, :session_key, :prompt, :engine_id]
@@ -39,8 +41,45 @@ defmodule LemonGateway.ExecutionRequest do
         }
 
   @doc """
-  Compatibility/migration helper; new code should build `%ExecutionRequest{}`
-  values directly.
+  Converts the core execution command into gateway's private scheduling shape.
+  """
+  @spec from_command(ExecutionCommand.t()) :: t()
+  def from_command(%ExecutionCommand{} = command) do
+    %__MODULE__{
+      run_id: command.run_id,
+      session_key: command.session_key,
+      prompt: command.prompt,
+      engine_id: command.engine_id,
+      cwd: command.cwd,
+      resume: command.resume,
+      lane: command.lane,
+      tool_policy: command.tool_policy,
+      conversation_key: command.conversation_key,
+      meta: ExecutionCommand.normalize_meta(command.meta)
+    }
+  end
+
+  @doc """
+  Converts the gateway-private request back into the core boundary contract.
+  """
+  @spec to_command(t()) :: ExecutionCommand.t()
+  def to_command(%__MODULE__{} = request) do
+    %ExecutionCommand{
+      run_id: request.run_id,
+      session_key: request.session_key,
+      prompt: request.prompt,
+      engine_id: request.engine_id,
+      cwd: request.cwd,
+      resume: request.resume,
+      lane: request.lane,
+      tool_policy: request.tool_policy,
+      conversation_key: request.conversation_key,
+      meta: normalize_meta(request.meta)
+    }
+  end
+
+  @doc """
+  Compatibility/migration helper for gateway tests and legacy internals.
   """
   @spec from_job(Job.t(), keyword()) :: t()
   def from_job(%Job{} = job, opts \\ []) do

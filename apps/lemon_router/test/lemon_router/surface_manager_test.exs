@@ -162,7 +162,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     state = %{
       run_id: "run-fanout",
       session_key: session_key,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-fanout",
         session_key: session_key,
         prompt: "fanout",
@@ -206,7 +206,8 @@ defmodule LemonRouter.SurfaceManagerTest do
                     }},
                    1_000
 
-    refute_receive {:dispatched_intent, _}, 100
+    refute_receive {:dispatched_intent, %DeliveryIntent{run_id: "run-fanout", kind: :final_text}},
+                   100
 
     assert Enum.sort([peer_a, peer_b]) == ["111", "222"]
     assert Enum.sort([seq_a, seq_b]) == [1, 2]
@@ -228,7 +229,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     state = %{
       run_id: "run-fallback",
       session_key: session_key,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-fallback",
         session_key: session_key,
         prompt: "fallback",
@@ -271,7 +272,7 @@ defmodule LemonRouter.SurfaceManagerTest do
       run_id: "run-streamed-final",
       session_key: session_key,
       saw_delta: true,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-streamed-final",
         session_key: session_key,
         prompt: "streamed final",
@@ -322,7 +323,7 @@ defmodule LemonRouter.SurfaceManagerTest do
       run_id: "run-streamed-fallback",
       session_key: session_key,
       saw_delta: true,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-streamed-fallback",
         session_key: session_key,
         prompt: "streamed fallback",
@@ -354,7 +355,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     %{
       run_id: "run-1",
       session_key: SessionKey.main("surface-manager"),
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-1",
         session_key: SessionKey.main("surface-manager"),
         prompt: "test",

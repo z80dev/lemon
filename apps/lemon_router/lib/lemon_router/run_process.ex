@@ -2,9 +2,9 @@ defmodule LemonRouter.RunProcess do
   @moduledoc """
   Process that owns a single run lifecycle.
 
-  `RunProcess` expects a router-built `%LemonGateway.ExecutionRequest{}` at init
+  `RunProcess` expects a router-built `%LemonCore.ExecutionCommand{}` at init
   time. Router-owned conversation identity must already be resolved before this
-  process submits work into the gateway.
+  process submits work into the configured runtime.
 
   Each RunProcess:
   - Owns a run_id
@@ -25,8 +25,7 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
-  alias LemonGateway.ExecutionRequest
-  alias LemonCore.{Bus, Introspection}
+  alias LemonCore.{Bus, ExecutionCommand, Introspection}
   alias LemonRouter.SurfaceManager
   alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
 
@@ -102,12 +101,15 @@ defmodule LemonRouter.RunProcess do
   def init(opts) do
     run_id = opts[:run_id]
     init_session_key = opts[:session_key]
-    gateway_scheduler = opts[:gateway_scheduler] || LemonGateway.Scheduler
+
+    engine_runtime =
+      opts[:engine_runtime] || opts[:gateway_scheduler] || configured_engine_runtime()
+
     run_orchestrator = opts[:run_orchestrator] || LemonRouter.RunOrchestrator
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
     run_watchdog_confirm_timeout_ms = Watchdog.resolve_run_watchdog_confirm_timeout_ms(opts)
 
-    with %ExecutionRequest{} = request <- opts[:execution_request],
+    with %ExecutionCommand{} = request <- opts[:execution_request],
          {:ok, execution_request} <-
            normalize_execution_request(
              request,
@@ -145,7 +147,7 @@ defmodule LemonRouter.RunProcess do
         run_watchdog_confirmation_ref: nil,
         run_watchdog_awaiting_confirmation?: false,
         submit_to_gateway?: submit_to_gateway?,
-        gateway_scheduler: gateway_scheduler,
+        engine_runtime: engine_runtime,
         run_orchestrator: run_orchestrator,
         gateway_submit_attempt: 0,
         gateway_submitted?: false,
@@ -197,8 +199,8 @@ defmodule LemonRouter.RunProcess do
       state.gateway_submitted? or state.aborted or state.completed ->
         {:noreply, state}
 
-      scheduler_available?(state.gateway_scheduler) ->
-        submit_gateway_execution(state.gateway_scheduler, state)
+      runtime_available?(state.engine_runtime) ->
+        submit_runtime_execution(state.engine_runtime, state)
 
         Logger.debug(
           "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
@@ -212,7 +214,7 @@ defmodule LemonRouter.RunProcess do
         Process.send_after(self(), :submit_to_gateway, delay_ms)
 
         Logger.warning(
-          "Gateway scheduler unavailable; retrying submit for run_id=#{inspect(state.run_id)} " <>
+          "Engine runtime unavailable; retrying submit for run_id=#{inspect(state.run_id)} " <>
             "in #{delay_ms}ms (attempt=#{state.gateway_submit_attempt + 1})"
         )
 
@@ -481,8 +483,8 @@ defmodule LemonRouter.RunProcess do
       state.completed or not state.aborted ->
         {:noreply, state}
 
-      gateway_run_pid(state.run_id) != nil ->
-        LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+      runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
+        cancel_runtime_run(state.engine_runtime, state.run_id, reason)
         {:noreply, maybe_monitor_gateway_run(state)}
 
       true ->
@@ -524,7 +526,7 @@ defmodule LemonRouter.RunProcess do
       not is_nil(state.gateway_run_pid) ->
         {:noreply, state}
 
-      gateway_run_pid(state.run_id) != nil ->
+      runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
         {:noreply, maybe_monitor_gateway_run(state)}
 
       true ->
@@ -553,7 +555,7 @@ defmodule LemonRouter.RunProcess do
       not is_nil(state.gateway_run_pid) ->
         {:noreply, state}
 
-      gateway_run_pid(state.run_id) != nil ->
+      runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
         {:noreply, maybe_monitor_gateway_run(state)}
 
       true ->
@@ -600,7 +602,7 @@ defmodule LemonRouter.RunProcess do
 
       # Best-effort cancel of the gateway run. This does not currently remove
       # queued jobs for the same session_key; it only cancels the in-flight run.
-      LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+      cancel_runtime_run(state.engine_runtime, state.run_id, reason)
 
       if is_nil(state.gateway_run_pid) do
         Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
@@ -671,7 +673,7 @@ defmodule LemonRouter.RunProcess do
 
       # Best-effort abort of the gateway run on abnormal termination
       try do
-        LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_process_terminated)
+        cancel_runtime_run(state.engine_runtime, state.run_id, :run_process_terminated)
       rescue
         _ -> :ok
       end
@@ -718,8 +720,7 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_monitor_gateway_run(state) do
     with true <- Code.ensure_loaded?(Registry),
-         true <- Code.ensure_loaded?(LemonGateway.RunRegistry),
-         [{pid, _}] when is_pid(pid) <- Registry.lookup(LemonGateway.RunRegistry, state.run_id) do
+         pid when is_pid(pid) <- runtime_run_pid(state.engine_runtime, state.run_id) do
       %{state | gateway_run_pid: pid, gateway_run_ref: Process.monitor(pid)}
     else
       _ -> state
@@ -742,33 +743,20 @@ defmodule LemonRouter.RunProcess do
   defp gateway_down_grace_ms({:shutdown, _}), do: 200
   defp gateway_down_grace_ms(_), do: 20
 
-  defp gateway_run_pid(run_id) when is_binary(run_id) do
-    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
-      [{pid, _}] when is_pid(pid) -> pid
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp gateway_run_pid(_), do: nil
-
   # ---------------------------------------------------------------------------
   # Utility helpers
   # ---------------------------------------------------------------------------
 
-  defp submit_gateway_execution(scheduler, state) do
-    if is_map(state.execution_request) and function_exported?(scheduler, :submit_execution, 1) do
-      scheduler.submit_execution(
-        ExecutionRequest.ensure_conversation_key(state.execution_request)
-      )
+  defp submit_runtime_execution(runtime, state) do
+    if is_map(state.execution_request) and function_exported?(runtime, :submit_execution, 1) do
+      runtime.submit_execution(ExecutionCommand.ensure_conversation_key(state.execution_request))
     else
       :ok
     end
   end
 
   defp normalize_execution_request(
-         %ExecutionRequest{} = request,
+         %ExecutionCommand{} = request,
          session_key,
          conversation_key,
          run_id
@@ -779,7 +767,7 @@ defmodule LemonRouter.RunProcess do
         conversation_key: request.conversation_key || conversation_key
     }
 
-    {:ok, ExecutionRequest.ensure_conversation_key(normalized_request)}
+    {:ok, ExecutionCommand.ensure_conversation_key(normalized_request)}
   rescue
     ArgumentError ->
       {:error, {:invalid_execution_request, run_id}}
@@ -790,13 +778,52 @@ defmodule LemonRouter.RunProcess do
     LemonCore.EventBridge.unsubscribe_run(run_id)
   end
 
-  @spec scheduler_available?(term()) :: boolean()
-  defp scheduler_available?(scheduler) do
-    case GenServer.whereis(scheduler) do
-      pid when is_pid(pid) -> true
-      _ -> false
-    end
+  defp configured_engine_runtime do
+    Application.get_env(:lemon_router, :engine_runtime)
   end
+
+  @spec runtime_available?(term()) :: boolean()
+  defp runtime_available?(runtime) when is_atom(runtime) do
+    cond do
+      not Code.ensure_loaded?(runtime) ->
+        false
+
+      function_exported?(runtime, :available?, 0) ->
+        runtime.available?()
+
+      true ->
+        case GenServer.whereis(runtime) do
+          pid when is_pid(pid) -> true
+          _ -> false
+        end
+    end
+  rescue
+    _ -> false
+  end
+
+  defp runtime_available?(_), do: false
+
+  defp cancel_runtime_run(runtime, run_id, reason) when is_atom(runtime) and is_binary(run_id) do
+    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :cancel_by_run_id, 2) do
+      runtime.cancel_by_run_id(run_id, reason)
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp cancel_runtime_run(_, _, _), do: :ok
+
+  defp runtime_run_pid(runtime, run_id) when is_atom(runtime) and is_binary(run_id) do
+    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
+      runtime.run_pid(run_id)
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp runtime_run_pid(_, _), do: nil
 
   defp is_tool_start?(action_ev) when is_map(action_ev) do
     phase = Map.get(action_ev, :phase) || Map.get(action_ev, "phase")

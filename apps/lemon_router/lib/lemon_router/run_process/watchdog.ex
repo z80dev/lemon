@@ -213,7 +213,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
 
   defp emit_synthetic_run_completion(state, error, duration_ms) do
     try do
-      LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_watchdog_timeout)
+      engine_runtime(state).cancel_by_run_id(state.run_id, :run_watchdog_timeout)
     rescue
       _ -> :ok
     end
@@ -257,4 +257,9 @@ defmodule LemonRouter.RunProcess.Watchdog do
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key, :unset)
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key, :unset)
   defp get_opt(_, _), do: :unset
+
+  defp engine_runtime(state) do
+    Map.get(state, :engine_runtime) ||
+      Application.get_env(:lemon_router, :engine_runtime)
+  end
 end

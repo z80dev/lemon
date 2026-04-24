@@ -1,7 +1,7 @@
 defmodule LemonRouter.SubmissionBuilderTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{Submission, SubmissionBuilder}
 
   setup do
@@ -27,7 +27,7 @@ defmodule LemonRouter.SubmissionBuilderTest do
                orchestrator_state()
              )
 
-    assert %ExecutionRequest{} = submission.execution_request
+    assert %ExecutionCommand{} = submission.execution_request
     assert submission.run_id == submission.execution_request.run_id
     assert submission.session_key == session_key
   end

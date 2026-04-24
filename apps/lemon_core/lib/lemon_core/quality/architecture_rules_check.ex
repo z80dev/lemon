@@ -19,6 +19,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   @router_session_registry "LemonRouter." <> "SessionRegistry"
   @router_session_read_model "LemonRouter." <> "SessionReadModel"
   @router_registry_lookup "Registry.lookup(" <> @router_session_registry
+  @ignored_source_dirs MapSet.new(["_build", "cover", "deps", "node_modules", "tmp"])
 
   @rules [
     %{
@@ -527,7 +528,15 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   defp source_files(root, globs) do
     globs
     |> Enum.flat_map(fn glob -> Path.wildcard(Path.join(root, glob)) end)
+    |> Enum.reject(&ignored_source_path?(root, &1))
     |> Enum.uniq()
+  end
+
+  defp ignored_source_path?(root, file) do
+    file
+    |> Path.relative_to(root)
+    |> Path.split()
+    |> Enum.any?(&MapSet.member?(@ignored_source_dirs, &1))
   end
 
   defp reject_excluded(files, _root, []), do: files

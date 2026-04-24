@@ -1,7 +1,7 @@
 defmodule LemonRouter.SessionTransitionsTest do
   use ExUnit.Case, async: true
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{SessionState, SessionTransitions, Submission}
 
   test "idle submit queues work and requests start" do
@@ -170,7 +170,7 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert next_state.pending_steers == %{"run1" => [{steer_backlog, :collect}]}
 
     assert effects == [
-           {:dispatch_steer, "run1", :steer_backlog, steer_backlog, :collect}
+             {:dispatch_steer, "run1", :steer_backlog, steer_backlog, :collect}
            ]
   end
 
@@ -191,7 +191,9 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert {:ok, next_state, effects} = SessionTransitions.submit(state, followup, 100)
 
-    assert next_state.pending_steers == %{"run1" => [{%{followup | queue_mode: :steer}, :followup}]}
+    assert next_state.pending_steers == %{
+             "run1" => [{%{followup | queue_mode: :steer}, :followup}]
+           }
 
     assert effects == [
              {:dispatch_steer, "run1", :steer, %{followup | queue_mode: :steer}, :followup}
@@ -385,7 +387,9 @@ defmodule LemonRouter.SessionTransitionsTest do
         request_meta: %{task_auto_followup: true, task_id: "task-c", run_id: "run-c"}
       )
 
-    assert {:ok, next_state, [:maybe_start_next]} = SessionTransitions.submit(first_state, third, 300)
+    assert {:ok, next_state, [:maybe_start_next]} =
+             SessionTransitions.submit(first_state, third, 300)
+
     assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2", "run3"]
   end
 
@@ -437,6 +441,7 @@ defmodule LemonRouter.SessionTransitionsTest do
     next_state = submit_followups(previous, current)
 
     assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
+
     assert Enum.at(next_state.queue, 0).meta["async_followups"] == [
              %{
                source: :agent,
@@ -469,7 +474,7 @@ defmodule LemonRouter.SessionTransitionsTest do
   end
 
   defp submission(run_id, session_key, queue_mode, prompt, opts \\ []) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: session_key,
       prompt: prompt,

@@ -57,12 +57,13 @@ defmodule LemonServices.Runtime.PortManager do
 
   @impl true
   def init(%Definition{} = definition) do
-    {:ok, %{
-      definition: definition,
-      port: nil,
-      os_pid: nil,
-      owner: nil
-    }}
+    {:ok,
+     %{
+       definition: definition,
+       port: nil,
+       os_pid: nil,
+       owner: nil
+     }}
   end
 
   @impl true
@@ -113,13 +114,18 @@ defmodule LemonServices.Runtime.PortManager do
 
   @impl true
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    exit_code = Bitwise.bsr(status, 8)
-    Logger.debug("Port exited with status #{status} (exit code #{exit_code})")
+    Logger.debug("Port exited with status #{status}")
 
     # Forward to owner
-    send(state.owner, {:port_exit, exit_code})
+    send(state.owner, {:port_exit, status})
 
     {:noreply, %{state | port: nil, os_pid: nil}}
+  end
+
+  @impl true
+  def handle_info({:force_kill, os_pid}, state) do
+    signal_os_process(os_pid, "KILL")
+    {:noreply, state}
   end
 
   @impl true
@@ -129,11 +135,13 @@ defmodule LemonServices.Runtime.PortManager do
 
   # Private functions
 
-  defp do_start_port(%Definition{command: {:shell, cmd}} = definition, owner) when is_binary(cmd) do
+  defp do_start_port(%Definition{command: {:shell, cmd}} = definition, owner)
+       when is_binary(cmd) do
     start_shell_port(cmd, definition, owner)
   end
 
-  defp do_start_port(%Definition{command: {:shell, args}} = definition, owner) when is_list(args) do
+  defp do_start_port(%Definition{command: {:shell, args}} = definition, owner)
+       when is_list(args) do
     # Join args for shell execution
     cmd = Enum.join(args, " ")
     start_shell_port(cmd, definition, owner)
@@ -142,9 +150,10 @@ defmodule LemonServices.Runtime.PortManager do
   defp do_start_port(%Definition{command: {:module, mod, fun, args}}, _owner) do
     # For Elixir modules, we spawn a separate process that runs the function
     # This is useful for pure-Elixir services
-    {:ok, spawn_link(fn ->
-      apply(mod, fun, args)
-    end), nil}
+    {:ok,
+     spawn_link(fn ->
+       apply(mod, fun, args)
+     end), nil}
   end
 
   defp start_shell_port(cmd, definition, _owner) do
@@ -161,18 +170,20 @@ defmodule LemonServices.Runtime.PortManager do
       (definition.env || %{})
       |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
 
-    # Spawn the port
-    # Use :spawn_executable with a shell to get proper process group handling
-    port = Port.open(
-      {:spawn, "cd #{working_dir} && #{cmd}"},
-      [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        env: env,
-        cd: working_dir
-      ]
-    )
+    shell = System.find_executable("sh") || "/bin/sh"
+
+    port =
+      Port.open(
+        {:spawn_executable, shell},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          args: ["-c", cmd],
+          env: env,
+          cd: working_dir
+        ]
+      )
 
     # Try to get the OS PID
     os_pid = get_os_pid(port)
@@ -189,24 +200,11 @@ defmodule LemonServices.Runtime.PortManager do
   end
 
   defp do_stop_port(%{port: port, os_pid: os_pid} = state, timeout_ms) do
-    # Try graceful shutdown first (SIGTERM)
     if os_pid do
-      System.cmd("kill", ["-TERM", "#{os_pid}"])
+      signal_os_process(os_pid, "TERM")
+      Process.send_after(self(), {:force_kill, os_pid}, timeout_ms)
     else
       Port.close(port)
-    end
-
-    # Wait for process to exit
-    receive do
-      {^port, {:exit_status, _}} ->
-        :ok
-    after
-      timeout_ms ->
-        # Force kill if still running
-        if os_pid do
-          System.cmd("kill", ["-KILL", "#{os_pid}"])
-        end
-        Port.close(port)
     end
 
     %{state | port: nil, os_pid: nil}
@@ -217,6 +215,15 @@ defmodule LemonServices.Runtime.PortManager do
       {:os_pid, pid} when is_integer(pid) -> pid
       _ -> nil
     end
+  end
+
+  defp signal_os_process(os_pid, signal) do
+    if pkill = System.find_executable("pkill") do
+      System.cmd(pkill, ["-#{signal}", "-P", "#{os_pid}"], stderr_to_stdout: true)
+    end
+
+    System.cmd("kill", ["-#{signal}", "#{os_pid}"], stderr_to_stdout: true)
+    :ok
   end
 
   defp via_tuple(service_id) do

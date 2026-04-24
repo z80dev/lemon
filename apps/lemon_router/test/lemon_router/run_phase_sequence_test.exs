@@ -2,7 +2,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Bus, Event}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{SessionCoordinator, Submission}
 
   defmodule PhaseStubRunProcess do
@@ -48,7 +48,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     def init(opts), do: {:ok, %{test_pid: opts[:test_pid]}}
 
     @impl true
-    def handle_cast({kind, %ExecutionRequest{} = request, worker_pid}, state)
+    def handle_cast({kind, %ExecutionCommand{} = request, worker_pid}, state)
         when kind in [:steer, :steer_backlog] do
       send(state.test_pid, {:steer_dispatched, kind, request, worker_pid})
       {:noreply, state}
@@ -153,7 +153,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
 
     :ok = submit(key, run_id_2, "two", :steer, run_supervisor)
 
-    assert_receive {:steer_dispatched, :steer, %ExecutionRequest{run_id: ^run_id_2} = request,
+    assert_receive {:steer_dispatched, :steer, %ExecutionCommand{run_id: ^run_id_2} = request,
                     worker_pid},
                    500
 
@@ -192,7 +192,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
   end
 
   defp submit(key, run_id, prompt, queue_mode, run_supervisor) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,

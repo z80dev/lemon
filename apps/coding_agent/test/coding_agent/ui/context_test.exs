@@ -1,5 +1,5 @@
 defmodule CodingAgent.UI.ContextTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.UI.Context
   alias CodingAgent.Test.MockUI

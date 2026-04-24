@@ -4,13 +4,20 @@ defmodule LemonRouter.SubmissionBuilder do
 
   This module resolves profile/session defaults, sticky engine state, resume
   behavior, and conversation selection before constructing the canonical
-  `%LemonGateway.ExecutionRequest{}` and wrapping it in `%LemonRouter.Submission{}`.
+  `%LemonCore.ExecutionCommand{}` and wrapping it in `%LemonRouter.Submission{}`.
   """
 
   require Logger
 
-  alias LemonCore.{Cwd, MapHelpers, RoutingFeedbackStore, RunRequest, SessionKey, TaskFingerprint}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.{
+    Cwd,
+    ExecutionCommand,
+    MapHelpers,
+    RoutingFeedbackStore,
+    RunRequest,
+    SessionKey,
+    TaskFingerprint
+  }
 
   alias LemonRouter.{
     AgentProfiles,
@@ -149,7 +156,7 @@ defmodule LemonRouter.SubmissionBuilder do
         |> maybe_put(:system_prompt, resolved_system_prompt)
         |> maybe_put(:routing_feedback_model, history_model)
 
-      execution_request = %ExecutionRequest{
+      execution_request = %ExecutionCommand{
         run_id: run_id,
         session_key: session_key,
         prompt: prompt,

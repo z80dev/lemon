@@ -547,6 +547,10 @@ defmodule LemonGateway.Run do
     {request, request}
   end
 
+  defp normalize_steer_request(%LemonCore.ExecutionCommand{} = command) do
+    {ExecutionRequest.from_command(command), command}
+  end
+
   defp notify_steer_result(:steer, :accepted, worker_pid, request),
     do: send(worker_pid, {:steer_accepted, request})
 

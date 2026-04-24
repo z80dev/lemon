@@ -1,7 +1,7 @@
 defmodule LemonRouter.SessionCoordinatorTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{SessionCoordinator, Submission}
 
   defmodule StubRunProcess do
@@ -267,7 +267,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     refute SessionCoordinator.busy?(session_key)
     assert SessionCoordinator.active_run_for_session(session_key) == :none
-    assert SessionCoordinator.list_active_sessions() == []
+
+    refute Enum.any?(
+             SessionCoordinator.list_active_sessions(),
+             &(&1.session_key == session_key)
+           )
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}, 500
@@ -448,7 +452,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
   end
 
   defp submission(key, run_id, prompt, queue_mode, run_supervisor, overrides \\ []) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,

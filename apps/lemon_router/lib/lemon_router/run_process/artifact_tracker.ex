@@ -230,7 +230,7 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
   defp resolve_generated_path(_path, _cwd), do: nil
 
-  defp request_cwd(%{execution_request: %LemonGateway.ExecutionRequest{cwd: cwd}})
+  defp request_cwd(%{execution_request: %LemonCore.ExecutionCommand{cwd: cwd}})
        when is_binary(cwd) and cwd != "",
        do: cwd
 

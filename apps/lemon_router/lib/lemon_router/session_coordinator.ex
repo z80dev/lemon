@@ -16,8 +16,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   require Logger
 
-  alias LemonCore.MapHelpers
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.{ExecutionCommand, MapHelpers}
 
   alias LemonRouter.{
     PhasePublisher,
@@ -188,21 +187,21 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_accepted, %ExecutionRequest{} = request}, state) do
+  def handle_info({:steer_accepted, %ExecutionCommand{} = request}, state) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
 
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_backlog_accepted, %ExecutionRequest{} = request}, state) do
+  def handle_info({:steer_backlog_accepted, %ExecutionCommand{} = request}, state) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
 
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_rejected, %ExecutionRequest{} = request}, state) do
+  def handle_info({:steer_rejected, %ExecutionCommand{} = request}, state) do
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.steer_rejected(
@@ -216,7 +215,7 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_backlog_rejected, %ExecutionRequest{} = request}, state) do
+  def handle_info({:steer_backlog_rejected, %ExecutionCommand{} = request}, state) do
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.steer_rejected(
@@ -542,9 +541,9 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_cancel_active(state, _reason), do: state
 
-  defp dispatch_steer(active_run_id, steer_mode, %ExecutionRequest{} = request)
+  defp dispatch_steer(active_run_id, steer_mode, %ExecutionCommand{} = request)
        when steer_mode in [:steer, :steer_backlog] do
-    case gateway_run_pid(active_run_id) do
+    case runtime_run_pid(active_run_id) do
       nil ->
         :error
 
@@ -586,16 +585,21 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp clear_active_session_registry(state), do: state
 
-  defp gateway_run_pid(run_id) when is_binary(run_id) do
-    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
-      [{pid, _}] when is_pid(pid) -> pid
-      _ -> nil
+  defp runtime_run_pid(run_id) when is_binary(run_id) do
+    runtime = configured_engine_runtime()
+
+    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
+      runtime.run_pid(run_id)
     end
   rescue
     _ -> nil
   end
 
-  defp gateway_run_pid(_), do: nil
+  defp runtime_run_pid(_), do: nil
+
+  defp configured_engine_runtime do
+    Application.get_env(:lemon_router, :engine_runtime)
+  end
 
   defp coordinator_entries do
     Registry.select(LemonRouter.ConversationRegistry, [

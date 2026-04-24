@@ -186,10 +186,10 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       create_app_with_code(
         tmp_dir,
-        :ai,
-        "Ai",
+        :agent_core,
+        "AgentCore",
         """
-        defmodule Ai.NamespaceReference do
+        defmodule AgentCore.NamespaceReference do
           def test do
             LemonCore.Bus.topic(:system)
           end
@@ -202,7 +202,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
         refute Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_namespace_reference and issue.app == :ai
+                 issue.code == :forbidden_namespace_reference and issue.app == :agent_core
                end)
       after
         File.rm_rf!(tmp_dir)
@@ -276,11 +276,11 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       # Create apps with proper dependency
       create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
-      create_app_with_namespace(tmp_dir, :ai, "Ai", [:lemon_core])
+      create_app_with_namespace(tmp_dir, :agent_core, "AgentCore", [:lemon_core])
 
-      # Ai depends on lemon_core, so it should be allowed to reference LemonCore
-      create_app_with_code(tmp_dir, :ai, "Ai", "
-        defmodule Ai.Module do
+      # AgentCore depends on lemon_core, so it should be allowed to reference LemonCore
+      create_app_with_code(tmp_dir, :agent_core, "AgentCore", "
+        defmodule AgentCore.Module do
           def test do
             LemonCore.OtherModule.call()
           end

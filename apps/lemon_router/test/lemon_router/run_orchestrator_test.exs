@@ -379,7 +379,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         session_key: session_key,
         conversation_key: conversation_key,
         queue_mode: :collect,
-        execution_request: %LemonGateway.ExecutionRequest{
+        execution_request: %LemonCore.ExecutionCommand{
           run_id: run_id,
           session_key: session_key,
           prompt: "start directly",
@@ -442,7 +442,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         session_key: session_key,
         conversation_key: conversation_key,
         queue_mode: :collect,
-        execution_request: %LemonGateway.ExecutionRequest{
+        execution_request: %LemonCore.ExecutionCommand{
           run_id: run_id,
           session_key: session_key,
           prompt: "start directly",

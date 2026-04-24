@@ -82,7 +82,12 @@ defmodule LemonCore.Store do
   @spec delete_chat_state(term()) :: :ok
   def delete_chat_state(scope) do
     ReadCache.delete(:chat, scope)
-    GenServer.cast(__MODULE__, {:delete_chat_state, scope})
+
+    safe_store_call({:delete_chat_state, scope}, :ok,
+      op: :delete_chat_state,
+      table: :chat,
+      key: scope
+    )
   end
 
   # Run Events API
@@ -547,6 +552,11 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:delete_chat_state, scope}, _from, state) do
+    {:noreply, state} = delete_chat_state_from_backend(scope, state)
+    {:reply, :ok, state}
+  end
+
   def handle_call({:get_run_by_progress, scope, progress_msg_id}, _from, state) do
     key = {scope, progress_msg_id}
 
@@ -772,19 +782,7 @@ defmodule LemonCore.Store do
   end
 
   def handle_cast({:delete_chat_state, scope}, state) do
-    case state.backend.delete(state.backend_state, :chat, scope) do
-      {:ok, backend_state} ->
-        ReadCache.delete(:chat, scope)
-        {:noreply, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:delete, :chat, scope, reason)
-        {:noreply, state}
-
-      other ->
-        log_backend_unexpected(:delete, :chat, scope, other)
-        {:noreply, state}
-    end
+    delete_chat_state_from_backend(scope, state)
   end
 
   def handle_cast({:append_run_event, run_id, event}, state) do
@@ -921,6 +919,22 @@ defmodule LemonCore.Store do
 
       other ->
         log_backend_unexpected(:delete, :progress, key, other)
+        {:noreply, state}
+    end
+  end
+
+  defp delete_chat_state_from_backend(scope, state) do
+    case state.backend.delete(state.backend_state, :chat, scope) do
+      {:ok, backend_state} ->
+        ReadCache.delete(:chat, scope)
+        {:noreply, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:delete, :chat, scope, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:delete, :chat, scope, other)
         {:noreply, state}
     end
   end

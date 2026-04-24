@@ -36,6 +36,8 @@ jobs:
     name: Smoke test (${{ matrix.profile }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      LEMON_STORE_PATH: /tmp/lemon-store
 
     strategy:
       fail-fast: false
@@ -114,9 +116,14 @@ jobs:
           RESPONSE=$(curl -sS --max-time 5 "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/healthz")
           echo "healthz response: $RESPONSE"
 
+      - name: Install test deps
+        run: mix deps.get
+        env:
+          MIX_ENV: test
+
       - name: Run release smoke tests
         run: |
-          MIX_ENV=test mix test \
+          MIX_ENV=test mix test --no-start \
             apps/lemon_core/test/lemon_core/release/ \
             --include smoke \
             --formatter ExUnit.CLIFormatter

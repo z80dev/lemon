@@ -8,7 +8,7 @@ It turns normalized inbound requests into active runs, keeps one coordinator per
 It does:
 
 - normalize `LemonCore.RunRequest`
-- build router-owned `%LemonRouter.Submission{}` values that wrap gateway `%LemonGateway.ExecutionRequest{}`
+- build router-owned `%LemonRouter.Submission{}` values that wrap `%LemonCore.ExecutionCommand{}`
 - resolve policy, model, engine, cwd, and structured resume
 - choose conversation keys
 - enforce queue semantics in `SessionCoordinator`
@@ -31,7 +31,7 @@ Inbound transport
   -> RunOrchestrator.submit/1
   -> SessionCoordinator.submit/3
   -> RunProcess
-  -> LemonGateway.Runtime.submit_execution/1
+  -> configured LemonCore.EngineRuntime.submit_execution/1
   -> run events on LemonCore.Bus
   -> StreamCoalescer / ToolStatusCoalescer
   -> LemonCore.DeliveryIntent
@@ -58,6 +58,7 @@ Inbound transport
 
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
+- Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
 - Router owns pending-compaction prompt mutation.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.

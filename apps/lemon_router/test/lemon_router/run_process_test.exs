@@ -80,7 +80,7 @@ defmodule LemonRouter.RunProcessTest do
       GenServer.start_link(__MODULE__, %{notify_pid: notify_pid}, name: __MODULE__)
     end
 
-    def submit_execution(%LemonGateway.ExecutionRequest{} = request) do
+    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
       GenServer.cast(__MODULE__, {:submit, request})
     end
 
@@ -182,7 +182,7 @@ defmodule LemonRouter.RunProcessTest do
   # Create a minimal execution request for testing
   defp make_test_request(run_id, meta \\ %{}, attrs \\ %{}) do
     struct(
-      %LemonGateway.ExecutionRequest{
+      %LemonCore.ExecutionCommand{
         run_id: run_id,
         session_key: nil,
         prompt: "test",
@@ -533,7 +533,7 @@ defmodule LemonRouter.RunProcessTest do
       {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
 
       assert_receive {:test_scheduler_submit,
-                      %LemonGateway.ExecutionRequest{
+                      %LemonCore.ExecutionCommand{
                         run_id: ^run_id,
                         session_key: ^session_key,
                         conversation_key: ^conversation_key
@@ -578,7 +578,7 @@ defmodule LemonRouter.RunProcessTest do
 
       {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
 
-      refute_receive {:test_scheduler_submit, %LemonGateway.ExecutionRequest{run_id: ^run_id}},
+      refute_receive {:test_scheduler_submit, %LemonCore.ExecutionCommand{run_id: ^run_id}},
                      400
 
       if Process.alive?(pid), do: GenServer.stop(pid)
@@ -2686,7 +2686,7 @@ defmodule LemonRouter.RunProcessTest do
   describe "estimate_input_tokens_from_prompt/1" do
     test "returns char-based estimate for valid prompt" do
       state = %{
-        execution_request: %LemonGateway.ExecutionRequest{
+        execution_request: %LemonCore.ExecutionCommand{
           run_id: "run-estimate",
           session_key: "session-estimate",
           prompt: String.duplicate("a", 400),
@@ -2699,7 +2699,7 @@ defmodule LemonRouter.RunProcessTest do
 
     test "returns nil when prompt is nil" do
       state = %{
-        execution_request: %LemonGateway.ExecutionRequest{
+        execution_request: %LemonCore.ExecutionCommand{
           run_id: "run-estimate-nil",
           session_key: "session-estimate-nil",
           prompt: nil,
