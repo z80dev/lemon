@@ -123,6 +123,12 @@ defmodule LemonServices.Runtime.PortManager do
   end
 
   @impl true
+  def handle_info({:force_kill, os_pid}, state) do
+    signal_os_process(os_pid, "KILL")
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -194,25 +200,11 @@ defmodule LemonServices.Runtime.PortManager do
   end
 
   defp do_stop_port(%{port: port, os_pid: os_pid} = state, timeout_ms) do
-    # Try graceful shutdown first (SIGTERM)
     if os_pid do
-      System.cmd("kill", ["-TERM", "#{os_pid}"])
+      signal_os_process(os_pid, "TERM")
+      Process.send_after(self(), {:force_kill, os_pid}, timeout_ms)
     else
       Port.close(port)
-    end
-
-    # Wait for process to exit
-    receive do
-      {^port, {:exit_status, _}} ->
-        :ok
-    after
-      timeout_ms ->
-        # Force kill if still running
-        if os_pid do
-          System.cmd("kill", ["-KILL", "#{os_pid}"])
-        end
-
-        Port.close(port)
     end
 
     %{state | port: nil, os_pid: nil}
@@ -223,6 +215,15 @@ defmodule LemonServices.Runtime.PortManager do
       {:os_pid, pid} when is_integer(pid) -> pid
       _ -> nil
     end
+  end
+
+  defp signal_os_process(os_pid, signal) do
+    if pkill = System.find_executable("pkill") do
+      System.cmd(pkill, ["-#{signal}", "-P", "#{os_pid}"], stderr_to_stdout: true)
+    end
+
+    System.cmd("kill", ["-#{signal}", "#{os_pid}"], stderr_to_stdout: true)
+    :ok
   end
 
   defp via_tuple(service_id) do
