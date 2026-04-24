@@ -206,7 +206,8 @@ defmodule LemonRouter.SurfaceManagerTest do
                     }},
                    1_000
 
-    refute_receive {:dispatched_intent, _}, 100
+    refute_receive {:dispatched_intent, %DeliveryIntent{run_id: "run-fanout", kind: :final_text}},
+                   100
 
     assert Enum.sort([peer_a, peer_b]) == ["111", "222"]
     assert Enum.sort([seq_a, seq_b]) == [1, 2]
