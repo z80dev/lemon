@@ -481,13 +481,68 @@ defmodule CodingAgent.Messages do
     }
   end
 
+  defp convert_to_llm(%{"role" => "user", "content" => content} = msg) do
+    %Ai.Types.UserMessage{
+      role: :user,
+      content: content,
+      timestamp: Map.get(msg, "timestamp", 0)
+    }
+  end
+
+  defp convert_to_llm(%{"role" => "assistant", "content" => content} = msg) do
+    %Ai.Types.AssistantMessage{
+      role: :assistant,
+      content: content,
+      api: Map.get(msg, "api"),
+      provider: Map.get(msg, "provider"),
+      model: Map.get(msg, "model", ""),
+      usage: Map.get(msg, "usage"),
+      stop_reason: Map.get(msg, "stop_reason"),
+      timestamp: Map.get(msg, "timestamp", 0)
+    }
+  end
+
+  defp convert_to_llm(%{"role" => "tool_result", "content" => content} = msg) do
+    %Ai.Types.ToolResultMessage{
+      role: :tool_result,
+      tool_call_id: Map.get(msg, "tool_call_id") || Map.get(msg, "tool_use_id", ""),
+      tool_name: Map.get(msg, "tool_name", ""),
+      content: content,
+      trust: normalize_trust(Map.get(msg, "trust")),
+      is_error: Map.get(msg, "is_error", false),
+      timestamp: Map.get(msg, "timestamp", 0)
+    }
+  end
+
+  defp convert_to_llm(%{"role" => "custom", "custom_type" => "async_followup"} = msg) do
+    convert_to_llm(%CustomMessage{
+      custom_type: "async_followup",
+      content: Map.get(msg, "content", ""),
+      display: Map.get(msg, "display", true),
+      details: Map.get(msg, "details"),
+      timestamp: Map.get(msg, "timestamp", 0)
+    })
+  end
+
+  defp convert_to_llm(%{"role" => "custom"} = msg) do
+    convert_to_llm(%CustomMessage{
+      custom_type: Map.get(msg, "custom_type", ""),
+      content: Map.get(msg, "content", ""),
+      display: Map.get(msg, "display", true),
+      details: Map.get(msg, "details"),
+      timestamp: Map.get(msg, "timestamp", 0)
+    })
+  end
+
   defp format_async_followup_for_llm(%CustomMessage{} = msg) do
     content = get_text(msg) || ""
     fence = markdown_code_fence(content)
+    provenance = async_followup_provenance_lines(msg.details)
 
     Enum.join(
       [
         "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]",
+        provenance,
         "---",
         fence,
         content,
@@ -495,7 +550,35 @@ defmodule CodingAgent.Messages do
       ],
       "\n"
     )
+    |> String.replace("\n\n---", "\n---")
   end
+
+  defp async_followup_provenance_lines(details) when is_map(details) do
+    fields =
+      [
+        {"source", get_detail(details, :source)},
+        {"task_id", get_detail(details, :task_id)},
+        {"run_id", get_detail(details, :run_id)},
+        {"agent_id", get_detail(details, :agent_id)},
+        {"session_key", get_detail(details, :session_key)},
+        {"delivery", get_detail(details, :delivery)},
+        {"delivery_receipt", get_detail(details, :delivery_receipt)}
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Enum.map(fn {key, value} -> "#{key}: #{format_provenance_value(value)}" end)
+
+    Enum.join(fields, "\n")
+  end
+
+  defp async_followup_provenance_lines(_details), do: ""
+
+  defp get_detail(details, key) do
+    Map.get(details, key) || Map.get(details, Atom.to_string(key))
+  end
+
+  defp format_provenance_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp format_provenance_value(value) when is_binary(value), do: value
+  defp format_provenance_value(value), do: inspect(value, limit: 20)
 
   defp markdown_code_fence(content) when is_binary(content) do
     max_backticks =

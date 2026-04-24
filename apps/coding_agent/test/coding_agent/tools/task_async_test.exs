@@ -208,8 +208,9 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %Ai.Types.UserMessage{} = llm_message
       assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
       assert llm_message.content =~ message.content
-      refute llm_message.content =~ result.details.task_id
-      refute llm_message.content =~ result.details.run_id
+      assert llm_message.content =~ "task_id: #{result.details.task_id}"
+      assert llm_message.content =~ "run_id: #{result.details.run_id}"
+      assert llm_message.content =~ "delivery: followup"
 
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end

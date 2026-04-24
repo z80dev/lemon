@@ -139,7 +139,9 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
           "updatedAtMs" => updated_at,
           "error" => serialize_term(get_map(record, :error)),
           "result" => serialize_term(get_map(record, :result)),
-          "eventCount" => length(events)
+          "eventCount" => length(events),
+          "latestReasoning" => latest_reasoning(events),
+          "reasoningCount" => reasoning_count(events)
         }
         |> maybe_put(
           "events",
@@ -226,6 +228,61 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
     do: Enum.find_value(list, &extract_engine_from_term/1)
 
   defp extract_engine_from_term(_), do: nil
+
+  defp latest_reasoning(events) when is_list(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(&extract_reasoning_from_term/1)
+  end
+
+  defp latest_reasoning(_events), do: nil
+
+  defp reasoning_count(events) when is_list(events) do
+    Enum.count(events, &(extract_reasoning_from_term(&1) != nil))
+  end
+
+  defp reasoning_count(_events), do: 0
+
+  defp extract_reasoning_from_term(%{__struct__: _} = struct) do
+    struct
+    |> Map.from_struct()
+    |> extract_reasoning_from_term()
+  end
+
+  defp extract_reasoning_from_term(map) when is_map(map) do
+    reasoning =
+      get_map(map, :reasoning) ||
+        get_map(get_map(map, :details), :reasoning)
+
+    case normalize_reasoning(reasoning) do
+      nil ->
+        map
+        |> Map.values()
+        |> Enum.find_value(&extract_reasoning_from_term/1)
+
+      normalized ->
+        normalized
+    end
+  end
+
+  defp extract_reasoning_from_term(list) when is_list(list),
+    do: Enum.find_value(list, &extract_reasoning_from_term/1)
+
+  defp extract_reasoning_from_term(_), do: nil
+
+  defp normalize_reasoning(reasoning) when is_map(reasoning) do
+    text = get_map(reasoning, :text)
+
+    if is_binary(text) and String.trim(text) != "" do
+      %{
+        "text" => text,
+        "source" => get_map(reasoning, :source),
+        "phase" => get_map(reasoning, :phase)
+      }
+    end
+  end
+
+  defp normalize_reasoning(_), do: nil
 
   defp timeout_error?(error) do
     cond do

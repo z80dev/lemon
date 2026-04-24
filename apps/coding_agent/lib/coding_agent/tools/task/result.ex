@@ -69,22 +69,28 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   @spec build_update_content(String.t() | nil, String.t() | nil) :: [TextContent.t()]
-  def build_update_content(text, thinking) do
+  def build_update_content(text, _thinking) do
     text = text || ""
-    thinking = truncate_thinking(thinking || "")
 
-    base =
-      if text != "" do
-        [%TextContent{text: text}]
-      else
-        []
-      end
-
-    if thinking != "" do
-      prefix = if text != "", do: "\n[thinking] ", else: "[thinking] "
-      base ++ [%TextContent{text: prefix <> thinking}]
+    if text != "" do
+      [%TextContent{text: text}]
     else
-      base
+      []
+    end
+  end
+
+  @spec reasoning_details(String.t() | nil, String.t() | nil, String.t() | nil) :: map() | nil
+  def reasoning_details(thinking, source \\ "assistant_thinking", phase \\ "updated") do
+    text = truncate_thinking(thinking || "")
+
+    if text == "" do
+      nil
+    else
+      %{
+        text: text,
+        source: source || "assistant_thinking",
+        phase: phase || "updated"
+      }
     end
   end
 
@@ -177,6 +183,7 @@ defmodule CodingAgent.Tools.Task.Result do
   defp build_poll_result(task_id, record, events) do
     status = Map.get(record, :status, :unknown)
     current_action = latest_event_current_action(events)
+    reasoning = latest_event_reasoning(events)
 
     {content_text, preview} =
       case status do
@@ -199,6 +206,7 @@ defmodule CodingAgent.Tools.Task.Result do
       record
       |> base_task_details(task_id)
       |> maybe_put_current_action(current_action)
+      |> maybe_put_reasoning(reasoning)
       |> maybe_put_preview(preview)
       |> maybe_put_error(Map.get(record, :error))
 
@@ -232,6 +240,7 @@ defmodule CodingAgent.Tools.Task.Result do
       record
       |> base_task_details(task_id)
       |> maybe_put_current_action(latest_event_current_action(events))
+      |> maybe_put_reasoning(latest_event_reasoning(events))
       |> maybe_put_error(error)
 
     %AgentToolResult{content: [%TextContent{text: content_text}], details: details}
@@ -464,6 +473,9 @@ defmodule CodingAgent.Tools.Task.Result do
   defp maybe_put_current_action(details, current_action),
     do: Map.put(details, :current_action, current_action)
 
+  defp maybe_put_reasoning(details, nil), do: details
+  defp maybe_put_reasoning(details, reasoning), do: Map.put(details, :reasoning, reasoning)
+
   defp maybe_put_error(details, nil), do: details
   defp maybe_put_error(details, error), do: Map.put(details, :error, format_error(error))
 
@@ -503,6 +515,21 @@ defmodule CodingAgent.Tools.Task.Result do
     end)
   end
 
+  defp latest_event_reasoning(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{details: details} when is_map(details) ->
+        normalize_reasoning(details[:reasoning] || details["reasoning"])
+
+      %{details: details} when is_map(details) ->
+        normalize_reasoning(details[:reasoning] || details["reasoning"])
+
+      _ ->
+        nil
+    end)
+  end
+
   defp normalize_current_action(%{title: title, kind: kind, phase: phase})
        when is_binary(title) and title != "" and is_binary(kind) and kind != "" and
               is_binary(phase) and phase != "" do
@@ -516,6 +543,24 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp normalize_current_action(_), do: nil
+
+  defp normalize_reasoning(%{text: text} = reasoning) when is_binary(text) and text != "" do
+    %{
+      text: text,
+      source: Map.get(reasoning, :source) || Map.get(reasoning, "source") || "unknown",
+      phase: Map.get(reasoning, :phase) || Map.get(reasoning, "phase") || "updated"
+    }
+  end
+
+  defp normalize_reasoning(%{"text" => text} = reasoning) when is_binary(text) and text != "" do
+    %{
+      text: text,
+      source: Map.get(reasoning, "source") || "unknown",
+      phase: Map.get(reasoning, "phase") || "updated"
+    }
+  end
+
+  defp normalize_reasoning(_), do: nil
 
   defp action_kind(%{kind: kind}) when is_binary(kind) and kind != "", do: kind
   defp action_kind(_), do: nil

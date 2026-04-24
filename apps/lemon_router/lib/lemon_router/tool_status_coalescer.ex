@@ -702,16 +702,21 @@ defmodule LemonRouter.ToolStatusCoalescer do
       "file_change",
       "web_search",
       "subagent",
+      "reasoning",
       :tool,
       :command,
       :file_change,
       :web_search,
-      :subagent
+      :subagent,
+      :reasoning
     ]
 
     cond do
       kind in ["note", :note] ->
-        {:skip, :note}
+        case normalize_note_reasoning(action, ev) do
+          {:ok, data} -> {:ok, data.id, data}
+          :skip -> {:skip, :note}
+        end
 
       kind in allowed_kinds ->
         id = Map.get(action, :id)
@@ -742,6 +747,88 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp normalize_action_event(_), do: {:skip, :unknown}
+
+  defp normalize_note_reasoning(action, ev) when is_map(action) and is_map(ev) do
+    detail = Map.get(action, :detail) || Map.get(action, "detail") || %{}
+    reasoning = reasoning_from_detail(detail)
+    id = Map.get(action, :id)
+    title = Map.get(action, :title)
+
+    cond do
+      not (is_binary(id) and id != "") ->
+        :skip
+
+      is_map(reasoning) ->
+        text = reasoning[:text] || reasoning["text"] || title || ""
+
+        {:ok,
+         %{
+           id: id,
+           kind: "reasoning",
+           caller_engine: Map.get(ev, :engine),
+           title: text,
+           phase: Map.get(ev, :phase),
+           ok: Map.get(ev, :ok),
+           message: Map.get(ev, :message),
+           level: Map.get(ev, :level),
+           detail: %{reasoning: reasoning}
+         }}
+
+      reasoning_note_id?(id) ->
+        text = note_text(detail) || title || ""
+
+        {:ok,
+         %{
+           id: id,
+           kind: "reasoning",
+           caller_engine: Map.get(ev, :engine),
+           title: text,
+           phase: Map.get(ev, :phase),
+           ok: Map.get(ev, :ok),
+           message: Map.get(ev, :message),
+           level: Map.get(ev, :level),
+           detail: %{reasoning: %{text: text, source: "runner_note"}}
+         }}
+
+      true ->
+        :skip
+    end
+  end
+
+  defp normalize_note_reasoning(_action, _ev), do: :skip
+
+  defp reasoning_from_detail(detail) when is_map(detail) do
+    reasoning = Map.get(detail, :reasoning) || Map.get(detail, "reasoning")
+
+    cond do
+      is_map(reasoning) ->
+        reasoning
+
+      is_binary(Map.get(detail, :text)) ->
+        %{text: Map.get(detail, :text), source: "runner_note"}
+
+      is_binary(Map.get(detail, "text")) ->
+        %{text: Map.get(detail, "text"), source: "runner_note"}
+
+      true ->
+        nil
+    end
+  end
+
+  defp reasoning_from_detail(_detail), do: nil
+
+  defp note_text(detail) when is_map(detail) do
+    Map.get(detail, :text) || Map.get(detail, "text")
+  end
+
+  defp note_text(_detail), do: nil
+
+  defp reasoning_note_id?(id) when is_binary(id) do
+    id = String.downcase(id)
+    String.contains?(id, "thinking") or String.contains?(id, "reasoning")
+  end
+
+  defp reasoning_note_id?(_), do: false
 
   defp expand_embedded_actions(action_data) when is_map(action_data) do
     case {skip_parent_action?(action_data), embedded_child_action(action_data)} do
@@ -942,7 +1029,14 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp normalize_embedded_kind(kind), do: kind
 
   defp allowed_embedded_kind?(kind) when is_binary(kind) do
-    normalize_embedded_kind(kind) in ["tool", "command", "file_change", "web_search", "subagent"]
+    normalize_embedded_kind(kind) in [
+      "tool",
+      "command",
+      "file_change",
+      "web_search",
+      "subagent",
+      "reasoning"
+    ]
   end
 
   defp allowed_embedded_kind?(_), do: false

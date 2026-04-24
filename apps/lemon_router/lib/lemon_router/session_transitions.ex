@@ -130,10 +130,13 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :collect} = submission, _now_ms) do
+    submission = stamp_router_delivery(submission, :collect, :queued)
     {%SessionState{state | queue: state.queue ++ [submission]}, []}
   end
 
   defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :followup} = submission, now_ms) do
+    submission = stamp_router_delivery(submission, :followup, :queued)
+
     case maybe_merge_followup(state.queue, submission, state.last_followup_at_ms, now_ms) do
       {:merged, queue} ->
         {%SessionState{state | queue: queue, last_followup_at_ms: now_ms}, []}
@@ -155,6 +158,12 @@ defmodule LemonRouter.SessionTransitions do
         :steer -> {:followup, :steer}
         :steer_backlog -> {:collect, :steer_backlog}
       end
+
+    submission =
+      stamp_router_delivery(submission, steer_mode, :dispatched_to_active,
+        fallback_mode: fallback_mode,
+        active_run_id: active_run_id
+      )
 
     pending =
       Map.get(state.pending_steers, active_run_id, []) ++ [{submission, fallback_mode}]
@@ -180,12 +189,14 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :interrupt} = submission, _now_ms) do
+    submission = stamp_router_delivery(submission, :interrupt, :queued)
     next_state = %SessionState{state | queue: [submission | state.queue]}
     effects = if active?(state), do: [{:cancel_active, :interrupted}], else: []
     {next_state, effects}
   end
 
   defp enqueue_by_mode(%SessionState{} = state, submission, _now_ms) do
+    submission = stamp_router_delivery(submission, submission.queue_mode, :queued)
     {%SessionState{state | queue: state.queue ++ [submission]}, []}
   end
 
@@ -342,7 +353,11 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp enqueue_fallback(%SessionState{} = state, submission, :followup, now_ms) do
-    submission = suppress_router_phases(%{submission | queue_mode: :followup})
+    submission =
+      submission
+      |> Map.put(:queue_mode, :followup)
+      |> stamp_router_delivery(:followup, :fallback_queued)
+      |> suppress_router_phases()
 
     case maybe_merge_followup(
            state.queue,
@@ -366,6 +381,7 @@ defmodule LemonRouter.SessionTransitions do
     submission =
       submission
       |> Map.put(:queue_mode, :collect)
+      |> stamp_router_delivery(:collect, :fallback_queued)
       |> suppress_router_phases()
 
     %SessionState{state | queue: state.queue ++ [submission]}
@@ -469,7 +485,8 @@ defmodule LemonRouter.SessionTransitions do
         %{
           source: :task,
           task_id: MapHelpers.get_key(meta, :task_id),
-          run_id: MapHelpers.get_key(meta, :run_id)
+          run_id: MapHelpers.get_key(meta, :run_id),
+          delivery: MapHelpers.get_key(meta, :delivery)
         }
 
       truthy?(MapHelpers.get_key(meta, :delegated_auto_followup)) ->
@@ -478,7 +495,8 @@ defmodule LemonRouter.SessionTransitions do
           task_id: MapHelpers.get_key(meta, :delegated_task_id),
           run_id: MapHelpers.get_key(meta, :delegated_run_id),
           agent_id: MapHelpers.get_key(meta, :delegated_agent_id),
-          session_key: MapHelpers.get_key(meta, :delegated_session_key)
+          session_key: MapHelpers.get_key(meta, :delegated_session_key),
+          delivery: MapHelpers.get_key(meta, :delivery)
         }
 
       true ->
@@ -492,6 +510,56 @@ defmodule LemonRouter.SessionTransitions do
   defp truthy?("true"), do: true
   defp truthy?(1), do: true
   defp truthy?(_value), do: false
+
+  defp stamp_router_delivery(%Submission{} = submission, disposition, status, opts \\ []) do
+    receipt =
+      %{
+        mode: disposition,
+        status: status
+      }
+      |> maybe_put_receipt(:fallback_mode, Keyword.get(opts, :fallback_mode))
+      |> maybe_put_receipt(:active_run_id, Keyword.get(opts, :active_run_id))
+
+    meta = stamp_async_followup_meta(submission.meta || %{}, disposition, receipt)
+
+    execution_request = %{
+      submission.execution_request
+      | meta:
+          stamp_async_followup_meta(
+            submission.execution_request.meta || %{},
+            disposition,
+            receipt
+          )
+    }
+
+    %{submission | meta: meta, execution_request: execution_request}
+  end
+
+  defp maybe_put_receipt(receipt, _key, nil), do: receipt
+  defp maybe_put_receipt(receipt, key, value), do: Map.put(receipt, key, value)
+
+  defp stamp_async_followup_meta(meta, disposition, receipt) when is_map(meta) do
+    entries =
+      meta
+      |> async_followup_entries()
+      |> Enum.map(&stamp_async_followup_entry(&1, disposition, receipt))
+
+    if entries == [] do
+      meta
+    else
+      meta
+      |> Map.put("async_followups", entries)
+      |> Map.delete(:async_followups)
+    end
+  end
+
+  defp stamp_async_followup_meta(meta, _disposition, _receipt), do: meta
+
+  defp stamp_async_followup_entry(entry, disposition, receipt) when is_map(entry) do
+    entry
+    |> Map.put(:delivery, disposition)
+    |> Map.put(:delivery_receipt, receipt)
+  end
 
   defp suppress_router_phases(%Submission{} = submission) do
     %{submission | meta: Map.put(submission.meta || %{}, :suppress_router_phase_events, true)}

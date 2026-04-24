@@ -189,14 +189,17 @@ defmodule LemonRouter.ToolStatusRenderer do
     extra = nil
     indent = String.duplicate("  ", action_depth(action, actions))
 
-    case action[:phase] || action["phase"] do
-      :started ->
+    case {action[:kind] || action["kind"], action[:phase] || action["phase"]} do
+      {kind, _phase} when kind in [:reasoning, "reasoning"] ->
+        indent <> "… reasoning: " <> title
+
+      {_kind, :started} ->
         indent <> "\u25b8 " <> title <> (extra || "")
 
-      :updated ->
+      {_kind, :updated} ->
         indent <> "\u25b8 " <> title <> (extra || "")
 
-      :completed ->
+      {_kind, :completed} ->
         ok? = (action[:ok] || action["ok"]) == true
         symbol = if ok?, do: "\u2713", else: "\u2717"
         preview = extract_result_preview(action[:detail] || action["detail"])
@@ -209,7 +212,7 @@ defmodule LemonRouter.ToolStatusRenderer do
           base <> " -> " <> prev
         end
 
-      other ->
+      {_kind, other} ->
         indent <> "\u25b8 " <> "[#{other}] " <> title <> (extra || "")
     end
   end

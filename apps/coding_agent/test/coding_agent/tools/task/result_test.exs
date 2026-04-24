@@ -41,6 +41,32 @@ defmodule CodingAgent.Tools.Task.ResultTest do
     assert details.current_action.kind == "command"
   end
 
+  test "poll exposes reasoning as metadata without thinking marker text" do
+    task_id =
+      TaskStore.new_task(%{
+        description: "Reasoning task",
+        engine: "internal",
+        run_id: "run_reasoning_1"
+      })
+
+    TaskStore.mark_running(task_id)
+
+    TaskStore.append_event(task_id, %AgentToolResult{
+      content: Result.build_update_content("working answer", "checking the router path"),
+      details: %{
+        reasoning:
+          Result.reasoning_details("checking the router path", "assistant_thinking", "updated")
+      }
+    })
+
+    %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+      Result.do_poll(%{"task_id" => task_id})
+
+    refute text =~ "[thinking]"
+    assert details.reasoning.text == "checking the router path"
+    assert details.reasoning.source == "assistant_thinking"
+  end
+
   test "get returns status-only text for running command-heavy tasks" do
     task_id =
       TaskStore.new_task(%{

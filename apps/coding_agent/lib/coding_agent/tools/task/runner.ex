@@ -160,44 +160,48 @@ defmodule CodingAgent.Tools.Task.Runner do
         maybe_emit_cli_update(on_update, description, engine_label, "started", token.value)
         {:cont, %{acc | resume_token: token}}
 
-      {:action, %{title: title, kind: kind}, :started, _opts}, acc ->
-        maybe_emit_cli_update(
+      {:action, %{title: title, kind: kind} = action, :started, _opts}, acc ->
+        detail = Map.get(action, :detail)
+
+        maybe_emit_cli_action_update(
           on_update,
           description,
           engine_label,
-          "running",
           title,
-          %{current_action: %{title: title, kind: to_string(kind), phase: "started"}}
+          kind,
+          "started",
+          detail
         )
 
         {:cont, acc}
 
-      {:action, %{title: title, detail: detail, kind: kind}, :updated, _opts}, acc ->
+      {:action, %{title: title, kind: kind} = action, :updated, _opts}, acc ->
+        detail = Map.get(action, :detail)
         text = extract_action_detail_text(detail) || title
 
-        extra_details =
-          %{current_action: %{title: title, kind: to_string(kind), phase: "updated"}}
-          |> maybe_add_action_detail(detail)
-
-        maybe_emit_cli_update(
+        maybe_emit_cli_action_update(
           on_update,
           description,
           engine_label,
-          "running",
           text,
-          extra_details
+          kind,
+          "updated",
+          detail
         )
 
         {:cont, acc}
 
-      {:action, %{title: title, detail: detail, kind: kind}, :completed, _opts}, acc ->
-        maybe_emit_cli_update(
+      {:action, %{title: title, kind: kind} = action, :completed, _opts}, acc ->
+        detail = Map.get(action, :detail)
+
+        maybe_emit_cli_action_update(
           on_update,
           description,
           engine_label,
-          "running",
           "Completed: #{title}",
-          %{current_action: %{title: title, kind: to_string(kind), phase: "completed"}}
+          kind,
+          "completed",
+          detail
         )
 
         acc =
@@ -289,15 +293,21 @@ defmodule CodingAgent.Tools.Task.Runner do
                    task_session_poll_ms(opts)
                  ) do
               {:ok, %{text: text, thinking: thinking}} ->
-                %AgentToolResult{
-                  content: Result.build_update_content(text, thinking),
-                  details: %{
+                details =
+                  %{
                     session_id: session_id,
                     description: description,
                     status: "completed",
                     role: role_id,
                     engine: engine
                   }
+                  |> maybe_put_reasoning(
+                    Result.reasoning_details(thinking, "assistant_thinking", "completed")
+                  )
+
+                %AgentToolResult{
+                  content: Result.build_update_content(text, thinking),
+                  details: details
                 }
 
               {:error, reason} ->
@@ -371,6 +381,60 @@ defmodule CodingAgent.Tools.Task.Runner do
         |> Map.merge(extra_details)
     })
   end
+
+  defp maybe_emit_cli_action_update(
+         on_update,
+         description,
+         engine,
+         text,
+         kind,
+         phase,
+         detail
+       ) do
+    extra_details =
+      case normalize_cli_reasoning(kind, text, detail, phase) do
+        nil ->
+          %{current_action: %{title: text, kind: to_string(kind), phase: phase}}
+          |> maybe_add_action_detail(detail)
+
+        reasoning ->
+          %{reasoning: reasoning}
+      end
+
+    maybe_emit_cli_update(on_update, description, engine, "running", text, extra_details)
+  end
+
+  defp normalize_cli_reasoning(kind, text, detail, phase) when kind in [:note, "note"] do
+    detail_reasoning =
+      if is_map(detail) do
+        Map.get(detail, :reasoning) || Map.get(detail, "reasoning")
+      end
+
+    reasoning_text =
+      cond do
+        is_map(detail_reasoning) and is_binary(detail_reasoning[:text]) ->
+          detail_reasoning[:text]
+
+        is_map(detail_reasoning) and is_binary(detail_reasoning["text"]) ->
+          detail_reasoning["text"]
+
+        is_map(detail) and is_binary(Map.get(detail, :text)) ->
+          Map.get(detail, :text)
+
+        is_map(detail) and is_binary(Map.get(detail, "text")) ->
+          Map.get(detail, "text")
+
+        is_binary(text) ->
+          text
+
+        true ->
+          ""
+      end
+
+    Result.reasoning_details(reasoning_text, "runner_note", phase)
+  end
+
+  defp normalize_cli_reasoning(_kind, _text, _detail, _phase), do: nil
 
   defp maybe_apply_abort(result, signal) do
     if AbortSignal.aborted?(signal) do
@@ -880,19 +944,28 @@ defmodule CodingAgent.Tools.Task.Runner do
          role_id
        ) do
     if (text != "" or thinking != "") and (text != last_text or thinking != last_thinking) do
-      on_update.(%AgentToolResult{
-        content: Result.build_update_content(text, thinking),
-        details: %{
+      details =
+        %{
           session_id: session_id,
           description: description,
           status: "running",
           role: role_id
         }
+        |> maybe_put_reasoning(
+          Result.reasoning_details(thinking, "assistant_thinking", "updated")
+        )
+
+      on_update.(%AgentToolResult{
+        content: Result.build_update_content(text, thinking),
+        details: details
       })
     end
 
     {text, thinking}
   end
+
+  defp maybe_put_reasoning(details, nil), do: details
+  defp maybe_put_reasoning(details, reasoning), do: Map.put(details, :reasoning, reasoning)
 
   defp stop_session(session) when is_pid(session) do
     try do

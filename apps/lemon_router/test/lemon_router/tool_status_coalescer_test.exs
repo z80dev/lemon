@@ -139,7 +139,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
              Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
   end
 
-  test "filters note actions" do
+  test "filters generic note actions" do
     session_key = "agent:test2:telegram:bot:dm:456"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -155,6 +155,49 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+  end
+
+  test "renders structured reasoning note actions for operator surfaces" do
+    previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)
+    :persistent_term.put({ToolStatusIntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({ToolStatusIntentDispatcherStub, :test_pid})
+
+      if is_nil(previous_dispatcher) do
+        Application.delete_env(:lemon_router, :dispatcher)
+      else
+        Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+      end
+    end)
+
+    session_key = "agent:test:web:default:dm:reasoning"
+    channel_id = "web"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    ev = %{
+      engine: "codex",
+      action: %{
+        id: "codex.reasoning.1",
+        kind: "note",
+        title: "checking router fallback",
+        detail: %{reasoning: %{text: "checking router fallback", source: "codex_reasoning"}}
+      },
+      phase: :updated,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{kind: :tool_status_snapshot, body: %{text: text}}},
+                   1_000
+
+    assert text =~ "reasoning: checking router fallback"
   end
 
   test "retains more than forty actions" do
