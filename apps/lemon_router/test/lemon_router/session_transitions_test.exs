@@ -456,7 +456,7 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
 
-    assert [
+    assert Enum.at(next_state.queue, 0).meta["async_followups"] == [
              %{
                source: :agent,
                task_id: "task-a",
@@ -465,7 +465,7 @@ defmodule LemonRouter.SessionTransitionsTest do
                session_key: "session-a",
                delivery: :router
              }
-           ] = Enum.at(next_state.queue, 0).meta["async_followups"]
+           ]
   end
 
   test "async followup delivery receipt reflects active-run steer promotion" do
