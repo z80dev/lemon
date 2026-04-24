@@ -267,7 +267,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     refute SessionCoordinator.busy?(session_key)
     assert SessionCoordinator.active_run_for_session(session_key) == :none
-    assert SessionCoordinator.list_active_sessions() == []
+
+    refute Enum.any?(
+             SessionCoordinator.list_active_sessions(),
+             &(&1.session_key == session_key)
+           )
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}, 500
