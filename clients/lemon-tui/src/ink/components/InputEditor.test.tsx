@@ -8,7 +8,24 @@ import { renderWithContext, createTestStore } from '../test-helpers.js';
 import { InputEditor } from './InputEditor.js';
 import { SlashCommandAutocompleteProvider } from '../../autocomplete.js';
 
-function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
+function delay(ms = 20) { return new Promise<void>(r => setTimeout(r, ms)); }
+
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(10);
+    }
+  }
+
+  if (lastError) throw lastError;
+}
 
 const testCommands = [
   { name: 'help', description: 'Show help' },
@@ -178,7 +195,7 @@ describe('InputEditor', () => {
     stdin.write('/h');
     await delay();
     stdin.write('\t'); // Tab to show suggestions
-    await delay();
+    await waitFor(() => expect(lastFrame()).toContain('/help'));
     stdin.write('\r'); // Enter to apply first suggestion
     await delay();
     // Should have applied /help, not submitted
@@ -236,10 +253,7 @@ describe('InputEditor', () => {
     stdin.write('some text');
     await delay();
     stdin.write('\x03'); // Ctrl+C
-    await delay();
-    // Should clear the text
-    const frame = lastFrame();
-    expect(frame).not.toContain('some text');
+    await waitFor(() => expect(lastFrame()).not.toContain('some text'));
   });
 
   it('should not respond to input when not focused', async () => {

@@ -8,7 +8,7 @@ import { render } from 'ink-testing-library';
 import { ThemeProvider } from '../context/ThemeContext.js';
 import { ConfirmOverlay } from './ConfirmOverlay.js';
 
-function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
+function delay(ms = 20) { return new Promise<void>(r => setTimeout(r, ms)); }
 
 function renderOverlay(props: {
   title: string;

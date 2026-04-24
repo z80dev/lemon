@@ -8,7 +8,24 @@ import { render } from 'ink-testing-library';
 import { ThemeProvider } from '../context/ThemeContext.js';
 import { InputOverlay } from './InputOverlay.js';
 
-function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
+function delay(ms = 20) { return new Promise<void>(r => setTimeout(r, ms)); }
+
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(10);
+    }
+  }
+
+  if (lastError) throw lastError;
+}
 
 function renderOverlay(props: {
   title: string;
@@ -57,14 +74,14 @@ describe('InputOverlay', () => {
 
   it('should submit on Enter', async () => {
     const onSubmit = vi.fn();
-    const { stdin } = renderOverlay({
+    const { stdin, lastFrame } = renderOverlay({
       title: 'Test',
       onSubmit,
       onCancel: vi.fn(),
     });
     await delay();
     stdin.write('my value');
-    await delay();
+    await waitFor(() => expect(lastFrame()).toContain('my value'));
     stdin.write('\r');
     await delay();
     expect(onSubmit).toHaveBeenCalledWith('my value');

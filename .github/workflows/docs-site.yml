@@ -3,7 +3,7 @@ name: Docs Site
 # Builds the VitePress docs site and checks for broken links.
 #
 # On pull requests: build + link-check (no deploy).
-# On push to main:  build + link-check + deploy to GitHub Pages.
+# On push to main:  build + link-check; deploy only when explicitly enabled.
 # workflow_dispatch: manual trigger for either environment.
 #
 # The docs site is OPTIONAL — it supplements but does not replace the
@@ -81,7 +81,10 @@ jobs:
         continue-on-error: true   # link check is informational until baseline is established
 
       - name: Upload build artifact (for deployment)
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true')
+        if: >
+          vars.ENABLE_PAGES_DEPLOY == 'true' &&
+          (github.event_name == 'push' ||
+            (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true'))
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist
@@ -91,8 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-check
     if: >
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true')
+      vars.ENABLE_PAGES_DEPLOY == 'true' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true'))
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
