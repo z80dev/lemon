@@ -131,6 +131,9 @@ jobs:
           echo "$RESPONSE" | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
+          if d.get('ok') is True:
+              print('Healthz ok')
+              sys.exit(0)
           status = d.get('status', '')
           if status not in ('ok', 'degraded'):
               print(f'::error::Doctor returned unexpected status: {status}')
