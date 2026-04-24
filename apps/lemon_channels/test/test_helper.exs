@@ -39,6 +39,8 @@ Application.put_env(:lemon_channels, :engines, [
   "kimi"
 ])
 
+Application.put_env(:lemon_channels, :adapters, [])
+
 # Keep X adapter tests deterministic by default; specific tests can opt in.
 Application.put_env(:lemon_channels, :x_api_use_secrets, false)
 
@@ -56,5 +58,6 @@ ExUnit.after_suite(fn _ ->
 
   Application.delete_env(:lemon_gateway, gateway_config_key)
   Application.delete_env(:lemon_channels, :engines)
+  Application.delete_env(:lemon_channels, :adapters)
   Application.delete_env(:lemon_channels, :x_api_use_secrets)
 end)

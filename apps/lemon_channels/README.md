@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization to a canonical `LemonCore.InboundMessage` struct.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
 This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
 
@@ -11,7 +11,7 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
               +--------------------------------------+
               |                                      |
   [Platform]  |  Transport  ->  normalize_inbound()  |
-  (Telegram,  |  (polling/   ->  InboundMessage      |  -> LemonRouter
+  (Telegram,  |  (polling/   ->  RunRequest          |  -> LemonRouter
    Discord,   |   webhook)                           |
    etc.)      |                                      |
               +--------------------------------------+
@@ -36,7 +36,7 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
               +--------------------------------------+
 ```
 
-**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs, and routes them (via `LemonCore.RouterBridge`) to the session engine.
+**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs locally, converts them with `LemonChannels.RunRequestBuilder`, and submits only `LemonCore.RunRequest` structs to the session engine through `LemonCore.RouterBridge.submit_run/1`.
 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
@@ -59,16 +59,25 @@ LemonChannels.Application
 +-- Outbox.WorkerSupervisor               (Task.Supervisor)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
 +-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
-    +-- Telegram.Supervisor               (if enabled)
+    +-- Telegram.Supervisor               (if configured)
     |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
     |   +-- Telegram.Transport            (GenServer - long-polling)
-    +-- Discord.Supervisor                (if enabled)
+    +-- Discord.Supervisor                (if configured)
     |   +-- Discord.Transport             (Nostrum consumer)
     +-- XAPI.TokenManager                 (if configured, GenServer)
-    +-- XMTP.Transport                    (if enabled, GenServer + Port)
+    +-- XMTP.Transport                    (if configured, GenServer + Port)
 ```
 
-Adapters are started conditionally during application boot based on gateway configuration flags (`enable_telegram`, `enable_discord`, `enable_xmtp`) and credential availability (X API). Each adapter runs under the `AdapterSupervisor` DynamicSupervisor.
+Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+
+```elixir
+config :lemon_channels,
+  adapters: [
+    LemonChannels.Adapters.Telegram,
+    LemonChannels.Adapters.Discord,
+    LemonChannels.Adapters.Xmtp
+  ]
+```
 
 ## Plugin System
 
@@ -178,7 +187,7 @@ LemonChannels.enqueue(payload)          # Outbox.enqueue/1
 
 `LemonChannels.Dispatcher` is the router-facing entrypoint for semantic delivery. It selects a renderer from `DeliveryIntent.route.channel_id`, lets that renderer turn semantic output into platform operations, and relies on `LemonChannels.PresentationState` to keep platform message-id tracking inside `lemon_channels`.
 
-This ownership boundary matters: channels own truncation, send-vs-edit behavior, tool-status rendering, file/media batching, and Telegram message-id indices. Router owns run semantics and prompt rewriting. In particular, pending compaction prompt mutation must happen in router, not in channel transports.
+This ownership boundary matters: channels own truncation, send-vs-edit behavior, tool-status rendering, file/media batching, and Telegram message-id indices. Rendering should be a projection of canonical events plus channel capabilities. Router owns run semantics, session defaults, and prompt rewriting. In particular, pending compaction prompt mutation happens in the router submission path, not in channel transports.
 
 ## Outbox Pipeline
 
@@ -401,7 +410,7 @@ LemonChannels.Adapters.Telegram.VoiceTranscriber.transcribe(%{
 
 #### Configuration
 
-Enable via gateway config: `enable_telegram: true`. Required: Telegram bot token (via `LemonCore.Secrets` or env vars).
+Add `LemonChannels.Adapters.Telegram` to `config :lemon_channels, :adapters`. Required: Telegram bot token (via `LemonCore.Secrets` or env vars).
 
 ### Discord
 
@@ -415,7 +424,7 @@ Supports edit, delete, images, files, and threads.
 |--------|---------|
 | `Discord` (plugin) | Plugin behaviour implementation |
 | `Discord.Supervisor` | Starts transport if bot_token is configured |
-| `Discord.Transport` | Nostrum consumer, slash command handling, component interactions, and inbound routing via RouterBridge |
+| `Discord.Transport` | Nostrum consumer, slash command handling, component interactions, and inbound RunRequest submission |
 | `Discord.Inbound` | Normalizes Discord message events to `InboundMessage`, handles attachments |
 | `Discord.Renderer` | Semantic renderer for status controls, thread-aware replies, and finalize-time auto-send files |
 | `Discord.StatusRenderer` | Builds Discord button rows for cancel/keep-waiting UX |
@@ -435,7 +444,7 @@ Supports edit, delete, images, files, and threads.
 
 #### Configuration
 
-Enable via gateway config: `enable_discord: true`. Required: Discord bot token. Uses the `nostrum` library (declared as `runtime: false` dep; runtime availability is expected from the deployment environment).
+Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Uses the `nostrum` library (declared as `runtime: false` dep; runtime availability is expected from the deployment environment).
 
 ### X (Twitter) API
 
@@ -486,7 +495,7 @@ XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handle
 
 #### Configuration
 
-Enable via gateway config: `enable_xmtp: true`
+Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XMTP transport still checks `enable_xmtp: true` before starting its bridge.
 
 ## Adding a New Channel Adapter
 
@@ -494,15 +503,16 @@ Enable via gateway config: `enable_xmtp: true`
 
 2. **Create the supervisor and transport** if the adapter needs to receive inbound messages (polling or webhook).
 
-3. **Register the adapter** in `LemonChannels.Application.register_and_start_adapters/0`:
+3. **Configure the adapter** in `config :lemon_channels, :adapters`:
 
 ```elixir
-if GatewayConfig.get(:enable_my_channel) do
-  register_and_start_adapter(LemonChannels.Adapters.MyChannel)
-end
+config :lemon_channels,
+  adapters: [
+    LemonChannels.Adapters.MyChannel
+  ]
 ```
 
-4. **Add configuration** in gateway config for enable/disable and any adapter-specific settings.
+4. **Add configuration** in gateway config for adapter-specific settings.
 
 5. **Add tests** following the existing adapter test patterns in `test/lemon_channels/adapters/`.
 
@@ -510,19 +520,13 @@ end
 
 ### Gateway Config
 
-`LemonChannels.GatewayConfig` is a thin delegation to `LemonCore.GatewayConfig`, which merges config from three sources (highest priority first):
-
-1. `Application.get_env(:lemon_channels, :telegram | :xmtp)` -- runtime per-adapter overrides
-2. `Application.get_env(:lemon_channels, :gateway)` -- runtime gateway overrides
-3. `LemonCore.Config.cached().gateway` -- TOML-backed base config
+Adapter module startup is selected by `config :lemon_channels, :adapters`. Runtime gateway settings still come from `LemonChannels.GatewayConfig`, a thin delegation to `LemonCore.GatewayConfig`.
 
 Common gateway config keys:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `enable_telegram` | boolean | Enable/disable Telegram adapter |
-| `enable_discord` | boolean | Enable/disable Discord adapter |
-| `enable_xmtp` | boolean | Enable/disable XMTP adapter |
+| `enable_xmtp` | boolean | Enable/disable the XMTP bridge after the adapter is configured |
 | `default_engine` | string | Default session engine |
 | `bindings` | list | Chat scope to project/engine/agent bindings |
 | `projects` | map | Project definitions |

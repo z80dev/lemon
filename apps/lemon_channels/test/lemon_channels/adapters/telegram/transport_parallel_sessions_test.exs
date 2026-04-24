@@ -17,8 +17,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       :ok
     end
 
-    def submit(params) do
+    def submit(%LemonCore.RunRequest{} = params) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(params)})
         send(pid, {:submit_run, params})
       end
 
@@ -36,6 +37,25 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     def clear_busy_sessions do
       :persistent_term.erase(@busy_sessions_key)
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:user_msg_id] && to_string(meta[:user_msg_id]),
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
     end
   end
 
@@ -106,6 +126,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       router: ParallelTestRouter,
       run_orchestrator: ParallelTestRouter
     )
+
     ParallelTestRouter.clear_busy_sessions()
 
     set_bindings([])

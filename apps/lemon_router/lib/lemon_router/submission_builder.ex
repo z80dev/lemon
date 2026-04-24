@@ -38,6 +38,8 @@ defmodule LemonRouter.SubmissionBuilder do
     "xhigh" => :xhigh
   }
 
+  @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
+
   @spec build(RunRequest.t(), map()) :: {:ok, Submission.t()} | {:error, term()}
   def build(%RunRequest{} = params, opts) when is_map(opts) do
     origin = params.origin || :unknown
@@ -80,6 +82,7 @@ defmodule LemonRouter.SubmissionBuilder do
         end
 
       cwd = resolve_effective_cwd(cwd_override, meta)
+      prompt = maybe_apply_pending_compaction(prompt, session_key, origin)
 
       prompt =
         if MapHelpers.get_key(meta, :voice_transcribed) do
@@ -289,6 +292,136 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_apply_pending_compaction(prompt, session_key, :channel)
+       when is_binary(session_key) do
+    case LemonRouter.PendingCompactionStore.get(session_key) do
+      pending when is_map(pending) ->
+        if pending_compaction_fresh?(pending) do
+          apply_pending_compaction(prompt, session_key)
+        else
+          _ = LemonRouter.PendingCompactionStore.delete(session_key)
+
+          Logger.debug(
+            "Router cleared stale pending compaction session_key=#{inspect(session_key)}"
+          )
+
+          prompt
+        end
+
+      _ ->
+        prompt
+    end
+  rescue
+    _ -> prompt
+  end
+
+  defp maybe_apply_pending_compaction(prompt, _session_key, _origin), do: prompt
+
+  defp apply_pending_compaction(prompt, session_key) do
+    transcript =
+      LemonCore.RunStore.history(session_key, limit: 8)
+      |> format_run_history_transcript(max_chars: 8_000)
+
+    if transcript != "" do
+      _ = LemonRouter.PendingCompactionStore.delete(session_key)
+
+      Logger.warning(
+        "Router applying pending compaction session_key=#{inspect(session_key)} " <>
+          "transcript_chars=#{byte_size(transcript)}"
+      )
+
+      build_pending_compaction_prompt(transcript, prompt || "")
+    else
+      _ = LemonRouter.PendingCompactionStore.delete(session_key)
+      prompt
+    end
+  rescue
+    _ -> prompt
+  end
+
+  defp pending_compaction_fresh?(pending) when is_map(pending) do
+    set_at_ms = pending[:set_at_ms] || pending["set_at_ms"]
+
+    cond do
+      is_integer(set_at_ms) ->
+        System.system_time(:millisecond) - set_at_ms <= @pending_compaction_ttl_ms
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  defp pending_compaction_fresh?(_), do: false
+
+  defp build_pending_compaction_prompt(transcript, user_text)
+       when is_binary(transcript) and is_binary(user_text) do
+    user_text = String.trim(user_text)
+
+    base =
+      [
+        "The previous conversation reached the model context limit.",
+        "Use this compact transcript as prior context and continue.",
+        "",
+        "<previous_conversation>",
+        transcript,
+        "</previous_conversation>"
+      ]
+      |> Enum.join("\n")
+
+    if user_text == "" do
+      String.trim(base <> "\n\nContinue.")
+    else
+      String.trim(base <> "\n\nUser:\n" <> user_text)
+    end
+  end
+
+  defp build_pending_compaction_prompt(_transcript, user_text), do: user_text
+
+  defp format_run_history_transcript(history, opts) when is_list(history) do
+    max_chars = Keyword.get(opts, :max_chars, 12_000)
+
+    text =
+      history
+      |> Enum.reverse()
+      |> Enum.map(&format_run_history_entry/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+      |> String.trim()
+
+    if String.length(text) > max_chars do
+      String.slice(text, String.length(text) - max_chars, max_chars)
+    else
+      text
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp format_run_history_transcript(_other, _opts), do: ""
+
+  defp format_run_history_entry({_run_id, data}) when is_map(data) do
+    summary = data[:summary] || data["summary"] || %{}
+    prompt = summary[:prompt] || summary["prompt"] || ""
+    answer = summary[:answer] || summary["answer"] || ""
+
+    []
+    |> maybe_append("User: " <> String.trim(prompt), prompt)
+    |> maybe_append("Assistant: " <> String.trim(answer), answer)
+    |> Enum.join("\n")
+  end
+
+  defp format_run_history_entry(_), do: ""
+
+  defp maybe_append(parts, text, raw) do
+    if is_binary(raw) and String.trim(raw) != "" do
+      parts ++ [text]
+    else
+      parts
+    end
+  end
 
   defp normalize_thinking_level(nil), do: nil
   defp normalize_thinking_level(level) when is_atom(level), do: level

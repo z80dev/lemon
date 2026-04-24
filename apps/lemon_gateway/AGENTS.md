@@ -19,9 +19,9 @@ The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reint
 
 ```
 +-----------------------------------------------------------------------+
-|                           Transports                                   |
+|                  Channel Adapters / Gateway Ingress                    |
 |  Telegram (lemon_channels)  Discord (lemon_channels)  XMTP (lemon_ch) |
-|  Email (SMTP/webhook)  SMS (Twilio)  Voice (Twilio/Deepgram)          |
+|  Email (SMTP/webhook)  SMS support services  Voice support services   |
 |  Farcaster (Frame)  Webhook (HTTP sync/async)                          |
 +-------------------------------------+---------------------------------+
                                       |
@@ -267,6 +267,8 @@ For CLI-based engines wrapping an `AgentCore.CliRunners.*` module, the implement
 
 ## How to Add a New Transport
 
+Prefer adding new user-facing messaging channels in `lemon_channels`. Use this gateway-native path only for non-channel ingress shims that still belong with gateway runtime services.
+
 ### Step 1: Create the Transport Module
 
 ```elixir
@@ -274,9 +276,9 @@ defmodule LemonGateway.Transports.MyTransport do
   use GenServer
   use LemonGateway.Transport
 
-  alias LemonGateway.{BindingResolver, Runtime}
-  alias LemonGateway.Types.Job
+  alias LemonGateway.BindingResolver
   alias LemonCore.ChatScope
+  alias LemonCore.{RouterBridge, RunRequest}
 
   @impl LemonGateway.Transport
   def id, do: "mytransport"
@@ -296,22 +298,17 @@ defmodule LemonGateway.Transports.MyTransport do
   def handle_info({:incoming_message, data}, state) do
     scope = %ChatScope{transport: :mytransport, chat_id: data.chat_id}
 
-    request = %LemonGateway.ExecutionRequest{
-      run_id: LemonCore.Id.run_id(),
+    request = RunRequest.new(%{
+      origin: :mytransport,
       session_key: "mytransport:#{data.chat_id}:#{data.user_id}",
+      agent_id: BindingResolver.resolve_agent_id(scope),
       prompt: data.text,
       engine_id: BindingResolver.resolve_engine(scope, nil, nil),
       cwd: BindingResolver.resolve_cwd(scope),
-      conversation_key: {:session, "mytransport:#{data.chat_id}:#{data.user_id}"},
       meta: %{origin: :mytransport, notify_pid: self()}
-    }
+    })
 
-    Runtime.submit_execution(request)
-    {:noreply, state}
-  end
-
-  def handle_info({:lemon_gateway_run_completed, _job, completed}, state) do
-    # Handle completion
+    RouterBridge.submit_run(request)
     {:noreply, state}
   end
 end
@@ -323,9 +320,8 @@ Add to `:transports` in application config, or modify `TransportRegistry.init/1`
 
 ### Best Practices
 
-- Prefer `Runtime.submit_execution/1` (never call Scheduler directly)
-- Set `meta.notify_pid: self()` to receive `{:lemon_gateway_run_completed, job, completed}`
-- Build stable, unique `session_key` strings (transport:chat:user or similar)
+- Prefer `RouterBridge.submit_run/1` with `%LemonCore.RunRequest{}` (never call Scheduler directly)
+- Build stable, unique `session_key` strings
 - Return `:ignore` from `start_link/1` when disabled
 - Use `BindingResolver` to respect config bindings for engine/cwd/agent metadata
 

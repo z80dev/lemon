@@ -120,10 +120,10 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | Email | `Transports.Email` | SMTP inbound webhook + outbound delivery via gen_smtp |
 | Farcaster | `Transports.Farcaster` | Farcaster Frame-based interactions with Hub validation |
 | Webhook | `Transports.Webhook` | Generic HTTP webhook (sync/async modes) |
-| Voice | `Transports.Voice` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
+| Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
-Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app.
+Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services supervised directly by `LemonGateway.Application`.
 
 ## Module Inventory
 
@@ -189,7 +189,6 @@ Transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link
 | `LemonGateway.Transports.Farcaster.FrameServer` | `transports/farcaster/frame_server.ex` | Farcaster Frame HTTP server |
 | `LemonGateway.Transports.Farcaster.HubClient` | `transports/farcaster/hub_client.ex` | Farcaster Hub validation client |
 | `LemonGateway.Transports.Farcaster.CastHandler` | `transports/farcaster/cast_handler.ex` | Cast processing handler |
-| `LemonGateway.Transports.Voice` | `transports/voice.ex` | Voice call transport |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
 ### Binding and Legacy Rendering Helpers

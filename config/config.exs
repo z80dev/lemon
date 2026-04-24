@@ -24,6 +24,15 @@ config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
 
+config :lemon_channels,
+  adapters: [
+    LemonChannels.Adapters.Telegram,
+    LemonChannels.Adapters.Discord,
+    LemonChannels.Adapters.Xmtp,
+    LemonChannels.Adapters.WhatsApp,
+    LemonChannels.Adapters.XAPI
+  ]
+
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,

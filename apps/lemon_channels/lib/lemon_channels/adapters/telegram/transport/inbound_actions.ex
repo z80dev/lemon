@@ -172,7 +172,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
   end
 
   defp route_to_router(inbound) do
-    case LemonCore.RouterBridge.handle_inbound(inbound) do
+    case LemonChannels.Runtime.submit_inbound(inbound) do
       :ok ->
         :ok
 
@@ -180,14 +180,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         meta = inbound.meta || %{}
 
         Logger.warning(
-          "RouterBridge.handle_inbound failed for telegram inbound (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
+          "RouterBridge.submit_run failed for telegram inbound (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
             inspect(other)
         )
-
-        LemonCore.Telemetry.channel_inbound("telegram", %{
-          peer_id: inbound.peer.id,
-          peer_kind: inbound.peer.kind
-        })
     end
   rescue
     e ->

@@ -15,6 +15,33 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
 
       :ok
     end
+
+    def submit(%LemonCore.RunRequest{} = request) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(request)})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:xmtp] && meta[:xmtp].message_id,
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
+    end
   end
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
@@ -26,7 +53,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     :persistent_term.put({XmtpTestRouter, :pid}, self())
-    LemonCore.RouterBridge.configure(router: XmtpTestRouter)
+    LemonCore.RouterBridge.configure(router: XmtpTestRouter, run_orchestrator: XmtpTestRouter)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_xmtp: true,

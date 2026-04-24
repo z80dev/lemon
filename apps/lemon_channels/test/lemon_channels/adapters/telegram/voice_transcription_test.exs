@@ -10,6 +10,33 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
       :ok
     end
+
+    def submit(%LemonCore.RunRequest{} = request) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(request)})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:user_msg_id] && to_string(meta[:user_msg_id]),
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
+    end
   end
 
   defmodule VoiceMockAPI do
@@ -72,7 +99,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     :persistent_term.put({VoiceTestRouter, :pid}, self())
     :persistent_term.put({TestTranscriber, :pid}, self())
     VoiceMockAPI.register_sent(self())
-    LemonCore.RouterBridge.configure(router: VoiceTestRouter)
+    LemonCore.RouterBridge.configure(router: VoiceTestRouter, run_orchestrator: VoiceTestRouter)
     previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})

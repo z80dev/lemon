@@ -1558,7 +1558,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       StatusRenderer.action_row([
         StatusRenderer.select_menu(
           "#{@model_callback_prefix}:select_model:#{provider}:#{page}",
-          options, placeholder: "Choose a model")
+          options,
+          placeholder: "Choose a model"
+        )
       ]),
       StatusRenderer.action_row(nav_buttons)
     ]
@@ -1569,10 +1571,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       StatusRenderer.action_row([
         StatusRenderer.button(
           "This session",
-          "#{@model_callback_prefix}:set:s:#{provider}:#{index}", style: :primary),
+          "#{@model_callback_prefix}:set:s:#{provider}:#{index}",
+          style: :primary
+        ),
         StatusRenderer.button(
           "All future sessions",
-          "#{@model_callback_prefix}:set:f:#{provider}:#{index}", style: :success),
+          "#{@model_callback_prefix}:set:f:#{provider}:#{index}",
+          style: :success
+        ),
         StatusRenderer.button("Back", "#{@model_callback_prefix}:provider:#{provider}:0"),
         StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
       ])
@@ -2485,7 +2491,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp route_to_router(%InboundMessage{} = inbound) do
-    case RouterBridge.handle_inbound(inbound) do
+    case LemonChannels.Runtime.submit_inbound(inbound) do
       :ok ->
         :ok
 

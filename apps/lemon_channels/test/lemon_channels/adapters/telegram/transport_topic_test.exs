@@ -17,6 +17,33 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
       :ok
     end
+
+    def submit(%LemonCore.RunRequest{} = request) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(request)})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:user_msg_id] && to_string(meta[:user_msg_id]),
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
+    end
   end
 
   defmodule MockAPI do
@@ -89,7 +116,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       {:error, :already_registered} -> :ok
     end
 
-    LemonCore.RouterBridge.configure(router: TestRouter)
+    LemonCore.RouterBridge.configure(router: TestRouter, run_orchestrator: TestRouter)
 
     set_bindings([])
 

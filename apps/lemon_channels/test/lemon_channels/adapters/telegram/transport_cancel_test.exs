@@ -15,6 +15,33 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       :ok
     end
 
+    def submit(%LemonCore.RunRequest{} = request) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(request)})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:user_msg_id] && to_string(meta[:user_msg_id]),
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
+    end
+
     def abort(session_key, reason) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:abort_session, session_key, reason})
@@ -99,7 +126,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     :persistent_term.put({CancelTestRouter, :pid}, self())
     CancelMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: CancelTestRouter)
+    LemonCore.RouterBridge.configure(router: CancelTestRouter, run_orchestrator: CancelTestRouter)
     set_bindings([])
     System.put_env("OPENAI_API_KEY", "test-openai-key")
     System.put_env("LEMON_DEFAULT_PROVIDER", "openai")

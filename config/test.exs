@@ -22,6 +22,9 @@ config :lemon_core, LemonCore.Store,
 # Enable test-mode gateway config path (full-replacement via app env).
 config :lemon_core, config_test_mode: true
 
+# Tests opt into channel adapters explicitly.
+config :lemon_channels, adapters: []
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 

@@ -120,9 +120,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     own_jid = event["jid"]
     phone = event["phone"] || phone_from_jid(own_jid)
 
-    Logger.info(
-      "whatsapp bridge connected: own_jid=#{inspect(own_jid)} phone=#{inspect(phone)}"
-    )
+    Logger.info("whatsapp bridge connected: own_jid=#{inspect(own_jid)} phone=#{inspect(phone)}")
 
     state = %{
       state
@@ -264,7 +262,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   def handle_call({:deliver, payload}, from, state) do
     if state.connected? do
       correlation_id = generate_correlation_id()
-      timer_ref = Process.send_after(self(), {:command_timeout, correlation_id}, @command_timeout_ms)
+
+      timer_ref =
+        Process.send_after(self(), {:command_timeout, correlation_id}, @command_timeout_ms)
 
       result = dispatch_outbound(state.port_server, payload, correlation_id)
 
@@ -461,7 +461,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     inbound =
       inbound
       |> put_in([Access.key!(:account_id)], state.account_id)
-      |> put_in([Access.key!(:meta)], Map.merge(inbound.meta || %{}, %{
+      |> put_in(
+        [Access.key!(:meta)],
+        Map.merge(inbound.meta || %{}, %{
           agent_id: agent_id,
           engine_id: engine_id,
           queue_mode: queue_mode,
@@ -469,7 +471,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
           model_hint: model_hint,
           model_hint_source: model_source,
           thinking_hint: thinking_hint
-        }))
+        })
+      )
 
     Logger.info(
       "whatsapp inbound routing: peer=#{peer_id} session_key=#{inspect(session_key)} " <>
@@ -479,7 +482,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     # Send typing indicator
     Bridge.typing(state.port_server, peer_id, true)
 
-    RouterBridge.handle_inbound(inbound)
+    LemonChannels.Runtime.submit_inbound(inbound)
   rescue
     e ->
       Logger.warning(
@@ -579,7 +582,13 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     }
   rescue
     _ ->
-      %{enabled: false, model: "gpt-4o-mini-transcribe", base_url: nil, api_key: nil, max_bytes: 10 * 1024 * 1024}
+      %{
+        enabled: false,
+        model: "gpt-4o-mini-transcribe",
+        base_url: nil,
+        api_key: nil,
+        max_bytes: 10 * 1024 * 1024
+      }
   end
 
   defp normalize_blank(nil), do: nil

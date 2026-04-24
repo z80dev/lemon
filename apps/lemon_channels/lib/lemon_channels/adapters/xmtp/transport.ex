@@ -9,7 +9,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   alias LemonChannels.{BindingResolver, GatewayConfig}
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
-  alias LemonCore.{EngineCatalog, InboundMessage, RouterBridge, SessionKey}
+  alias LemonCore.{EngineCatalog, InboundMessage, SessionKey}
   alias LemonCore.Secrets
 
   @default_poll_interval_ms 1_500
@@ -1254,13 +1254,13 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp parse_engine_directive(prompt), do: {nil, prompt || ""}
 
   defp route_to_router(%InboundMessage{} = inbound) do
-    case RouterBridge.handle_inbound(inbound) do
+    case LemonChannels.Runtime.submit_inbound(inbound) do
       :ok ->
         :ok
 
       other ->
         Logger.warning(
-          "RouterBridge.handle_inbound failed for xmtp inbound (wallet=#{inspect(inbound.peer.id)} conversation=#{inspect(inbound.peer.thread_id)}): " <>
+          "RouterBridge.submit_run failed for xmtp inbound (wallet=#{inspect(inbound.peer.id)} conversation=#{inspect(inbound.peer.thread_id)}): " <>
             inspect(other)
         )
 

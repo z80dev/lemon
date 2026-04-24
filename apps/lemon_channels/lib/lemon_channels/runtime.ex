@@ -1,7 +1,22 @@
 defmodule LemonChannels.Runtime do
   @moduledoc false
 
+  alias LemonCore.InboundMessage
+
   @router_mod :"Elixir.LemonRouter.Router"
+
+  @spec submit_inbound(InboundMessage.t()) :: :ok | {:error, term()}
+  def submit_inbound(%InboundMessage{} = inbound) do
+    emit_inbound_telemetry(inbound)
+
+    inbound
+    |> LemonChannels.RunRequestBuilder.from_inbound()
+    |> LemonCore.RouterBridge.submit_run()
+    |> case do
+      {:ok, _run_id} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @spec cancel_by_progress_msg(binary(), integer()) :: :ok
   def cancel_by_progress_msg(session_key, _progress_msg_id)
@@ -79,4 +94,16 @@ defmodule LemonChannels.Runtime do
   end
 
   def session_busy?(_), do: false
+
+  defp emit_inbound_telemetry(%InboundMessage{} = inbound) do
+    meta = if is_map(inbound.meta), do: inbound.meta, else: %{}
+
+    LemonCore.Telemetry.channel_inbound(inbound.channel_id, %{
+      account_id: inbound.account_id,
+      peer_kind: inbound.peer.kind,
+      agent_id: meta[:agent_id] || meta["agent_id"] || "default"
+    })
+  rescue
+    _ -> :ok
+  end
 end

@@ -10,6 +10,33 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
       :ok
     end
+
+    def submit(%LemonCore.RunRequest{} = request) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:inbound, inbound_from_request(request)})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
+
+    defp inbound_from_request(%LemonCore.RunRequest{} = request) do
+      meta = request.meta || %{}
+
+      %LemonCore.InboundMessage{
+        channel_id: meta[:channel_id],
+        account_id: meta[:account_id],
+        peer: meta[:peer],
+        sender: meta[:sender],
+        message: %{
+          id: meta[:user_msg_id] && to_string(meta[:user_msg_id]),
+          text: request.prompt,
+          timestamp: nil,
+          reply_to_id: nil
+        },
+        raw: meta[:raw],
+        meta: meta
+      }
+    end
   end
 
   defmodule AuthMockAPI do
@@ -65,7 +92,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     :persistent_term.put({AuthTestRouter, :pid}, self())
     AuthMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: AuthTestRouter)
+    LemonCore.RouterBridge.configure(router: AuthTestRouter, run_orchestrator: AuthTestRouter)
     set_bindings([])
 
     on_exit(fn ->
@@ -181,7 +208,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
   defp set_bindings(bindings) do
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
-    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :bindings, bindings))
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.put(existing, :bindings, bindings)
+    )
   end
 
   defp restore_gateway_env(nil) do

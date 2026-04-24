@@ -71,6 +71,8 @@ defmodule LemonChannels.StartupTest do
       }
     })
 
+    Application.put_env(:lemon_channels, :adapters, [LemonChannels.Adapters.Telegram])
+
     on_exit(fn ->
       StartupMockTelegramAPI.stop()
       _ = Application.stop(:lemon_channels)
@@ -104,6 +106,8 @@ defmodule LemonChannels.StartupTest do
         "opencode",
         "pi"
       ])
+
+      Application.put_env(:lemon_channels, :adapters, [])
 
       _ = Application.ensure_all_started(:lemon_channels)
     end)

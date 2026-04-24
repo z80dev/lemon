@@ -6,7 +6,7 @@ Channel adapter application for external messaging platforms (Telegram, Discord,
 
 LemonChannels sits between external messaging platforms and the Lemon session engine. It has three jobs:
 
-1. **Inbound**: Receive messages from platforms, normalize them to `LemonCore.InboundMessage`, and route to `LemonRouter` via `LemonCore.RouterBridge`.
+1. **Inbound**: Receive messages from platforms, normalize them locally, and submit only canonical `LemonCore.RunRequest` structs to `LemonRouter` via `LemonCore.RouterBridge.submit_run/1`.
 2. **Semantic outbound rendering**: Accept router-owned `LemonCore.DeliveryIntent` values, render channel-specific UX, and keep platform presentation state inside `lemon_channels`.
 3. **Direct outbound delivery**: Accept `OutboundPayload` structs from adapter helpers and other low-level callers, chunk/dedupe/rate-limit them, and deliver to the target platform with retry.
 
@@ -36,7 +36,7 @@ LemonChannels provides:
 
 ```
                     Inbound
-[Platform] → Transport → normalize_inbound() → RouterBridge → [LemonRouter]
+[Platform] → Transport → normalize_inbound() → RunRequestBuilder → RouterBridge.submit_run() → [LemonRouter]
 
                Semantic Outbound
 [Router] → Dispatcher → Renderer → PresentationState → Outbox → deliver() → [Platform]
@@ -61,6 +61,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/presentation_state.ex` | `LemonChannels.PresentationState` | Channels-owned presentation state: message ids, pending creates, pending edits, deferred/coalesced edits, deferred chunk sets for long Telegram replies, post-edit follow-up chunks, and surface tracking. Telegram overflow follow-up chunks should preserve the original reply target so long answers stay attached to the triggering prompt instead of jumping to the topic root, and final long-answer tails for an already-live Telegram message must wait for the winning edit ack before they are enqueued. If that ack wins the race before the tails or deferred final edit finish staging, `PresentationState` must flush those late-staged follow-ups or deferred chunks immediately instead of waiting for another ack that will never arrive. Supports moving a live message from one semantic surface to another so router coalescers can keep editing the same Telegram message across answer/status handoffs, including task-specific status surfaces such as `{:status_task, task_id}`. |
 | `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
 | `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
+| `lib/lemon_channels/run_request_builder.ex` | `LemonChannels.RunRequestBuilder` | Converts adapter-normalized `InboundMessage` values into router-facing `LemonCore.RunRequest` structs. |
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
@@ -227,7 +228,7 @@ Defined in `LemonChannels.Capabilities`:
 
 1. Create adapter module in `lib/lemon_channels/adapters/` implementing `LemonChannels.Plugin`
 2. Optionally create a supervisor and transport for inbound message handling
-3. Register in `LemonChannels.Application.register_and_start_adapters/0` with a config gate
+3. Add the adapter module to `config :lemon_channels, :adapters` where it should start
 4. Add tests in `test/lemon_channels/adapters/`
 
 ## Common Modification Patterns
@@ -426,13 +427,13 @@ Auto-refresh by `XAPI.TokenManager` GenServer. Starts as adapter child process.
 
 - Uses Node.js bridge process managed via Erlang Port
 - Bridge handles XMTP protocol; Elixir side manages lifecycle and normalization
-- Enable: `enable_xmtp: true` in gateway config
+- Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`; `enable_xmtp: true` still gates the bridge process
 
 ## Discord Adapter
 
 - Uses `nostrum` library (declared `runtime: false`)
 - Slash commands: `/lemon`, `/session new`, `/session info`
-- Enable: `enable_discord: true` in gateway config
+- Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`
 
 ## Binding Resolution
 
@@ -496,16 +497,24 @@ LemonChannels.Application.start_adapter(MyAdapter)
 LemonChannels.Application.stop_adapter(MyAdapter)
 ```
 
-Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
+Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor). Startup is driven by `config :lemon_channels, :adapters`; do not add hardcoded adapter gates to `LemonChannels.Application`.
+
+```elixir
+config :lemon_channels,
+  adapters: [
+    LemonChannels.Adapters.Telegram,
+    LemonChannels.Adapters.Discord,
+    LemonChannels.Adapters.Xmtp
+  ]
+```
 
 ## GatewayConfig
 
-Gateway transport config comes only from the canonical TOML `[gateway]` section via `LemonCore.GatewayConfig`. There are no runtime `Application.get_env` transport overlays in production.
+Gateway transport config comes only from the canonical TOML `[gateway]` section via `LemonCore.GatewayConfig`. There are no runtime `Application.get_env` transport overlays in production. Channel adapter module selection is the exception and belongs to `config :lemon_channels, :adapters`.
 
 In test mode (`config_test_mode`), a full-replacement app env layer is supported for test isolation.
 
 ```elixir
-LemonChannels.GatewayConfig.get(:enable_telegram)
 LemonChannels.GatewayConfig.get(:bindings, [])
 LemonChannels.GatewayConfig.get(:default_engine)
 LemonChannels.GatewayConfig.get(:projects, %{})
