@@ -67,6 +67,11 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
+Use `LemonCore.Event` constructors for structured run-event contracts when available.
+`engine_action/2` validates tool/status action payloads before broadcast, and
+`reasoning_status/2` carries structured reasoning text without smuggling it through ad hoc note
+strings.
+
 ## Configuration System Architecture
 
 ### Config Sources (precedence: env > project > global)

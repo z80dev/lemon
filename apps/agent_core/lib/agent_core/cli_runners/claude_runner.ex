@@ -436,7 +436,12 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
     # Truncate long thinking text for title
     title = String.slice(thinking, 0, 100)
-    detail = if signature, do: %{signature: signature}, else: %{}
+
+    detail =
+      %{reasoning: %{text: thinking, source: "claude_thinking"}}
+      |> then(fn detail ->
+        if signature, do: Map.put(detail, :signature, signature), else: detail
+      end)
 
     {event, factory} =
       EventFactory.action_completed(

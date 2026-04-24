@@ -28,7 +28,7 @@ defmodule LemonCore.EventTest do
 
   describe "new_with_ts/4" do
     test "creates event with specific timestamp" do
-      ts = 1234567890
+      ts = 1_234_567_890
       event = Event.new_with_ts(:historic, ts, %{old: true})
 
       assert event.ts_ms == ts
@@ -44,6 +44,38 @@ defmodule LemonCore.EventTest do
 
       assert result >= before
       assert result <= after_time
+    end
+  end
+
+  describe "validated run event constructors" do
+    test "creates engine action events" do
+      event =
+        Event.engine_action(
+          %{
+            engine: "codex",
+            phase: :updated,
+            action: %{id: "a1", kind: "reasoning", title: "checking", detail: %{}}
+          },
+          %{run_id: "run-1"}
+        )
+
+      assert event.type == :engine_action
+      assert event.payload.action.kind == "reasoning"
+    end
+
+    test "rejects malformed engine action events" do
+      assert_raise ArgumentError, fn ->
+        Event.engine_action(%{action: %{id: "", kind: "tool", title: "bad"}}, %{})
+      end
+    end
+
+    test "creates reasoning status events" do
+      event =
+        Event.reasoning_status(%{text: "checking", source: "runner_note"}, %{run_id: "run-1"})
+
+      assert event.type == :reasoning_status
+      assert event.payload.text == "checking"
+      assert event.payload.source == "runner_note"
     end
   end
 end

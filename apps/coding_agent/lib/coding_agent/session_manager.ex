@@ -575,12 +575,18 @@ defmodule CodingAgent.SessionManager do
           "content" => "[Conversation summary: #{compaction_entry.summary}]"
         }
 
+        compacted_entries =
+          branch
+          |> Enum.take(kept_start_idx)
+
+        preserved_async_followups = extract_async_followup_messages(compacted_entries)
+
         kept_entries =
           branch
           |> Enum.drop(kept_start_idx)
           |> extract_messages()
 
-        [summary_msg | kept_entries]
+        [summary_msg | preserved_async_followups] ++ kept_entries
       else
         extract_messages(branch)
       end
@@ -642,6 +648,16 @@ defmodule CodingAgent.SessionManager do
   end
 
   defp entry_to_message(_), do: nil
+
+  defp extract_async_followup_messages(entries) do
+    entries
+    |> Enum.filter(fn
+      %{type: :custom_message, custom_type: "async_followup"} -> true
+      _ -> false
+    end)
+    |> Enum.map(&entry_to_message/1)
+    |> Enum.reject(&is_nil/1)
+  end
 
   # ============================================================================
   # Migrations

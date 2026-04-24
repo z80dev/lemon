@@ -23,7 +23,7 @@ defmodule CodingAgent.Tools.Task.Projection do
 
   @doc """
   Build an `:engine_action` payload from an `AgentToolResult` update
-  that contains a `current_action` in its details.
+  that contains a `current_action` or `reasoning` entry in its details.
 
   Returns `{:ok, payload}` or `:error`.
   """
@@ -38,25 +38,47 @@ defmodule CodingAgent.Tools.Task.Projection do
       :error
     else
       current_action = details[:current_action] || details["current_action"]
+      reasoning = details[:reasoning] || details["reasoning"]
       action_detail = details[:action_detail] || details["action_detail"] || %{}
 
-      with %{title: title, kind: kind, phase: phase} <- normalize_current_action(current_action) do
-        {:ok,
-         %{
-           engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
-           phase: normalize_phase(phase),
-           ok: normalize_ok(phase),
-           message: nil,
-           level: nil,
-           action: %{
-             id: stable_child_action_id(run_id, kind, title),
-             kind: normalize_kind(kind),
-             title: title,
-             detail: action_detail
-           }
-         }}
-      else
-        _ -> :error
+      case normalize_current_action(current_action) do
+        %{title: title, kind: kind, phase: phase} ->
+          {:ok,
+           %{
+             engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
+             phase: normalize_phase(phase),
+             ok: normalize_ok(phase),
+             message: nil,
+             level: nil,
+             action: %{
+               id: stable_child_action_id(run_id, kind, title),
+               kind: normalize_kind(kind),
+               title: title,
+               detail: action_detail
+             }
+           }}
+
+        nil ->
+          case normalize_reasoning(reasoning) do
+            %{text: text, source: source, phase: phase} ->
+              {:ok,
+               %{
+                 engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
+                 phase: normalize_phase(phase),
+                 ok: normalize_ok(phase),
+                 message: nil,
+                 level: nil,
+                 action: %{
+                   id: stable_child_action_id(run_id, "reasoning", text),
+                   kind: "reasoning",
+                   title: text,
+                   detail: %{reasoning: %{text: text, source: source, phase: phase}}
+                 }
+               }}
+
+            nil ->
+              :error
+          end
       end
     end
   end
@@ -96,8 +118,6 @@ defmodule CodingAgent.Tools.Task.Projection do
     }
   end
 
-  # ---- Private ----
-
   defp normalize_current_action(%{title: title, kind: kind, phase: phase})
        when is_binary(title) and title != "" and
               is_binary(kind) and kind != "" and
@@ -113,6 +133,24 @@ defmodule CodingAgent.Tools.Task.Projection do
   end
 
   defp normalize_current_action(_), do: nil
+
+  defp normalize_reasoning(%{text: text} = reasoning) when is_binary(text) and text != "" do
+    %{
+      text: text,
+      source: Map.get(reasoning, :source) || Map.get(reasoning, "source") || "unknown",
+      phase: Map.get(reasoning, :phase) || Map.get(reasoning, "phase") || "updated"
+    }
+  end
+
+  defp normalize_reasoning(%{"text" => text} = reasoning) when is_binary(text) and text != "" do
+    %{
+      text: text,
+      source: Map.get(reasoning, "source") || "unknown",
+      phase: Map.get(reasoning, "phase") || "updated"
+    }
+  end
+
+  defp normalize_reasoning(_), do: nil
 
   defp normalize_phase("started"), do: :started
   defp normalize_phase("updated"), do: :updated

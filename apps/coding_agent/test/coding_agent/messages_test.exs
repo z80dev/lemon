@@ -321,9 +321,9 @@ defmodule CodingAgent.MessagesTest do
       assert result.timestamp == 123
       assert result.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
       assert_async_followup_envelope(result.content, original_content)
-      refute result.content =~ "task-123"
-      refute result.content =~ "run-123"
-      refute result.content =~ "steer_backlog"
+      assert result.content =~ "task_id: task-123"
+      assert result.content =~ "run_id: run-123"
+      assert result.content =~ "delivery: steer_backlog"
     end
 
     test "wraps async followup custom messages with fallback values for missing metadata" do

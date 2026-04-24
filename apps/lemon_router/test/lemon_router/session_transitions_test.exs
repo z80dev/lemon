@@ -191,13 +191,27 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert {:ok, next_state, effects} = SessionTransitions.submit(state, followup, 100)
 
-    assert next_state.pending_steers == %{
-             "run1" => [{%{followup | queue_mode: :steer}, :followup}]
-           }
+    assert [
+             {:dispatch_steer, "run1", :steer, dispatched, :followup}
+           ] = effects
 
-    assert effects == [
-             {:dispatch_steer, "run1", :steer, %{followup | queue_mode: :steer}, :followup}
-           ]
+    assert dispatched.queue_mode == :steer
+    assert next_state.pending_steers == %{"run1" => [{dispatched, :followup}]}
+
+    assert [
+             %{
+               source: :task,
+               task_id: "task-a",
+               run_id: "run-a",
+               delivery: :steer,
+               delivery_receipt: %{
+                 mode: :steer,
+                 status: :dispatched_to_active,
+                 fallback_mode: :followup,
+                 active_run_id: "run1"
+               }
+             }
+           ] = dispatched.meta["async_followups"]
   end
 
   test "rejected steer fallback requeues and only requests start when resulting state is idle" do
@@ -442,7 +456,7 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert Enum.map(next_state.queue, & &1.run_id) == ["run1", "run2"]
 
-    assert Enum.at(next_state.queue, 0).meta["async_followups"] == [
+    assert [
              %{
                source: :agent,
                task_id: "task-a",
@@ -451,7 +465,56 @@ defmodule LemonRouter.SessionTransitionsTest do
                session_key: "session-a",
                delivery: :router
              }
-           ]
+           ] = Enum.at(next_state.queue, 0).meta["async_followups"]
+  end
+
+  test "async followup delivery receipt reflects active-run steer promotion" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active-run", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    followup =
+      submission("run2", "s1", :followup, "task done",
+        meta: %{
+          :task_auto_followup => true,
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :followup}
+          ]
+        },
+        request_meta: %{
+          :task_auto_followup => true,
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :followup}
+          ]
+        }
+      )
+
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, followup, 100)
+
+    assert [
+             {:dispatch_steer, "active-run", :steer, dispatched, :followup}
+           ] = effects
+
+    assert next_state.pending_steers == %{"active-run" => [{dispatched, :followup}]}
+
+    assert [
+             %{
+               delivery: :steer,
+               delivery_receipt: %{
+                 mode: :steer,
+                 status: :dispatched_to_active,
+                 fallback_mode: :followup,
+                 active_run_id: "active-run"
+               }
+             }
+           ] = dispatched.meta["async_followups"]
+
+    assert dispatched.execution_request.meta["async_followups"] ==
+             dispatched.meta["async_followups"]
   end
 
   defp merge_followups(previous, current) do

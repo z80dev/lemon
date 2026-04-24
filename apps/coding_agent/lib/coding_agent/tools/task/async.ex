@@ -64,17 +64,13 @@ defmodule CodingAgent.Tools.Task.Async do
     with {:ok, payload} <-
            Projection.engine_action_from_update(result, lifecycle_context) do
       event =
-        LemonCore.Event.new(
-          :engine_action,
-          payload,
-          %{
-            run_id: lifecycle_context[:run_id],
-            parent_run_id: lifecycle_context[:parent_run_id],
-            session_key: lifecycle_context[:session_key],
-            agent_id: lifecycle_context[:agent_id],
-            task_id: lifecycle_context[:task_id]
-          }
-        )
+        LemonCore.Event.engine_action(payload, %{
+          run_id: lifecycle_context[:run_id],
+          parent_run_id: lifecycle_context[:parent_run_id],
+          session_key: lifecycle_context[:session_key],
+          agent_id: lifecycle_context[:agent_id],
+          task_id: lifecycle_context[:task_id]
+        })
 
       LemonCore.Bus.broadcast(
         LemonCore.Bus.run_topic(lifecycle_context[:run_id]),

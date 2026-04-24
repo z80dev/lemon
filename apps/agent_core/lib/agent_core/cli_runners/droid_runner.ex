@@ -205,7 +205,11 @@ defmodule AgentCore.CliRunners.DroidRunner do
     state = maybe_capture_session(state, session_id)
     action_id = normalize_reasoning_id(id)
     title = normalize_reasoning_title(text)
-    detail = %{text: normalize_reasoning_text(text)}
+
+    detail = %{
+      text: normalize_reasoning_text(text),
+      reasoning: %{text: normalize_reasoning_text(text), source: "droid_reasoning"}
+    }
 
     {phase, pending_reasoning} =
       if Map.has_key?(state.pending_reasoning, action_id) do
@@ -515,7 +519,7 @@ defmodule AgentCore.CliRunners.DroidRunner do
                                                              {events, factory} ->
         {event, factory} =
           EventFactory.action_completed(factory, action_id, :note, title, true,
-            detail: %{text: title}
+            detail: %{text: title, reasoning: %{text: title, source: "droid_reasoning"}}
           )
 
         {events ++ [event], factory}

@@ -78,6 +78,7 @@ Inbound transport
 Async task/delegated followups are special:
 - active auto-followups should prefer `:steer` with `:followup` fallback, not `:steer_backlog` with `:collect` fallback
 - async followups with task/delegated provenance must not be merged together during the followup debounce window
+- submitted async followups are stamped after the router mutation with `delivery` plus `delivery_receipt`, reflecting whether the final disposition was queued, steered to an active run, or fallback-queued
 
 Conversation keys are:
 
@@ -176,6 +177,11 @@ Async task followups (`task action=poll`) are also rebound onto the original tas
 `task_id` when `SurfaceManager` preserves that metadata in action `detail.result_meta`, so
 background Codex/Claude task progress stays attached to the originating `task(...)` line instead
 of creating blank standalone `task:` status entries.
+Structured reasoning from child runs should arrive as `detail.reasoning` and render as a
+`reasoning` tool-status action for Web/TUI/monitoring surfaces. Generic `:note` actions are still
+filtered, but notes carrying reasoning details are preserved instead of being dropped blindly.
+Chat renderers keep the usual line budget for these actions; non-chat/operator renderers can show
+the full structured action stream.
 Generated images and explicit file-send requests are tracked in
 `RunProcess.ArtifactTracker`; channels still receive them only through
 `auto_send_files` metadata on the answer finalization path.

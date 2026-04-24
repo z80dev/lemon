@@ -555,8 +555,8 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
       # Reasoning (extended thinking)
       %ReasoningItem{id: action_id, text: text} ->
-        # Truncate long reasoning text for title
         title = String.slice(text, 0, 100)
+        detail = %{reasoning: %{text: text, source: "codex_reasoning"}}
 
         case phase do
           p when p in [:started, :updated] ->
@@ -565,7 +565,8 @@ defmodule AgentCore.CliRunners.CodexRunner do
                 phase: phase,
                 action_id: action_id,
                 kind: :note,
-                title: title
+                title: title,
+                detail: detail
               )
 
             state = %{state | factory: factory}
@@ -573,7 +574,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
           :completed ->
             {event, factory} =
-              EventFactory.action_completed(state.factory, action_id, :note, title, true)
+              EventFactory.action_completed(state.factory, action_id, :note, title, true,
+                detail: detail
+              )
 
             state = %{state | factory: factory}
             {[event], state, []}

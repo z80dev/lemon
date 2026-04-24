@@ -352,6 +352,50 @@ defmodule CodingAgent.SessionManagerTest do
       assert summary_msg["content"] =~ "Conversation about code"
       assert length(rest) >= 1
     end
+
+    test "preserves compacted async followup provenance in restored context" do
+      session =
+        SessionManager.new("/tmp")
+        |> SessionManager.append_message(%{"role" => "user", "content" => "msg1"})
+        |> SessionManager.append_custom_message(%{
+          "role" => "custom",
+          "custom_type" => "async_followup",
+          "content" => "child completed",
+          "details" => %{
+            source: :task,
+            task_id: "task-123",
+            run_id: "run-123",
+            delivery: :followup,
+            delivery_receipt: %{mode: :followup, status: :queued}
+          }
+        })
+        |> SessionManager.append_message(%{"role" => "assistant", "content" => "ack"})
+
+      kept_id = List.last(SessionManager.entries(session)).id
+
+      session =
+        session
+        |> SessionManager.append_compaction("summarized", kept_id, 1000)
+        |> SessionManager.append_message(%{"role" => "user", "content" => "next"})
+
+      context = SessionManager.build_session_context(session)
+
+      assert Enum.any?(context.messages, fn
+               %{
+                 "role" => "custom",
+                 "custom_type" => "async_followup",
+                 "details" => details
+               } ->
+                 details[:task_id] == "task-123" and
+                   details[:delivery_receipt] == %{mode: :followup, status: :queued}
+
+               _ ->
+                 false
+             end)
+
+      llm_messages = CodingAgent.Messages.to_llm(context.messages)
+      assert Enum.any?(llm_messages, &String.contains?(&1.content, "task_id: task-123"))
+    end
   end
 
   # ============================================================================
