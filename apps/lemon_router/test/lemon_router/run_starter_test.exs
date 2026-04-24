@@ -1,7 +1,7 @@
 defmodule LemonRouter.RunStarterTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{RunStarter, Submission}
 
   defmodule StarterCapturingRunProcess do
@@ -154,7 +154,7 @@ defmodule LemonRouter.RunStarterTest do
   end
 
   defp submission(run_id, session_key, run_supervisor, run_process_module, run_process_opts) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: session_key,
       prompt: "prompt for #{run_id}",

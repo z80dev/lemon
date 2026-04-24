@@ -6,10 +6,21 @@ defmodule LemonGateway.Runtime do
   cancellation helpers for active runs by progress message ID or run ID.
   """
 
+  @behaviour LemonCore.EngineRuntime
+
+  alias LemonCore.ExecutionCommand
   alias LemonGateway.ExecutionRequest
 
   @doc "Submits an execution request to the scheduler."
-  @spec submit_execution(ExecutionRequest.t()) :: :ok
+  @impl true
+  @spec submit_execution(ExecutionCommand.t() | ExecutionRequest.t()) :: :ok
+  def submit_execution(%ExecutionCommand{} = command) do
+    command
+    |> ExecutionCommand.ensure_conversation_key()
+    |> ExecutionRequest.from_command()
+    |> LemonGateway.Scheduler.submit_execution()
+  end
+
   def submit_execution(%ExecutionRequest{} = request) do
     request
     |> ExecutionRequest.ensure_conversation_key()
@@ -27,10 +38,11 @@ defmodule LemonGateway.Runtime do
   end
 
   @doc "Cancels a run identified by its run ID. No-op if the run is not found."
+  @impl true
   @spec cancel_by_run_id(binary(), term()) :: :ok
   def cancel_by_run_id(run_id, reason \\ :user_requested) when is_binary(run_id) do
-    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
-      [{run_pid, _meta}] when is_pid(run_pid) ->
+    case run_pid(run_id) do
+      run_pid when is_pid(run_pid) ->
         LemonGateway.Scheduler.cancel(run_pid, reason)
 
       _ ->
@@ -38,5 +50,29 @@ defmodule LemonGateway.Runtime do
     end
   rescue
     _ -> :ok
+  end
+
+  @impl true
+  @spec run_pid(binary()) :: pid() | nil
+  def run_pid(run_id) when is_binary(run_id) do
+    case Registry.lookup(LemonGateway.RunRegistry, run_id) do
+      [{pid, _meta}] when is_pid(pid) -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  def run_pid(_), do: nil
+
+  @impl true
+  @spec available?() :: boolean()
+  def available? do
+    case GenServer.whereis(LemonGateway.Scheduler) do
+      pid when is_pid(pid) -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 end

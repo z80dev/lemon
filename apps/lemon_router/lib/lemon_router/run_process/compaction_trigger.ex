@@ -130,7 +130,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   def estimate_input_tokens_from_prompt(state) do
     prompt =
       case Map.get(state, :execution_request) do
-        %LemonGateway.ExecutionRequest{prompt: p} when is_binary(p) -> p
+        %LemonCore.ExecutionCommand{prompt: p} when is_binary(p) -> p
         _ -> nil
       end
 
@@ -438,7 +438,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   defp resolve_context_window_from_model(state) when is_map(state) do
     model =
       case Map.get(state, :execution_request) do
-        %LemonGateway.ExecutionRequest{meta: meta} when is_map(meta) ->
+        %LemonCore.ExecutionCommand{meta: meta} when is_map(meta) ->
           fetch(meta, :model)
 
         _ ->
@@ -509,7 +509,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     engine =
       extract_completed_engine(event) ||
         case Map.get(state, :execution_request) do
-          %LemonGateway.ExecutionRequest{} = request ->
+          %LemonCore.ExecutionCommand{} = request ->
             request.engine_id
 
           _ ->

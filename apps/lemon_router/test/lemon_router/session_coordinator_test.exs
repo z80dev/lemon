@@ -1,7 +1,7 @@
 defmodule LemonRouter.SessionCoordinatorTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonRouter.{SessionCoordinator, Submission}
 
   defmodule StubRunProcess do
@@ -448,7 +448,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
   end
 
   defp submission(key, run_id, prompt, queue_mode, run_supervisor, overrides \\ []) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,

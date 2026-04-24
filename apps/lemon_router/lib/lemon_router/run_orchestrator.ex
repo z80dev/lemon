@@ -5,7 +5,7 @@ defmodule LemonRouter.RunOrchestrator do
   The orchestrator is responsible for:
   - Normalizing router-facing `RunRequest` input
   - Recording orchestration lifecycle introspection
-  - Building a router-owned `Submission` plus gateway `ExecutionRequest`
+  - Building a router-owned `Submission` plus core `ExecutionCommand`
   - Delegating run-start mechanics to `LemonRouter.RunStarter`
   - Subscribing external event bridges before coordinator handoff
   """

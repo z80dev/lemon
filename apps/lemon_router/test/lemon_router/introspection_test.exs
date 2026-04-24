@@ -7,7 +7,7 @@ defmodule LemonRouter.IntrospectionTest do
   alias LemonCore.Introspection
 
   defp make_test_request(run_id, session_key, engine_id, meta \\ %{}) do
-    %LemonGateway.ExecutionRequest{
+    %LemonCore.ExecutionCommand{
       run_id: run_id,
       session_key: session_key,
       prompt: "test",

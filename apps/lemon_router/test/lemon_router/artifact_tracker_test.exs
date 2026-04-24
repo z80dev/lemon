@@ -193,7 +193,7 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
   end
 
   defp request(cwd) do
-    %LemonGateway.ExecutionRequest{
+    %LemonCore.ExecutionCommand{
       run_id: "run-artifacts",
       session_key: "agent:test:main",
       prompt: "test",

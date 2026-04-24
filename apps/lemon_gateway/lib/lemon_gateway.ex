@@ -8,7 +8,7 @@ defmodule LemonGateway do
 
   ## Usage
 
-      request = %LemonGateway.ExecutionRequest{
+      command = %LemonCore.ExecutionCommand{
         run_id: "run_123",
         prompt: "Fix the failing test",
         engine_id: "lemon",
@@ -16,9 +16,10 @@ defmodule LemonGateway do
         conversation_key: {:session, "telegram:12345"}
       }
 
-      LemonGateway.submit(request)
+      LemonGateway.submit(command)
   """
 
+  alias LemonCore.ExecutionCommand
   alias LemonGateway.ExecutionRequest
 
   @doc """
@@ -27,6 +28,7 @@ defmodule LemonGateway do
   The request is routed through the scheduler, which handles concurrency
   limiting per conversation key.
   """
-  @spec submit(ExecutionRequest.t()) :: :ok
+  @spec submit(ExecutionCommand.t() | ExecutionRequest.t()) :: :ok
+  def submit(%ExecutionCommand{} = command), do: LemonGateway.Runtime.submit_execution(command)
   def submit(%ExecutionRequest{} = request), do: LemonGateway.Runtime.submit_execution(request)
 end

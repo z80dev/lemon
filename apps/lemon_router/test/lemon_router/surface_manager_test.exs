@@ -162,7 +162,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     state = %{
       run_id: "run-fanout",
       session_key: session_key,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-fanout",
         session_key: session_key,
         prompt: "fanout",
@@ -228,7 +228,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     state = %{
       run_id: "run-fallback",
       session_key: session_key,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-fallback",
         session_key: session_key,
         prompt: "fallback",
@@ -271,7 +271,7 @@ defmodule LemonRouter.SurfaceManagerTest do
       run_id: "run-streamed-final",
       session_key: session_key,
       saw_delta: true,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-streamed-final",
         session_key: session_key,
         prompt: "streamed final",
@@ -322,7 +322,7 @@ defmodule LemonRouter.SurfaceManagerTest do
       run_id: "run-streamed-fallback",
       session_key: session_key,
       saw_delta: true,
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-streamed-fallback",
         session_key: session_key,
         prompt: "streamed fallback",
@@ -354,7 +354,7 @@ defmodule LemonRouter.SurfaceManagerTest do
     %{
       run_id: "run-1",
       session_key: SessionKey.main("surface-manager"),
-      execution_request: %LemonGateway.ExecutionRequest{
+      execution_request: %LemonCore.ExecutionCommand{
         run_id: "run-1",
         session_key: SessionKey.main("surface-manager"),
         prompt: "test",
