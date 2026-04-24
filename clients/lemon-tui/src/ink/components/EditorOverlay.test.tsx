@@ -10,6 +10,21 @@ import { EditorOverlay } from './EditorOverlay.js';
 
 function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
 
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const start = Date.now();
+  let lastError: unknown;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await delay(10);
+    }
+  }
+  throw lastError;
+}
+
 function renderOverlay(props: {
   title: string;
   prefill?: string;
@@ -77,14 +92,15 @@ describe('EditorOverlay', () => {
     });
     await delay();
     stdin.write('line1');
-    await delay();
+    await waitFor(() => expect(lastFrame()).toContain('line1'));
     stdin.write('\r'); // Enter inserts newline (not submit)
     await delay();
     stdin.write('line2');
-    await delay();
-    const frame = lastFrame();
-    expect(frame).toContain('line1');
-    expect(frame).toContain('line2');
+    await waitFor(() => {
+      const frame = lastFrame();
+      expect(frame).toContain('line1');
+      expect(frame).toContain('line2');
+    });
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
