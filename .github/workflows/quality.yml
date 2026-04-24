@@ -124,7 +124,7 @@ jobs:
         run: mix compile --warnings-as-errors
 
       - name: Run umbrella tests
-        run: mix test --cover --exclude integration
+        run: mix test --exclude integration
 
   clients:
     runs-on: ubuntu-latest

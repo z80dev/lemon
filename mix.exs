@@ -22,6 +22,34 @@ defmodule Lemon.MixProject do
   # Release configuration for games.zeebot.xyz
   defp releases do
     [
+      lemon_runtime_min: [
+        applications: [
+          lemon_core: :permanent,
+          coding_agent: :permanent,
+          lemon_gateway: :permanent,
+          lemon_router: :permanent,
+          lemon_channels: :permanent,
+          lemon_control_plane: :permanent
+        ],
+        include_executables_for: [:unix],
+        steps: [:assemble, :tar]
+      ],
+      lemon_runtime_full: [
+        applications: [
+          lemon_core: :permanent,
+          coding_agent: :permanent,
+          lemon_gateway: :permanent,
+          lemon_router: :permanent,
+          lemon_channels: :permanent,
+          lemon_control_plane: :permanent,
+          lemon_automation: :permanent,
+          lemon_skills: :permanent,
+          lemon_web: :permanent,
+          lemon_sim_ui: :permanent
+        ],
+        include_executables_for: [:unix],
+        steps: [:assemble, :tar]
+      ],
       sim_broadcast_platform: [
         applications: [
           lemon_core: :permanent,

@@ -10,6 +10,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     assert report.issue_count == 0
   end
 
+  test "ignores app scratch directories" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/coding_agent/tmp/scratch.ex",
+        """
+        defmodule Scratch do
+          LemonRouter.SessionRegistry
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "flags forbidden router outbound payload construction" do
     tmp_dir = tmp_repo!()
 

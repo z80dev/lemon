@@ -17,7 +17,11 @@ defmodule Mix.Tasks.Lemon.SkillTest do
     # Deterministic discovery stubs so discover/search tests do not depend on network.
     HttpMock.stub("https://api.github.com/search/repositories", {:ok, ~s({"items": []})})
     HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
-    HttpMock.stub("https://raw.githubusercontent.com/lemon-agent/skills/main/", {:error, :nxdomain})
+
+    HttpMock.stub(
+      "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+      {:error, :nxdomain}
+    )
 
     previous_home = System.get_env("HOME")
     previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
@@ -78,7 +82,12 @@ defmodule Mix.Tasks.Lemon.SkillTest do
 
   describe "list command" do
     test "lists skills in table format", %{tmp_dir: tmp_dir} do
-      write_skill!(tmp_dir, "list-skill", "---\nname: Listed\ndescription: Listed skill\n---\nbody")
+      write_skill!(
+        tmp_dir,
+        "list-skill",
+        "---\nname: Listed\ndescription: Listed skill\n---\nbody"
+      )
+
       LemonSkills.refresh(cwd: tmp_dir)
 
       output =
@@ -198,6 +207,14 @@ defmodule Mix.Tasks.Lemon.SkillTest do
 
   describe "search command" do
     test "searches local skills", %{tmp_dir: tmp_dir} do
+      write_skill!(
+        tmp_dir,
+        "api-helper",
+        "---\nname: API Helper\ndescription: Build and test API integrations\n---\nbody"
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
       output =
         capture_io(fn ->
           Skill.run(["search", "api", "--no-online", "--cwd=#{tmp_dir}"])

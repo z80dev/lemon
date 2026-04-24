@@ -8,11 +8,13 @@ defmodule CodingAgent.Tools.ProcessTest do
   alias AgentCore.AbortSignal
 
   setup do
-    try do
-      ProcessStore.clear()
-    catch
-      _, _ -> :ok
-    end
+    clear_process_store()
+    Process.sleep(100)
+    clear_process_store()
+
+    on_exit(fn ->
+      clear_process_store()
+    end)
 
     :ok
   end
@@ -655,4 +657,12 @@ defmodule CodingAgent.Tools.ProcessTest do
   end
 
   defp get_text(%AgentToolResult{content: [%{text: text} | _]}), do: text
+
+  defp clear_process_store do
+    try do
+      ProcessStore.clear()
+    catch
+      _, _ -> :ok
+    end
+  end
 end
