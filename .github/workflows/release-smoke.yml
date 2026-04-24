@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      LEMON_STORE_PATH: ${{ runner.temp }}/lemon-store
+      LEMON_STORE_PATH: /tmp/lemon-store
 
     strategy:
       fail-fast: false
