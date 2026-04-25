@@ -1,6 +1,6 @@
 # LemonGateway AGENTS.md
 
-Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, transport ingress that still lives in gateway, and real-time run events on the bus.
+Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, and real-time run events on the bus. Gateway-native transport, SMS, voice, and command startup is transitional legacy ingress and only starts when `:legacy_ingress_enabled` is set for `:lemon_gateway`.
 
 ## Quick Orientation
 
@@ -21,8 +21,8 @@ The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reint
 +-----------------------------------------------------------------------+
 |                  Channel Adapters / Gateway Ingress                    |
 |  Telegram (lemon_channels)  Discord (lemon_channels)  XMTP (lemon_ch) |
-|  Email (SMTP/webhook)  SMS support services  Voice support services   |
-|  Farcaster (Frame)  Webhook (HTTP sync/async)                          |
+|  Email / Farcaster / Webhook / SMS / Voice legacy ingress               |
+|  (explicit `:legacy_ingress_enabled` gateway startup only)              |
 +-------------------------------------+---------------------------------+
                                       |
                 RunRequest via LemonCore.RouterBridge.submit_run/1
@@ -117,12 +117,13 @@ Gateway config comes from the canonical TOML `[gateway]` section only, via `Lemo
 
 | File | Module | Notes |
 |------|--------|-------|
-| `lib/lemon_gateway/application.ex` | `Application` | OTP supervision tree: Config, registries, schedulers, SMS, voice, health server |
+| `lib/lemon_gateway/application.ex` | `Application` | OTP supervision tree: execution runtime by default, optional health server, explicit legacy ingress children |
+| `lib/lemon_gateway/legacy_ingress_supervisor.ex` | `LegacyIngressSupervisor` | Transitional supervisor for gateway-native transport, command, SMS, and voice startup |
 | `lib/lemon_gateway/run_supervisor.ex` | `RunSupervisor` | DynamicSupervisor for Run processes (temporary restart strategy) |
 | `lib/lemon_gateway/thread_registry.ex` | `ThreadRegistry` | Unique-key Registry wrapper for ThreadWorker lookup by thread_key |
 | `lib/lemon_gateway/thread_worker_supervisor.ex` | `ThreadWorkerSupervisor` | DynamicSupervisor for ThreadWorker processes |
-| `lib/lemon_gateway/transport_registry.ex` | `TransportRegistry` | GenServer: transport ID -> module mapping with enable/disable awareness |
-| `lib/lemon_gateway/transport_supervisor.ex` | `TransportSupervisor` | Supervisor starting all enabled transports |
+| `lib/lemon_gateway/transport_registry.ex` | `TransportRegistry` | Legacy ingress GenServer: transport ID -> module mapping with enable/disable awareness |
+| `lib/lemon_gateway/transport_supervisor.ex` | `TransportSupervisor` | Legacy ingress supervisor starting all enabled gateway-native transports |
 
 ### Voice System
 
@@ -405,7 +406,7 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `engine_directive_test.exs` | Directive parsing (`/claude text` -> `{"claude", "text"}`) |
 | `config_loader_test.exs` | TOML config parsing into typed structs |
 | `binding_resolver_test.exs` | Binding resolution for engine, cwd, agent_id |
-| `chat_state_test.exs` | ChatState struct operations |
+| `apps/lemon_core/test/lemon_core/chat_state_test.exs` | ChatState struct operations owned by `lemon_core` |
 | `command_registry_test.exs` | Command registration and validation |
 | `cancel_flow_test.exs` | End-to-end cancel flow |
 
@@ -438,8 +439,8 @@ For Run tests, you need to set up: `EngineRegistry` (or mock it), `EngineLock`, 
 ### Common Test Patterns
 
 ```elixir
-# Create a test execution request
-request = %LemonGateway.ExecutionRequest{
+# Create a test execution command
+command = %LemonCore.ExecutionCommand{
   run_id: LemonCore.Id.run_id(),
   session_key: "test:#{System.unique_integer([:positive])}",
   prompt: "test prompt",
@@ -449,7 +450,7 @@ request = %LemonGateway.ExecutionRequest{
 }
 
 # Submit and wait for completion
-LemonGateway.Runtime.submit_execution(request)
+LemonGateway.Runtime.submit_execution(command)
 assert_receive {:lemon_gateway_run_completed, _job, completed}, 5000
 assert completed.ok == true
 ```
@@ -469,14 +470,14 @@ assert completed.ok == true
 
 | App | How It Uses LemonGateway |
 |-----|-------------------------|
-| `lemon_router` | Subscribes to `LemonCore.Bus` events from Run processes, manages `RunProcess` and `StreamCoalescer` |
+| `lemon_router` | Configures a `LemonCore.EngineRuntime`, submits `LemonCore.ExecutionCommand` values, and tracks bus events through router-owned run/session processes |
 | `lemon_channels` | Subscribes to bus events for channel-specific rendering and delivery |
 | `lemon_control_plane` | May submit jobs or cancel runs via `Runtime` API |
 | `lemon_automation` | Submits jobs for scheduled/cron runs |
 
 ### Key Integration Points
 
-1. **Execution submission**: Prefer `LemonGateway.Runtime.submit_execution(%ExecutionRequest{})` to trigger an AI run.
+1. **Execution submission**: Prefer `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})` to trigger an AI run.
 2. **Completion notification**: Set `meta.notify_pid` to receive `{:lemon_gateway_run_completed, job, completed}` when a run finishes.
 3. **Bus events**: Subscribe to `LemonCore.Bus` topic `"run:<run_id>"` to receive real-time run events.
 4. **Run cancellation**: Call `LemonGateway.Runtime.cancel_by_run_id/2` with the run_id.

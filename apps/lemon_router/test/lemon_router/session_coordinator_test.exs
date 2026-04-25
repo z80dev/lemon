@@ -58,14 +58,27 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
   end
 
-  defmodule SessionCoordinatorGatewayRunStub do
+  defmodule SessionCoordinatorRuntime do
+    def submit_execution(_command), do: :ok
+    def cancel_by_run_id(_run_id, _reason), do: :ok
+    def available?, do: true
+
+    def run_pid(run_id) do
+      case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+        [{pid, _}] -> pid
+        _ -> nil
+      end
+    end
+  end
+
+  defmodule SessionCoordinatorRuntimeRunStub do
     use GenServer
 
     def start_link(opts) do
       GenServer.start_link(
         __MODULE__,
         opts,
-        name: {:via, Registry, {LemonGateway.RunRegistry, opts[:run_id]}}
+        name: {:via, Registry, {LemonRouter.RunRegistry, opts[:run_id]}}
       )
     end
 
@@ -87,8 +100,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
       Registry.start_link(keys: :duplicate, name: LemonRouter.SessionRegistry)
     end)
 
-    start_if_needed(LemonGateway.RunRegistry, fn ->
-      Registry.start_link(keys: :unique, name: LemonGateway.RunRegistry)
+    start_if_needed(LemonRouter.RunRegistry, fn ->
+      Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
     end)
 
     {:ok, run_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
@@ -116,11 +129,14 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     original_bridge_impl = Application.get_env(:lemon_core, :event_bridge_impl)
     original_bridge_test_pid = Application.get_env(:lemon_router, :event_bridge_test_pid)
+    original_engine_runtime = Application.get_env(:lemon_router, :engine_runtime)
     Application.put_env(:lemon_router, :event_bridge_test_pid, self())
+    Application.put_env(:lemon_router, :engine_runtime, SessionCoordinatorRuntime)
     :ok = LemonCore.EventBridge.configure(SessionCoordinatorEventBridgeStub)
 
     on_exit(fn ->
       restore_event_bridge_impl(original_bridge_impl)
+      restore_engine_runtime(original_engine_runtime)
 
       case original_bridge_test_pid do
         nil -> Application.delete_env(:lemon_router, :event_bridge_test_pid)
@@ -393,7 +409,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}, 500
-    gateway_run = start_supervised!({SessionCoordinatorGatewayRunStub, run_id: "run1"})
+    runtime_run = start_supervised!({SessionCoordinatorRuntimeRunStub, run_id: "run1"})
 
     :ok = LemonCore.EventBridge.subscribe_run("run2")
     assert_receive {:bridge_subscribed, "run2"}, 500
@@ -403,7 +419,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:aborted, "run1", :user_requested}, 500
     assert_receive {:bridge_unsubscribed, "run2"}, 500
 
-    GenServer.stop(gateway_run)
+    GenServer.stop(runtime_run)
   end
 
   test "abort_session drops pending steer submissions and unsubscribes them", %{
@@ -414,7 +430,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}, 500
-    gateway_run = start_supervised!({SessionCoordinatorGatewayRunStub, run_id: "run1"})
+    runtime_run = start_supervised!({SessionCoordinatorRuntimeRunStub, run_id: "run1"})
 
     :ok = LemonCore.EventBridge.subscribe_run("run2")
     assert_receive {:bridge_subscribed, "run2"}, 500
@@ -424,7 +440,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:aborted, "run1", :user_requested}, 500
     assert_receive {:bridge_unsubscribed, "run2"}, 500
 
-    GenServer.stop(gateway_run)
+    GenServer.stop(runtime_run)
   end
 
   test "cancel drops pending steer_backlog submissions and unsubscribes them", %{
@@ -434,7 +450,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}, 500
-    gateway_run = start_supervised!({SessionCoordinatorGatewayRunStub, run_id: "run1"})
+    runtime_run = start_supervised!({SessionCoordinatorRuntimeRunStub, run_id: "run1"})
 
     :ok = LemonCore.EventBridge.subscribe_run("run2")
     assert_receive {:bridge_subscribed, "run2"}, 500
@@ -444,7 +460,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:aborted, "run1", :user_requested}, 500
     assert_receive {:bridge_unsubscribed, "run2"}, 500
 
-    GenServer.stop(gateway_run)
+    GenServer.stop(runtime_run)
   end
 
   defp submit(key, run_id, prompt, queue_mode, run_supervisor) do
@@ -527,8 +543,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
     Application.put_env(:lemon_core, :event_bridge_impl, value)
   end
 
+  defp restore_engine_runtime(nil), do: Application.delete_env(:lemon_router, :engine_runtime)
+  defp restore_engine_runtime(value), do: Application.put_env(:lemon_router, :engine_runtime, value)
+
   defp with_stopped_run_registry(fun) when is_function(fun, 0) do
-    registry_pid = Process.whereis(LemonGateway.RunRegistry)
+    registry_pid = Process.whereis(LemonRouter.RunRegistry)
 
     if is_pid(registry_pid) do
       GenServer.stop(registry_pid)
@@ -537,8 +556,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
     try do
       fun.()
     after
-      start_if_needed(LemonGateway.RunRegistry, fn ->
-        Registry.start_link(keys: :unique, name: LemonGateway.RunRegistry)
+      start_if_needed(LemonRouter.RunRegistry, fn ->
+        Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
       end)
     end
   end

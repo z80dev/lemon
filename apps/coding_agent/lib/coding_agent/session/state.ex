@@ -320,6 +320,7 @@ defmodule CodingAgent.Session.State do
       |> maybe_put_async_detail(:task_id, latest)
       |> maybe_put_async_detail(:run_id, latest)
       |> maybe_put_async_detail(:delivery, latest)
+      |> maybe_put_async_detail(:delivery_receipt, latest)
       |> maybe_put_async_detail(:agent_id, latest)
       |> maybe_put_async_detail(:session_key, latest)
 

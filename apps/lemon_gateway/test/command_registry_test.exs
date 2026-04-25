@@ -65,10 +65,13 @@ defmodule LemonGateway.CommandRegistryTest do
       enable_telegram: false
     })
 
+    Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
     Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :transports, [])
 
     on_exit(fn ->
+      Application.stop(:lemon_gateway)
+      Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
       Application.delete_env(:lemon_gateway, :commands)
     end)
 

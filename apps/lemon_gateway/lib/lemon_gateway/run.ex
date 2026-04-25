@@ -30,6 +30,7 @@ defmodule LemonGateway.Run do
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias LemonCore.{
+    ChatState,
     ChatStateStore,
     ProgressStore,
     RunPhase,
@@ -38,7 +39,7 @@ defmodule LemonGateway.Run do
     RunStore
   }
 
-  alias LemonGateway.{ChatState, Cwd, Event, ExecutionRequest}
+  alias LemonGateway.{Cwd, Event, ExecutionRequest}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
 

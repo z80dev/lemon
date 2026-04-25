@@ -9,27 +9,28 @@ defmodule LemonGateway.ApplicationTest do
   and configuration loading.
   """
 
-  # Base children in the supervision tree (in order).
-  # Optional health/voice websocket servers are appended based on config.
   @base_expected_children [
     Elixir.LemonGateway.Config,
     Elixir.LemonGateway.EngineRegistry,
-    Elixir.LemonGateway.TransportRegistry,
-    Elixir.LemonGateway.TransportSupervisor,
-    Elixir.LemonGateway.CommandRegistry,
     Elixir.LemonGateway.EngineLock,
     Elixir.LemonGateway.RunRegistry,
     Elixir.LemonGateway.ThreadRegistry,
+    Elixir.LemonGateway.RunSupervisor,
+    Elixir.LemonGateway.ThreadWorkerSupervisor,
+    Elixir.LemonGateway.TaskSupervisor,
+    Elixir.LemonGateway.Scheduler
+  ]
+
+  @legacy_ingress_children [
+    Elixir.LemonGateway.TransportRegistry,
+    Elixir.LemonGateway.TransportSupervisor,
+    Elixir.LemonGateway.CommandRegistry,
     Elixir.LemonGateway.Sms.Inbox,
     Elixir.LemonGateway.Sms.WebhookServer,
     Elixir.LemonGateway.Voice.CallRegistry,
     Elixir.LemonGateway.Voice.DeepgramRegistry,
     Elixir.LemonGateway.Voice.CallSessionSupervisor,
-    Elixir.LemonGateway.Voice.DeepgramSupervisor,
-    Elixir.LemonGateway.RunSupervisor,
-    Elixir.LemonGateway.ThreadWorkerSupervisor,
-    Elixir.LemonGateway.TaskSupervisor,
-    Elixir.LemonGateway.Scheduler
+    Elixir.LemonGateway.Voice.DeepgramSupervisor
   ]
 
   defmodule MockTelegramTransportApp do
@@ -68,6 +69,7 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
+    Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
     Application.delete_env(:lemon_core, LemonCore.Store)
   end
 
@@ -81,11 +83,14 @@ defmodule LemonGateway.ApplicationTest do
         children
       end
 
-    if LemonGateway.Voice.Config.enabled?() do
-      children ++ [Elixir.LemonGateway.Voice.Server]
-    else
-      children
-    end
+    children =
+      if Application.get_env(:lemon_gateway, :legacy_ingress_enabled, false) do
+        children ++ [Elixir.LemonGateway.LegacyIngressSupervisor]
+      else
+        children
+      end
+
+    children
   end
 
   # ---------------------------------------------------------------------
@@ -236,15 +241,33 @@ defmodule LemonGateway.ApplicationTest do
       assert type == :supervisor
     end
 
-    test "TransportSupervisor is started by default" do
+    test "legacy ingress children are not started by default" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
+      child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      assert Enum.find(children, fn {id, _, _, _} ->
-               id == Elixir.LemonGateway.TransportSupervisor
-             end) !=
-               nil
+      for child <- @legacy_ingress_children do
+        refute child in child_ids
+      end
+    end
+
+    test "legacy ingress children start when explicitly enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
+      child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
+
+      assert Elixir.LemonGateway.LegacyIngressSupervisor in child_ids
+
+      children = Supervisor.which_children(Elixir.LemonGateway.LegacyIngressSupervisor)
+      child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
+
+      for child <- @legacy_ingress_children do
+        assert child in child_ids
+      end
     end
 
     test "ThreadRegistry is a supervisor (Registry)" do
@@ -292,7 +315,9 @@ defmodule LemonGateway.ApplicationTest do
       assert is_list(engines)
     end
 
-    test "TransportRegistry is available after startup" do
+    test "TransportRegistry is available when legacy ingress is enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert is_pid(Process.whereis(Elixir.LemonGateway.TransportRegistry))
@@ -300,7 +325,9 @@ defmodule LemonGateway.ApplicationTest do
       assert is_list(transports)
     end
 
-    test "CommandRegistry is available after startup" do
+    test "CommandRegistry is available when legacy ingress is enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert is_pid(Process.whereis(Elixir.LemonGateway.CommandRegistry))
@@ -491,6 +518,8 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo",
@@ -541,6 +570,8 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "empty commands list is handled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo",
@@ -816,6 +847,8 @@ defmodule LemonGateway.ApplicationTest do
         def handle(_args, _job, _meta), do: {:ok, "help"}
       end
 
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo",
@@ -915,7 +948,9 @@ defmodule LemonGateway.ApplicationTest do
       assert is_list(engines)
     end
 
-    test "TransportRegistry process is registered and responding" do
+    test "TransportRegistry process is registered and responding when legacy ingress is enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       pid = Process.whereis(Elixir.LemonGateway.TransportRegistry)
@@ -926,7 +961,9 @@ defmodule LemonGateway.ApplicationTest do
       assert is_list(transports)
     end
 
-    test "CommandRegistry process is registered and responding" do
+    test "CommandRegistry process is registered and responding when legacy ingress is enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       pid = Process.whereis(Elixir.LemonGateway.CommandRegistry)
@@ -996,7 +1033,15 @@ defmodule LemonGateway.ApplicationTest do
       assert result == nil
     end
 
-    test "TransportSupervisor is registered by default" do
+    test "TransportSupervisor is not registered by default" do
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert Process.whereis(Elixir.LemonGateway.TransportSupervisor) == nil
+    end
+
+    test "TransportSupervisor is registered when legacy ingress is enabled" do
+      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       pid = Process.whereis(Elixir.LemonGateway.TransportSupervisor)

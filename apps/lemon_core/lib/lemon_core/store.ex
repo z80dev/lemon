@@ -15,7 +15,7 @@ defmodule LemonCore.Store do
 
   use GenServer
 
-  alias LemonCore.MapHelpers
+  alias LemonCore.{ChatState, MapHelpers}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
   require Logger
@@ -43,14 +43,14 @@ defmodule LemonCore.Store do
 
   # Chat State API
 
-  @spec put_chat_state(term(), map()) :: :ok
+  @spec put_chat_state(term(), ChatState.t() | map()) :: :ok
   def put_chat_state(scope, state) do
     # Eagerly update read cache before async GenServer cast for consistency
     ReadCache.put(:chat, scope, state)
     GenServer.cast(__MODULE__, {:put_chat_state, scope, state})
   end
 
-  @spec get_chat_state(term()) :: map() | nil
+  @spec get_chat_state(term()) :: ChatState.t() | map() | nil
   def get_chat_state(scope) do
     # Fast path: read from ETS cache, bypassing GenServer mailbox
     case ReadCache.get(:chat, scope) do

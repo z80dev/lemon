@@ -33,14 +33,27 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     end
   end
 
-  defmodule RunPhaseSequenceGatewayRunStub do
+  defmodule RunPhaseSequenceRuntime do
+    def submit_execution(_command), do: :ok
+    def cancel_by_run_id(_run_id, _reason), do: :ok
+    def available?, do: true
+
+    def run_pid(run_id) do
+      case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+        [{pid, _}] -> pid
+        _ -> nil
+      end
+    end
+  end
+
+  defmodule RunPhaseSequenceRuntimeRunStub do
     use GenServer
 
     def start_link(opts) do
       GenServer.start_link(
         __MODULE__,
         opts,
-        name: {:via, Registry, {LemonGateway.RunRegistry, opts[:run_id]}}
+        name: {:via, Registry, {LemonRouter.RunRegistry, opts[:run_id]}}
       )
     end
 
@@ -66,8 +79,8 @@ defmodule LemonRouter.RunPhaseSequenceTest do
       Registry.start_link(keys: :duplicate, name: LemonRouter.SessionRegistry)
     end)
 
-    start_if_needed(LemonGateway.RunRegistry, fn ->
-      Registry.start_link(keys: :unique, name: LemonGateway.RunRegistry)
+    start_if_needed(LemonRouter.RunRegistry, fn ->
+      Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
     end)
 
     {:ok, run_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
@@ -83,7 +96,12 @@ defmodule LemonRouter.RunPhaseSequenceTest do
 
     Process.register(coord_supervisor, LemonRouter.SessionCoordinatorSupervisor)
 
+    original_engine_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    Application.put_env(:lemon_router, :engine_runtime, RunPhaseSequenceRuntime)
+
     on_exit(fn ->
+      restore_engine_runtime(original_engine_runtime)
+
       if is_pid(Process.whereis(LemonRouter.SessionCoordinatorSupervisor)) do
         safe_unregister(LemonRouter.SessionCoordinatorSupervisor)
       end
@@ -149,7 +167,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     assert_receive {:started, ^run_id_1, _opts}, 500
 
     {:ok, gateway_run} =
-      start_supervised({RunPhaseSequenceGatewayRunStub, test_pid: self(), run_id: run_id_1})
+      start_supervised({RunPhaseSequenceRuntimeRunStub, test_pid: self(), run_id: run_id_1})
 
     :ok = submit(key, run_id_2, "two", :steer, run_supervisor)
 
@@ -261,4 +279,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
   rescue
     ArgumentError -> :ok
   end
+
+  defp restore_engine_runtime(nil), do: Application.delete_env(:lemon_router, :engine_runtime)
+  defp restore_engine_runtime(value), do: Application.put_env(:lemon_router, :engine_runtime, value)
 end

@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.Task.Projection do
   """
 
   alias AgentCore.Types.AgentToolResult
+  alias LemonCore.Event
 
   @terminal_event_types [
     :run_completed,
@@ -32,6 +33,22 @@ defmodule CodingAgent.Tools.Task.Projection do
         lifecycle_context
       )
       when is_map(details) and is_map(lifecycle_context) do
+    with {:ok, %Event{payload: payload}} <-
+           engine_action_event_from_update(%AgentToolResult{details: details}, lifecycle_context) do
+      {:ok, payload}
+    end
+  end
+
+  def engine_action_from_update(_, _), do: :error
+
+  @doc """
+  Build a canonical `:engine_action` event from an `AgentToolResult` update.
+  """
+  def engine_action_event_from_update(
+        %AgentToolResult{details: details},
+        lifecycle_context
+      )
+      when is_map(details) and is_map(lifecycle_context) do
     run_id = lifecycle_context[:run_id]
 
     if not is_binary(run_id) or run_id == "" do
@@ -43,38 +60,26 @@ defmodule CodingAgent.Tools.Task.Projection do
 
       case normalize_current_action(current_action) do
         %{title: title, kind: kind, phase: phase} ->
-          {:ok,
-           %{
-             engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
-             phase: normalize_phase(phase),
-             ok: normalize_ok(phase),
-             message: nil,
-             level: nil,
-             action: %{
-               id: stable_child_action_id(run_id, kind, title),
-               kind: normalize_kind(kind),
-               title: title,
-               detail: action_detail
-             }
-           }}
+          payload = %{
+            engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
+            phase: normalize_phase(phase),
+            ok: normalize_ok(phase),
+            message: nil,
+            level: nil,
+            action: %{
+              id: stable_child_action_id(run_id, kind, title),
+              kind: normalize_kind(kind),
+              title: title,
+              detail: action_detail
+            }
+          }
+
+          {:ok, Event.engine_action(payload, event_meta(lifecycle_context))}
 
         nil ->
           case normalize_reasoning(reasoning) do
             %{text: text, source: source, phase: phase} ->
-              {:ok,
-               %{
-                 engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
-                 phase: normalize_phase(phase),
-                 ok: normalize_ok(phase),
-                 message: nil,
-                 level: nil,
-                 action: %{
-                   id: stable_child_action_id(run_id, "reasoning", text),
-                   kind: "reasoning",
-                   title: text,
-                   detail: %{reasoning: %{text: text, source: source, phase: phase}}
-                 }
-               }}
+              build_reasoning_event(details, lifecycle_context, text, source, phase)
 
             nil ->
               :error
@@ -83,7 +88,7 @@ defmodule CodingAgent.Tools.Task.Projection do
     end
   end
 
-  def engine_action_from_update(_, _), do: :error
+  def engine_action_event_from_update(_, _), do: :error
 
   @doc """
   Project a child-run engine_action payload into a parent-owned task surface payload.
@@ -165,6 +170,38 @@ defmodule CodingAgent.Tools.Task.Projection do
   defp normalize_kind(kind) when is_binary(kind), do: kind
   defp normalize_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
   defp normalize_kind(_), do: "tool"
+
+  defp build_reasoning_event(details, lifecycle_context, text, source, phase) do
+    session_key = lifecycle_context[:session_key]
+    run_id = lifecycle_context[:run_id]
+
+    if is_binary(session_key) and session_key != "" do
+      attrs =
+        event_meta(lifecycle_context)
+        |> Map.merge(%{
+          engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
+          text: text,
+          source: source,
+          phase: phase,
+          visibility: :operator,
+          action_id: stable_child_action_id(run_id, "reasoning", text)
+        })
+
+      {:ok, Event.engine_reasoning(attrs)}
+    else
+      :error
+    end
+  end
+
+  defp event_meta(lifecycle_context) do
+    %{
+      run_id: lifecycle_context[:run_id],
+      parent_run_id: lifecycle_context[:parent_run_id],
+      session_key: lifecycle_context[:session_key],
+      agent_id: lifecycle_context[:agent_id],
+      task_id: lifecycle_context[:task_id]
+    }
+  end
 
   defp stable_child_action_id(run_id, kind, title)
        when is_binary(run_id) and is_binary(kind) and is_binary(title) do

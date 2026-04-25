@@ -1,22 +1,10 @@
-defmodule LemonGateway.ChatStateTest do
+defmodule LemonCore.ChatStateTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ChatState
+  alias LemonCore.ChatState
   alias LemonCore.{ChatScope, Store}
 
   setup do
-    # Stop the app to reset state
-    _ = Application.stop(:lemon_gateway)
-
-    # Clean up any existing config
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
-    Application.delete_env(:lemon_gateway, :config_path)
-
-    on_exit(fn ->
-      Application.delete_env(:lemon_gateway, LemonGateway.Config)
-      Application.delete_env(:lemon_gateway, :config_path)
-    end)
-
     :ok
   end
 
@@ -483,7 +471,7 @@ defmodule LemonGateway.ChatStateTest do
       # compiles and runs the code at runtime.
       assert_raise KeyError, fn ->
         Code.eval_string("""
-        alias LemonGateway.ChatState
+        alias LemonCore.ChatState
         %ChatState{invalid_key: "value"}
         """)
       end
@@ -543,9 +531,6 @@ defmodule LemonGateway.ChatStateTest do
 
   describe "Store ChatState round-trip" do
     test "stores and retrieves ChatState" do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       scope = %ChatScope{transport: :telegram, chat_id: 12345}
 
       original = %ChatState{
@@ -578,18 +563,12 @@ defmodule LemonGateway.ChatStateTest do
     end
 
     test "returns nil for missing chat state" do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       scope = %ChatScope{transport: :telegram, chat_id: 99999}
 
       assert Store.get_chat_state(scope) == nil
     end
 
     test "overwrites existing chat state" do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       scope = %ChatScope{transport: :telegram, chat_id: 12345}
 
       first = %ChatState{last_engine: "first", last_resume_token: "token1", updated_at: 1000}
@@ -614,9 +593,6 @@ defmodule LemonGateway.ChatStateTest do
     end
 
     test "different scopes have separate chat states" do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       scope1 = %ChatScope{transport: :telegram, chat_id: 11111}
       scope2 = %ChatScope{transport: :telegram, chat_id: 22222}
 

@@ -2,8 +2,11 @@ defmodule LemonGateway.Application do
   @moduledoc """
   OTP application for LemonGateway.
 
-  Starts the supervision tree including configuration, registries, schedulers,
-  transport supervisors, and the health check server.
+  Starts the execution supervision tree: configuration, engine registries,
+  schedulers, run supervisors, and the health check server.
+
+  Legacy gateway ingress is transitional and only starts when
+  `:legacy_ingress_enabled` is set for `:lemon_gateway`.
   """
 
   use Application
@@ -14,20 +17,9 @@ defmodule LemonGateway.Application do
       [
         LemonGateway.Config,
         LemonGateway.EngineRegistry,
-        LemonGateway.TransportRegistry,
-        LemonGateway.TransportSupervisor,
-        LemonGateway.CommandRegistry,
         LemonGateway.EngineLock,
         {Registry, keys: :unique, name: LemonGateway.RunRegistry},
         LemonGateway.ThreadRegistry,
-        LemonGateway.Sms.Inbox,
-        LemonGateway.Sms.WebhookServer,
-        # Voice call infrastructure
-        {Registry, keys: :unique, name: LemonGateway.Voice.CallRegistry},
-        {Registry, keys: :unique, name: LemonGateway.Voice.DeepgramRegistry},
-        {DynamicSupervisor,
-         name: LemonGateway.Voice.CallSessionSupervisor, strategy: :one_for_one},
-        {DynamicSupervisor, name: LemonGateway.Voice.DeepgramSupervisor, strategy: :one_for_one},
         LemonGateway.RunSupervisor,
         LemonGateway.ThreadWorkerSupervisor,
         {Task.Supervisor, name: LemonGateway.TaskSupervisor},
@@ -35,7 +27,7 @@ defmodule LemonGateway.Application do
         # lemon_channels is started explicitly by the top-level runtime app (or by
         # starting :lemon_control_plane / lemon_channels directly). LemonGateway
         # does not attempt to orchestrate startup of sibling applications.
-      ] ++ maybe_health_server_child() ++ maybe_voice_server_child()
+      ] ++ maybe_health_server_child() ++ maybe_legacy_ingress_children()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -68,45 +60,23 @@ defmodule LemonGateway.Application do
     Application.get_env(:lemon_gateway, :health_enabled, true)
   end
 
+  defp maybe_legacy_ingress_children do
+    if legacy_ingress_enabled?() do
+      [LemonGateway.LegacyIngressSupervisor]
+    else
+      []
+    end
+  end
+
+  defp legacy_ingress_enabled? do
+    Application.get_env(:lemon_gateway, :legacy_ingress_enabled, false)
+  end
+
   defp default_health_port do
     if Code.ensure_loaded?(Mix) and Mix.env() == :test do
       0
     else
       4042
     end
-  end
-
-  defp maybe_voice_server_child do
-    if voice_enabled?() do
-      [voice_server_child_spec()]
-    else
-      []
-    end
-  end
-
-  defp voice_server_child_spec do
-    port = LemonGateway.Voice.Config.websocket_port() |> maybe_test_voice_port()
-
-    %{
-      id: LemonGateway.Voice.Server,
-      start:
-        {Bandit, :start_link,
-         [[plug: LemonGateway.Voice.WebhookRouter, port: port, scheme: :http]]},
-      type: :supervisor
-    }
-  end
-
-  defp voice_enabled? do
-    LemonGateway.Voice.Config.enabled?()
-  end
-
-  defp maybe_test_voice_port(4047) do
-    if test_env?(), do: 0, else: 4047
-  end
-
-  defp maybe_test_voice_port(port), do: port
-
-  defp test_env? do
-    Code.ensure_loaded?(Mix) and Mix.env() == :test
   end
 end

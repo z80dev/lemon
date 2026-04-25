@@ -2,7 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   @moduledoc false
 
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
-  alias LemonCore.{ChatScope, ChatStateStore, ResumeToken, SessionKey}
+  alias LemonCore.{ChatScope, ChatState, ChatStateStore, ResumeToken, SessionKey}
 
   @spec safe_delete_chat_state(term()) :: :ok
   def safe_delete_chat_state(key) do
@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
     _ -> :ok
   end
 
-  @spec safe_get_chat_state(term()) :: map() | nil
+  @spec safe_get_chat_state(term()) :: ChatState.t() | map() | nil
   def safe_get_chat_state(key) do
     ChatStateStore.get(key)
   rescue
@@ -151,13 +151,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   @spec last_engine_hint(term()) :: binary() | nil
   def last_engine_hint(session_key) when is_binary(session_key) do
     state = safe_get_chat_state(session_key)
-    engine = state && (state[:last_engine] || state["last_engine"] || state.last_engine)
+    engine = state && chat_state_value(state, :last_engine)
     if is_binary(engine) and engine != "", do: engine, else: nil
   rescue
     _ -> nil
   end
 
   def last_engine_hint(_), do: nil
+
+  defp chat_state_value(%{} = state, key), do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
+  defp chat_state_value(_state, _key), do: nil
 
   @spec state_account_id_from_session_key(term()) :: binary()
   def state_account_id_from_session_key(session_key) when is_binary(session_key) do

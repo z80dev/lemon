@@ -26,7 +26,7 @@ defmodule LemonRouter.ResumeResolver do
 
   defp resolve_auto_resume(session_key, selected_engine_id) when is_binary(session_key) do
     case LemonCore.ChatStateStore.get(session_key) do
-      %LemonGateway.ChatState{last_engine: engine, last_resume_token: token}
+      %LemonCore.ChatState{last_engine: engine, last_resume_token: token}
       when is_binary(engine) and is_binary(token) ->
         apply_auto_resume_if_compatible(engine, token, selected_engine_id)
 

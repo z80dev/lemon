@@ -205,13 +205,56 @@ defmodule LemonRouter.SessionTransitionsTest do
                run_id: "run-a",
                delivery: :steer,
                delivery_receipt: %{
-                 mode: :steer,
+                 requested_mode: :followup,
+                 actual_mode: :steer,
                  status: :dispatched_to_active,
                  fallback_mode: :followup,
-                 active_run_id: "run1"
+                 active_run_id: "run1",
+                 decided_at_ms: decided_at_ms
                }
              }
            ] = dispatched.meta["async_followups"]
+
+    assert is_integer(decided_at_ms)
+  end
+
+  test "queued async followups stamp requested and actual delivery receipt" do
+    state = SessionState.new(conversation_key: {:session, "s1"})
+
+    followup =
+      submission("run1", "s1", :followup, "task done",
+        meta: %{
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :followup}
+          ]
+        },
+        request_meta: %{
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :followup}
+          ]
+        }
+      )
+
+    assert {:ok, next_state, [:maybe_start_next]} =
+             SessionTransitions.submit(state, followup, 100)
+
+    assert [queued] = next_state.queue
+
+    assert [
+             %{
+               delivery: :followup,
+               delivery_receipt: %{
+                 requested_mode: :followup,
+                 actual_mode: :followup,
+                 status: :queued,
+                 decided_at_ms: decided_at_ms
+               }
+             }
+           ] = queued.meta["async_followups"]
+
+    assert is_integer(decided_at_ms)
+    refute Map.has_key?(hd(queued.meta["async_followups"]).delivery_receipt, :mode)
+    assert queued.execution_request.meta["async_followups"] == queued.meta["async_followups"]
   end
 
   test "rejected steer fallback requeues and only requests start when resulting state is idle" do
@@ -505,16 +548,68 @@ defmodule LemonRouter.SessionTransitionsTest do
              %{
                delivery: :steer,
                delivery_receipt: %{
-                 mode: :steer,
+                 requested_mode: :followup,
+                 actual_mode: :steer,
                  status: :dispatched_to_active,
                  fallback_mode: :followup,
-                 active_run_id: "active-run"
+                 active_run_id: "active-run",
+                 decided_at_ms: decided_at_ms
                }
              }
            ] = dispatched.meta["async_followups"]
 
+    assert is_integer(decided_at_ms)
+
     assert dispatched.execution_request.meta["async_followups"] ==
              dispatched.meta["async_followups"]
+  end
+
+  test "fallback queued async followups preserve requested delivery and stamp fallback status" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active-run", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    steer =
+      submission("run2", "s1", :steer, "task done",
+        meta: %{
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :steer}
+          ]
+        },
+        request_meta: %{
+          "async_followups" => [
+            %{source: :task, task_id: "task-a", run_id: "child-run", delivery: :steer}
+          ]
+        }
+      )
+
+    assert {:ok, pending_state, _effects} = SessionTransitions.submit(state, steer, 100)
+
+    assert {:ok, next_state, []} =
+             SessionTransitions.dispatch_steer_failed(pending_state, "run2", 200)
+
+    assert [queued] = next_state.queue
+
+    assert [
+             %{
+               delivery: :followup,
+               delivery_receipt: %{
+                 requested_mode: :steer,
+                 actual_mode: :followup,
+                 status: :fallback_queued,
+                 fallback_mode: :followup,
+                 active_run_id: "active-run",
+                 decided_at_ms: decided_at_ms
+               }
+             }
+           ] = queued.meta["async_followups"]
+
+    assert is_integer(decided_at_ms)
+    assert queued.execution_request.meta["async_followups"] == queued.meta["async_followups"]
   end
 
   defp merge_followups(previous, current) do

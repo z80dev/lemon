@@ -110,6 +110,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 |--------|---------|
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct (type, ts_ms, payload, meta) |
+| `LemonCore.ChatState` | Sticky execution state for auto-resume across router/gateway/channel boundaries |
 | `LemonCore.EventBridge` | Cross-app event translation |
 
 ### Routing and Sessions

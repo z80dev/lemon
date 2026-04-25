@@ -6,6 +6,8 @@ defmodule LemonGateway.Sms.InboxTest do
   @table :sms_inbox
 
   setup do
+    _ = Application.stop(:lemon_gateway)
+    Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     # Ensure a deterministic inbox number for default matching.
@@ -18,6 +20,9 @@ defmodule LemonGateway.Sms.InboxTest do
     end
 
     on_exit(fn ->
+      Application.stop(:lemon_gateway)
+      Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
+
       if is_nil(prev) do
         System.delete_env("TWILIO_INBOX_NUMBER")
       else

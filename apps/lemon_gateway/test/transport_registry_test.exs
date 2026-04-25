@@ -157,7 +157,7 @@ defmodule LemonGateway.TransportRegistryTest do
   end
 
   defp restart_registry do
-    supervisor = Elixir.LemonGateway.Supervisor
+    supervisor = Elixir.LemonGateway.LegacyIngressSupervisor
 
     case Supervisor.terminate_child(supervisor, TransportRegistry) do
       :ok -> :ok
@@ -184,6 +184,8 @@ defmodule LemonGateway.TransportRegistryTest do
   end
 
   setup do
+    _ = Application.stop(:lemon_gateway)
+
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
       default_engine: "echo",
@@ -194,11 +196,14 @@ defmodule LemonGateway.TransportRegistryTest do
     Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :commands, [])
     Application.put_env(:lemon_gateway, :transports, [])
+    Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = restart_config_and_registry()
 
     on_exit(fn ->
+      Application.stop(:lemon_gateway)
+      Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
       Application.delete_env(:lemon_gateway, :transports)
     end)
 

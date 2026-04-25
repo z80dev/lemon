@@ -80,6 +80,33 @@ defmodule LemonCore.StoreTest do
       assert %{phase: :active} = Store.get_chat_state(chat_scope)
     end
 
+    test "put_chat_state preserves core chat state structs while adding expiry" do
+      token = unique_token()
+      chat_scope = scope(token, :ttl_struct)
+      ttl_ms = :sys.get_state(Store).chat_state_ttl_ms
+
+      before_put = System.system_time(:millisecond)
+
+      :ok =
+        Store.put_chat_state(chat_scope, %LemonCore.ChatState{
+          last_engine: "codex",
+          last_resume_token: "thread-1"
+        })
+
+      stored = Store.get(:chat, chat_scope)
+      after_put = System.system_time(:millisecond)
+
+      assert %LemonCore.ChatState{
+               last_engine: "codex",
+               last_resume_token: "thread-1",
+               expires_at: expires_at
+             } = stored
+
+      assert expires_at >= before_put + ttl_ms
+      assert expires_at <= after_put + ttl_ms
+      assert %LemonCore.ChatState{last_engine: "codex"} = Store.get_chat_state(chat_scope)
+    end
+
     test "get_chat_state lazily evicts expired state" do
       token = unique_token()
       chat_scope = scope(token, :lazy_expiry)

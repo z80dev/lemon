@@ -134,16 +134,6 @@ defmodule LemonRouter.RunOrchestratorTest do
   setup do
     ensure_pubsub()
 
-    {engine_registry_started_here?, engine_pid} =
-      case Process.whereis(LemonGateway.EngineRegistry) do
-        nil ->
-          {:ok, started_pid} = LemonGateway.EngineRegistry.start_link([])
-          {true, started_pid}
-
-        existing_pid ->
-          {false, existing_pid}
-      end
-
     original_bridge_impl = Application.get_env(:lemon_core, :event_bridge_impl)
     original_bridge_test_pid = Application.get_env(:lemon_router, :event_bridge_test_pid)
     Application.put_env(:lemon_router, :event_bridge_test_pid, self())
@@ -172,9 +162,6 @@ defmodule LemonRouter.RunOrchestratorTest do
             bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
           end
 
-          if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
-            GenServer.stop(engine_pid)
-          end
         end)
 
         {:ok, orchestrator_pid: pid}
@@ -196,9 +183,6 @@ defmodule LemonRouter.RunOrchestratorTest do
             bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
           end
 
-          if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
-            GenServer.stop(engine_pid)
-          end
         end)
 
         {:ok, orchestrator_pid: pid}

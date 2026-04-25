@@ -401,11 +401,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   def switching_session?(nil, %ResumeToken{}), do: true
 
   def switching_session?(%{} = chat_state, %ResumeToken{} = resume) do
-    last_engine = chat_state[:last_engine] || chat_state["last_engine"] || chat_state.last_engine
-
-    last_token =
-      chat_state[:last_resume_token] || chat_state["last_resume_token"] ||
-        chat_state.last_resume_token
+    last_engine = chat_state_value(chat_state, :last_engine)
+    last_token = chat_state_value(chat_state, :last_resume_token)
 
     last_engine != resume.engine or last_token != resume.value
   rescue
@@ -413,6 +410,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   end
 
   def switching_session?(_chat_state, _resume), do: true
+
+  defp chat_state_value(%{} = state, key), do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
+  defp chat_state_value(_state, _key), do: nil
 
   @spec maybe_prefix_resume_to_prompt(map(), ResumeToken.t()) :: map()
   def maybe_prefix_resume_to_prompt(inbound, %ResumeToken{} = resume) do

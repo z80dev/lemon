@@ -19,7 +19,7 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | `lemon_core` | *(none)* |
 | `lemon_gateway` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core` |
 | `lemon_mcp` | `agent_core`, `coding_agent` |
-| `lemon_router` | `agent_core`, `ai`, `coding_agent`, `lemon_channels`, `lemon_core`, `lemon_gateway` |
+| `lemon_router` | `agent_core`, `ai`, `coding_agent`, `lemon_channels`, `lemon_core` |
 | `lemon_services` | *(none)* |
 | `lemon_sim` | `agent_core`, `ai`, `lemon_ai_runtime`, `lemon_core` |
 | `lemon_sim_ui` | `ai`, `lemon_core`, `lemon_sim` |
@@ -41,6 +41,7 @@ The architecture checker enforces both:
 - namespace references in `apps/*/lib/**/*.ex` (forbidden cross-app module usage)
 
 It fails if any app introduces either an out-of-policy direct dependency or an out-of-policy cross-app namespace reference.
+It also reports non-failing target-policy drift for transitional dependencies that should be removed by the active review remediation milestones.
 
 ## Runtime Ownership Rules
 
@@ -48,7 +49,7 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 
 - `lemon_router` may emit semantic `LemonCore.DeliveryIntent` values, but it may not construct `LemonChannels.OutboundPayload` values or reference Telegram renderer helpers directly.
 - `lemon_channels` owns channel rendering and presentation state. It must not mutate inbound prompts for pending-compaction behavior.
-- `lemon_gateway` owns execution slots and engine lifecycle. Router-owned queue semantics, chat-state readback for auto-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved `LemonCore.ExecutionCommand` values to the configured `LemonCore.EngineRuntime`; `LemonGateway.ExecutionRequest` is gateway-private adapter state, and `LemonGateway.Runtime.submit/1` must not be reintroduced as a legacy compatibility path.
+- `lemon_gateway` owns execution slots and engine lifecycle. Router-owned queue semantics, chat-state readback for auto-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved `LemonCore.ExecutionCommand` values to the configured `LemonCore.EngineRuntime`; `LemonGateway.ExecutionRequest` is gateway-private adapter state, and `LemonGateway.Runtime.submit/1` must not be reintroduced as a legacy compatibility path. Default gateway startup is execution-only; gateway-native transport, command, SMS, and voice children are transitional legacy ingress and require explicit `:legacy_ingress_enabled` configuration.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` or `LemonRouter.SessionReadModel` directly.
 - Router and channels should validate engine IDs through `LemonCore.EngineCatalog`. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.

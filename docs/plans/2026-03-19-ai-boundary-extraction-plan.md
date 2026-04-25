@@ -1,8 +1,8 @@
 # AI Boundary Extraction Plan
 
-Status: in-progress
+Status: boundary extraction complete; repo extraction still optional/future
 
-Last reviewed: 2025-07-14
+Last reviewed: 2026-04-24
 
 ## Summary
 
@@ -16,13 +16,14 @@ The key decision is to invert the current boundary first:
 - `Ai` becomes a generic LLM library responsible only for model metadata,
   request construction, streaming, parsing, and provider-specific protocol logic
 
-Extraction into a separate repo should happen only after `apps/ai` no longer
-depends on `lemon_core` and external callers no longer depend on `Ai.Auth.*`
-for Lemon-owned secret resolution.
+`apps/ai` no longer depends on `lemon_core`; Lemon-owned auth/config/storage
+resolution now lives in `apps/lemon_ai_runtime`. Extraction into a separate repo
+should happen only after confirming external callers no longer depend on
+storage-backed `Ai.Auth.*` behavior.
 
 ## Problem Statement
 
-`apps/ai` is currently two things at once:
+Before the boundary extraction, `apps/ai` was two things at once:
 
 1. a reusable LLM abstraction layer
 2. a Lemon-integrated runtime adapter
@@ -30,7 +31,7 @@ for Lemon-owned secret resolution.
 The reusable part is valuable on its own. The Lemon-integrated part is what
 currently blocks extraction.
 
-Today, `apps/ai` still depends on Lemon for:
+Those Lemon-owned concerns have moved out of `apps/ai`:
 
 - secret lookup and persistence
 - canonical provider config resolution
@@ -38,7 +39,7 @@ Today, `apps/ai` still depends on Lemon for:
 - telemetry sink wiring
 - local OAuth callback handling
 
-This means extracting `ai` directly would either:
+Before that move, extracting `ai` directly would have either:
 
 - drag Lemon runtime concepts into a new repo, or
 - break existing callers that rely on Lemon-owned secret and OAuth behavior
@@ -117,6 +118,11 @@ No Lemon secret names, no config refs, and no storage handles should cross into
 `Ai`.
 
 ## Current Coupling Inventory
+
+As of 2026-04-24, `apps/ai/lib` has no `LemonCore.*`,
+`LemonCore.Secrets`, `LemonCore.ProviderConfigResolver`, or
+`LemonCore.Onboarding` references. The old violation inventory below is kept as
+historical context for the migration.
 
 The main categories of current coupling are:
 
@@ -265,9 +271,9 @@ This should be additive first, not a breaking change.
 names, and auth resolvers for all 5 OAuth providers. Already used by
 `coding_agent`, `lemon_sim`, `lemon_channels`.
 
-### Phase 3: Remove `LemonCore.*` calls from `apps/ai` ← NEXT
+### Phase 3: Remove `LemonCore.*` calls from `apps/ai` ✅
 
-This is the core remaining work. Current violations (as of 2025-07-14):
+This was the core remaining work. Historical violations (as of 2025-07-14):
 
 **`LemonCore.Secrets`** (6 providers + `Ai.Models` + 5 auth modules):
 - `Ai.Providers.Anthropic`

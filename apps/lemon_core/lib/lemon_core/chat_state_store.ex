@@ -3,12 +3,13 @@ defmodule LemonCore.ChatStateStore do
   Typed wrapper for chat-state persistence.
   """
 
+  alias LemonCore.ChatState
   alias LemonCore.Store
 
-  @spec get(term()) :: term()
+  @spec get(term()) :: ChatState.t() | map() | nil
   def get(scope), do: Store.get_chat_state(scope)
 
-  @spec put(term(), term()) :: :ok | {:error, term()}
+  @spec put(term(), ChatState.t() | map()) :: :ok | {:error, term()}
   def put(scope, state), do: Store.put_chat_state(scope, state)
 
   @spec delete(term()) :: :ok | {:error, term()}

@@ -2482,7 +2482,7 @@ defmodule LemonGateway.RunTest do
     test "context overflow clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      LemonCore.Store.put_chat_state(scope, %LemonCore.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2525,7 +2525,7 @@ defmodule LemonGateway.RunTest do
     test "Chinese context overflow marker clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      LemonCore.Store.put_chat_state(scope, %LemonCore.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)

@@ -11,12 +11,11 @@ defmodule LemonRouter.SessionTransitions do
   @spec submit(SessionState.t(), Submission.t(), integer()) ::
           {:ok, SessionState.t(), [QueueEffect.t()]}
   def submit(%SessionState{} = state, %Submission{} = submission, now_ms) do
-    submission =
-      submission
-      |> normalize_queue_mode()
-      |> maybe_promote_auto_followup(state)
+    submission = normalize_queue_mode(submission)
+    requested_mode = submission.queue_mode
+    submission = maybe_promote_auto_followup(submission, state)
 
-    {state, effects} = enqueue_by_mode(state, submission, now_ms)
+    {state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
     effects = maybe_request_start_next(state, effects)
 
     {:ok, state, effects}
@@ -129,13 +128,23 @@ defmodule LemonRouter.SessionTransitions do
     steer_rejected(state, submission_run_id, now_ms)
   end
 
-  defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :collect} = submission, _now_ms) do
-    submission = stamp_router_delivery(submission, :collect, :queued)
+  defp enqueue_by_mode(
+         %SessionState{} = state,
+         %{queue_mode: :collect} = submission,
+         _now_ms,
+         requested_mode
+       ) do
+    submission = stamp_router_delivery(submission, requested_mode, :collect, :queued)
     {%SessionState{state | queue: state.queue ++ [submission]}, []}
   end
 
-  defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :followup} = submission, now_ms) do
-    submission = stamp_router_delivery(submission, :followup, :queued)
+  defp enqueue_by_mode(
+         %SessionState{} = state,
+         %{queue_mode: :followup} = submission,
+         now_ms,
+         requested_mode
+       ) do
+    submission = stamp_router_delivery(submission, requested_mode, :followup, :queued)
 
     case maybe_merge_followup(state.queue, submission, state.last_followup_at_ms, now_ms) do
       {:merged, queue} ->
@@ -150,7 +159,8 @@ defmodule LemonRouter.SessionTransitions do
   defp enqueue_by_mode(
          %SessionState{active: %{run_id: active_run_id}} = state,
          submission,
-         _now_ms
+         _now_ms,
+         requested_mode
        )
        when submission.queue_mode in [:steer, :steer_backlog] and is_binary(active_run_id) do
     {fallback_mode, steer_mode} =
@@ -160,7 +170,7 @@ defmodule LemonRouter.SessionTransitions do
       end
 
     submission =
-      stamp_router_delivery(submission, steer_mode, :dispatched_to_active,
+      stamp_router_delivery(submission, requested_mode, steer_mode, :dispatched_to_active,
         fallback_mode: fallback_mode,
         active_run_id: active_run_id
       )
@@ -176,27 +186,38 @@ defmodule LemonRouter.SessionTransitions do
     {next_state, [{:dispatch_steer, active_run_id, steer_mode, submission, fallback_mode}]}
   end
 
-  defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :steer} = submission, now_ms) do
-    enqueue_by_mode(state, %{submission | queue_mode: :followup}, now_ms)
+  defp enqueue_by_mode(
+         %SessionState{} = state,
+         %{queue_mode: :steer} = submission,
+         now_ms,
+         requested_mode
+       ) do
+    enqueue_by_mode(state, %{submission | queue_mode: :followup}, now_ms, requested_mode)
   end
 
   defp enqueue_by_mode(
          %SessionState{} = state,
          %{queue_mode: :steer_backlog} = submission,
-         now_ms
+         now_ms,
+         requested_mode
        ) do
-    enqueue_by_mode(state, %{submission | queue_mode: :collect}, now_ms)
+    enqueue_by_mode(state, %{submission | queue_mode: :collect}, now_ms, requested_mode)
   end
 
-  defp enqueue_by_mode(%SessionState{} = state, %{queue_mode: :interrupt} = submission, _now_ms) do
-    submission = stamp_router_delivery(submission, :interrupt, :queued)
+  defp enqueue_by_mode(
+         %SessionState{} = state,
+         %{queue_mode: :interrupt} = submission,
+         _now_ms,
+         requested_mode
+       ) do
+    submission = stamp_router_delivery(submission, requested_mode, :interrupt, :queued)
     next_state = %SessionState{state | queue: [submission | state.queue]}
     effects = if active?(state), do: [{:cancel_active, :interrupted}], else: []
     {next_state, effects}
   end
 
-  defp enqueue_by_mode(%SessionState{} = state, submission, _now_ms) do
-    submission = stamp_router_delivery(submission, submission.queue_mode, :queued)
+  defp enqueue_by_mode(%SessionState{} = state, submission, _now_ms, requested_mode) do
+    submission = stamp_router_delivery(submission, requested_mode, submission.queue_mode, :queued)
     {%SessionState{state | queue: state.queue ++ [submission]}, []}
   end
 
@@ -307,7 +328,7 @@ defmodule LemonRouter.SessionTransitions do
 
     Enum.reduce(pending, %SessionState{state | pending_steers: pending_steers}, fn
       {submission, fallback_mode}, acc ->
-        enqueue_fallback(acc, submission, fallback_mode, now_ms)
+        enqueue_fallback(acc, submission, fallback_mode, now_ms, active_run_id: active_run_id)
     end)
   end
 
@@ -323,12 +344,13 @@ defmodule LemonRouter.SessionTransitions do
       {nil, pending_steers} ->
         %SessionState{state | pending_steers: pending_steers}
 
-      {{submission, fallback_mode, _active_run_id}, pending_steers} ->
+      {{submission, fallback_mode, active_run_id}, pending_steers} ->
         enqueue_fallback(
           %SessionState{state | pending_steers: pending_steers},
           submission,
           fallback_mode,
-          now_ms
+          now_ms,
+          active_run_id: active_run_id
         )
     end
   end
@@ -352,11 +374,14 @@ defmodule LemonRouter.SessionTransitions do
     end)
   end
 
-  defp enqueue_fallback(%SessionState{} = state, submission, :followup, now_ms) do
+  defp enqueue_fallback(%SessionState{} = state, submission, :followup, now_ms, opts) do
     submission =
       submission
       |> Map.put(:queue_mode, :followup)
-      |> stamp_router_delivery(:followup, :fallback_queued)
+      |> stamp_router_delivery(existing_requested_mode(submission), :followup, :fallback_queued,
+        fallback_mode: :followup,
+        active_run_id: Keyword.get(opts, :active_run_id)
+      )
       |> suppress_router_phases()
 
     case maybe_merge_followup(
@@ -377,11 +402,14 @@ defmodule LemonRouter.SessionTransitions do
     end
   end
 
-  defp enqueue_fallback(%SessionState{} = state, submission, :collect, _now_ms) do
+  defp enqueue_fallback(%SessionState{} = state, submission, :collect, _now_ms, opts) do
     submission =
       submission
       |> Map.put(:queue_mode, :collect)
-      |> stamp_router_delivery(:collect, :fallback_queued)
+      |> stamp_router_delivery(existing_requested_mode(submission), :collect, :fallback_queued,
+        fallback_mode: :collect,
+        active_run_id: Keyword.get(opts, :active_run_id)
+      )
       |> suppress_router_phases()
 
     %SessionState{state | queue: state.queue ++ [submission]}
@@ -511,11 +539,19 @@ defmodule LemonRouter.SessionTransitions do
   defp truthy?(1), do: true
   defp truthy?(_value), do: false
 
-  defp stamp_router_delivery(%Submission{} = submission, disposition, status, opts \\ []) do
+  defp stamp_router_delivery(
+         %Submission{} = submission,
+         requested_mode,
+         disposition,
+         status,
+         opts \\ []
+       ) do
     receipt =
       %{
-        mode: disposition,
-        status: status
+        requested_mode: requested_mode,
+        actual_mode: disposition,
+        status: status,
+        decided_at_ms: LemonCore.Event.now_ms()
       }
       |> maybe_put_receipt(:fallback_mode, Keyword.get(opts, :fallback_mode))
       |> maybe_put_receipt(:active_run_id, Keyword.get(opts, :active_run_id))
@@ -560,6 +596,25 @@ defmodule LemonRouter.SessionTransitions do
     |> Map.put(:delivery, disposition)
     |> Map.put(:delivery_receipt, receipt)
   end
+
+  defp existing_requested_mode(%Submission{} = submission) do
+    [submission.meta, submission.execution_request.meta]
+    |> Enum.find_value(fn meta ->
+      meta
+      |> async_followup_entries()
+      |> Enum.find_value(fn entry ->
+        entry
+        |> MapHelpers.get_key(:delivery_receipt)
+        |> receipt_requested_mode()
+      end)
+    end) || submission.queue_mode
+  end
+
+  defp receipt_requested_mode(receipt) when is_map(receipt) do
+    MapHelpers.get_key(receipt, :requested_mode) || MapHelpers.get_key(receipt, :mode)
+  end
+
+  defp receipt_requested_mode(_receipt), do: nil
 
   defp suppress_router_phases(%Submission{} = submission) do
     %{submission | meta: Map.put(submission.meta || %{}, :suppress_router_phase_events, true)}

@@ -311,7 +311,14 @@ defmodule CodingAgent.MessagesTest do
           "source" => :task,
           "task_id" => "task-123",
           "run_id" => "run-123",
-          "delivery" => :steer_backlog
+          "delivery" => :steer,
+          "delivery_receipt" => %{
+            requested_mode: :followup,
+            actual_mode: :steer,
+            status: :dispatched_to_active,
+            fallback_mode: :followup,
+            active_run_id: "active-run"
+          }
         },
         timestamp: 123
       }
@@ -323,7 +330,12 @@ defmodule CodingAgent.MessagesTest do
       assert_async_followup_envelope(result.content, original_content)
       assert result.content =~ "task_id: task-123"
       assert result.content =~ "run_id: run-123"
-      assert result.content =~ "delivery: steer_backlog"
+      assert result.content =~ "delivery: steer"
+      assert result.content =~ "requested_delivery: followup"
+      assert result.content =~ "actual_delivery: steer"
+      assert result.content =~ "delivery_status: dispatched_to_active"
+      assert result.content =~ "fallback_delivery: followup"
+      assert result.content =~ "active_run_id: active-run"
     end
 
     test "wraps async followup custom messages with fallback values for missing metadata" do

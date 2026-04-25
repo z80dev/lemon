@@ -245,7 +245,7 @@ defmodule LemonRouter.RunProcessTest do
       session_key = SessionKey.main("test-agent")
       previous = Process.flag(:trap_exit, true)
 
-      job = %LemonGateway.Types.Job{
+      job = %{
         run_id: run_id,
         session_key: session_key,
         prompt: "test",

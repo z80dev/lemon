@@ -9,9 +9,12 @@ defmodule LemonGateway.Sms.WebhookRouterTest do
   setup do
     # Keep this test deterministic even if the developer environment has Twilio webhook
     # validation enabled.
+    _ = Application.stop(:lemon_gateway)
+
     orig_validate = System.get_env("TWILIO_VALIDATE_WEBHOOK")
     System.put_env("TWILIO_VALIDATE_WEBHOOK", "0")
 
+    Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     for {k, _v} <- LemonCore.Store.list(@table) do
@@ -19,6 +22,9 @@ defmodule LemonGateway.Sms.WebhookRouterTest do
     end
 
     on_exit(fn ->
+      Application.stop(:lemon_gateway)
+      Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
+
       case orig_validate do
         nil -> System.delete_env("TWILIO_VALIDATE_WEBHOOK")
         v -> System.put_env("TWILIO_VALIDATE_WEBHOOK", v)

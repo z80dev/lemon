@@ -22,6 +22,8 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert Map.has_key?(report, :issue_count)
       assert Map.has_key?(report, :issues)
       assert Map.has_key?(report, :actual_dependencies)
+      assert Map.has_key?(report, :target_drift_count)
+      assert Map.has_key?(report, :target_dependency_drifts)
     end
 
     test "returns error report when issues are found" do
@@ -49,6 +51,12 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
     test "delegates to architecture policy" do
       assert ArchitectureCheck.allowed_direct_deps() ==
                ArchitecturePolicy.allowed_direct_deps()
+
+      assert ArchitectureCheck.current_allowed_direct_deps() ==
+               ArchitecturePolicy.current_allowed_direct_deps()
+
+      assert ArchitectureCheck.target_allowed_direct_deps() ==
+               ArchitecturePolicy.target_allowed_direct_deps()
     end
 
     test "lemon_core has no allowed dependencies" do
@@ -71,6 +79,49 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert Enum.all?(deps, fn {_app, allowed} ->
                allowed == Enum.sort(allowed)
              end)
+    end
+
+    test "target policy removes transitional direct dependencies" do
+      current = ArchitecturePolicy.current_allowed_direct_deps()
+      target = ArchitecturePolicy.target_allowed_direct_deps()
+
+      refute :lemon_gateway in target.lemon_router
+      refute :lemon_gateway in current.lemon_router
+
+      assert :lemon_channels in current.lemon_gateway
+      assert :lemon_automation in current.lemon_gateway
+      assert :ai in current.lemon_gateway
+
+      refute :lemon_channels in target.lemon_gateway
+      refute :lemon_automation in target.lemon_gateway
+      refute :ai in target.lemon_gateway
+
+      assert target.ai == []
+    end
+  end
+
+  describe "target dependency drift" do
+    test "tracks target drift independently from current enforcement" do
+      assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
+      assert report.issue_count == 0
+      assert is_integer(report.target_drift_count)
+      assert is_list(report.target_dependency_drifts)
+    end
+
+    test "does not turn target-only drift into current policy issues" do
+      tmp_dir = create_tmp_umbrella()
+
+      ArchitecturePolicy.current_allowed_direct_deps()
+      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
+
+      try do
+        assert {:ok, report} = ArchitectureCheck.run(root: tmp_dir)
+        assert report.issue_count == 0
+        assert report.target_drift_count > 0
+        assert Enum.all?(report.target_dependency_drifts, &(&1.code == :target_dependency_drift))
+      after
+        File.rm_rf!(tmp_dir)
+      end
     end
   end
 

@@ -16,12 +16,22 @@ defmodule LemonCore.Quality.ArchitectureCheck do
           path: String.t() | nil
         }
 
+  @type target_drift :: %{
+          code: :target_dependency_drift,
+          message: String.t(),
+          app: atom(),
+          dependency: atom(),
+          path: nil
+        }
+
   @type report :: %{
           root: String.t(),
           apps_checked: non_neg_integer(),
           issue_count: non_neg_integer(),
           issues: [issue()],
-          actual_dependencies: %{optional(atom()) => [atom()]}
+          actual_dependencies: %{optional(atom()) => [atom()]},
+          target_drift_count: non_neg_integer(),
+          target_dependency_drifts: [target_drift()]
         }
 
   @app_namespaces %{
@@ -85,12 +95,16 @@ defmodule LemonCore.Quality.ArchitectureCheck do
       |> check_dependency_violations(actual)
       |> check_namespace_violations(root, actual)
 
+    target_dependency_drifts = target_dependency_drifts(actual)
+
     report = %{
       root: root,
       apps_checked: map_size(actual),
       issue_count: length(issues),
       issues: Enum.reverse(issues),
-      actual_dependencies: actual
+      actual_dependencies: actual,
+      target_drift_count: length(target_dependency_drifts),
+      target_dependency_drifts: target_dependency_drifts
     }
 
     if report.issue_count == 0 do
@@ -108,6 +122,18 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   """
   @spec allowed_direct_deps() :: %{optional(atom()) => [atom()]}
   def allowed_direct_deps, do: ArchitecturePolicy.allowed_direct_deps()
+
+  @doc """
+  Returns the current enforced direct dependency policy.
+  """
+  @spec current_allowed_direct_deps() :: %{optional(atom()) => [atom()]}
+  def current_allowed_direct_deps, do: ArchitecturePolicy.current_allowed_direct_deps()
+
+  @doc """
+  Returns the target direct dependency policy used for non-failing drift reports.
+  """
+  @spec target_allowed_direct_deps() :: %{optional(atom()) => [atom()]}
+  def target_allowed_direct_deps, do: ArchitecturePolicy.target_allowed_direct_deps()
 
   @spec load_actual_dependencies(String.t()) :: %{optional(atom()) => [atom()]}
   defp load_actual_dependencies(root) do
@@ -248,6 +274,34 @@ defmodule LemonCore.Quality.ArchitectureCheck do
         ]
       end)
     end)
+  end
+
+  @spec target_dependency_drifts(%{optional(atom()) => [atom()]}) :: [target_drift()]
+  defp target_dependency_drifts(actual) do
+    target_allowed_direct_deps = target_allowed_direct_deps()
+
+    actual
+    |> Enum.flat_map(fn {app, deps} ->
+      if Map.has_key?(target_allowed_direct_deps, app) do
+        target_allowed = Map.get(target_allowed_direct_deps, app, [])
+
+        forbidden = deps -- target_allowed
+
+        Enum.map(forbidden, fn dep ->
+          %{
+            code: :target_dependency_drift,
+            message:
+              "App #{app} still directly depends on #{dep}; target policy allows: #{Enum.join(Enum.map(target_allowed, &to_string/1), ", ")}",
+            app: app,
+            dependency: dep,
+            path: nil
+          }
+        end)
+      else
+        []
+      end
+    end)
+    |> Enum.sort_by(fn %{app: app, dependency: dependency} -> {app, dependency} end)
   end
 
   @spec check_namespace_violations([issue()], String.t(), %{optional(atom()) => [atom()]}) ::

@@ -69,13 +69,39 @@ defmodule LemonCore.EventTest do
       end
     end
 
-    test "creates reasoning status events" do
+    test "creates canonical reasoning engine action events" do
       event =
-        Event.reasoning_status(%{text: "checking", source: "runner_note"}, %{run_id: "run-1"})
+        Event.engine_reasoning(%{
+          run_id: "run-1",
+          session_key: "agent:default:web:default:dm:1",
+          text: "checking",
+          source: "runner_note",
+          phase: "updated",
+          visibility: :operator
+        })
 
-      assert event.type == :reasoning_status
-      assert event.payload.text == "checking"
-      assert event.payload.source == "runner_note"
+      assert event.type == :engine_action
+      assert event.meta.run_id == "run-1"
+      assert event.meta.session_key == "agent:default:web:default:dm:1"
+      assert event.meta.visibility == :operator
+      assert event.payload.action.kind == "reasoning"
+      assert event.payload.action.title == "checking"
+
+      assert event.payload.action.detail.reasoning == %{
+               text: "checking",
+               source: "runner_note",
+               phase: "updated"
+             }
+    end
+
+    test "rejects malformed reasoning engine action events" do
+      assert_raise ArgumentError, fn ->
+        Event.engine_reasoning(%{
+          run_id: "run-1",
+          session_key: "agent:default:web:default:dm:1",
+          text: ""
+        })
+      end
     end
   end
 end

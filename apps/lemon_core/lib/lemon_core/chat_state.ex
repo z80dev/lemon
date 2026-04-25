@@ -1,9 +1,9 @@
-defmodule LemonGateway.ChatState do
+defmodule LemonCore.ChatState do
   @moduledoc """
-  Represents the persistent state for a chat scope.
+  Persistent sticky execution state for a chat scope.
 
-  Used for auto-resume functionality - tracks the last engine and resume token
-  so subsequent messages can automatically continue the conversation.
+  Tracks the last engine and resume token so router and channel code can resume
+  a conversation without depending on the gateway runtime.
   """
 
   defstruct [:last_engine, :last_resume_token, :updated_at, :expires_at]
@@ -15,15 +15,9 @@ defmodule LemonGateway.ChatState do
           expires_at: integer() | nil
         }
 
-  @doc """
-  Creates a new ChatState with default values (all nil).
-  """
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
-  @doc """
-  Creates a new ChatState with the given values.
-  """
   @spec new(map()) :: t()
   def new(attrs) when is_map(attrs) do
     %__MODULE__{

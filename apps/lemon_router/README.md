@@ -11,8 +11,8 @@ Channel transport or gateway-native ingress
   -> LemonRouter.RunOrchestrator
   -> LemonRouter.SessionCoordinator
   -> LemonRouter.RunProcess
-  -> LemonGateway.Runtime.submit_execution/1
-  -> LemonGateway.Scheduler / ThreadWorker / Run
+  -> configured LemonCore.EngineRuntime.submit_execution/1
+  -> gateway runtime scheduler / thread worker / run
   -> LemonCore.Bus run events
   -> LemonRouter semantic coalescers / output tracking
   -> LemonCore.DeliveryIntent
@@ -65,7 +65,7 @@ metadata enrichment is best-effort and must not block the final answer path.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
 - Engine ID validation and normalization should use `LemonCore.EngineCatalog`; default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
-- Gateway input is `LemonGateway.ExecutionRequest`, not `LemonGateway.Types.Job`.
+- Runtime input is `LemonCore.ExecutionCommand`; gateway-private adapters may translate it to `LemonGateway.ExecutionRequest`.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
   - `LemonChannels.Telegram.ResumeIndexStore`

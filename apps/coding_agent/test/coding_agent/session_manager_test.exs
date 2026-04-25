@@ -366,7 +366,12 @@ defmodule CodingAgent.SessionManagerTest do
             task_id: "task-123",
             run_id: "run-123",
             delivery: :followup,
-            delivery_receipt: %{mode: :followup, status: :queued}
+            delivery_receipt: %{
+              requested_mode: :followup,
+              actual_mode: :followup,
+              status: :queued,
+              decided_at_ms: 123
+            }
           }
         })
         |> SessionManager.append_message(%{"role" => "assistant", "content" => "ack"})
@@ -387,7 +392,12 @@ defmodule CodingAgent.SessionManagerTest do
                  "details" => details
                } ->
                  details[:task_id] == "task-123" and
-                   details[:delivery_receipt] == %{mode: :followup, status: :queued}
+                   details[:delivery_receipt] == %{
+                     requested_mode: :followup,
+                     actual_mode: :followup,
+                     status: :queued,
+                     decided_at_ms: 123
+                   }
 
                _ ->
                  false

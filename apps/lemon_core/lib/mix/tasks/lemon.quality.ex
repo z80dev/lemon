@@ -53,10 +53,12 @@ defmodule Mix.Tasks.Lemon.Quality do
         case check_fun.() do
           {:ok, report} ->
             Mix.shell().info("[ok] #{name} check passed (#{report.issue_count} issues)")
+            print_target_drift(report)
             acc
 
           {:error, report} ->
             print_report(name, report)
+            print_target_drift(report)
             [{name, report} | acc]
         end
       end)
@@ -125,4 +127,16 @@ defmodule Mix.Tasks.Lemon.Quality do
       Mix.shell().error("  - [#{issue.code}] #{label}: #{issue.message}")
     end)
   end
+
+  defp print_target_drift(%{target_drift_count: 0}), do: :ok
+
+  defp print_target_drift(%{target_drift_count: count, target_dependency_drifts: drifts}) do
+    Mix.shell().info("[warn] architecture target drift (#{count} direct dependencies)")
+
+    Enum.each(drifts, fn drift ->
+      Mix.shell().info("  - [#{drift.code}] #{drift.app}: #{drift.message}")
+    end)
+  end
+
+  defp print_target_drift(_report), do: :ok
 end

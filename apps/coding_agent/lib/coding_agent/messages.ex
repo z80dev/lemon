@@ -554,6 +554,9 @@ defmodule CodingAgent.Messages do
   end
 
   defp async_followup_provenance_lines(details) when is_map(details) do
+    delivery = get_detail(details, :delivery)
+    delivery_receipt = get_detail(details, :delivery_receipt)
+
     fields =
       [
         {"source", get_detail(details, :source)},
@@ -561,8 +564,12 @@ defmodule CodingAgent.Messages do
         {"run_id", get_detail(details, :run_id)},
         {"agent_id", get_detail(details, :agent_id)},
         {"session_key", get_detail(details, :session_key)},
-        {"delivery", get_detail(details, :delivery)},
-        {"delivery_receipt", get_detail(details, :delivery_receipt)}
+        {"delivery", delivery},
+        {"requested_delivery", receipt_value(delivery_receipt, :requested_mode)},
+        {"actual_delivery", receipt_value(delivery_receipt, :actual_mode) || delivery},
+        {"delivery_status", receipt_value(delivery_receipt, :status)},
+        {"fallback_delivery", receipt_value(delivery_receipt, :fallback_mode)},
+        {"active_run_id", receipt_value(delivery_receipt, :active_run_id)}
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
       |> Enum.map(fn {key, value} -> "#{key}: #{format_provenance_value(value)}" end)
@@ -575,6 +582,12 @@ defmodule CodingAgent.Messages do
   defp get_detail(details, key) do
     Map.get(details, key) || Map.get(details, Atom.to_string(key))
   end
+
+  defp receipt_value(receipt, key) when is_map(receipt) do
+    Map.get(receipt, key) || Map.get(receipt, Atom.to_string(key))
+  end
+
+  defp receipt_value(_receipt, _key), do: nil
 
   defp format_provenance_value(value) when is_atom(value), do: Atom.to_string(value)
   defp format_provenance_value(value) when is_binary(value), do: value

@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.Quality.ArchitecturePolicy
+  alias LemonCore.Quality.{ArchitectureDocs, ArchitecturePolicy}
   alias Mix.Tasks.Lemon.Quality
 
   # Get the repo root (4 levels up from this test file)
@@ -172,7 +172,28 @@ defmodule Mix.Tasks.Lemon.QualityTest do
     end
   end
 
-  defp create_tmp_quality_repo do
+  describe "architecture target drift integration" do
+    test "reports target drift as a warning without failing quality checks" do
+      tmp_dir = create_tmp_quality_repo(ArchitectureDocs.render_dependency_policy_markdown())
+
+      try do
+        output =
+          capture_io(:stdio, fn ->
+            capture_io(:stderr, fn ->
+              Quality.run(["--root", tmp_dir])
+            end)
+          end)
+
+        assert output =~ "[warn] architecture target drift"
+        assert output =~ "lemon_gateway"
+        assert output =~ "All quality checks passed."
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+  end
+
+  defp create_tmp_quality_repo(architecture_policy_section \\ "stale") do
     tmp_dir =
       Path.join(
         System.tmp_dir!(),
@@ -190,7 +211,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       ## Direct Dependency Policy
 
       <!-- architecture_policy:start -->
-      stale
+      #{architecture_policy_section}
       <!-- architecture_policy:end -->
 
       ## Enforcement

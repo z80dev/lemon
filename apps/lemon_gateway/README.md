@@ -8,7 +8,7 @@ Part of the `lemon` Elixir umbrella project.
 
 ```
                         +-----------------------------------------+
-                        |   Router / Gateway-Owned Transports     |
+                        |   Router / Explicit Legacy Ingress       |
                         | Email  SMS  Voice  Farcaster  Webhook   |
                         +-------------------+---------------------+
                                             |
@@ -66,7 +66,7 @@ Part of the `lemon` Elixir umbrella project.
 
 ### Flow
 
-1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonGateway.ExecutionRequest{}` values to the gateway.
+1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
 3. The **Scheduler** routes each execution request by the router-supplied `conversation_key` and allocates a concurrency slot.
 4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics.
@@ -123,7 +123,7 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
-Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services supervised directly by `LemonGateway.Application`.
+Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when transitional legacy ingress startup is explicitly enabled with `config :lemon_gateway, legacy_ingress_enabled: true`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit legacy ingress startup.
 
 ## Module Inventory
 
@@ -132,14 +132,15 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGateway` | `lemon_gateway.ex` | Public API entry point (`submit/1` delegates to `submit_execution/1`) |
-| `LemonGateway.Application` | `application.ex` | OTP supervision tree |
+| `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
+| `LemonGateway.LegacyIngressSupervisor` | `legacy_ingress_supervisor.ex` | Transitional supervisor for gateway-native transport, command, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
 | `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway input contract with no queue semantics |
 | `LemonGateway.Types` | `types.ex` | Legacy compatibility types (`Job`, `engine_id`, `lane`) |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
-| `LemonGateway.ChatState` | `chat_state.ex` | Session state struct for auto-resume tracking |
+| `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
 | `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`, `default_engine`) |
 | `LemonGateway.Shared` | `shared.ex` | Shared utilities (config access, data normalization, IP parsing) |
@@ -355,6 +356,12 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 | `auto_resume` | `false` | Automatically resume sessions from stored `ChatState` |
 | `require_engine_lock` | `true` | Acquire per-session mutex before engine runs |
 | `engine_lock_timeout_ms` | `60000` | Timeout for engine lock acquisition |
+
+### Startup Options
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `legacy_ingress_enabled` | `false` | Start transitional gateway-native transports, command registry, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
 
 ### Transport Enable Flags
 

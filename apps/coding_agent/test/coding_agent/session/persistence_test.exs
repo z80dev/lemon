@@ -135,7 +135,20 @@ defmodule CodingAgent.Session.PersistenceTest do
     tmp_dir: tmp_dir
   } do
     async_followups = [
-      %{source: :task, task_id: "task-123", run_id: "run-123", delivery: :router}
+      %{
+        source: :task,
+        task_id: "task-123",
+        run_id: "run-123",
+        delivery: :steer,
+        delivery_receipt: %{
+          requested_mode: :followup,
+          actual_mode: :steer,
+          status: :dispatched_to_active,
+          decided_at_ms: 123,
+          fallback_mode: :followup,
+          active_run_id: "active-run"
+        }
+      }
     ]
 
     job = %Job{
@@ -187,6 +200,11 @@ defmodule CodingAgent.Session.PersistenceTest do
       end)
 
     assert llm_followup.content =~ "[task task-123] delegated work completed"
+    assert llm_followup.content =~ "requested_delivery: followup"
+    assert llm_followup.content =~ "actual_delivery: steer"
+    assert llm_followup.content =~ "delivery_status: dispatched_to_active"
+    assert llm_followup.content =~ "fallback_delivery: followup"
+    assert llm_followup.content =~ "active_run_id: active-run"
   end
 
   @tag :tmp_dir

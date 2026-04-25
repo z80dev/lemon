@@ -620,7 +620,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp resume_conversation_key(session_key) when is_binary(session_key) do
     case LemonCore.ChatStateStore.get(session_key) do
-      %LemonGateway.ChatState{last_engine: engine, last_resume_token: token}
+      %LemonCore.ChatState{last_engine: engine, last_resume_token: token}
       when is_binary(engine) and is_binary(token) ->
         {:resume, engine, token}
 
