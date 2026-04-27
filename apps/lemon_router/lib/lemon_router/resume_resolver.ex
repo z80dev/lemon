@@ -2,15 +2,16 @@ defmodule LemonRouter.ResumeResolver do
   @moduledoc """
   Router-owned resume resolution.
 
-  This module resolves the effective resume token before gateway submission,
-  moving auto-resume semantics out of gateway scheduler mutation.
+  This module resolves the effective resume token before runtime submission,
+  keeping auto-resume semantics out of gateway scheduler mutation.
   """
 
   alias LemonCore.ResumeToken
 
   @type resolved :: {ResumeToken.t() | nil, binary() | nil}
 
-  @spec resolve(ResumeToken.t() | map() | nil, binary() | nil, binary() | nil, map()) :: resolved()
+  @spec resolve(ResumeToken.t() | map() | nil, binary() | nil, binary() | nil, map()) ::
+          resolved()
   def resolve(explicit_resume, session_key, selected_engine_id, meta \\ %{}) do
     cond do
       (resume = normalize_resume(explicit_resume)) != nil ->
@@ -63,7 +64,8 @@ defmodule LemonRouter.ResumeResolver do
 
   defp compatible_engine?(selected_engine, engine)
        when is_binary(selected_engine) and is_binary(engine) do
-    selected_engine == engine || String.split(selected_engine, ":", parts: 2) |> List.first() == engine
+    selected_engine == engine ||
+      String.split(selected_engine, ":", parts: 2) |> List.first() == engine
   end
 
   defp compatible_engine?(_selected_engine, _engine), do: false

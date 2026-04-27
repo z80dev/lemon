@@ -44,7 +44,7 @@ Channel transport or gateway-native ingress
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
-| `LemonRouter.ResumeResolver` | Structured resume resolution before gateway submission |
+| `LemonRouter.ResumeResolver` | Structured resume resolution before runtime submission |
 | `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |

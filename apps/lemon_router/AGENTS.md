@@ -47,7 +47,7 @@ Inbound transport
 | `lib/lemon_router/session_coordinator.ex` | queue semantics owner |
 | `lib/lemon_router/run_starter.ex` | shared child-start mechanics for prepared router submissions |
 | `lib/lemon_router/conversation_key.ex` | canonical conversation-key selection |
-| `lib/lemon_router/resume_resolver.ex` | structured resume resolution before gateway submission |
+| `lib/lemon_router/resume_resolver.ex` | structured resume resolution before runtime submission |
 | `lib/lemon_router/run_process.ex` | active-run lifecycle shell |
 | `lib/lemon_router/run_process/compaction_trigger.ex` | overflow detection and pending-compaction marking |
 | `lib/lemon_router/stream_coalescer.ex` | semantic answer coalescing |

@@ -248,11 +248,13 @@ On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key`
 ### Message Flow
 
 ```
-[User via Telegram / SMS (Twilio) / Discord / XMTP / X]
+[User via Telegram / Discord / XMTP / X / SMS]
     ↓
-[lemon_gateway] - Transport layer, engine selection
+[lemon_channels or legacy gateway ingress] - Transport adapters and inbound normalization
     ↓
-[lemon_router] - Route to appropriate agent, run orchestration
+[lemon_router] - Route to appropriate agent, run orchestration, queue semantics
+    ↓
+[lemon_gateway] - Execution slots and engine lifecycle
     ↓
 [coding_agent] - Execute tools, manage sessions, budget enforcement
     ↓
@@ -270,7 +272,7 @@ Derived from mix.exs files and enforced by `mix lemon.quality` (architecture bou
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, coding_agent*
-lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
+lemon_router ─────────→ lemon_core, lemon_channels, coding_agent, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent, lemon_channels*
 lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core, lemon_ai_runtime
@@ -470,4 +472,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-03-19* (added AI boundary extraction plan to docs index)
+*Last updated: 2026-04-27* (updated router/gateway architecture flow and dependency map)

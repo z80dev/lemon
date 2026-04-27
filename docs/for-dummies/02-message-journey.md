@@ -159,17 +159,19 @@ Your conversation is idle, so we proceed.
 
 ---
 
-## Step 10: The Gateway Takes Over
+## Step 10: The Runtime Takes Over
 
-A `RunProcess` is created and it submits the `ExecutionRequest` to the gateway:
+A `RunProcess` is created and it submits a `LemonCore.ExecutionCommand` through the configured runtime:
 
 ```
-lemon_router (RunProcess)  ---->  lemon_gateway (Runtime.submit_execution)
+lemon_router (RunProcess)  ---->  LemonCore.EngineRuntime.submit_execution
 ```
 
-The gateway's **Scheduler** receives the request. It manages a pool of execution
-slots (default: 10 concurrent runs across all conversations). It finds or
-creates a **ThreadWorker** for your conversation.
+In the default local runtime, `LemonGateway.Runtime` translates that command to
+gateway-private execution state. The gateway's **Scheduler** receives the
+request. It manages a pool of execution slots (default: 10 concurrent runs
+across all conversations). It finds or creates a **ThreadWorker** for your
+conversation.
 
 The ThreadWorker is a per-conversation serializer — it ensures your messages are
 processed in order, one at a time. It requests a slot from the Scheduler, and

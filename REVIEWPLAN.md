@@ -1,16 +1,17 @@
 # Review Remediation Plan
 
-This plan addresses the findings in `REVIEW.md` after the four-phase refactor.
+This plan addressed the findings in `REVIEW.md` after the four-phase refactor.
+Implementation was completed in commit `3d5cf7f6`.
 
 ## Current Review Readout
 
 | Area | Review result | Plan status |
 | --- | --- | --- |
-| Phase 1: AI boundary extraction | Essentially achieved; docs and guardrails are stale | Close out with docs and CI checks |
-| Phase 2: execution DTO boundary | Mostly achieved; router still depends on gateway through chat state | Finish router/gateway compile-time decoupling |
-| Phase 3: events, async delivery, reasoning | Functional progress; event contract still informal | Canonicalize reasoning action events and delivery receipts |
-| Phase 4: gateway/channels cleanup | Channel side improved; gateway still owns too much ingress | Shrink gateway supervision first, then extract legacy transports |
-| Architecture policy | Improved, but still blesses transitional coupling | Add current-vs-target drift reporting |
+| Phase 1: AI boundary extraction | Essentially achieved; docs and guardrails were stale | Completed docs and guardrail updates |
+| Phase 2: execution DTO boundary | Router still depended on gateway through chat state | Completed router/gateway compile-time decoupling |
+| Phase 3: events, async delivery, reasoning | Event contract was informal | Completed canonical reasoning action events and delivery receipts |
+| Phase 4: gateway/channels cleanup | Gateway still owned too much ingress | Completed gateway startup shrink behind explicit legacy ingress |
+| Architecture policy | Transitional coupling was still blessed | Completed current-vs-target drift reporting |
 
 ## Milestone 1: Remove Router's Gateway Dependency
 
@@ -304,16 +305,16 @@ Expected:
 - no stale AI-boundary migration text describes completed work as pending
 - ownership docs match actual dependencies
 
-## Recommended Execution Order
+## Completed Execution Order
 
-1. Milestone 1: remove router's gateway dependency.
-2. Milestone 2: explicit async delivery receipts.
-3. Milestone 3: canonical reasoning event constructor.
-4. Milestone 5: architecture policy guardrails for current vs target.
-5. Milestone 6: documentation updates for completed milestones.
-6. Milestone 4: gateway startup shrink, unless a release requires transport extraction first.
+1. Milestone 1: removed router's gateway dependency.
+2. Milestone 2: added explicit async delivery receipts.
+3. Milestone 3: added canonical reasoning event constructor.
+4. Milestone 5: added architecture policy guardrails for current vs target.
+5. Milestone 6: updated documentation for completed milestones.
+6. Milestone 4: shrank gateway startup behind explicit legacy ingress.
 
-Gateway extraction is intentionally later because it has the highest blast radius. The router dependency removal is smaller, easier to test, and gives the clearest architectural proof point.
+Full legacy transport extraction remains future work because it has the highest blast radius. The completed gateway startup split keeps legacy ingress explicit while preserving the current runtime.
 
 ## Final Verification Set
 
@@ -330,4 +331,3 @@ rg "TransportRegistry|TransportSupervisor|Sms|Voice" apps/lemon_gateway/lib/lemo
 mix test apps/lemon_core apps/lemon_router apps/coding_agent apps/lemon_gateway apps/lemon_channels
 mix lemon.quality
 ```
-
