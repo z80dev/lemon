@@ -158,7 +158,6 @@ The Lemon umbrella has several other apps that we won't cover in depth:
 | lemon_mcp | Model Context Protocol bridge |
 | lemon_services | Long-running external process management |
 | lemon_sim | Simulation harness for testing agents |
-| market_intel | Market data ingestion |
 
 These are all real parts of Lemon, but they're adjacent to the core
 "talk to your AI assistant via Telegram" flow. If you're curious, each has

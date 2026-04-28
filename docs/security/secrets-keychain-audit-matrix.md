@@ -12,7 +12,6 @@ This document captures the current, tested contract for Lemon secret resolution 
 | Master key env fallback | Manual set of `LEMON_SECRETS_MASTER_KEY` (external) | `MasterKey.resolve/1` via `resolve_from_env/1` | No further fallback; returns `:missing_master_key` or `:invalid_master_key` | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` can fallback to env by same secret name (`env_fallback: true`) | `apps/lemon_core/lib/lemon_core/secrets.ex` |
 | Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, env fallback enabled | `apps/coding_agent/lib/coding_agent/session.ex` |
-| MarketIntel secret adapter | `MarketIntel.Secrets.put/2` (delegated module) | `MarketIntel.Secrets.get/1` -> store first then env | Explicit fallback to env if store path fails/misses | `apps/market_intel/lib/market_intel/secrets.ex` |
 
 ## Keychain Error Semantics (Current Contract)
 

@@ -112,12 +112,6 @@ The following secrets are recognized by the migration tooling:
 - `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET` - OAuth 1.0a
 - `X_API_ACCESS_TOKEN_SECRET` - OAuth 1.0a
 
-### Market Intel
-- `MARKET_INTEL_BASESCAN_KEY` - BaseScan API
-- `MARKET_INTEL_DEXSCREENER_KEY` - DEX Screener API
-- `MARKET_INTEL_OPENAI_KEY` - OpenAI for commentary
-- `MARKET_INTEL_ANTHROPIC_KEY` - Anthropic alternative
-
 ## Troubleshooting
 
 ### Secret not found after migration

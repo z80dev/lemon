@@ -51,8 +51,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_sim_ui: ["LemonSimUi"],
     lemon_services: ["LemonServices"],
     lemon_skills: ["LemonSkills"],
-    lemon_web: ["LemonWeb"],
-    market_intel: ["MarketIntel"]
+    lemon_web: ["LemonWeb"]
   }
 
   @exact_module_owners %{

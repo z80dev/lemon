@@ -239,13 +239,13 @@ defmodule LemonSim.Examples.StartupIncubator do
             }
           }
         end,
-        market_intel: fn frame, _tools, _opts ->
+        market_conditions: fn frame, _tools, _opts ->
           market_conditions = get(frame.world, :market_conditions, %{})
           market_event_log = get(frame.world, :market_event_log, [])
 
           %{
-            id: :market_intel,
-            title: "Market Intelligence",
+            id: :market_conditions,
+            title: "Market Conditions",
             format: :json,
             content: %{
               "sector_multipliers" => market_conditions,
@@ -286,7 +286,7 @@ defmodule LemonSim.Examples.StartupIncubator do
         :world_state,
         :your_position,
         :deal_room,
-        :market_intel,
+        :market_conditions,
         :recent_events,
         :current_intent,
         :available_actions,

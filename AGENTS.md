@@ -25,7 +25,6 @@
 | Manage long-running external processes | `apps/lemon_services/` |
 | Work on the web UI | `apps/lemon_web/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
-| Market data ingestion | `apps/market_intel/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
 
 ---
@@ -155,8 +154,7 @@ apps/
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_skills/        # Skill registry, discovery, installation
-├── lemon_web/           # Phoenix LiveView web interface
-└── market_intel/        # Market data ingestion, analysis (Ecto/SQLite, GenStage)
+└── lemon_web/           # Phoenix LiveView web interface
 
 clients/
 ├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
@@ -284,7 +282,6 @@ lemon_sim ────────────→ lemon_core, agent_core, ai, le
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
 lemon_web ────────────→ lemon_core, lemon_router
-market_intel ─────────→ lemon_core, agent_core, lemon_channels*
 lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
 coding_agent_ui ──────→ coding_agent
 ai ───────────────────→ lemon_core
@@ -467,7 +464,6 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_services | `apps/lemon_services/AGENTS.md` |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
 | lemon_mcp | `apps/lemon_mcp/README.md` *(no AGENTS.md yet)* |
-| market_intel | `apps/market_intel/AGENTS.md` |
 | coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
 
 ---

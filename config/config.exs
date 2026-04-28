@@ -62,18 +62,6 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 
 config :lemon_sim_ui, :access_token, nil
 
-# MarketIntel ingestion feature flags.
-# Each flag gates the corresponding worker in the supervision tree.
-# Core infrastructure (Cache, Repo) always starts regardless.
-config :market_intel, :ingestion, %{
-  enable_dex: true,
-  enable_polymarket: true,
-  enable_twitter: true,
-  enable_onchain: true,
-  enable_commentary: true,
-  enable_scheduler: true
-}
-
 # Sample configuration:
 #
 #     config :logger, :default_handler,

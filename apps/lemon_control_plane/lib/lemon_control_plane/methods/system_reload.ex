@@ -24,8 +24,7 @@ defmodule LemonControlPlane.Methods.SystemReload do
     :lemon_channels,
     :lemon_control_plane,
     :lemon_automation,
-    :lemon_skills,
-    :market_intel
+    :lemon_skills
   ]
 
   @impl true
