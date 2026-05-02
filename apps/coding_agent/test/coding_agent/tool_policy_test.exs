@@ -19,6 +19,7 @@ defmodule CodingAgent.ToolPolicyTest do
 
       assert ToolPolicy.allowed?(policy, "read")
       assert ToolPolicy.allowed?(policy, "read_skill")
+      assert ToolPolicy.allowed?(policy, "search_memory")
       assert ToolPolicy.allowed?(policy, "grep")
       assert ToolPolicy.allowed?(policy, "find")
       refute ToolPolicy.allowed?(policy, "write")
@@ -30,6 +31,7 @@ defmodule CodingAgent.ToolPolicyTest do
 
       assert ToolPolicy.allowed?(policy, "read")
       assert ToolPolicy.allowed?(policy, "read_skill")
+      assert ToolPolicy.allowed?(policy, "search_memory")
       assert ToolPolicy.allowed?(policy, "memory_topic")
       assert ToolPolicy.allowed?(policy, "write")
       assert ToolPolicy.allowed?(policy, "patch")

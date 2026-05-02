@@ -26,11 +26,12 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-  @read_tools ["read", "read_skill", "grep", "find", "ls"]
+  @read_tools ["read", "read_skill", "search_memory", "grep", "find", "ls"]
 
   @minimal_core_tools [
     "read",
     "read_skill",
+    "search_memory",
     "memory_topic",
     "write",
     "edit",

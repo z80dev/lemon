@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, read_skill, memory_topic, search_memory, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
-  - `read_only_tools/2` - Exploration tools (read only plus read_skill/search_memory)
+  - `coding_tools/2` - Full access tools (read, read_skill, memory_topic, search_memory, write, edit, hashline_edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
+  - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
 
@@ -35,7 +35,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (read, read_skill, memory_topic, search_memory, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
+  Get the default coding tools (read, read_skill, memory_topic, search_memory, write, edit, hashline_edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
 
   ## Options
   - Any options are passed through to individual tools
