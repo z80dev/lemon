@@ -256,5 +256,11 @@
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
     max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-hermes-agent-harness-parity-scorecard.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-02],
+    max_age_days: 90
   }
 ]
