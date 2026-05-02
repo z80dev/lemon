@@ -105,7 +105,7 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 ## Key Capabilities
 
 **Agent:**
-- 21 built-in tools: `bash`, `read`, `read_skill`, `write`, `edit`, `grep`, `websearch`, `webfetch`, `task`, `agent`, and more
+- 22 built-in tools: `bash`, `read`, `read_skill`, `search_memory`, `write`, `edit`, `grep`, `websearch`, `webfetch`, `task`, `agent`, and more
 - Real-time streaming with live steering (inject messages mid-run)
 - Session persistence via JSONL with tree-structured history
 - Context compaction and branch summarization
@@ -188,3 +188,4 @@ Skill library bootstrapped from [Hermes Agent](https://github.com/NousResearch/h
 
 Built with [Elixir](https://elixir-lang.org/) and the BEAM.
 TUI powered by [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
+

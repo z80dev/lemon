@@ -11,7 +11,7 @@ defmodule CodingAgent.Evals.Harness do
   alias AgentCore.Types.AgentToolResult
   alias CodingAgent.ToolRegistry
 
-  @required_builtin_tools ~w(read read_skill memory_topic write edit patch bash grep find ls webfetch websearch todo task extensions_status)
+  @required_builtin_tools ~w(read read_skill memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
 
   @type eval_result :: %{
           name: String.t(),

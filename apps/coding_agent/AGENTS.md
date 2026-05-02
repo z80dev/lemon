@@ -61,11 +61,11 @@ When downstream store or agent processes time out, callers should log and contin
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (20 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (22 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
-| **File Operations / Skills** | `read`, `read_skill`, `write`, `edit`, `patch`, `hashline_edit`, `ls` |
+| **File Operations / Skills** | `read`, `read_skill`, `memory_topic`, `search_memory`, `write`, `edit`, `patch`, `hashline_edit`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash` |
 | **Web** | `websearch`, `webfetch` |
@@ -803,3 +803,4 @@ If the central resolver module is unavailable at runtime (mixed-version or parti
 - `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache
 Task-tool normalization is intentionally tolerant of provider variance: if a model supplies a prompt but omits the optional-looking `description` field, `CodingAgent.Tools.Task.Params` derives a short description from the prompt instead of rejecting the task call. Bash-only internal tasks also have a direct fast path for both backticked `Run \`cmd\`` prompts and plain `Run this exact command and return the output: cmd` phrasing so tool-using providers do not pay for a full child session just to execute one shell command.
+
