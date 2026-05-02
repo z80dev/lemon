@@ -2,6 +2,7 @@ defmodule CodingAgent.SystemPromptTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.SystemPrompt
+  alias CodingAgent.Tools
 
   @tag :tmp_dir
   test "injects workspace files into prompt", %{tmp_dir: tmp_dir} do
@@ -42,6 +43,31 @@ defmodule CodingAgent.SystemPromptTest do
     assert String.contains?(prompt, "Use `memory_topic` to scaffold new topic notes")
     assert String.contains?(prompt, "memory/topics/TEMPLATE.md")
     assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
+  end
+
+  @tag :tmp_dir
+  test "tool names referenced by the system prompt are available in default coding tools", %{
+    tmp_dir: tmp_dir
+  } do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+
+    prompt =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main
+      })
+
+    referenced_tools = SystemPrompt.referenced_tool_names(prompt)
+    default_tool_names = Tools.coding_tools(tmp_dir) |> Enum.map(& &1.name) |> MapSet.new()
+
+    assert "read_skill" in referenced_tools
+    assert "search_memory" in referenced_tools
+
+    missing_tools = Enum.reject(referenced_tools, &MapSet.member?(default_tool_names, &1))
+
+    assert missing_tools == []
   end
 
   @tag :tmp_dir

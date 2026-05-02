@@ -50,6 +50,22 @@ defmodule CodingAgent.SystemPrompt do
     |> Enum.join("\n\n")
   end
 
+  @doc """
+  Extract tool names that the prompt explicitly instructs the agent to use.
+
+  This is intentionally narrower than "all backticked lowercase words" so file
+  names, XML tags, and parameter examples do not become false tool references.
+  It powers prompt-contract tests that keep system-prompt tool guidance aligned
+  with the default native Lemon tool set.
+  """
+  @spec referenced_tool_names(String.t()) :: [String.t()]
+  def referenced_tool_names(prompt) when is_binary(prompt) do
+    ~r/\b(?:Use|use|If)\s+`([a-z][a-z0-9_]*)`/
+    |> Regex.scan(prompt, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.uniq()
+  end
+
   # ============================================================================
   # Sections
   # ============================================================================

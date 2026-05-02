@@ -76,6 +76,11 @@ mix lemon.skill check <skill-key>
 
 Shows readiness, local drift, and upstream status for the installed skill.
 
+Agents also have a `read_skill` tool in the default native Lemon tool set. The
+system prompt lists installed skills by key and tells the agent to call
+`read_skill` before following any clearly relevant skill, so skill instructions
+can be loaded on demand without injecting every full `SKILL.md` body up front.
+
 ---
 
 ## Installing Skills

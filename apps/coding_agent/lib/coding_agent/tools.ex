@@ -3,14 +3,17 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
-  - `read_only_tools/2` - Exploration tools (read only)
+  - `coding_tools/2` - Full access tools (read, read_skill, memory_topic, search_memory, write, edit, hashline_edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions)
+  - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
 
   alias CodingAgent.Tools.{
     Agent,
     Read,
+    ReadSkill,
+    MemoryTopic,
+    SearchMemory,
     Write,
     Edit,
     HashlineEdit,
@@ -32,7 +35,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
+  Get the default coding tools (read, read_skill, memory_topic, search_memory, write, edit, hashline_edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, parent_question, tool_auth, extensions_status, post_to_x, get_x_mentions).
 
   ## Options
   - Any options are passed through to individual tools
@@ -41,6 +44,9 @@ defmodule CodingAgent.Tools do
   def coding_tools(cwd, opts \\ []) do
     [
       Read.tool(cwd, opts),
+      ReadSkill.tool(cwd, opts),
+      MemoryTopic.tool(cwd, opts),
+      SearchMemory.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
       HashlineEdit.tool(cwd, opts),
@@ -63,12 +69,14 @@ defmodule CodingAgent.Tools do
   end
 
   @doc """
-  Get read-only tools for exploration (read, grep, find, ls).
+  Get read-only tools for exploration (read, read_skill, search_memory, grep, find, ls).
   """
   @spec read_only_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
   def read_only_tools(cwd, opts \\ []) do
     [
       Read.tool(cwd, opts),
+      ReadSkill.tool(cwd, opts),
+      SearchMemory.tool(cwd, opts),
       Grep.tool(cwd, opts),
       Find.tool(cwd, opts),
       Ls.tool(cwd, opts)
@@ -82,6 +90,9 @@ defmodule CodingAgent.Tools do
   def all_tools(cwd, opts \\ []) do
     %{
       "read" => Read.tool(cwd, opts),
+      "read_skill" => ReadSkill.tool(cwd, opts),
+      "memory_topic" => MemoryTopic.tool(cwd, opts),
+      "search_memory" => SearchMemory.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),
       "hashline_edit" => HashlineEdit.tool(cwd, opts),

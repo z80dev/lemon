@@ -85,6 +85,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       names = Enum.map(tools, & &1.name)
       assert "read" in names
+      assert "read_skill" in names
       assert "memory_topic" in names
       assert "write" in names
       assert "edit" in names
@@ -218,6 +219,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert is_list(names)
       assert "read" in names
+      assert "read_skill" in names
       assert "write" in names
       assert Enum.all?(names, &is_binary/1)
     end
@@ -234,6 +236,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert is_binary(result)
       assert String.contains?(result, "- read:")
+      assert String.contains?(result, "- read_skill:")
       assert String.contains?(result, "- write:")
     end
   end
@@ -244,6 +247,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert is_list(names)
       assert :read in names
+      assert :read_skill in names
       assert :write in names
       assert :edit in names
       assert :bash in names
