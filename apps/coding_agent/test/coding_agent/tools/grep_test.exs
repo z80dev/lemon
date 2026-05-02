@@ -27,6 +27,7 @@ defmodule CodingAgent.Tools.GrepTest do
       assert Map.has_key?(props, "path")
       assert Map.has_key?(props, "glob")
       assert Map.has_key?(props, "case_sensitive")
+      assert Map.has_key?(props, "literal")
       assert Map.has_key?(props, "context_lines")
       assert Map.has_key?(props, "max_results")
     end
@@ -175,6 +176,31 @@ defmodule CodingAgent.Tools.GrepTest do
 
       assert {:error, "Pattern is required"} = result
     end
+
+    test "supports literal search when requested", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "test.txt")
+      File.write!(path, "a.c\nabc\nliteral a.c")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "a.c",
+            "path" => path,
+            "literal" => true
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.match_count == 2
+      assert text =~ "test.txt:1: a.c"
+      assert text =~ "test.txt:3: literal a.c"
+      refute text =~ "test.txt:2: abc"
+    end
   end
 
   describe "execute/6 - case sensitivity" do
@@ -294,6 +320,25 @@ defmodule CodingAgent.Tools.GrepTest do
       assert text =~ "line2" or text =~ "2"
       assert text =~ "line4" or text =~ "4"
     end
+
+    test "returns error for invalid context_lines", %{tmp_dir: tmp_dir} do
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "MATCH",
+            "path" => tmp_dir,
+            "context_lines" => -1
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert {:error, msg} = result
+      assert msg =~ "context_lines must be a non-negative integer"
+    end
   end
 
   describe "execute/6 - result limiting" do
@@ -318,13 +363,82 @@ defmodule CodingAgent.Tools.GrepTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncated == true
-      assert text =~ "truncated"
+      assert details.match_limit_reached == 5
+      assert text =~ "limit reached"
     end
 
     test "uses default max_results of 100", %{tmp_dir: tmp_dir} do
       tool = Grep.tool(tmp_dir)
       # Verify the tool was created with proper defaults
       assert tool.parameters["properties"]["max_results"]["description"] =~ "100"
+    end
+
+    test "returns error for invalid max_results", %{tmp_dir: tmp_dir} do
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "match",
+            "max_results" => 0
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert {:error, msg} = result
+      assert msg =~ "max_results must be a positive integer"
+    end
+
+    test "truncates long match lines", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "test.txt")
+      File.write!(path, "prefix " <> String.duplicate("x", 700))
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "prefix",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.lines_truncated == true
+      assert text =~ "[truncated]"
+    end
+
+    test "truncates aggregate output to byte budget", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "test.txt")
+
+      content =
+        Enum.map_join(1..20, "\n", fn i ->
+          "match#{i} " <> String.duplicate("x", 80)
+        end)
+
+      File.write!(path, content)
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "match",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          max_bytes: 300
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.truncation.truncated == true
+      assert text =~ "300B limit reached"
     end
   end
 

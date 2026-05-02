@@ -140,7 +140,7 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 
 | Tool | What It Does |
 |------|-------------|
-| `grep` | Search file contents with regex (via ripgrep) |
+| `grep` | Search file contents with regex or literal text (via ripgrep) |
 | `find` | Find files by name pattern |
 
 ### Execution

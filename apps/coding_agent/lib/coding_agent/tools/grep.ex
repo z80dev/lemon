@@ -4,16 +4,6 @@ defmodule CodingAgent.Tools.Grep do
 
   Searches for patterns in files using ripgrep (rg) if available,
   falling back to Elixir's built-in file/regex operations.
-
-  ## Features
-
-  - Regex pattern matching
-  - Optional path/directory to search
-  - File glob filtering (e.g., "*.ex")
-  - Case sensitive/insensitive search
-  - Context lines around matches
-  - Result limiting
-  - Abort signal support
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
@@ -25,21 +15,19 @@ defmodule CodingAgent.Tools.Grep do
 
   @default_max_results 100
   @default_context_lines 0
+  @default_max_bytes 50 * 1024
+  @grep_max_line_length 500
   @ripgrep_timeout_ms 30_000
 
   @doc """
   Returns the Grep tool definition.
-
-  ## Options
-
-  - `:max_results` - Default maximum results (default: 100)
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "grep",
       description:
-        "Search for patterns in files using regex. Uses ripgrep for performance when available.",
+        "Search for patterns in files using regex or literal text. Uses ripgrep for performance when available.",
       label: "Search Files",
       parameters: %{
         "type" => "object",
@@ -61,6 +49,10 @@ defmodule CodingAgent.Tools.Grep do
             "type" => "boolean",
             "description" => "Whether the search is case sensitive (default: true)"
           },
+          "literal" => %{
+            "type" => "boolean",
+            "description" => "Treat the pattern as a literal string instead of a regex"
+          },
           "context_lines" => %{
             "type" => "integer",
             "description" => "Number of lines of context to show around matches"
@@ -78,20 +70,6 @@ defmodule CodingAgent.Tools.Grep do
 
   @doc """
   Execute the grep tool.
-
-  ## Parameters
-
-  - `tool_call_id` - Unique identifier for this tool invocation
-  - `params` - Parameters map with "pattern", optional "path", "glob", etc.
-  - `signal` - Abort signal for cancellation (can be nil)
-  - `on_update` - Callback for streaming partial results (unused for grep)
-  - `cwd` - Current working directory
-  - `opts` - Tool options
-
-  ## Returns
-
-  - `AgentToolResult.t()` - Result with matched lines and file paths
-  - `{:error, term()}` - Error if search fails
   """
   @spec execute(
           tool_call_id :: String.t(),
@@ -114,12 +92,15 @@ defmodule CodingAgent.Tools.Grep do
     path = Map.get(params, "path")
     glob = Map.get(params, "glob")
     case_sensitive = Map.get(params, "case_sensitive", true)
+    literal = Map.get(params, "literal", false)
     context_lines = Map.get(params, "context_lines", @default_context_lines)
 
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
-    with :ok <- validate_pattern(pattern),
+    with :ok <- validate_pattern(pattern, literal),
+         :ok <- validate_context_lines(context_lines),
+         :ok <- validate_max_results(max_results),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_path_access(resolved_path),
          :ok <- check_abort(signal) do
@@ -128,8 +109,10 @@ defmodule CodingAgent.Tools.Grep do
         path: resolved_path,
         glob: glob,
         case_sensitive: case_sensitive,
+        literal: literal,
         context_lines: context_lines,
         max_results: max_results,
+        max_bytes: Keyword.get(opts, :max_bytes, @default_max_bytes),
         signal: signal,
         timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
         rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3)
@@ -143,34 +126,26 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  # ============================================================================
-  # Validation
-  # ============================================================================
+  defp validate_pattern("", _literal), do: {:error, "Pattern is required"}
+  defp validate_pattern(nil, _literal), do: {:error, "Pattern is required"}
 
-  defp validate_pattern("") do
-    {:error, "Pattern is required"}
-  end
-
-  defp validate_pattern(nil) do
-    {:error, "Pattern is required"}
-  end
-
-  defp validate_pattern(pattern) when not is_binary(pattern) do
+  defp validate_pattern(pattern, _literal) when not is_binary(pattern) do
     {:error, "Pattern must be a string, got: #{inspect(pattern)}"}
   end
 
-  defp validate_pattern(pattern) when byte_size(pattern) > 10_000 do
+  defp validate_pattern(pattern, _literal) when byte_size(pattern) > 10_000 do
     {:error, "Pattern is too long (max 10000 bytes)"}
   end
 
-  defp validate_pattern(pattern) do
+  defp validate_pattern(_pattern, true), do: :ok
+
+  defp validate_pattern(pattern, false) do
     case Regex.compile(pattern) do
       {:ok, _} ->
         :ok
 
       {:error, {reason, position}} ->
-        # Provide more helpful error message with position
-        hint = suggest_regex_fix(pattern, reason)
+        hint = suggest_regex_fix(pattern)
 
         message =
           if position > 0 do
@@ -183,8 +158,22 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  # Suggest common fixes for regex errors
-  defp suggest_regex_fix(pattern, _reason) do
+  defp validate_context_lines(context_lines)
+       when is_integer(context_lines) and context_lines >= 0,
+       do: :ok
+
+  defp validate_context_lines(context_lines) do
+    {:error, "context_lines must be a non-negative integer, got: #{inspect(context_lines)}"}
+  end
+
+  defp validate_max_results(max_results) when is_integer(max_results) and max_results > 0,
+    do: :ok
+
+  defp validate_max_results(max_results) do
+    {:error, "max_results must be a positive integer, got: #{inspect(max_results)}"}
+  end
+
+  defp suggest_regex_fix(pattern) do
     cond do
       String.contains?(pattern, "[") and not String.contains?(pattern, "]") ->
         " (hint: missing closing bracket ']')"
@@ -203,10 +192,6 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  # ============================================================================
-  # Path Resolution
-  # ============================================================================
-
   defp resolve_path(nil, cwd, _opts), do: {:ok, cwd}
   defp resolve_path("", cwd, _opts), do: {:ok, cwd}
 
@@ -220,10 +205,6 @@ defmodule CodingAgent.Tools.Grep do
       {:error, _} = error -> error
     end
   end
-
-  # ============================================================================
-  # Ripgrep Search
-  # ============================================================================
 
   @doc false
   def ripgrep_available? do
@@ -240,19 +221,10 @@ defmodule CodingAgent.Tools.Grep do
       {:ok, {output, 0}} ->
         parse_ripgrep_output(output, opts)
 
-      {:ok, {output, 1}} ->
-        # Exit code 1 means no matches found
-        %AgentToolResult{
-          content: [%TextContent{text: "No matches found."}],
-          details: %{
-            match_count: 0,
-            files_searched: count_files_in_output(output),
-            truncated: false
-          }
-        }
+      {:ok, {_output, 1}} ->
+        no_matches_result()
 
       {:ok, {output, 2}} ->
-        # Exit code 2 means error
         {:error, "Search error: #{String.trim(output)}"}
 
       {:ok, {output, code}} ->
@@ -306,28 +278,9 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp build_ripgrep_args(opts) do
-    args = [
-      "--line-number",
-      "--with-filename",
-      "--color",
-      "never"
-    ]
-
+    args = ["--json", "--line-number", "--color", "never"]
     args = if opts.case_sensitive, do: args, else: args ++ ["--ignore-case"]
-
-    args =
-      if opts.context_lines > 0 do
-        args ++ ["--context", to_string(opts.context_lines)]
-      else
-        args
-      end
-
-    args =
-      if opts.max_results do
-        args ++ ["--max-count", to_string(opts.max_results)]
-      else
-        args
-      end
+    args = if opts.literal, do: args ++ ["--fixed-strings"], else: args
 
     args =
       if opts.glob do
@@ -336,85 +289,80 @@ defmodule CodingAgent.Tools.Grep do
         args
       end
 
-    # Add pattern and path
     args ++ [opts.pattern, opts.path]
   end
 
   defp parse_ripgrep_output(output, opts) do
-    lines = String.split(output, "\n", trim: true)
-    match_count = count_matches(lines)
-    truncated = match_count >= opts.max_results
+    matches =
+      output
+      |> String.split("\n", trim: true)
+      |> Enum.reduce([], fn line, acc ->
+        case Jason.decode(line) do
+          {:ok,
+           %{
+             "type" => "match",
+             "data" => %{
+               "path" => %{"text" => file_path},
+               "line_number" => line_number
+             }
+           }}
+          when is_binary(file_path) and is_integer(line_number) ->
+            [%{file_path: file_path, line_number: line_number} | acc]
 
-    result_text =
-      if truncated do
-        output <> "\n\n[Results truncated at #{opts.max_results} matches]"
-      else
-        output
-      end
+          _ ->
+            acc
+        end
+      end)
+      |> Enum.reverse()
 
-    summary =
-      if match_count > 0 do
-        "Found #{match_count} match#{if match_count == 1, do: "", else: "es"}.\n\n#{result_text}"
-      else
-        "No matches found."
-      end
-
-    %AgentToolResult{
-      content: [%TextContent{text: summary}],
-      details: %{
-        match_count: match_count,
-        truncated: truncated
-      }
-    }
+    build_result_from_match_refs(
+      matches,
+      opts,
+      length(matches),
+      length(matches) > opts.max_results
+    )
   end
-
-  defp count_matches(lines) do
-    # Count lines that look like matches (file:line:content)
-    Enum.count(lines, fn line ->
-      Regex.match?(~r/^[^:]+:\d+:/, line)
-    end)
-  end
-
-  defp count_files_in_output(_output), do: 0
-
-  # ============================================================================
-  # Elixir Fallback Search
-  # ============================================================================
 
   defp search_with_elixir(opts) do
-    case compile_regex(opts.pattern, opts.case_sensitive) do
-      {:ok, regex} ->
-        do_elixir_search(regex, opts)
+    with {:ok, matcher} <- compile_matcher(opts.pattern, opts.case_sensitive, opts.literal) do
+      match_refs =
+        opts.path
+        |> find_files(opts.glob)
+        |> Stream.flat_map(fn file ->
+          if aborted?(opts.signal) do
+            []
+          else
+            search_file_refs(file, matcher)
+          end
+        end)
+        |> Enum.to_list()
 
-      {:error, reason} ->
-        {:error, "Invalid regex: #{reason}"}
+      if aborted?(opts.signal) do
+        {:error, "Operation aborted"}
+      else
+        total_match_count = length(match_refs)
+
+        build_result_from_match_refs(
+          match_refs,
+          opts,
+          total_match_count,
+          total_match_count > opts.max_results
+        )
+      end
     end
   end
 
-  defp compile_regex(pattern, case_sensitive) do
-    options = if case_sensitive, do: [], else: [:caseless]
-    Regex.compile(pattern, options)
+  defp compile_matcher(pattern, case_sensitive, true) do
+    normalized_pattern = if case_sensitive, do: pattern, else: String.downcase(pattern)
+    {:ok, {:literal, normalized_pattern, case_sensitive}}
   end
 
-  defp do_elixir_search(regex, opts) do
-    files = find_files(opts.path, opts.glob)
+  defp compile_matcher(pattern, case_sensitive, false) do
+    options = if case_sensitive, do: [], else: [:caseless]
 
-    results =
-      files
-      |> Stream.flat_map(fn file ->
-        if aborted?(opts.signal) do
-          []
-        else
-          search_file(file, regex, opts.context_lines)
-        end
-      end)
-      |> Stream.take(opts.max_results)
-      |> Enum.to_list()
-
-    if aborted?(opts.signal) do
-      {:error, "Operation aborted"}
-    else
-      format_elixir_results(results, opts.max_results)
+    case Regex.compile(pattern, options) do
+      {:ok, regex} -> {:ok, {:regex, regex}}
+      {:error, reason} -> {:error, "Invalid regex: #{reason}"}
     end
   end
 
@@ -449,7 +397,6 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp text_file?(path) do
-    # Simple heuristic: check first 512 bytes for null bytes
     case File.open(path, [:read, :binary]) do
       {:ok, file} ->
         result =
@@ -467,81 +414,270 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  defp search_file(file_path, regex, context_lines) do
+  defp search_file_refs(file_path, matcher) do
     case File.read(file_path) do
       {:ok, content} ->
-        lines = String.split(content, ~r/\r?\n/)
-
-        lines
+        content
+        |> String.split(~r/\r?\n/)
         |> Enum.with_index(1)
-        |> Enum.filter(fn {line, _idx} -> Regex.match?(regex, line) end)
-        |> Enum.map(fn {line, idx} ->
-          context = get_context(lines, idx, context_lines)
-          %{file: file_path, line_number: idx, content: line, context: context}
+        |> Enum.reduce([], fn {line, idx}, acc ->
+          if line_matches?(line, matcher) do
+            [%{file_path: file_path, line_number: idx} | acc]
+          else
+            acc
+          end
         end)
+        |> Enum.reverse()
 
       {:error, _} ->
         []
     end
   end
 
-  defp get_context(_lines, _idx, 0), do: nil
+  defp line_matches?(line, {:regex, regex}), do: Regex.match?(regex, line)
 
-  defp get_context(lines, idx, context_lines) do
-    total = length(lines)
-    start_idx = max(1, idx - context_lines)
-    end_idx = min(total, idx + context_lines)
-
-    lines
-    |> Enum.slice((start_idx - 1)..(end_idx - 1))
-    |> Enum.with_index(start_idx)
-    |> Enum.map(fn {line, line_num} ->
-      prefix = if line_num == idx, do: ">", else: " "
-      "#{prefix}#{line_num}: #{line}"
-    end)
-    |> Enum.join("\n")
+  defp line_matches?(line, {:literal, pattern, true}) do
+    String.contains?(line, pattern)
   end
 
-  defp format_elixir_results([], _max_results) do
-    %AgentToolResult{
-      content: [%TextContent{text: "No matches found."}],
-      details: %{
-        match_count: 0,
-        truncated: false
-      }
-    }
+  defp line_matches?(line, {:literal, pattern, false}) do
+    String.contains?(String.downcase(line), pattern)
   end
 
-  defp format_elixir_results(results, max_results) do
-    match_count = length(results)
-    truncated = match_count >= max_results
+  defp build_result_from_match_refs([], _opts, _total_match_count, _match_limit_reached?) do
+    no_matches_result()
+  end
 
-    formatted =
-      results
-      |> Enum.map(&format_match/1)
-      |> Enum.join("\n")
+  defp build_result_from_match_refs(match_refs, opts, total_match_count, match_limit_reached?) do
+    shown_refs = Enum.take(match_refs, opts.max_results)
+
+    {formatted_lines, lines_truncated?} = format_match_refs(shown_refs, opts)
+    raw_output = Enum.join(formatted_lines, "\n")
+    truncation = truncate_head_output(raw_output, opts.max_bytes)
+
+    notices =
+      []
+      |> maybe_add_notice(
+        match_limit_reached?,
+        "#{opts.max_results} matches limit reached. Use max_results=#{opts.max_results * 2} for more, or refine pattern"
+      )
+      |> maybe_add_notice(
+        truncation.truncated,
+        "#{format_size(opts.max_bytes)} limit reached"
+      )
+      |> maybe_add_notice(
+        lines_truncated?,
+        "Some lines truncated to #{@grep_max_line_length} chars. Use read tool to see full lines"
+      )
+
+    body =
+      case {truncation.content, notices} do
+        {"", []} ->
+          nil
+
+        {"", _} ->
+          "[#{Enum.join(notices, ". ")}]"
+
+        {content, []} ->
+          content
+
+        {content, _} ->
+          content <> "\n\n[" <> Enum.join(notices, ". ") <> "]"
+      end
+
+    summary = "Found #{total_match_count} match#{if total_match_count == 1, do: "", else: "es"}."
 
     text =
-      if truncated do
-        "Found #{match_count} match#{if match_count == 1, do: "", else: "es"} (truncated at #{max_results}).\n\n#{formatted}"
+      if body do
+        summary <> "\n\n" <> body
       else
-        "Found #{match_count} match#{if match_count == 1, do: "", else: "es"}.\n\n#{formatted}"
+        summary
       end
+
+    details =
+      %{
+        match_count: total_match_count,
+        truncated: match_limit_reached? or truncation.truncated,
+        match_limit_reached: if(match_limit_reached?, do: opts.max_results),
+        truncation: if(truncation.truncated, do: truncation),
+        lines_truncated: if(lines_truncated?, do: true)
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: %{
-        match_count: match_count,
-        truncated: truncated
-      }
+      details: details
     }
   end
 
-  defp format_match(%{file: file, line_number: line_num, content: content, context: nil}) do
-    "#{file}:#{line_num}:#{content}"
+  defp no_matches_result do
+    %AgentToolResult{
+      content: [%TextContent{text: "No matches found."}],
+      details: %{match_count: 0, truncated: false}
+    }
   end
 
-  defp format_match(%{file: file, line_number: _line_num, context: context}) do
-    "#{file}:\n#{context}"
+  defp format_match_refs(match_refs, opts) do
+    directory_search? = directory_search?(opts.path)
+
+    {lines, _cache, lines_truncated?} =
+      Enum.reduce(match_refs, {[], %{}, false}, fn match_ref,
+                                                   {acc_lines, cache, any_truncated?} ->
+        {block_lines, next_cache, block_truncated?} =
+          format_match_ref(match_ref, opts, cache, directory_search?)
+
+        {acc_lines ++ block_lines, next_cache, any_truncated? or block_truncated?}
+      end)
+
+    {lines, lines_truncated?}
   end
+
+  defp directory_search?(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :directory}} -> true
+      _ -> false
+    end
+  end
+
+  defp format_match_ref(
+         %{file_path: file_path, line_number: line_number},
+         opts,
+         cache,
+         directory_search?
+       ) do
+    display_path = display_path(file_path, opts.path, directory_search?)
+
+    case load_file_lines(file_path, cache) do
+      {{:ok, lines}, next_cache} ->
+        start_line =
+          if opts.context_lines > 0 do
+            max(1, line_number - opts.context_lines)
+          else
+            line_number
+          end
+
+        end_line =
+          if opts.context_lines > 0 do
+            min(length(lines), line_number + opts.context_lines)
+          else
+            line_number
+          end
+
+        {block_lines, block_truncated?} =
+          Enum.reduce(start_line..end_line, {[], false}, fn current_line, {acc, any_truncated?} ->
+            raw_line = Enum.at(lines, current_line - 1, "")
+            {line_text, line_truncated?} = truncate_match_line(raw_line)
+
+            formatted_line =
+              if current_line == line_number do
+                "#{display_path}:#{current_line}: #{line_text}"
+              else
+                "#{display_path}-#{current_line}- #{line_text}"
+              end
+
+            {acc ++ [formatted_line], any_truncated? or line_truncated?}
+          end)
+
+        {block_lines, next_cache, block_truncated?}
+
+      {{:error, _reason}, next_cache} ->
+        {["#{display_path}:#{line_number}: (unable to read file)"], next_cache, false}
+    end
+  end
+
+  defp load_file_lines(file_path, cache) do
+    case Map.fetch(cache, file_path) do
+      {:ok, value} ->
+        {value, cache}
+
+      :error ->
+        value =
+          case File.read(file_path) do
+            {:ok, content} ->
+              normalized = content |> String.replace("\r\n", "\n") |> String.replace("\r", "\n")
+              {:ok, String.split(normalized, "\n", trim: false)}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        {value, Map.put(cache, file_path, value)}
+    end
+  end
+
+  defp display_path(file_path, search_path, true) do
+    relative_path = Path.relative_to(file_path, search_path)
+
+    if relative_path == file_path or String.starts_with?(relative_path, "../") do
+      Path.basename(file_path)
+    else
+      relative_path
+    end
+  end
+
+  defp display_path(file_path, _search_path, false), do: Path.basename(file_path)
+
+  defp truncate_match_line(line) do
+    if String.length(line) <= @grep_max_line_length do
+      {line, false}
+    else
+      {String.slice(line, 0, @grep_max_line_length) <> "... [truncated]", true}
+    end
+  end
+
+  defp truncate_head_output(content, max_bytes) when byte_size(content) <= max_bytes do
+    %{
+      content: content,
+      truncated: false,
+      truncated_by: nil,
+      total_lines: count_lines(content),
+      total_bytes: byte_size(content),
+      output_lines: count_lines(content),
+      output_bytes: byte_size(content)
+    }
+  end
+
+  defp truncate_head_output(content, max_bytes) do
+    lines = String.split(content, "\n", trim: false)
+    total_lines = length(lines)
+    total_bytes = byte_size(content)
+
+    {output_lines, truncated_by} = take_lines_within_bytes(lines, max_bytes, [], 0)
+    output_content = Enum.join(output_lines, "\n")
+
+    %{
+      content: output_content,
+      truncated: true,
+      truncated_by: truncated_by,
+      total_lines: total_lines,
+      total_bytes: total_bytes,
+      output_lines: length(output_lines),
+      output_bytes: byte_size(output_content)
+    }
+  end
+
+  defp take_lines_within_bytes([], _max_bytes, acc, _acc_bytes) do
+    {Enum.reverse(acc), :bytes}
+  end
+
+  defp take_lines_within_bytes([line | rest], max_bytes, acc, acc_bytes) do
+    line_bytes = byte_size(line) + if(acc == [], do: 0, else: 1)
+
+    if acc_bytes + line_bytes > max_bytes do
+      {Enum.reverse(acc), :bytes}
+    else
+      take_lines_within_bytes(rest, max_bytes, [line | acc], acc_bytes + line_bytes)
+    end
+  end
+
+  defp count_lines(""), do: 0
+  defp count_lines(content), do: length(String.split(content, "\n", trim: false))
+
+  defp maybe_add_notice(notices, true, notice), do: notices ++ [notice]
+  defp maybe_add_notice(notices, false, _notice), do: notices
+
+  defp format_size(bytes) when bytes < 1024, do: "#{bytes}B"
+  defp format_size(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)}KB"
+  defp format_size(bytes), do: "#{Float.round(bytes / (1024 * 1024), 1)}MB"
 end
