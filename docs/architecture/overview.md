@@ -55,7 +55,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
          │           └─────────────────────-┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
-│  · 20 built-in tools                        │
+│  · 21 built-in tools                        │
 │  · context compaction                       │
 │  · extension system                         │
 └────────┬───────────────────────────────────┘

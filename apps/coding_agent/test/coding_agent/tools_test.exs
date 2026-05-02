@@ -28,6 +28,7 @@ defmodule CodingAgent.ToolsTest do
 
       expected_tools = [
         "read",
+        "read_skill",
         "write",
         "edit",
         "patch",
@@ -52,9 +53,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 19 tools" do
+    test "returns exactly 20 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 19
+      assert length(tools) == 20
     end
 
     test "passes cwd to each tool" do
@@ -73,7 +74,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 19
+      assert length(tools) == 20
     end
   end
 
@@ -97,14 +98,14 @@ defmodule CodingAgent.ToolsTest do
       tools = Tools.read_only_tools(@test_cwd)
       tool_names = Enum.map(tools, & &1.name)
 
-      expected_tools = ["read", "grep", "find", "ls"]
+      expected_tools = ["read", "read_skill", "grep", "find", "ls"]
 
       assert Enum.sort(tool_names) == Enum.sort(expected_tools)
     end
 
-    test "returns exactly 4 tools" do
+    test "returns exactly 5 tools" do
       tools = Tools.read_only_tools(@test_cwd)
-      assert length(tools) == 4
+      assert length(tools) == 5
     end
 
     test "does not include write/edit tools" do
@@ -141,6 +142,7 @@ defmodule CodingAgent.ToolsTest do
 
       expected_tools = [
         "read",
+        "read_skill",
         "write",
         "edit",
         "patch",
@@ -167,9 +169,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 20 tools (includes truncate plus parent_question and X tools)" do
+    test "returns 21 tools (includes truncate plus read_skill, parent_question, and X tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 20
+      assert map_size(tools_map) == 21
     end
 
     test "tool names match map keys" do
@@ -219,6 +221,7 @@ defmodule CodingAgent.ToolsTest do
     test "can retrieve all known tools" do
       known_tools = [
         "read",
+        "read_skill",
         "write",
         "edit",
         "patch",
