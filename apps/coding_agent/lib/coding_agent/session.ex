@@ -569,7 +569,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
-      state = refresh_system_prompt(state)
+      state = refresh_system_prompt(state, text)
       user_message = State.build_prompt_message(text, opts)
 
       # Defer the actual prompt slightly after we reply so callers can subscribe immediately
@@ -578,31 +578,38 @@ defmodule CodingAgent.Session do
       # This also gives the session a chance to receive near-immediate `follow_up/2` and
       # `steer/2` messages before the agent loop does its end-of-turn queue checks in
       # very fast (mocked) runs.
-      timer_ref = Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
+      timer_ref =
+        Process.send_after(
+          self(),
+          {:do_prompt, user_message, state.system_prompt},
+          @prompt_defer_ms
+        )
 
       {:reply, :ok, State.begin_prompt(state, timer_ref)}
     end
   end
 
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
-    state = refresh_system_prompt(state)
     message = State.build_async_followup_message(message_or_attrs)
+    state = refresh_system_prompt(state, message_skill_context(message))
     state = persist_message(state, message)
 
     if state.is_streaming do
       case AsyncFollowups.live_delivery_mode(message) do
         :steer ->
-          AgentCore.Agent.steer(state.agent, message)
+          AgentCore.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
           queue = :queue.in(message, state.steering_queue)
           {:reply, :ok, %{state | steering_queue: queue}}
 
         :followup ->
-          AgentCore.Agent.follow_up(state.agent, message)
+          AgentCore.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
           queue = :queue.in(message, state.follow_up_queue)
           {:reply, :ok, %{state | follow_up_queue: queue}}
       end
     else
-      timer_ref = Process.send_after(self(), {:do_prompt, message}, @prompt_defer_ms)
+      timer_ref =
+        Process.send_after(self(), {:do_prompt, message, state.system_prompt}, @prompt_defer_ms)
+
       {:reply, :ok, State.begin_prompt(state, timer_ref)}
     end
   end
@@ -823,7 +830,7 @@ defmodule CodingAgent.Session do
   @spec handle_cast(term(), t()) :: {:noreply, t()}
   @impl true
   def handle_cast({:steer, text}, state) do
-    state = refresh_system_prompt(state)
+    state = refresh_system_prompt(state, text)
 
     message = %Ai.Types.UserMessage{
       role: :user,
@@ -831,14 +838,14 @@ defmodule CodingAgent.Session do
       timestamp: System.system_time(:millisecond)
     }
 
-    AgentCore.Agent.steer(state.agent, message)
+    AgentCore.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
     queue = :queue.in(message, state.steering_queue)
 
     {:noreply, %{state | steering_queue: queue}}
   end
 
   def handle_cast({:follow_up, text}, state) do
-    state = refresh_system_prompt(state)
+    state = refresh_system_prompt(state, text)
 
     message = %Ai.Types.UserMessage{
       role: :user,
@@ -846,7 +853,7 @@ defmodule CodingAgent.Session do
       timestamp: System.system_time(:millisecond)
     }
 
-    AgentCore.Agent.follow_up(state.agent, message)
+    AgentCore.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
     queue = :queue.in(message, state.follow_up_queue)
 
     {:noreply, %{state | follow_up_queue: queue}}
@@ -957,24 +964,34 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
+  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
+      :ok = AgentCore.Agent.set_system_prompt(state.agent, system_prompt)
       # Send to agent (user message will be persisted on :message_end event)
       _ = AgentCore.Agent.prompt(state.agent, user_message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil}}
+      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
       # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
       {:noreply, state}
     end
   end
 
-  def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
+  def handle_info({:do_prompt, %CustomMessage{} = message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
+      :ok = AgentCore.Agent.set_system_prompt(state.agent, system_prompt)
       _ = AgentCore.Agent.prompt(state.agent, message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil}}
+      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
       {:noreply, state}
     end
+  end
+
+  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
+    handle_info({:do_prompt, user_message, state.system_prompt}, state)
+  end
+
+  def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
+    handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
   def handle_info(_msg, state) do
@@ -1011,15 +1028,43 @@ defmodule CodingAgent.Session do
   # Private Functions
   # ============================================================================
 
-  @spec refresh_system_prompt(t()) :: t()
-  defp refresh_system_prompt(state) do
+  defp message_skill_context(%Ai.Types.UserMessage{content: content}),
+    do: content_skill_context(content)
+
+  defp message_skill_context(%CustomMessage{content: content, display: display}) do
+    [content_skill_context(content), content_skill_context(display)]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n")
+  end
+
+  defp message_skill_context(_message), do: ""
+
+  defp content_skill_context(content) when is_binary(content), do: content
+
+  defp content_skill_context(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+      %{text: text} when is_binary(text) -> text
+      text when is_binary(text) -> text
+      _ -> ""
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp content_skill_context(_content), do: ""
+
+  @spec refresh_system_prompt(t(), String.t()) :: t()
+  defp refresh_system_prompt(state, skill_context) do
     case PromptComposer.maybe_refresh_system_prompt(
            state.cwd,
            state.explicit_system_prompt,
            state.prompt_template,
            state.workspace_dir,
            state.session_scope,
-           state.system_prompt
+           state.system_prompt,
+           skill_context
          ) do
       :unchanged ->
         state

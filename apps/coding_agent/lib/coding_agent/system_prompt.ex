@@ -14,7 +14,9 @@ defmodule CodingAgent.SystemPrompt do
   @type opts :: %{
           optional(:workspace_dir) => String.t(),
           optional(:bootstrap_max_chars) => pos_integer(),
-          optional(:session_scope) => :main | :subagent | String.t()
+          optional(:session_scope) => :main | :subagent | String.t(),
+          optional(:skill_context) => String.t(),
+          optional(:max_relevant_skills) => pos_integer()
         }
 
   @doc """
@@ -28,6 +30,8 @@ defmodule CodingAgent.SystemPrompt do
     workspace_dir = Map.get(opts, :workspace_dir, Workspace.workspace_dir())
     max_chars = Map.get(opts, :bootstrap_max_chars, Workspace.default_max_chars())
     session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
+    skill_context = Map.get(opts, :skill_context, "")
+    max_relevant_skills = Map.get(opts, :max_relevant_skills, 3)
 
     bootstrap_files =
       Workspace.load_bootstrap_files(
@@ -39,6 +43,7 @@ defmodule CodingAgent.SystemPrompt do
     sections = [
       "You are a personal assistant running inside Lemon.",
       build_runtime_section(session_scope),
+      build_relevant_skills_section(cwd, skill_context, max_relevant_skills),
       build_skills_section(cwd),
       build_memory_workflow_section(session_scope),
       build_workspace_section(cwd, workspace_dir),
@@ -69,6 +74,18 @@ defmodule CodingAgent.SystemPrompt do
   # ============================================================================
   # Sections
   # ============================================================================
+
+  defp build_relevant_skills_section(_cwd, context, _max_skills) when context in [nil, ""], do: ""
+
+  defp build_relevant_skills_section(cwd, context, max_skills) when is_binary(context) do
+    views =
+      context
+      |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: false)
+      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
+      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
+
+    PromptView.render_relevant_skills(views)
+  end
 
   defp build_skills_section(cwd) do
     PromptView.render_for_prompt(cwd)

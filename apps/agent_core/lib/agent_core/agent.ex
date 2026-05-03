@@ -348,10 +348,12 @@ defmodule AgentCore.Agent do
 
   Steering messages are delivered after the current tool execution completes,
   skipping remaining tool calls. Use this for "steering" the agent while it's working.
+  Pass `system_prompt: prompt` to apply a per-turn prompt refresh when the queued
+  message is consumed by an already-running loop.
   """
-  @spec steer(GenServer.server(), Types.agent_message()) :: :ok
-  def steer(agent, message) do
-    GenServer.cast(agent, {:steer, message})
+  @spec steer(GenServer.server(), Types.agent_message(), keyword()) :: :ok
+  def steer(agent, message, opts \\ []) do
+    GenServer.cast(agent, {:steer, queued_message(message, opts)})
   end
 
   @doc """
@@ -359,11 +361,12 @@ defmodule AgentCore.Agent do
 
   Follow-up messages are delivered only when the agent has no more tool calls
   and no steering messages. Use this for messages that should wait until the
-  agent completes its current work.
+  agent completes its current work. Pass `system_prompt: prompt` to apply a
+  per-turn prompt refresh when the queued message is consumed.
   """
-  @spec follow_up(GenServer.server(), Types.agent_message()) :: :ok
-  def follow_up(agent, message) do
-    GenServer.cast(agent, {:follow_up, message})
+  @spec follow_up(GenServer.server(), Types.agent_message(), keyword()) :: :ok
+  def follow_up(agent, message, opts \\ []) do
+    GenServer.cast(agent, {:follow_up, queued_message(message, opts)})
   end
 
   @doc """
@@ -835,6 +838,13 @@ defmodule AgentCore.Agent do
 
   defp abort_ref_matches?(state_abort_ref, abort_ref) do
     state_abort_ref == abort_ref or state_abort_ref == {:aborted, abort_ref}
+  end
+
+  defp queued_message(message, opts) do
+    case Keyword.get(opts, :system_prompt) do
+      prompt when is_binary(prompt) and prompt != "" -> %{message: message, system_prompt: prompt}
+      _ -> message
+    end
   end
 
   # ============================================================================

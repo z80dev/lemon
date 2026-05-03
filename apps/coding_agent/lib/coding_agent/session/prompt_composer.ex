@@ -26,9 +26,17 @@ defmodule CodingAgent.Session.PromptComposer do
           String.t() | nil,
           String.t() | nil,
           String.t(),
-          :main | :subagent
+          :main | :subagent,
+          String.t()
         ) :: String.t()
-  def compose_system_prompt(cwd, explicit_prompt, prompt_template, workspace_dir, session_scope) do
+  def compose_system_prompt(
+        cwd,
+        explicit_prompt,
+        prompt_template,
+        workspace_dir,
+        session_scope,
+        skill_context \\ ""
+      ) do
     # Load prompt template if specified
     template_content =
       case prompt_template do
@@ -46,7 +54,8 @@ defmodule CodingAgent.Session.PromptComposer do
     base_prompt =
       CodingAgent.SystemPrompt.build(cwd, %{
         workspace_dir: workspace_dir,
-        session_scope: session_scope
+        session_scope: session_scope,
+        skill_context: skill_context
       })
 
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
@@ -101,6 +110,7 @@ defmodule CodingAgent.Session.PromptComposer do
           String.t() | nil,
           String.t(),
           :main | :subagent,
+          String.t(),
           String.t()
         ) :: {:changed, String.t()} | :unchanged
   def maybe_refresh_system_prompt(
@@ -109,7 +119,8 @@ defmodule CodingAgent.Session.PromptComposer do
         prompt_template,
         workspace_dir,
         session_scope,
-        current_prompt
+        current_prompt,
+        skill_context \\ ""
       ) do
     next_prompt =
       compose_system_prompt(
@@ -117,7 +128,8 @@ defmodule CodingAgent.Session.PromptComposer do
         explicit_system_prompt,
         prompt_template,
         workspace_dir,
-        session_scope
+        session_scope,
+        skill_context
       )
 
     if next_prompt == current_prompt do

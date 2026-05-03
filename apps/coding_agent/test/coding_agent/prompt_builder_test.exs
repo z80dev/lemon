@@ -6,6 +6,42 @@ defmodule CodingAgent.PromptBuilderTest do
   @moduletag :tmp_dir
 
   describe "build/2" do
+    test "passes context through to relevance-selected skill hints", %{tmp_dir: tmp_dir} do
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        """
+        ---
+        name: github-pr-workflow
+        description: GitHub pull request lifecycle and CI checks
+        keywords:
+          - github
+          - pull request
+          - ci
+        ---
+
+        Full body should not be inlined.
+        """
+      )
+
+      result =
+        PromptBuilder.build(tmp_dir, %{
+          base_prompt: "Base.",
+          context: "open a github pull request and monitor ci",
+          include_skills: true,
+          include_commands: false,
+          include_mentions: false
+        })
+
+      assert String.contains?(result, "Base.")
+      assert String.contains?(result, "<relevant-skills>")
+      assert String.contains?(result, "github-pr-workflow")
+      assert String.contains?(result, "Use `read_skill` with <key>")
+      refute String.contains?(result, "Full body should not be inlined.")
+    end
+
     test "returns base prompt when no extras", %{tmp_dir: tmp_dir} do
       result =
         PromptBuilder.build(tmp_dir, %{
