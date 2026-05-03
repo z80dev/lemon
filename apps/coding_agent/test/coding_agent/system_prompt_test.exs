@@ -71,6 +71,79 @@ defmodule CodingAgent.SystemPromptTest do
   end
 
   @tag :tmp_dir
+  test "includes relevance-selected skill hints when skill context matches", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
+    File.mkdir_p!(skill_dir)
+
+    skill_body = "Follow the complete GitHub PR lifecycle details."
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      """
+      ---
+      name: github-pr-workflow
+      description: GitHub pull request lifecycle, CI checks, branches, commits, PR creation, merge readiness
+      keywords:
+        - github
+        - pull request
+        - pr
+        - ci
+      ---
+
+      #{skill_body}
+      """
+    )
+
+    prompt =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main,
+        skill_context: "please create a GitHub pull request and watch CI"
+      })
+
+    assert String.contains?(prompt, "<relevant-skills>")
+    assert String.contains?(prompt, "github-pr-workflow")
+    assert String.contains?(prompt, "Use `read_skill` with <key>")
+    refute String.contains?(prompt, skill_body)
+  end
+
+  @tag :tmp_dir
+  test "omits relevance-selected skill hints without skill context", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      """
+      ---
+      name: github-pr-workflow
+      description: GitHub pull request lifecycle
+      ---
+
+      Follow the full workflow.
+      """
+    )
+
+    prompt =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main
+      })
+
+    refute String.contains?(prompt, "<relevant-skills>")
+    assert String.contains?(prompt, "<available_skills>")
+    assert String.contains?(prompt, "github-pr-workflow")
+  end
+
+  @tag :tmp_dir
   test "subagent scope excludes memory and soul context", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)

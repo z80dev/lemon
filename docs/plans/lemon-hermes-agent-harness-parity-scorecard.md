@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills.
+Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, and third slice wires relevant-skill preselection into the native session prompt path.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`.
 
 ## Capability scorecard
 
@@ -52,12 +52,13 @@ The first code slice from this scorecard made `read_skill` available in the defa
   - Registry supports global, project, and `.agents/skills` compatibility paths.
   - Relevance scoring exists.
   - Prompt renderer lists available skills and tells the agent to load relevant skills.
+  - Native session prompt refresh passes the current user prompt into relevance scoring and renders concise `<relevant-skills>` hints per turn.
   - `read_skill` can read full content, summaries, sections, and linked files.
   - Install/update audit gates exist.
 - Gaps:
   - Missed-skill detection is not yet audited as a run outcome.
   - Skill authoring/patching from the agent loop is not as mature as read-only consumption.
-  - Per-turn relevant-skill hints are not yet wired into the native session path as an enforced behavior.
+  - Per-turn relevant-skill hints are guided, but not yet enforced through observed tool-call telemetry.
 - Priority: high.
 - Acceptance tests:
   - Native Lemon default tools include `read_skill`.
@@ -201,11 +202,16 @@ The first code slice from this scorecard made `read_skill` available in the defa
 3. Added eval checks for relevant-skill prompt progressive disclosure and `read_skill` guidance.
 4. Added tests that require those checks to appear in `CodingAgent.Evals.Harness.run/1` and `mix lemon.eval` JSON output.
 
+### Slice 3: Native relevant-skill preselection
+
+1. Extended `CodingAgent.SystemPrompt.build/2` with `:skill_context` and `:max_relevant_skills` options.
+2. Updated session prompt refresh to pass the current user prompt/steer/follow-up text into skill relevance scoring.
+3. Added contract tests for system-prompt, prompt-builder, and session prompt-composer paths that require concise `<relevant-skills>` hints and keep full skill bodies behind `read_skill`.
+
 ## Follow-up backlog
 
-1. Add a “prompt-contract integrity” test that fails when system prompt references a tool not in default tools.
-2. Add skill-load telemetry fields to run events or session metadata.
-3. Add missed-skill audit warnings based on `LemonSkills.find_relevant/2` and observed tool calls.
-4. Clarify memory/session-search/skills/todos in docs and prompt text.
-5. Add cron parity scorecard and scheduled job prompt validation.
-6. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, async task receipt → `join` before final answer.
+1. Add skill-load telemetry fields to run events or session metadata.
+2. Add missed-skill audit warnings based on `LemonSkills.find_relevant/2` and observed tool calls.
+3. Clarify memory/session-search/skills/todos in docs and prompt text.
+4. Add cron parity scorecard and scheduled job prompt validation.
+5. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, async task receipt → `join` before final answer.

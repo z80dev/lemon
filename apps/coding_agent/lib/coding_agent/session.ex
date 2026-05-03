@@ -569,7 +569,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
-      state = refresh_system_prompt(state)
+      state = refresh_system_prompt(state, text)
       user_message = State.build_prompt_message(text, opts)
 
       # Defer the actual prompt slightly after we reply so callers can subscribe immediately
@@ -823,7 +823,7 @@ defmodule CodingAgent.Session do
   @spec handle_cast(term(), t()) :: {:noreply, t()}
   @impl true
   def handle_cast({:steer, text}, state) do
-    state = refresh_system_prompt(state)
+    state = refresh_system_prompt(state, text)
 
     message = %Ai.Types.UserMessage{
       role: :user,
@@ -838,7 +838,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:follow_up, text}, state) do
-    state = refresh_system_prompt(state)
+    state = refresh_system_prompt(state, text)
 
     message = %Ai.Types.UserMessage{
       role: :user,
@@ -1012,14 +1012,16 @@ defmodule CodingAgent.Session do
   # ============================================================================
 
   @spec refresh_system_prompt(t()) :: t()
-  defp refresh_system_prompt(state) do
+  @spec refresh_system_prompt(t(), String.t()) :: t()
+  defp refresh_system_prompt(state, skill_context \\ "") do
     case PromptComposer.maybe_refresh_system_prompt(
            state.cwd,
            state.explicit_system_prompt,
            state.prompt_template,
            state.workspace_dir,
            state.session_scope,
-           state.system_prompt
+           state.system_prompt,
+           skill_context
          ) do
       :unchanged ->
         state
