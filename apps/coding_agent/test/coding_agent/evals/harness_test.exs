@@ -11,7 +11,10 @@ defmodule CodingAgent.Evals.HarnessTest do
     assert Enum.map(report.results, & &1.name) == [
              "deterministic_contract",
              "statistical_stability",
-             "read_edit_workflow"
+             "read_edit_workflow",
+             "memory_scope_contract",
+             "memory_topic_contract",
+             "auto_skill_prompt_contract"
            ]
   end
 end

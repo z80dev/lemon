@@ -9,7 +9,8 @@ defmodule CodingAgent.Evals.Harness do
   """
 
   alias AgentCore.Types.AgentToolResult
-  alias CodingAgent.ToolRegistry
+  alias CodingAgent.{PromptBuilder, ToolRegistry}
+  alias CodingAgent.Tools.{MemoryTopic, SearchMemory}
 
   @required_builtin_tools ~w(read read_skill memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
 
@@ -32,7 +33,10 @@ defmodule CodingAgent.Evals.Harness do
     results = [
       deterministic_contract_eval(cwd),
       statistical_stability_eval(cwd, iterations),
-      read_edit_workflow_eval(cwd)
+      read_edit_workflow_eval(cwd),
+      memory_scope_contract_eval(cwd),
+      memory_topic_contract_eval(cwd),
+      auto_skill_prompt_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -126,6 +130,198 @@ defmodule CodingAgent.Evals.Harness do
           details: %{reason: format_reason(reason)}
         }
     end
+  end
+
+  @spec memory_scope_contract_eval(String.t()) :: eval_result()
+  def memory_scope_contract_eval(_cwd) do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_memory_scope_eval_#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    project_dir = Path.join(tmp_dir, "project")
+    home_dir = Path.join(tmp_dir, "home")
+
+    search_fn = fn query, opts ->
+      scope_key = Keyword.fetch!(opts, :scope_key)
+      limit = Keyword.fetch!(opts, :limit)
+
+      [
+        %{
+          doc_id: "#{Path.basename(scope_key)}-doc",
+          query: query,
+          limit: limit,
+          scope_key: scope_key
+        }
+      ]
+    end
+
+    format_results_fn = fn docs ->
+      docs
+      |> Enum.map(&Map.fetch!(&1, :doc_id))
+      |> Enum.join(",")
+    end
+
+    tool =
+      SearchMemory.tool(project_dir,
+        workspace_dir: home_dir,
+        search_fn: search_fn,
+        format_results_fn: format_results_fn
+      )
+
+    result = tool.execute.("eval-search-memory", %{"query" => "deployment notes"}, nil, nil)
+    text = flatten_text(result)
+
+    cond do
+      result.details[:scope] != :current ->
+        contract_fail("memory_scope_contract", "expected default scope :current", result.details)
+
+      result.details[:resolved_scopes] != [:project, :home] ->
+        contract_fail("memory_scope_contract", "expected project and home scopes", result.details)
+
+      not String.contains?(text, "project-doc") or not String.contains?(text, "home-doc") ->
+        contract_fail("memory_scope_contract", "expected project and home search hits", %{
+          text: text
+        })
+
+      true ->
+        %{
+          name: "memory_scope_contract",
+          status: :pass,
+          details: %{
+            scope: result.details[:scope],
+            resolved_scopes: result.details[:resolved_scopes]
+          }
+        }
+    end
+  rescue
+    e -> contract_fail("memory_scope_contract", Exception.message(e), %{})
+  end
+
+  @spec memory_topic_contract_eval(String.t()) :: eval_result()
+  def memory_topic_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      workspace_dir = Path.join(tmp_dir, "workspace")
+      template_path = Path.join(workspace_dir, "memory/topics/TEMPLATE.md")
+      topic_path = Path.join(workspace_dir, "memory/topics/harness-contract.md")
+
+      File.mkdir_p!(Path.dirname(template_path))
+      File.write!(template_path, "# Topic: <topic-slug>\n\ncontract-template")
+
+      result =
+        MemoryTopic.execute(
+          "eval-memory-topic",
+          %{"topic" => "Harness Contract"},
+          nil,
+          nil,
+          workspace_dir
+        )
+
+      cond do
+        not match?(%AgentToolResult{}, result) ->
+          contract_fail("memory_topic_contract", "unexpected result", %{result: inspect(result)})
+
+        result.details[:created] != true ->
+          contract_fail("memory_topic_contract", "topic was not created", result.details)
+
+        result.details[:path] != topic_path ->
+          contract_fail("memory_topic_contract", "topic path drifted", result.details)
+
+        not File.exists?(topic_path) ->
+          contract_fail("memory_topic_contract", "topic file missing", %{path: topic_path})
+
+        not String.contains?(File.read!(topic_path), "# Topic: harness-contract") ->
+          contract_fail("memory_topic_contract", "template slug replacement failed", %{
+            path: topic_path
+          })
+
+        true ->
+          File.rm_rf(tmp_dir)
+
+          %{
+            name: "memory_topic_contract",
+            status: :pass,
+            details: %{slug: result.details[:slug], path: result.details[:path]}
+          }
+      end
+    else
+      {:error, reason} -> contract_fail("memory_topic_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("memory_topic_contract", Exception.message(e), %{})
+  end
+
+  @spec auto_skill_prompt_contract_eval(String.t()) :: eval_result()
+  def auto_skill_prompt_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "hermes-memory"])
+      skill_path = Path.join(skill_dir, "SKILL.md")
+      sentinel = "FULL BODY SENTINEL MUST NOT BE IN PROMPT"
+
+      File.mkdir_p!(skill_dir)
+
+      File.write!(skill_path, """
+      ---
+      name: hermes-memory
+      description: Hermes memory recall and durable profile discipline
+      keywords:
+        - hermes
+        - memory
+        - recall
+      ---
+
+      # Hermes Memory
+
+      #{sentinel}
+      """)
+
+      prompt =
+        PromptBuilder.build(tmp_dir, %{
+          base_prompt: "Base.",
+          context: "improve hermes memory recall and profile discipline",
+          include_skills: true,
+          include_commands: false,
+          include_mentions: false
+        })
+
+      cond do
+        not String.contains?(prompt, "<relevant-skills>") ->
+          contract_fail("auto_skill_prompt_contract", "missing relevant skills block", %{
+            prompt: prompt
+          })
+
+        not String.contains?(prompt, "<key>hermes-memory</key>") ->
+          contract_fail("auto_skill_prompt_contract", "missing relevant skill key", %{
+            prompt: prompt
+          })
+
+        not String.contains?(prompt, "Use `read_skill`") ->
+          contract_fail("auto_skill_prompt_contract", "missing read_skill loading reminder", %{
+            prompt: prompt
+          })
+
+        String.contains?(prompt, sentinel) ->
+          contract_fail("auto_skill_prompt_contract", "full skill body leaked into prompt", %{})
+
+        true ->
+          File.rm_rf(tmp_dir)
+
+          %{
+            name: "auto_skill_prompt_contract",
+            status: :pass,
+            details: %{skill: "hermes-memory", progressive_disclosure: true}
+          }
+      end
+    else
+      {:error, reason} -> contract_fail("auto_skill_prompt_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("auto_skill_prompt_contract", Exception.message(e), %{})
+  end
+
+  defp contract_fail(name, reason, details) do
+    %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
 
   defp normalized_tool_names(cwd) do
