@@ -80,7 +80,7 @@ defmodule CodingAgent.SystemPrompt do
   defp build_relevant_skills_section(cwd, context, max_skills) when is_binary(context) do
     views =
       context
-      |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: true)
+      |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: false)
       |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
       |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
 

@@ -564,6 +564,8 @@ defmodule AgentCore.Loop do
   end
 
   defp process_pending_messages(context, new_messages, pending_messages, stream) do
+    {context, pending_messages} = apply_queued_system_prompt(context, pending_messages)
+
     for message <- pending_messages do
       EventStream.push(stream, {:message_start, message})
       EventStream.push(stream, {:message_end, message})
@@ -573,6 +575,28 @@ defmodule AgentCore.Loop do
     new_messages = new_messages ++ pending_messages
 
     {context, new_messages, []}
+  end
+
+  defp apply_queued_system_prompt(context, pending_messages) do
+    {messages, latest_system_prompt} =
+      Enum.map_reduce(pending_messages, nil, fn
+        %{message: message, system_prompt: prompt}, _latest when is_binary(prompt) ->
+          {message, prompt}
+
+        %{message: message}, latest ->
+          {message, latest}
+
+        message, latest ->
+          {message, latest}
+      end)
+
+    context =
+      case latest_system_prompt do
+        prompt when is_binary(prompt) and prompt != "" -> %{context | system_prompt: prompt}
+        _ -> context
+      end
+
+    {context, messages}
   end
 
   # ============================================================================

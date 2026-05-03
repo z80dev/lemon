@@ -501,6 +501,57 @@ defmodule AgentCore.LoopTest do
       assert length(events) > 0
     end
 
+    test "applies queued system prompt to follow-up turns" do
+      parent = self()
+      context = simple_context(system_prompt: "base prompt")
+
+      follow_up = %{
+        message: user_message("use relevant skills"),
+        system_prompt: "follow-up prompt"
+      }
+
+      {:ok, responses} =
+        Agent.start_link(fn ->
+          [Mocks.assistant_message("first"), Mocks.assistant_message("second")]
+        end)
+
+      {:ok, follow_up_queue} = Agent.start_link(fn -> [follow_up] end)
+
+      stream_fn = fn _model, llm_context, _options ->
+        send(parent, {:seen_system_prompt, llm_context.system_prompt})
+
+        response =
+          Agent.get_and_update(responses, fn
+            [head | tail] -> {head, tail}
+            [] -> {Mocks.assistant_message("done"), []}
+          end)
+
+        {:ok, stream} = Ai.EventStream.start_link()
+
+        Task.start(fn ->
+          Ai.EventStream.push(stream, {:start, response})
+          Ai.EventStream.push(stream, {:done, response.stop_reason, response})
+          Ai.EventStream.complete(stream, response)
+        end)
+
+        {:ok, stream}
+      end
+
+      get_follow_up = fn ->
+        Agent.get_and_update(follow_up_queue, fn
+          [head | tail] -> {[head], tail}
+          [] -> {[], []}
+        end)
+      end
+
+      config = simple_config(stream_fn: stream_fn, get_follow_up_messages: get_follow_up)
+
+      Loop.stream([user_message("initial")], context, config) |> Enum.to_list()
+
+      assert_receive {:seen_system_prompt, "base prompt"}
+      assert_receive {:seen_system_prompt, "follow-up prompt"}
+    end
+
     test "does not skip tool calls when steering messages arrive" do
       echo_tool = Mocks.echo_tool()
       context = simple_context(tools: [echo_tool])
