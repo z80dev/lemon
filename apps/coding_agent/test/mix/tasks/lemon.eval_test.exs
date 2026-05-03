@@ -268,5 +268,20 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       check_names = Enum.map(decoded["results"], & &1["name"])
       assert "read_edit_workflow" in check_names
     end
+
+    @tag :integration
+    test "memory and skill contract checks are included" do
+      output =
+        capture_io(fn ->
+          Eval.run(["--iterations", "2", "--json"])
+        end)
+
+      {:ok, decoded} = Jason.decode(output)
+
+      check_names = Enum.map(decoded["results"], & &1["name"])
+      assert "memory_scope_contract" in check_names
+      assert "memory_topic_contract" in check_names
+      assert "auto_skill_prompt_contract" in check_names
+    end
   end
 end

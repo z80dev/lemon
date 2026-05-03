@@ -212,7 +212,9 @@ For coordination workflows that must produce one final same-turn answer, queued 
 |--------|-------------|
 | `CodingAgent.Checkpoint` | Snapshot/restore for long-running sessions with aggregate stats |
 | `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
-| `CodingAgent.Evals.Harness` | Evaluation harness for automated agent testing |
+| `CodingAgent.Evals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
+
+The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, `search_memory` current-scope resolution, `memory_topic` scaffold behavior, and relevant-skill prompt guidance that points agents to `read_skill` without inlining full skill bodies.
 
 ### Security
 

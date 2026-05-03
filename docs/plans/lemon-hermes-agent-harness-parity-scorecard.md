@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: initial working scorecard for the `harness-parity` branch.
+Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard is to make `read_skill` available in the default native Lemon tool set, because the system prompt already instructs agents to use `read_skill` when a listed skill applies.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure.
 
 ## Capability scorecard
 
@@ -35,7 +35,8 @@ The first code slice from this scorecard is to make `read_skill` available in th
 - Priority: high.
 - Acceptance tests:
   - Default tool set contains every tool referenced by the system prompt.
-  - Read-only and minimal-core policies allow context-loading tools such as `read_skill`.
+  - Read-only and minimal-core policies allow context-loading tools such as `read_skill` and `search_memory`.
+  - Eval harness includes deterministic contracts for memory scopes, memory-topic scaffolding, and relevant-skill prompt progressive disclosure.
   - Eval catches an agent finalizing after promising an action without calling a tool.
 
 ### Skills lifecycle and procedural memory
@@ -54,14 +55,15 @@ The first code slice from this scorecard is to make `read_skill` available in th
   - `read_skill` can read full content, summaries, sections, and linked files.
   - Install/update audit gates exist.
 - Gaps:
-  - `read_skill` was not exposed through the default coding tool factories / registry before this branch.
   - Missed-skill detection is not yet audited as a run outcome.
   - Skill authoring/patching from the agent loop is not as mature as read-only consumption.
-- Priority: highest first slice.
+  - Per-turn relevant-skill hints are not yet wired into the native session path as an enforced behavior.
+- Priority: high.
 - Acceptance tests:
   - Native Lemon default tools include `read_skill`.
   - System prompt mentions `read_skill` only when the tool is available, or tests enforce both surfaces move together.
-  - A skill-relevant fixture prompt causes the agent/eval harness to call `read_skill` before answering.
+  - Eval harness verifies a skill-relevant fixture prompt surfaces a `<relevant-skills>` block, includes a `read_skill` reminder, and does not inline full skill bodies.
+  - Future behavioral eval: a skill-relevant fixture prompt causes the agent/eval harness to call `read_skill` before answering.
 
 ### Memory and session recall
 
@@ -74,7 +76,7 @@ The first code slice from this scorecard is to make `read_skill` available in th
 - Strengths:
   - Completed runs become structured `MemoryDocument`s.
   - Full-text search supports current/project/home/session/agent/all scopes.
-  - Secret scanning prevents obvious memory leaks.
+  - Ingest-time secret scanning/redaction needs to be verified and hardened before claiming memory storage safety.
   - Skill synthesis can mine successful runs.
 - Gaps:
   - System prompt still mixes workspace memory files, memory topics, and session search in a way that may be confusing.
@@ -82,6 +84,8 @@ The first code slice from this scorecard is to make `read_skill` available in th
   - Need evals that force memory search when users reference prior work.
 - Priority: high.
 - Acceptance tests:
+  - `search_memory` defaults to current scope and searches both project and assistant-home memory without broadening missing contexts.
+  - `memory_topic` scaffolds `memory/topics/<slug>.md` from the workspace template and replaces the slug placeholder.
   - “Last time / remember when” prompts call `search_memory` before answering.
   - Memory-topic creation does not replace procedural skill authoring.
 
@@ -182,12 +186,20 @@ The first code slice from this scorecard is to make `read_skill` available in th
   - Need dashboard panels for skill loads, memory searches, approvals, subagent tree, and cron job runs.
 - Priority: medium.
 
-## First implementation slice
+## Implementation slices so far
 
-1. Expose `read_skill` from `CodingAgent.Tools` and `CodingAgent.ToolRegistry`.
-2. Allow `read_skill` in `read_only` and `minimal_core` policies.
-3. Update docs and tests so the prompt/tool contract stays synchronized.
-4. Add follow-up eval: prompt with a clearly matching skill must call `read_skill` before final answer.
+### Slice 1: Native `read_skill` / `search_memory` availability
+
+1. Exposed `read_skill` from `CodingAgent.Tools` and `CodingAgent.ToolRegistry`.
+2. Allowed `read_skill` and `search_memory` in relevant read/minimal policies.
+3. Updated docs and tests so the prompt/tool contract stays synchronized.
+
+### Slice 2: Memory and skill harness contract evals
+
+1. Added eval checks for default `search_memory` current-scope resolution.
+2. Added eval checks for `memory_topic` scaffold behavior.
+3. Added eval checks for relevant-skill prompt progressive disclosure and `read_skill` guidance.
+4. Added tests that require those checks to appear in `CodingAgent.Evals.Harness.run/1` and `mix lemon.eval` JSON output.
 
 ## Follow-up backlog
 
@@ -196,3 +208,4 @@ The first code slice from this scorecard is to make `read_skill` available in th
 3. Add missed-skill audit warnings based on `LemonSkills.find_relevant/2` and observed tool calls.
 4. Clarify memory/session-search/skills/todos in docs and prompt text.
 5. Add cron parity scorecard and scheduled job prompt validation.
+6. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, async task receipt → `join` before final answer.
