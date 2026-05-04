@@ -65,6 +65,69 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     end
   end
 
+  defmodule TransportRegistryStub do
+    use GenServer
+
+    def start_link(state) do
+      GenServer.start(__MODULE__, state, name: __MODULE__)
+    end
+
+    def list_transports, do: GenServer.call(__MODULE__, :list_transports)
+    def enabled_transports, do: GenServer.call(__MODULE__, :enabled_transports)
+    def get_transport(id), do: GenServer.call(__MODULE__, {:get_transport, id})
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call(:list_transports, _from, state) do
+      {:reply, Map.keys(state.transports), state}
+    end
+
+    def handle_call(:enabled_transports, _from, state) do
+      enabled =
+        state.transports
+        |> Enum.filter(fn {id, _mod} -> id in state.enabled end)
+        |> Enum.into([])
+
+      {:reply, enabled, state}
+    end
+
+    def handle_call({:get_transport, id}, _from, state) do
+      {:reply, Map.get(state.transports, id), state}
+    end
+  end
+
+  defmodule TransportRegistryMissingApiStub do
+    use GenServer
+
+    def start_link(state) do
+      GenServer.start(__MODULE__, state, name: __MODULE__)
+    end
+
+    @impl true
+    def init(state), do: {:ok, state}
+  end
+
+  defmodule TransportRegistryCrashingStub do
+    use GenServer
+
+    def start_link(state) do
+      GenServer.start(__MODULE__, state, name: __MODULE__)
+    end
+
+    def list_transports, do: GenServer.call(__MODULE__, :list_transports)
+    def enabled_transports, do: GenServer.call(__MODULE__, :enabled_transports)
+    def get_transport(_id), do: raise("registry API failure")
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call(:list_transports, _from, state), do: {:reply, ["email"], state}
+    def handle_call(:enabled_transports, _from, state), do: {:reply, [], state}
+  end
+
   setup do
     token = System.unique_integer([:positive, :monotonic])
     agent_id = "cp_introspection_#{token}"
@@ -203,13 +266,26 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert is_map(session["harness"])
       assert session["harness"]["todos"]["total"] == 1
       assert session["harness"]["checkpoints"]["count"] >= 1
-      assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+
+      assert session["harness"]["requirements"]["project_name"] ==
+               "Control Plane Harness Projection"
+
       assert session["harness"]["requirements"]["percentage"] == 50
       assert session["harness"]["requirements"]["cwd"] == requirements_cwd
     end
   end
 
   describe "transports.status" do
+    setup do
+      old_registry_module = Application.get_env(:lemon_control_plane, :transport_registry_module)
+
+      on_exit(fn ->
+        restore_transport_registry_module(old_registry_module)
+      end)
+
+      :ok
+    end
+
     test "returns transport visibility snapshot" do
       assert TransportsStatus.name() == "transports.status"
       assert TransportsStatus.scopes() == [:read]
@@ -228,6 +304,111 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         assert is_boolean(transport["enabled"])
         assert transport["status"] in ["enabled", "disabled"]
       end)
+    end
+
+    test "returns empty snapshot when the gateway registry module is not loaded" do
+      Application.put_env(
+        :lemon_control_plane,
+        :transport_registry_module,
+        :"Elixir.LemonControlPlane.MissingTransportRegistryForTest"
+      )
+
+      {:ok, result} = TransportsStatus.handle(%{}, %{})
+
+      assert result["registryRunning"] == false
+      assert result["transports"] == []
+      assert result["total"] == 0
+      assert result["enabled"] == 0
+    end
+
+    test "returns empty snapshot when the gateway registry module is loaded but stopped" do
+      Application.put_env(:lemon_control_plane, :transport_registry_module, TransportRegistryStub)
+
+      {:ok, result} = TransportsStatus.handle(%{}, %{})
+
+      assert result["registryRunning"] == false
+      assert result["transports"] == []
+    end
+
+    test "returns configured and enabled transports when the legacy registry is running" do
+      Application.put_env(:lemon_control_plane, :transport_registry_module, TransportRegistryStub)
+
+      {:ok, pid} =
+        TransportRegistryStub.start_link(%{
+          transports: %{"email" => Example.EmailTransport, "webhook" => Example.WebhookTransport},
+          enabled: ["webhook"]
+        })
+
+      try do
+        {:ok, result} = TransportsStatus.handle(%{}, %{})
+
+        assert result["registryRunning"] == true
+        assert result["total"] == 2
+        assert result["enabled"] == 1
+
+        assert result["transports"] == [
+                 %{
+                   "transportId" => "email",
+                   "module" => "Elixir.Example.EmailTransport",
+                   "enabled" => false,
+                   "status" => "disabled"
+                 },
+                 %{
+                   "transportId" => "webhook",
+                   "module" => "Elixir.Example.WebhookTransport",
+                   "enabled" => true,
+                   "status" => "enabled"
+                 }
+               ]
+      after
+        Process.unlink(pid)
+        Process.exit(pid, :kill)
+      end
+    end
+
+    test "degrades safely when the registry API is missing or fails" do
+      Application.put_env(
+        :lemon_control_plane,
+        :transport_registry_module,
+        TransportRegistryMissingApiStub
+      )
+
+      {:ok, missing_api_pid} = TransportRegistryMissingApiStub.start_link(%{})
+
+      try do
+        {:ok, result} = TransportsStatus.handle(%{}, %{})
+        assert result["registryRunning"] == true
+        assert result["transports"] == []
+      after
+        Process.unlink(missing_api_pid)
+        Process.exit(missing_api_pid, :kill)
+      end
+
+      Application.put_env(
+        :lemon_control_plane,
+        :transport_registry_module,
+        TransportRegistryCrashingStub
+      )
+
+      {:ok, crashing_pid} = TransportRegistryCrashingStub.start_link(%{})
+
+      try do
+        {:ok, result} = TransportsStatus.handle(%{}, %{})
+
+        assert result["registryRunning"] == true
+
+        assert result["transports"] == [
+                 %{
+                   "transportId" => "email",
+                   "module" => nil,
+                   "enabled" => false,
+                   "status" => "disabled"
+                 }
+               ]
+      after
+        Process.unlink(crashing_pid)
+        Process.exit(crashing_pid, :kill)
+      end
     end
   end
 
@@ -277,7 +458,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert session = Enum.find(result["activeSessions"], &(&1["sessionKey"] == session_key))
       assert is_map(session["harness"])
       assert session["harness"]["todos"]["total"] == 1
-      assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+
+      assert session["harness"]["requirements"]["project_name"] ==
+               "Control Plane Harness Projection"
+
       assert session["harness"]["requirements"]["cwd"] == requirements_cwd
     end
 
@@ -305,9 +489,18 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)
 
-  defp restore_session_coordinator(nil), do: Application.delete_env(:lemon_router, :session_coordinator)
+  defp restore_session_coordinator(nil),
+    do: Application.delete_env(:lemon_router, :session_coordinator)
 
   defp restore_session_coordinator(config) do
     Application.put_env(:lemon_router, :session_coordinator, config)
+  end
+
+  defp restore_transport_registry_module(nil) do
+    Application.delete_env(:lemon_control_plane, :transport_registry_module)
+  end
+
+  defp restore_transport_registry_module(config) do
+    Application.put_env(:lemon_control_plane, :transport_registry_module, config)
   end
 end

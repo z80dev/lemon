@@ -3,6 +3,21 @@ defmodule LemonGateway.HealthTest do
 
   import Plug.Test
 
+  defmodule XmtpMissingStatusStub do
+  end
+
+  defmodule XmtpDisconnectedStub do
+    def status do
+      {:ok, %{mode: :mock, require_live: true, connected?: false, healthy?: true}}
+    end
+  end
+
+  defmodule XmtpUnhealthyStub do
+    def status do
+      {:ok, %{mode: :mock, require_live: true, connected?: true, healthy?: false}}
+    end
+  end
+
   setup do
     Application.stop(:lemon_gateway)
 
@@ -21,6 +36,7 @@ defmodule LemonGateway.HealthTest do
     on_exit(fn ->
       Application.stop(:lemon_gateway)
       Application.delete_env(:lemon_gateway, :health_checks)
+      Application.delete_env(:lemon_gateway, :xmtp_transport_module)
     end)
 
     :ok
@@ -78,5 +94,58 @@ defmodule LemonGateway.HealthTest do
     assert Enum.any?(body["checks"], fn check ->
              check["name"] == "xmtp_transport" and check["ok"] == false
            end)
+  end
+
+  test "xmtp readiness check distinguishes missing channel module" do
+    restart_gateway_with_xmtp(:"Elixir.LemonGateway.HealthTest.MissingXmtpModule")
+
+    check = xmtp_health_check()
+
+    assert check.ok == false
+    assert check.error =~ ":xmtp_module_not_loaded"
+  end
+
+  test "xmtp readiness check distinguishes missing status callback" do
+    restart_gateway_with_xmtp(XmtpMissingStatusStub)
+
+    check = xmtp_health_check()
+
+    assert check.ok == false
+    assert check.error =~ ":xmtp_status_unavailable"
+  end
+
+  test "xmtp readiness check distinguishes disconnected and unhealthy transport" do
+    restart_gateway_with_xmtp(XmtpDisconnectedStub)
+
+    check = xmtp_health_check()
+    assert check.ok == false
+    assert check.error =~ ":xmtp_not_connected"
+
+    restart_gateway_with_xmtp(XmtpUnhealthyStub)
+
+    check = xmtp_health_check()
+    assert check.ok == false
+    assert check.error =~ ":xmtp_unhealthy"
+  end
+
+  defp restart_gateway_with_xmtp(transport_module) do
+    Application.stop(:lemon_gateway)
+
+    Application.put_env(:lemon_gateway, :xmtp_transport_module, transport_module)
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_telegram: false,
+      enable_xmtp: true
+    })
+
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+  end
+
+  defp xmtp_health_check do
+    LemonGateway.Health.status()
+    |> Map.fetch!(:checks)
+    |> Enum.find(&(&1.name == "xmtp_transport"))
   end
 end

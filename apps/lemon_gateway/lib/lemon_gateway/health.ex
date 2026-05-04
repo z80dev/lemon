@@ -147,13 +147,14 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_transport_check do
-    xmtp_transport_mod = :"Elixir.LemonChannels.Adapters.Xmtp.Transport"
+    xmtp_transport_mod = xmtp_transport_module()
 
-    with true <- Code.ensure_loaded?(xmtp_transport_mod),
-         true <- function_exported?(xmtp_transport_mod, :status, 0),
-         {:ok, status} <- xmtp_transport_mod.status(),
-         true <- status[:connected?] == true,
-         true <- status[:healthy?] == true do
+    with {:module_loaded, true} <- {:module_loaded, Code.ensure_loaded?(xmtp_transport_mod)},
+         {:status_exported, true} <-
+           {:status_exported, function_exported?(xmtp_transport_mod, :status, 0)},
+         {:status, {:ok, status}} <- {:status, apply(xmtp_transport_mod, :status, [])},
+         {:connected, true} <- {:connected, status[:connected?] == true},
+         {:healthy, true} <- {:healthy, status[:healthy?] == true} do
       {:ok,
        %{
          mode: status[:mode],
@@ -161,11 +162,23 @@ defmodule LemonGateway.Health do
          connected: status[:connected?]
        }}
     else
-      false ->
-        {:error, :xmtp_not_live}
+      {:module_loaded, false} ->
+        {:error, :xmtp_module_not_loaded}
 
-      {:error, reason} ->
+      {:status_exported, false} ->
+        {:error, :xmtp_status_unavailable}
+
+      {:status, {:error, reason}} ->
         {:error, reason}
+
+      {:status, other} ->
+        {:error, {:unexpected_xmtp_status, other}}
+
+      {:connected, false} ->
+        {:error, :xmtp_not_connected}
+
+      {:healthy, false} ->
+        {:error, :xmtp_unhealthy}
 
       other ->
         {:error, {:unexpected_xmtp_status, other}}
@@ -173,6 +186,14 @@ defmodule LemonGateway.Health do
   rescue
     error ->
       {:error, error}
+  end
+
+  defp xmtp_transport_module do
+    Application.get_env(
+      :lemon_gateway,
+      :xmtp_transport_module,
+      :"Elixir.LemonChannels.Adapters.Xmtp.Transport"
+    )
   end
 
   defp xmtp_enabled? do
