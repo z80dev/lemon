@@ -147,7 +147,7 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_transport_check do
-    xmtp_transport_mod = LemonChannels.Adapters.Xmtp.Transport
+    xmtp_transport_mod = :"Elixir.LemonChannels.Adapters.Xmtp.Transport"
 
     with true <- Code.ensure_loaded?(xmtp_transport_mod),
          true <- function_exported?(xmtp_transport_mod, :status, 0),

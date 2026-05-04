@@ -45,15 +45,17 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   end
 
   defp transport_registry_running? do
-    Code.ensure_loaded?(LemonGateway.TransportRegistry) and
-      is_pid(Process.whereis(LemonGateway.TransportRegistry))
+    registry = transport_registry_module()
+
+    Code.ensure_loaded?(registry) and is_pid(Process.whereis(registry))
   end
 
   defp configured_transports(false), do: []
 
   defp configured_transports(true) do
-    registry_module()
-    |> apply(:list_transports, [])
+    registry = transport_registry_module()
+
+    apply(registry, :list_transports, [])
     |> Enum.map(fn id -> {id, safe_get_transport(id)} end)
   rescue
     _ -> []
@@ -64,8 +66,7 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   defp enabled_transport_ids(false), do: MapSet.new()
 
   defp enabled_transport_ids(true) do
-    registry_module()
-    |> apply(:enabled_transports, [])
+    apply(transport_registry_module(), :enabled_transports, [])
     |> Enum.map(fn {id, _mod} -> id end)
     |> MapSet.new()
   rescue
@@ -75,16 +76,15 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   end
 
   defp safe_get_transport(id) do
-    registry_module()
-    |> apply(:get_transport, [id])
+    apply(transport_registry_module(), :get_transport, [id])
   rescue
     _ -> nil
   catch
     :exit, _ -> nil
   end
 
-  defp registry_module, do: LemonGateway.TransportRegistry
-
   defp module_name(mod) when is_atom(mod), do: Atom.to_string(mod)
   defp module_name(_), do: nil
+
+  defp transport_registry_module, do: :"Elixir.LemonGateway.TransportRegistry"
 end

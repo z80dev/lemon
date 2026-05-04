@@ -24,7 +24,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_automation,
       :lemon_channels,
       :lemon_core,
-      :lemon_gateway,
       :lemon_router,
       :lemon_skills
     ],
@@ -34,7 +33,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :ai,
       :coding_agent,
       :lemon_automation,
-      :lemon_channels,
       :lemon_core
     ],
     lemon_mcp: [:agent_core, :coding_agent],
