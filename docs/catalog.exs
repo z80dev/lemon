@@ -126,6 +126,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/testing.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-05],
+    max_age_days: 60
+  },
+  %{
     path: "docs/testing/deterministic-test-patterns.md",
     owner: "@z80",
     last_reviewed: ~D[2026-04-23],

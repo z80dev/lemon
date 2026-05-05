@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# Canonical Lemon repo-level test runner.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LANE="${1:-help}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/test <lane> [args]
+
+Canonical test lanes:
+  fast       MIX_ENV=test compile with warnings as errors, then ExUnit excluding integration
+  quality    Lemon quality gates: CI/docs lint, skill lint, architecture quality, duplicate tests, focused quality tests
+  clients    Node client CI parity checks for lemon-web, lemon-tui, and lemon-browser-node
+  eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
+  smoke      Local product-smoke pointer; CI-only release smoke is in .github/workflows/product-smoke.yml
+  all        Useful local aggregate: fast, quality, eval-fast, smoke
+  path       Pass-through to mix test for paths or ExUnit args: scripts/test path apps/foo/test --seed 1
+  help       Show this message
+
+Runner defaults:
+  - Runs from the repository root.
+  - Sets MIX_ENV=test for BEAM test lanes unless a lane intentionally overrides it.
+  - Creates per-invocation temp LEMON_STORE_PATH and LEMON_TEST_TMPDIR when unset.
+EOF
+}
+
+ensure_repo_root() {
+  cd "$ROOT"
+}
+
+setup_test_env() {
+  export MIX_ENV="${MIX_ENV:-test}"
+
+  if [ -z "${LEMON_TEST_TMPDIR:-}" ]; then
+    export LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
+    trap 'rm -rf "$LEMON_TEST_TMPDIR"' EXIT
+  fi
+
+  export LEMON_STORE_PATH="${LEMON_STORE_PATH:-$LEMON_TEST_TMPDIR/store}"
+  mkdir -p "$LEMON_STORE_PATH"
+}
+
+run_fast() {
+  ensure_repo_root
+  setup_test_env
+  mix compile --warnings-as-errors
+  mix test --exclude integration "$@"
+}
+
+run_quality() {
+  ensure_repo_root
+  setup_test_env
+  bash scripts/lint_ci_docs.sh
+  bash scripts/test_contract.sh
+  mix lemon.skill.lint
+  mix lemon.quality
+  mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
+}
+
+run_npm_ci_if_needed() {
+  local dir="$1"
+  if [ ! -d "$dir/node_modules" ]; then
+    (cd "$dir" && npm ci)
+  fi
+}
+
+run_clients() {
+  ensure_repo_root
+
+  run_npm_ci_if_needed clients/lemon-web
+  (cd clients/lemon-web && npm run typecheck && npm --workspace web run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)
+
+  run_npm_ci_if_needed clients/lemon-tui
+  (cd clients/lemon-tui && npm run typecheck && npm run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)
+
+  run_npm_ci_if_needed clients/lemon-browser-node
+  (cd clients/lemon-browser-node && npm run typecheck && npm run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)
+}
+
+run_eval_fast() {
+  ensure_repo_root
+  setup_test_env
+  mix lemon.eval --iterations "${LEMON_EVAL_ITERATIONS:-3}" "$@"
+}
+
+run_smoke() {
+  ensure_repo_root
+  cat <<'EOF'
+The product smoke lane is CI-only for now because it builds and boots a release
+with GitHub Actions service assumptions. Use one of:
+
+  gh workflow run product-smoke.yml
+  scripts/test fast
+  scripts/test quality
+
+Canonical CI smoke definition: .github/workflows/product-smoke.yml
+EOF
+}
+
+run_path() {
+  ensure_repo_root
+  setup_test_env
+  if [ "$#" -eq 0 ]; then
+    echo "scripts/test path requires at least one mix test path or argument" >&2
+    exit 64
+  fi
+  mix test "$@"
+}
+
+case "$LANE" in
+  help|-h|--help) usage ;;
+  fast) run_fast "$@" ;;
+  quality) run_quality "$@" ;;
+  clients) run_clients "$@" ;;
+  eval-fast) run_eval_fast "$@" ;;
+  smoke) run_smoke "$@" ;;
+  all)
+    run_fast
+    run_quality
+    run_eval_fast
+    run_smoke
+    ;;
+  path) run_path "$@" ;;
+  *)
+    echo "Unknown test lane: $LANE" >&2
+    usage >&2
+    exit 64
+    ;;
+esac

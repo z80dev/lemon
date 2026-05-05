@@ -179,24 +179,18 @@ mix deps.get
 # Compile all apps
 mix compile
 
-# Run all tests
-mix test
-
-# Run umbrella tests with coverage
-mix test --cover --exclude integration
-
-# Run tests for specific app
-mix test apps/ai
-mix test apps/coding_agent
-
-# Run integration tests
-mix test --include integration
+# Canonical repo-level test lanes
+scripts/test help
+scripts/test fast       # compile with warnings as errors + ExUnit excluding integration
+scripts/test quality    # Lemon quality gates and focused quality tests
+scripts/test clients    # Node client CI parity checks
+scripts/test eval-fast  # small eval harness run
+scripts/test smoke      # CI-only product-smoke pointer
+scripts/test all        # useful local aggregate
+scripts/test path apps/ai/test --seed 1
 
 # Format code
 mix format
-
-# Quality checks after docs/dependency changes
-mix lemon.quality
 ```
 
 ### TUI Client (TypeScript)
@@ -415,6 +409,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/config.md` - Runtime configuration reference
 - `docs/skills.md` - Skill system documentation
 - `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
+- `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
 - `docs/remote-cli-task-execution-plan.md` - Planning note for remote `codex`/`claude` task execution over generic runner backends
