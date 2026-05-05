@@ -35,7 +35,12 @@ ensure_repo_root() {
 
 setup_test_env() {
   export MIX_ENV="${MIX_ENV:-test}"
-  export LEMON_TEST_TMPDIR="${LEMON_TEST_TMPDIR:-$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")}"
+
+  if [ -z "${LEMON_TEST_TMPDIR:-}" ]; then
+    export LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
+    trap 'rm -rf "$LEMON_TEST_TMPDIR"' EXIT
+  fi
+
   export LEMON_STORE_PATH="${LEMON_STORE_PATH:-$LEMON_TEST_TMPDIR/store}"
   mkdir -p "$LEMON_STORE_PATH"
 }
@@ -54,7 +59,6 @@ run_quality() {
   bash scripts/test_contract.sh
   mix lemon.skill.lint
   mix lemon.quality
-  mix lemon.check_duplicate_tests
   mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
 }
 
