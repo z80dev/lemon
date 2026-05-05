@@ -148,10 +148,13 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 ## Development
 
 ```bash
-mix test                          # all tests
-mix test apps/lemon_skills        # one app
-mix lemon.quality                 # lint + doc freshness + architecture boundaries
+scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
+scripts/test path apps/lemon_skills/test
+scripts/test quality              # lint + doc freshness + architecture boundaries
 ```
+
+See [`docs/testing.md`](docs/testing.md) for the canonical local test lanes and
+how they map to CI.
 
 GitHub Copilot coding-agent runs use
 [`/.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml)

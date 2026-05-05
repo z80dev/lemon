@@ -22,10 +22,13 @@ Full setup: [`docs/user-guide/setup.md`](docs/user-guide/setup.md)
 ## Development
 
 ```bash
-mix test                   # all tests
-mix test apps/lemon_core   # one app
-mix lemon.quality          # lint + architecture boundaries + doc freshness
+scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
+scripts/test path apps/lemon_core/test
+scripts/test quality              # lint + architecture boundaries + doc freshness
 ```
+
+See [`docs/testing.md`](docs/testing.md) for the canonical local test lanes and
+how they map to CI.
 
 ## Commit Style (Conventional Commits)
 

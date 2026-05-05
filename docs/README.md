@@ -38,6 +38,7 @@
 | Doc | What it covers |
 |-----|---------------|
 | [long-running-agent-harnesses.md](long-running-agent-harnesses.md) | Long-running harness patterns, eval loops, and runtime validation workflows |
+| [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 
