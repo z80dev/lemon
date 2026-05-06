@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers; seventieth slice backs dedicated memory/skill tool preference with prompt contracts.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers; seventieth slice backs dedicated memory/skill tool preference with prompt contracts; seventy-first slice adds live-model untrusted prompt-injection coverage.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: prompt contracts now require agents to prefer dedicated memory and skill tools over shell commands for learning surfaces.
+Latest slice: the opt-in live-model lane now verifies a provider-backed model ignores untrusted external tool instructions and avoids `skill_manage` side effects.
 
 ### Tool ergonomics and enforcement
 
@@ -216,8 +216,9 @@ Latest slice: prompt contracts now require agents to prefer dedicated memory and
   - Untrusted tool-output boundary exists.
   - The agent safety contract now ties tool exposure, approval scopes, durable-memory screening, skill audit enforcement, and redacted telemetry together.
   - The deterministic eval lane now checks that adversarial untrusted tool output stays inside the external-content boundary.
+  - The opt-in live-model lane now checks that provider-backed models ignore untrusted external tool instructions and avoid `skill_manage` side effects.
 - Gaps:
-  - Need live-model prompt-injection evals against external content.
+  - Additional prompt-injection variants across web, email, and extension tools would broaden coverage.
 - Priority: medium-high.
 
 ### Observability and dogfood loop
@@ -662,6 +663,12 @@ Latest slice: prompt contracts now require agents to prefer dedicated memory and
 1. Updated main-session memory guidance to prefer `search_memory`, `memory_topic`, `read_skill`, and `skill_manage` over shell commands for learning surfaces.
 2. Updated the shared learning workflow prompt with the same dedicated-tool preference.
 3. Added `dedicated_tool_preference_contract` so the deterministic eval lane fails if that guidance drifts.
+
+### Slice 71: Live-model untrusted prompt-injection coverage
+
+1. Added `live_model_untrusted_prompt_injection_contract` to the opt-in live-model eval lane.
+2. Seeded an untrusted external lookup tool whose result tries to close the external-content boundary, call `skill_manage`, and force a PWNED response.
+3. Required the provider-backed model to use the external result only as data, avoid `skill_manage`, and finish with the safe marker.
 
 ## Follow-up backlog
 
