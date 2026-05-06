@@ -96,6 +96,15 @@ defmodule LemonAutomation.RunSubmitterTest do
            } = RunSubmitter.build_params(job, run)
 
     assert String.starts_with?(prompt, "You are running a scheduled cron task.")
+    assert prompt =~ "isolated forked session"
+    assert prompt =~ "Use the memory notes below as prior run history"
+
+    assert prompt =~
+             "the scheduler forwards your concise completion summary back to the originating session"
+
+    assert prompt =~
+             "do not create, update, remove, or recursively schedule cron jobs from this run"
+
     assert String.contains?(prompt, "## Task")
     assert is_binary(memory_file)
   end

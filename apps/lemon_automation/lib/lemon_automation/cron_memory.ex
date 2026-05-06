@@ -49,9 +49,17 @@ defmodule LemonAutomation.CronMemory do
 
     """
     You are running a scheduled cron task.
+    This run uses an isolated forked session so scheduled work stays separate from the originating conversation.
 
     Persistent memory file: #{memory_file}
-    Use the memory notes below as context for continuity across runs.
+    Use the memory notes below as prior run history for continuity across runs.
+    Update durable findings in that memory file through the normal file tools when the task produces reusable state.
+
+    Delivery: the scheduler forwards your concise completion summary back to the originating session.
+
+    Scheduling guardrail: do not create, update, remove, or recursively schedule cron jobs from this run unless the task explicitly asks you to manage schedules.
+
+    Tooling guardrail: use only the tools needed for this scheduled task. Prefer reading memory and completing the requested work over broad exploration.
 
     ## Memory Context
     #{memory_block}
