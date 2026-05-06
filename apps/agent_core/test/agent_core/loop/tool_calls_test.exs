@@ -381,10 +381,133 @@ defmodule AgentCore.Loop.ToolCallsTest do
     [tool_result_message] = results
     assert tool_result_message.is_error == true
 
+    assert tool_result_message.details == %{
+             error_type: :unknown_tool,
+             tool_name: "nonexistent_tool"
+           }
+
     assert Enum.any?(tool_result_message.content, fn
              %TextContent{text: text} -> String.contains?(text, "not found")
              _ -> false
            end)
+  end
+
+  test "coerces safe schema-shaped arguments before executing tool task" do
+    parent = self()
+
+    tool = %AgentTool{
+      name: "schema_tool",
+      description: "captures coerced args",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "flag" => %{"type" => "boolean"},
+          "count" => %{"type" => "integer"},
+          "ratio" => %{"type" => "number"},
+          "config" => %{
+            "type" => "object",
+            "properties" => %{"mode" => %{"type" => "string"}},
+            "required" => ["mode"]
+          },
+          "tags" => %{"type" => "array", "items" => %{"type" => "string"}}
+        },
+        "required" => ["flag", "count", "ratio", "config", "tags"]
+      },
+      label: "Schema",
+      execute: fn _id, params, _signal, _on_update ->
+        send(parent, {:coerced_params, params})
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "ok"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_call =
+      Mocks.tool_call(
+        "schema_tool",
+        %{
+          "flag" => "true",
+          "count" => "42",
+          "ratio" => "2.5",
+          "config" => ~s({"mode":"fast"}),
+          "tags" => "blue"
+        },
+        id: "call_schema_coerce"
+      )
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert_receive {:coerced_params,
+                    %{
+                      "flag" => true,
+                      "count" => 42,
+                      "ratio" => 2.5,
+                      "config" => %{"mode" => "fast"},
+                      "tags" => ["blue"]
+                    }}
+
+    assert [%{is_error: false, tool_call_id: "call_schema_coerce"}] = results
+  end
+
+  test "rejects invalid schema-shaped arguments before starting tool task" do
+    parent = self()
+
+    tool = %AgentTool{
+      name: "schema_tool",
+      description: "must not execute with invalid args",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "count" => %{"type" => "integer"},
+          "config" => %{"type" => "object"}
+        },
+        "required" => ["count", "config"]
+      },
+      label: "Schema",
+      execute: fn _id, _params, _signal, _on_update ->
+        send(parent, :unexpected_schema_tool_execution)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "unexpected"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_call =
+      Mocks.tool_call(
+        "schema_tool",
+        %{"count" => "forty-two", "config" => "not json"},
+        id: "call_schema_invalid"
+      )
+
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    refute_received :unexpected_schema_tool_execution
+
+    assert [tool_result_message] = results
+    assert tool_result_message.is_error == true
+    assert tool_result_message.tool_call_id == "call_schema_invalid"
+    assert tool_result_message.details.error_type == :invalid_tool_arguments
+    assert "count: expected integer" in tool_result_message.details.errors
+    assert "config: expected object, got string" in tool_result_message.details.errors
+
+    assert List.last(updated_context.messages).tool_call_id == "call_schema_invalid"
+    assert List.last(updated_new_messages).tool_call_id == "call_schema_invalid"
   end
 
   test "normalize_tool_name/1 trims whitespace and normalizes Unicode" do

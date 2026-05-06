@@ -359,39 +359,59 @@ defmodule AgentCore.Loop.ToolCalls do
                   %{tool_name: tool_call.name, tool_call_id: tool_call.id}
                 )
 
-                case start_tool_task(
-                       tool_task_supervisor,
-                       parent,
-                       ref,
-                       tool,
-                       tool_call,
-                       signal,
-                       stream
-                     ) do
-                  {:ok, pid} ->
-                    mon_ref = Process.monitor(pid)
+                case prepare_tool_call(tool, tool_call) do
+                  {:ok, prepared_tool_call} ->
+                    case start_tool_task(
+                           tool_task_supervisor,
+                           parent,
+                           ref,
+                           tool,
+                           prepared_tool_call,
+                           signal,
+                           stream
+                         ) do
+                      {:ok, pid} ->
+                        mon_ref = Process.monitor(pid)
 
-                    {:cont,
-                     {
-                       Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
-                       Map.put(by_mon, mon_ref, ref),
-                       rest,
-                       start_failures
-                     }}
+                        {:cont,
+                         {
+                           Map.put(by_ref, ref, %{
+                             tool_call: prepared_tool_call,
+                             mon_ref: mon_ref,
+                             pid: pid
+                           }),
+                           Map.put(by_mon, mon_ref, ref),
+                           rest,
+                           start_failures
+                         }}
 
-                  {:error, reason} ->
+                      {:error, reason} ->
+                        LemonCore.Telemetry.emit(
+                          [:agent_core, :tool_task, :error],
+                          %{system_time: System.system_time()},
+                          %{
+                            tool_name: tool_call.name,
+                            tool_call_id: tool_call.id,
+                            reason: {:start_failed, reason}
+                          }
+                        )
+
+                        failure = {tool_call, tool_start_failure_result(reason)}
+                        {:cont, {by_ref, by_mon, rest, [failure | start_failures]}}
+                    end
+
+                  {:error, result} ->
                     LemonCore.Telemetry.emit(
                       [:agent_core, :tool_task, :error],
                       %{system_time: System.system_time()},
                       %{
                         tool_name: tool_call.name,
                         tool_call_id: tool_call.id,
-                        reason: {:start_failed, reason}
+                        reason: result.details.error_type
                       }
                     )
 
-                    failure = {tool_call, tool_start_failure_result(reason)}
-                    {:cont, {by_ref, by_mon, rest, [failure | start_failures]}}
+                    {:cont, {by_ref, by_mon, rest, [{tool_call, result} | start_failures]}}
                 end
             end
           end
@@ -483,15 +503,6 @@ defmodule AgentCore.Loop.ToolCalls do
     )
 
     {context, new_messages, results}
-  end
-
-  defp execute_tool_call(nil, tool_call, _signal, _stream) do
-    error_result = %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
-      details: nil
-    }
-
-    {error_result, true}
   end
 
   defp execute_tool_call(tool, tool_call, signal, stream) do
@@ -586,6 +597,148 @@ defmodule AgentCore.Loop.ToolCalls do
     %AgentToolResult{
       content: [%TextContent{type: :text, text: inspect(reason)}],
       details: nil
+    }
+  end
+
+  defp prepare_tool_call(nil, tool_call), do: {:error, unknown_tool_result(tool_call)}
+
+  defp prepare_tool_call(tool, tool_call) do
+    case coerce_tool_arguments(tool.parameters, tool_call.arguments) do
+      {:ok, arguments} ->
+        {:ok, %{tool_call | arguments: arguments}}
+
+      {:error, errors} ->
+        {:error, invalid_arguments_result(errors)}
+    end
+  end
+
+  defp coerce_tool_arguments(schema, arguments) do
+    case coerce_value(%{"type" => "object"} |> Map.merge(schema || %{}), arguments) do
+      {:ok, coerced} -> {:ok, coerced}
+      {:error, errors} -> {:error, List.wrap(errors)}
+    end
+  end
+
+  defp coerce_value(%{"type" => "object"} = schema, value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, decoded} -> coerce_value(schema, decoded)
+      {:error, _reason} -> {:error, ["expected object, got string"]}
+    end
+  end
+
+  defp coerce_value(%{"type" => "object"} = schema, value) when is_map(value) do
+    required_errors =
+      schema
+      |> Map.get("required", [])
+      |> Enum.reject(&Map.has_key?(value, &1))
+      |> Enum.map(&"missing required argument #{inspect(&1)}")
+
+    {properties, errors} =
+      schema
+      |> Map.get("properties", %{})
+      |> Enum.reduce({value, required_errors}, fn {key, property_schema}, {acc, errors} ->
+        if Map.has_key?(value, key) do
+          case coerce_value(property_schema, Map.fetch!(value, key)) do
+            {:ok, coerced} -> {Map.put(acc, key, coerced), errors}
+            {:error, property_errors} -> {acc, errors ++ prefix_errors(key, property_errors)}
+          end
+        else
+          {acc, errors}
+        end
+      end)
+
+    if errors == [], do: {:ok, properties}, else: {:error, errors}
+  end
+
+  defp coerce_value(%{"type" => "object"}, _value), do: {:error, ["expected object"]}
+
+  defp coerce_value(%{"type" => "array"} = schema, value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, decoded} when is_list(decoded) -> coerce_value(schema, decoded)
+      {:ok, decoded} -> coerce_array_items(schema, [decoded])
+      {:error, _reason} -> coerce_array_items(schema, [value])
+    end
+  end
+
+  defp coerce_value(%{"type" => "array"} = schema, value) when is_list(value) do
+    coerce_array_items(schema, value)
+  end
+
+  defp coerce_value(%{"type" => "array"} = schema, value), do: coerce_array_items(schema, [value])
+
+  defp coerce_value(%{"type" => "boolean"}, value) when is_boolean(value), do: {:ok, value}
+
+  defp coerce_value(%{"type" => "boolean"}, value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "true" -> {:ok, true}
+      "false" -> {:ok, false}
+      _ -> {:error, ["expected boolean"]}
+    end
+  end
+
+  defp coerce_value(%{"type" => "boolean"}, _value), do: {:error, ["expected boolean"]}
+
+  defp coerce_value(%{"type" => "integer"}, value) when is_integer(value), do: {:ok, value}
+
+  defp coerce_value(%{"type" => "integer"}, value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {integer, ""} -> {:ok, integer}
+      _ -> {:error, ["expected integer"]}
+    end
+  end
+
+  defp coerce_value(%{"type" => "integer"}, _value), do: {:error, ["expected integer"]}
+
+  defp coerce_value(%{"type" => "number"}, value) when is_number(value), do: {:ok, value}
+
+  defp coerce_value(%{"type" => "number"}, value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    case Float.parse(trimmed) do
+      {number, ""} -> {:ok, number}
+      _ -> {:error, ["expected number"]}
+    end
+  end
+
+  defp coerce_value(%{"type" => "number"}, _value), do: {:error, ["expected number"]}
+
+  defp coerce_value(%{"type" => "string"}, value) when is_binary(value), do: {:ok, value}
+  defp coerce_value(%{"type" => "string"}, _value), do: {:error, ["expected string"]}
+  defp coerce_value(_schema, value), do: {:ok, value}
+
+  defp coerce_array_items(schema, values) do
+    item_schema = Map.get(schema, "items", %{})
+
+    {coerced, errors} =
+      values
+      |> Enum.with_index()
+      |> Enum.reduce({[], []}, fn {value, index}, {items, errors} ->
+        case coerce_value(item_schema, value) do
+          {:ok, coerced} -> {[coerced | items], errors}
+          {:error, item_errors} -> {items, errors ++ prefix_errors(index, item_errors)}
+        end
+      end)
+
+    if errors == [], do: {:ok, Enum.reverse(coerced)}, else: {:error, errors}
+  end
+
+  defp prefix_errors(prefix, errors) do
+    Enum.map(List.wrap(errors), &"#{prefix}: #{&1}")
+  end
+
+  defp unknown_tool_result(tool_call) do
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
+      details: %{error_type: :unknown_tool, tool_name: tool_call.name}
+    }
+  end
+
+  defp invalid_arguments_result(errors) do
+    %AgentToolResult{
+      content: [
+        %TextContent{type: :text, text: "Invalid tool arguments: #{Enum.join(errors, "; ")}"}
+      ],
+      details: %{error_type: :invalid_tool_arguments, errors: errors}
     }
   end
 
