@@ -591,15 +591,11 @@ defmodule Ai.Error do
   end
 
   defp parse_retry_after("retry-after", value) when is_binary(value) do
-    # Retry-After can be seconds or an HTTP date
-    case Integer.parse(value) do
-      {seconds, _} ->
-        # Convert to milliseconds
-        seconds * 1000
+    value = String.trim(value)
 
-      :error ->
-        # Try parsing as HTTP date (not commonly used, return nil for simplicity)
-        nil
+    case Integer.parse(value) do
+      {seconds, ""} -> seconds * 1000
+      _ -> parse_retry_after_http_date(value)
     end
   end
 
@@ -618,6 +614,64 @@ defmodule Ai.Error do
        do: value
 
   defp parse_retry_after(_, _), do: nil
+
+  defp parse_retry_after_http_date(value) do
+    with {{year, month, day}, {hour, minute, second}} <- convert_http_date(value),
+         {:ok, naive} <- NaiveDateTime.new(year, month, day, hour, minute, second),
+         {:ok, datetime} <- DateTime.from_naive(naive, "Etc/UTC") do
+      diff = DateTime.diff(datetime, DateTime.utc_now(), :millisecond)
+      if diff > 0, do: diff, else: nil
+    else
+      _ -> nil
+    end
+  end
+
+  defp convert_http_date(value) do
+    case Regex.run(
+           ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s+GMT$/i,
+           value
+         ) do
+      [_, day, month, year, hour, minute, second] ->
+        with {:ok, month} <- http_month(month),
+             {:ok, year} <- parse_http_date_int(year),
+             {:ok, day} <- parse_http_date_int(day),
+             {:ok, hour} <- parse_http_date_int(hour),
+             {:ok, minute} <- parse_http_date_int(minute),
+             {:ok, second} <- parse_http_date_int(second) do
+          {{year, month, day}, {hour, minute, second}}
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_http_date_int(value) do
+    case Integer.parse(value) do
+      {int, ""} -> {:ok, int}
+      _ -> :error
+    end
+  end
+
+  defp http_month(value) do
+    case String.downcase(value) do
+      "jan" -> {:ok, 1}
+      "feb" -> {:ok, 2}
+      "mar" -> {:ok, 3}
+      "apr" -> {:ok, 4}
+      "may" -> {:ok, 5}
+      "jun" -> {:ok, 6}
+      "jul" -> {:ok, 7}
+      "aug" -> {:ok, 8}
+      "sep" -> {:ok, 9}
+      "oct" -> {:ok, 10}
+      "nov" -> {:ok, 11}
+      "dec" -> {:ok, 12}
+      _ -> :error
+    end
+  end
 
   # ============================================================================
   # Context Length Error Helpers

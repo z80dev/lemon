@@ -151,6 +151,26 @@ defmodule Ai.ErrorTest do
       assert info.retry_after == 30_000
     end
 
+    test "extracts retry-after HTTP date header" do
+      retry_at =
+        DateTime.utc_now()
+        |> DateTime.add(65, :second)
+        |> DateTime.truncate(:second)
+
+      headers = [{"retry-after", Calendar.strftime(retry_at, "%a, %d %b %Y %H:%M:%S GMT")}]
+
+      info = Error.extract_rate_limit_info(headers)
+
+      assert info.retry_after >= 63_000
+      assert info.retry_after <= 65_000
+    end
+
+    test "ignores malformed retry-after values" do
+      info = Error.extract_rate_limit_info([{"retry-after", "123ms"}])
+
+      assert info.retry_after == nil
+    end
+
     test "handles missing headers" do
       info = Error.extract_rate_limit_info([])
 
