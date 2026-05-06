@@ -45,8 +45,9 @@ defmodule Ai.ErrorProviderTest do
 
       result = Error.parse_http_error(529, body, [])
 
-      assert result.category == :server
+      assert result.category == :transient
       assert result.provider_message == "Overloaded"
+      assert result.retryable == true
     end
 
     test "parses Anthropic invalid_request_error" do

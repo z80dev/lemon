@@ -188,6 +188,7 @@ defmodule Ai.ErrorTest do
       assert Error.retryable?({:http_error, 502, "bad gateway"})
       assert Error.retryable?({:http_error, 503, "unavailable"})
       assert Error.retryable?({:http_error, 504, "timeout"})
+      assert Error.retryable?({:http_error, 529, "overloaded"})
       assert Error.retryable?(:timeout)
       assert Error.retryable?(:econnrefused)
       assert Error.retryable?(:econnreset)

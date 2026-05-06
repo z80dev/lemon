@@ -332,14 +332,14 @@ defmodule Ai.Error do
       status == 429 -> :rate_limit
       status in [401, 403] -> :auth
       status >= 400 and status < 500 -> :client
-      status in [502, 503, 504] -> :transient
+      status in [502, 503, 504, 529] -> :transient
       status >= 500 -> :server
       true -> :unknown
     end
   end
 
   defp retryable_status?(status) do
-    status in [429, 502, 503, 504, 520, 521, 522, 523, 524]
+    status in [429, 502, 503, 504, 520, 521, 522, 523, 524, 529]
   end
 
   defp extract_provider_message(body) when is_binary(body) do

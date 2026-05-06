@@ -65,7 +65,7 @@ Ai.Supervisor (one_for_one)
 | `Ai.EventStream` | Async GenServer for streaming events: bounded queue, backpressure, owner monitoring, task linking, cancellation, timeout |
 | `Ai.Models` | Compile-time registry of all model definitions and metadata across all providers |
 | `Ai.Types` | All struct/type definitions: `Model`, `Context`, `StreamOptions`, `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ToolCall`, `TextContent`, `ThinkingContent`, `ImageContent`, `Tool`, `Usage`, `Cost`, `ModelCost` |
-| `Ai.Error` | HTTP error parsing, classification (`:rate_limit`, `:auth`, `:client`, `:server`, `:transient`), retry advice, formatting |
+| `Ai.Error` | HTTP error parsing, classification (`:rate_limit`, `:auth`, `:client`, `:server`, `:transient`), retry advice, formatting; provider overloads such as Anthropic HTTP 529 are transient retryable errors |
 | `Ai.HttpInspector` | Captures and saves sanitized request dumps for 4xx errors to `~/.lemon/logs/http-errors/` |
 | `Ai.PromptDiagnostics` | Opt-in prompt size and token usage diagnostics (enabled via `LEMON_AI_PROMPT_DIAGNOSTICS=1`) |
 

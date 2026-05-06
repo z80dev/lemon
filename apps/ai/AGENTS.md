@@ -43,7 +43,7 @@ Ai (main API)
 | `Ai.EventStream` | Async GenServer for streaming events with lifecycle management |
 | `Ai.Models` | All model definitions and metadata (large file: many thousands of lines). Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
 | `Ai.Types` | All type/struct definitions (inline in module) |
-| `Ai.Error` | HTTP error parsing, classification, and formatting utilities |
+| `Ai.Error` | HTTP error parsing, classification, retryability, and formatting utilities; provider-specific overloaded responses such as Anthropic HTTP 529 are transient retryable errors |
 | `Ai.HttpInspector` | Captures and saves request dumps for 4xx errors |
 | `Ai.PromptDiagnostics` | Opt-in prompt size + token usage diagnostics |
 
