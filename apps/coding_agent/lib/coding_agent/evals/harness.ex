@@ -10,7 +10,8 @@ defmodule CodingAgent.Evals.Harness do
 
   alias AgentCore.Types.AgentToolResult
   alias CodingAgent.{PromptBuilder, ToolRegistry}
-  alias CodingAgent.Tools.{MemoryTopic, SearchMemory}
+  alias CodingAgent.Tools.{MemoryTopic, ReadSkill, SearchMemory, SkillManage}
+  alias LemonSkills.Curator
 
   @required_builtin_tools ~w(read read_skill skill_manage memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
 
@@ -36,7 +37,8 @@ defmodule CodingAgent.Evals.Harness do
       read_edit_workflow_eval(cwd),
       memory_scope_contract_eval(cwd),
       memory_topic_contract_eval(cwd),
-      auto_skill_prompt_contract_eval(cwd)
+      auto_skill_prompt_contract_eval(cwd),
+      skill_curator_behavior_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -324,6 +326,101 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("auto_skill_prompt_contract", Exception.message(e), %{})
   end
 
+  @spec skill_curator_behavior_contract_eval(String.t()) :: eval_result()
+  def skill_curator_behavior_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        tool_opts = [
+          run_id: "eval-skill-curator",
+          session_key: "agent:skill-curator-eval:main",
+          session_id: "agent:skill-curator-eval:main",
+          agent_id: "skill-curator-eval"
+        ]
+
+        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+
+        with {:ok, _} <-
+               execute_tool(skill_tool, "seed-rollout-verify", %{
+                 "action" => "create",
+                 "name" => "kube-rollout-verify",
+                 "scope" => "project",
+                 "content" => narrow_skill_content("Kube Rollout Verify", "verify")
+               }),
+             {:ok, _} <-
+               execute_tool(skill_tool, "seed-rollout-rollback", %{
+                 "action" => "create",
+                 "name" => "kube-rollout-rollback",
+                 "scope" => "project",
+                 "content" => narrow_skill_content("Kube Rollout Rollback", "rollback")
+               }),
+             {:ok, curator_result} <-
+               Curator.run(
+                 scope: :project,
+                 cwd: tmp_dir,
+                 now: ~U[2026-05-06 00:00:00Z],
+                 interval_hours: 1
+               ),
+             :ok <- assert_curator_prompt(curator_result.review_prompt),
+             {:ok, verify_text} <-
+               execute_tool(read_tool, "read-rollout-verify", %{
+                 "key" => "kube-rollout-verify",
+                 "view" => "full"
+               }),
+             {:ok, rollback_text} <-
+               execute_tool(read_tool, "read-rollout-rollback", %{
+                 "key" => "kube-rollout-rollback",
+                 "view" => "full"
+               }),
+             :ok <- assert_contains(verify_text, "kubectl rollout status"),
+             :ok <- assert_contains(rollback_text, "kubectl rollout undo"),
+             {:ok, _} <-
+               execute_tool(skill_tool, "create-rollout-umbrella", %{
+                 "action" => "create",
+                 "name" => "kube-rollout-operations",
+                 "scope" => "project",
+                 "content" => umbrella_skill_content()
+               }),
+             {:ok, _} <-
+               execute_tool(skill_tool, "archive-rollout-verify", %{
+                 "action" => "archive",
+                 "name" => "kube-rollout-verify",
+                 "scope" => "project"
+               }),
+             {:ok, _} <-
+               execute_tool(skill_tool, "archive-rollout-rollback", %{
+                 "action" => "archive",
+                 "name" => "kube-rollout-rollback",
+                 "scope" => "project"
+               }),
+             :ok <- assert_archived(tmp_dir, "kube-rollout-verify"),
+             :ok <- assert_archived(tmp_dir, "kube-rollout-rollback"),
+             :ok <- assert_active_agent_skill(tmp_dir, "kube-rollout-operations") do
+          %{
+            name: "skill_curator_behavior_contract",
+            status: :pass,
+            details: %{
+              prompt_candidates: Enum.map(curator_result.candidates, & &1.name),
+              read_calls: ["kube-rollout-verify", "kube-rollout-rollback"],
+              created: "kube-rollout-operations",
+              archived: ["kube-rollout-verify", "kube-rollout-rollback"]
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("skill_curator_behavior_contract", format_reason(reason), %{})
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("skill_curator_behavior_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("skill_curator_behavior_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -348,6 +445,13 @@ defmodule CodingAgent.Evals.Harness do
 
   defp normalize_tool_result(other) do
     {:error, "Unexpected tool result: #{inspect(other)}"}
+  end
+
+  defp execute_tool(tool, tool_call_id, params) do
+    case normalize_tool_result(tool.execute.(tool_call_id, params, nil, nil)) do
+      {:ok, result} -> {:ok, flatten_text(result)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp flatten_text(%AgentToolResult{content: content}) do
@@ -388,6 +492,110 @@ defmodule CodingAgent.Evals.Harness do
     case File.write(path, "alpha\nbeta\n") do
       :ok -> {:ok, path}
       {:error, reason} -> {:error, "Failed to write fixture file #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp narrow_skill_content(name, mode) do
+    command =
+      case mode do
+        "verify" -> "kubectl rollout status deployment/example"
+        "rollback" -> "kubectl rollout undo deployment/example"
+      end
+
+    """
+    ---
+    name: #{name}
+    description: Kubernetes rollout #{mode} workflow
+    keywords:
+      - kubernetes
+      - rollout
+      - #{mode}
+    ---
+
+    ## Usage
+
+    Use this when a Kubernetes deployment needs rollout #{mode} handling.
+
+    ## Steps
+
+    1. Inspect the deployment and namespace.
+    2. Run `#{command}`.
+    3. Capture the result and next action.
+    """
+  end
+
+  defp umbrella_skill_content do
+    """
+    ---
+    name: Kube Rollout Operations
+    description: Verify and rollback Kubernetes rollouts safely
+    keywords:
+      - kubernetes
+      - rollout
+      - verify
+      - rollback
+    ---
+
+    ## Usage
+
+    Use this when maintaining Kubernetes rollout health across verification and rollback.
+
+    ## Verify
+
+    Run `kubectl rollout status deployment/example` and inspect events before declaring success.
+
+    ## Rollback
+
+    Run `kubectl rollout undo deployment/example` only after identifying the failed revision and impact.
+    """
+  end
+
+  defp assert_curator_prompt(prompt) do
+    cond do
+      not String.contains?(prompt, "Use read_skill") ->
+        {:error, "curator prompt does not require read_skill"}
+
+      not String.contains?(prompt, "skill_manage") ->
+        {:error, "curator prompt does not mention skill_manage"}
+
+      not String.contains?(prompt, "kube-rollout-verify") ->
+        {:error, "curator prompt missing kube-rollout-verify"}
+
+      not String.contains?(prompt, "kube-rollout-rollback") ->
+        {:error, "curator prompt missing kube-rollout-rollback"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_archived(cwd, key) do
+    record = LemonSkills.Usage.get(key, scope: :project, cwd: cwd)
+
+    cond do
+      record["lifecycle_state"] != "archived" ->
+        {:error, "expected #{key} to be archived, got #{inspect(record)}"}
+
+      not LemonSkills.Config.skill_disabled?(key, cwd) ->
+        {:error, "expected #{key} to be disabled after archive"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_active_agent_skill(cwd, key) do
+    record = LemonSkills.Usage.get(key, scope: :project, cwd: cwd)
+
+    cond do
+      record["created_by"] != "agent" ->
+        {:error, "expected #{key} to be agent-authored, got #{inspect(record)}"}
+
+      record["lifecycle_state"] != "active" ->
+        {:error, "expected #{key} to be active, got #{inspect(record)}"}
+
+      true ->
+        :ok
     end
   end
 
