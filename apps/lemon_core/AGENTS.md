@@ -52,6 +52,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
+| `LemonCore.MemorySafety` | Shared durable-memory secret screening used before ingest and skill synthesis |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |

@@ -26,6 +26,7 @@ defmodule LemonCore.MemoryIngest do
   require Logger
 
   alias LemonCore.MemoryDocument
+  alias LemonCore.MemorySafety
   alias LemonCore.MemoryStore
   alias LemonCore.RoutingFeedbackStore
   alias LemonCore.TaskFingerprint
@@ -80,7 +81,7 @@ defmodule LemonCore.MemoryIngest do
     try do
       doc = MemoryDocument.from_run(run_id, record, summary)
 
-      if valid_doc?(doc) do
+      if valid_doc?(doc) and MemorySafety.safe_document?(doc) do
         config = load_config(state.config_loader)
         features = Map.get(config, :features, %{})
 

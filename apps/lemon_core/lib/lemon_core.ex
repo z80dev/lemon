@@ -10,6 +10,7 @@ defmodule LemonCore do
   - `LemonCore.Idempotency` - Deduplication for operations
   - `LemonCore.Store` - Persistent key-value storage API
   - `LemonCore.Introspection` - Canonical introspection event contract and persistence API
+  - `LemonCore.MemorySafety` - Durable-memory secret screening helpers
   - `LemonCore.Telemetry` - Telemetry event helpers
   - `LemonCore.Clock` - Time utilities
   - `LemonCore.Config` - Configuration access

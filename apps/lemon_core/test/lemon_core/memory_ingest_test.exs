@@ -86,6 +86,56 @@ defmodule LemonCore.MemoryIngestTest do
     end
   end
 
+  describe "secret filtering" do
+    test "does not store runs whose prompt summary contains secret-looking content", %{
+      tmp_dir: tmp_dir
+    } do
+      counter = :counters.new(1, [:atomics])
+
+      {:ok, pid, memory_store, _routing_feedback_store} =
+        start_isolated_ingest(tmp_dir, counter, %{session_search: true})
+
+      {run_id, record, summary} = make_ingest_args()
+      summary = %{summary | prompt: "implement deployment password=hunter2"}
+
+      MemoryIngest.ingest(pid, run_id, record, summary)
+      :sys.get_state(pid)
+
+      assert [] =
+               LemonCore.MemoryStore.get_by_session(memory_store, summary.session_key, limit: 10)
+
+      assert :counters.get(counter, 1) == 0
+
+      stop_if_alive(pid)
+    end
+
+    test "does not store runs whose answer summary contains secret-looking content", %{
+      tmp_dir: tmp_dir
+    } do
+      counter = :counters.new(1, [:atomics])
+
+      {:ok, pid, memory_store, _routing_feedback_store} =
+        start_isolated_ingest(tmp_dir, counter, %{session_search: true})
+
+      {run_id, record, summary} = make_ingest_args()
+
+      summary = %{
+        summary
+        | completed: %{ok: true, answer: "done sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"}
+      }
+
+      MemoryIngest.ingest(pid, run_id, record, summary)
+      :sys.get_state(pid)
+
+      assert [] =
+               LemonCore.MemoryStore.get_by_session(memory_store, summary.session_key, limit: 10)
+
+      assert :counters.get(counter, 1) == 0
+
+      stop_if_alive(pid)
+    end
+  end
+
   defp start_isolated_ingest(tmp_dir, counter, features) do
     memory_path = Path.join(tmp_dir, "memory_#{System.unique_integer([:positive])}")
     routing_path = Path.join(tmp_dir, "routing_#{System.unique_integer([:positive])}")

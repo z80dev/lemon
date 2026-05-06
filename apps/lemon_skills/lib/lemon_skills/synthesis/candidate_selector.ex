@@ -15,19 +15,11 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   """
 
   alias LemonCore.MemoryDocument
+  alias LemonCore.MemorySafety
   alias LemonCore.TaskFingerprint
 
   @min_prompt_length 50
   @min_answer_length 100
-
-  # Patterns that suggest the document contains secret material.
-  @secret_patterns [
-    ~r/\b(password|passwd|secret|token|api[-_]?key|access[-_]?key|auth[-_]?token)\s*[:=]\s*\S+/i,
-    ~r/sk-[a-zA-Z0-9]{20,}/,
-    ~r/AKIA[A-Z0-9]{16}/,
-    ~r/-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
-    ~r/eyJ[a-zA-Z0-9+\/]{30,}/
-  ]
 
   @doc """
   Select candidate documents from `documents`.
@@ -55,7 +47,7 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
     good_outcome?(doc.outcome) and
       long_enough?(doc.prompt_summary, @min_prompt_length) and
       long_enough?(doc.answer_summary, @min_answer_length) and
-      not secret_content?(doc) and
+      MemorySafety.safe_document?(doc) and
       actionable_family?(doc)
   end
 
@@ -65,11 +57,6 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
 
   defp long_enough?(nil, _min), do: false
   defp long_enough?(text, min) when is_binary(text), do: String.length(text) >= min
-
-  defp secret_content?(%MemoryDocument{prompt_summary: prompt, answer_summary: answer}) do
-    combined = (prompt || "") <> " " <> (answer || "")
-    Enum.any?(@secret_patterns, &Regex.match?(&1, combined))
-  end
 
   defp actionable_family?(%MemoryDocument{} = doc) do
     fp = TaskFingerprint.from_document(doc)
