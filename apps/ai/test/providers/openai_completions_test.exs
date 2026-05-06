@@ -917,6 +917,53 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert second.arguments == %{"bar" => "baz"}
   end
 
+  test "normalizes streamed tool calls missing provider identity fields" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "type" => "function",
+                      "function" => %{"arguments" => "{\"path\":\"mix.exs\"}"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{"choices" => [%{"finish_reason" => "tool_calls"}]},
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_completions,
+      provider: :openai,
+      base_url: "https://example.test"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+
+    assert [%ToolCall{} = tool_call] = result.content
+    assert tool_call.id == "call_stream_0"
+    assert tool_call.name == "unknown_tool"
+    assert tool_call.arguments == %{"path" => "mix.exs"}
+    assert result.stop_reason == :tool_use
+  end
+
   test "preserves recoverable truncated streamed tool call arguments" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =

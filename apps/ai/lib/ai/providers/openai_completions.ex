@@ -57,6 +57,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
   require Logger
 
+  @fallback_tool_name "unknown_tool"
   @max_retries 3
   @base_retry_delay_ms 400
 
@@ -1248,7 +1249,8 @@ defmodule Ai.Providers.OpenAICompletions do
           0
       end
 
-    tool_id = tool_call["id"]
+    provider_tool_id = provider_stream_tool_id(tool_call["id"])
+    tool_id = provider_tool_id || fallback_stream_tool_id(index)
     function = tool_call["function"] || %{}
     func_name = function["name"]
     func_args = function["arguments"] || ""
@@ -1258,8 +1260,8 @@ defmodule Ai.Providers.OpenAICompletions do
     block = info.block
 
     block =
-      if tool_id && tool_id != "" do
-        %{block | id: tool_id}
+      if provider_tool_id do
+        %{block | id: provider_tool_id}
       else
         block
       end
@@ -1396,8 +1398,8 @@ defmodule Ai.Providers.OpenAICompletions do
 
         new_block = %ToolCall{
           type: :tool_call,
-          id: tool_id || "",
-          name: func_name || "",
+          id: tool_id,
+          name: normalize_stream_tool_name(func_name),
           arguments: %{},
           thought_signature: nil
         }
@@ -1419,8 +1421,23 @@ defmodule Ai.Providers.OpenAICompletions do
     end
   end
 
+  defp provider_stream_tool_id(id) when is_binary(id) do
+    if String.trim(id) == "", do: nil, else: id
+  end
+
+  defp provider_stream_tool_id(_id), do: nil
+  defp fallback_stream_tool_id(index), do: "call_stream_#{index}"
+
+  defp normalize_stream_tool_name(name) when is_binary(name) do
+    if String.trim(name) == "", do: @fallback_tool_name, else: name
+  end
+
+  defp normalize_stream_tool_name(_name), do: @fallback_tool_name
+
   defp merge_tool_name(current, nil), do: current || ""
   defp merge_tool_name(current, ""), do: current || ""
+
+  defp merge_tool_name(@fallback_tool_name, delta) when is_binary(delta), do: delta
 
   defp merge_tool_name(nil, delta) when is_binary(delta), do: delta
   defp merge_tool_name("", delta) when is_binary(delta), do: delta
