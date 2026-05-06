@@ -11,7 +11,7 @@ defmodule CodingAgent.Evals.Harness do
   alias AgentCore.{EventStream, Loop}
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
-  alias CodingAgent.Tools.{MemoryTopic, ReadSkill, SearchMemory, SkillManage}
+  alias CodingAgent.Tools.{MemoryTopic, Read, ReadSkill, SearchMemory, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonSkills.Curator
 
@@ -58,7 +58,8 @@ defmodule CodingAgent.Evals.Harness do
         agent_loop_learning_trace_contract_eval(cwd),
         agent_loop_memory_trace_contract_eval(cwd),
         agent_loop_async_join_trace_contract_eval(cwd),
-        agent_loop_parallel_join_trace_contract_eval(cwd)
+        agent_loop_parallel_join_trace_contract_eval(cwd),
+        agent_loop_delegation_artifact_trace_contract_eval(cwd)
       ] ++ live_model_results(cwd, opts)
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -936,6 +937,106 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("agent_loop_parallel_join_trace_contract", Exception.message(e), %{})
+  end
+
+  @spec agent_loop_delegation_artifact_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_delegation_artifact_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        clear_task_state()
+        artifact_path = Path.join(tmp_dir, "reports/child-release-lane.md")
+
+        task_tool =
+          TaskTool.tool(tmp_dir,
+            run_override: fn _on_update, _signal ->
+              File.mkdir_p!(Path.dirname(artifact_path))
+              File.write!(artifact_path, "# Child Release Lane\n\nchild side effect artifact\n")
+
+              %AgentToolResult{
+                content: [
+                  %TextContent{
+                    text: "wrote reports/child-release-lane.md with child side effect artifact"
+                  }
+                ],
+                details: %{status: "completed", artifact_path: "reports/child-release-lane.md"}
+              }
+            end,
+            session_key: "agent:delegation-artifact-trace-eval:main",
+            agent_id: "delegation-artifact-trace-eval",
+            parent_run_id: "parent-run-delegation-artifact-trace"
+          )
+
+        read_tool = Read.tool(tmp_dir)
+
+        context =
+          AgentContext.new(
+            system_prompt:
+              "Delegate artifact creation, join the child, read the artifact, then answer.",
+            tools: [task_tool, read_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: delegation_artifact_stream_fn()
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message("Have a child create the release lane artifact, then verify it.")
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_async_task_joined_with(messages, "child side effect artifact"),
+             :ok <- assert_loop_tool_result(messages, "read", "child side effect artifact"),
+             :ok <- assert_final_after_tool(messages, "read"),
+             :ok <-
+               assert_final_contains(messages, ["ARTIFACT_VERIFIED", "child side effect artifact"]),
+             true <- File.exists?(artifact_path) do
+          %{
+            name: "agent_loop_delegation_artifact_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              artifact: "reports/child-release-lane.md",
+              verified_before_final: true
+            }
+          }
+        else
+          false ->
+            contract_fail(
+              "agent_loop_delegation_artifact_trace_contract",
+              "artifact file missing",
+              %{}
+            )
+
+          {:error, reason} ->
+            contract_fail(
+              "agent_loop_delegation_artifact_trace_contract",
+              format_reason(reason),
+              %{}
+            )
+        end
+      after
+        clear_task_state()
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail(
+          "agent_loop_delegation_artifact_trace_contract",
+          format_reason(reason),
+          %{}
+        )
+    end
+  rescue
+    e -> contract_fail("agent_loop_delegation_artifact_trace_contract", Exception.message(e), %{})
   end
 
   defp contract_fail(name, reason, details) do
@@ -2120,6 +2221,36 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp assert_async_task_joined_with(messages, expected_text) do
+    task_results =
+      Enum.filter(messages, &match?(%{role: :tool_result, tool_name: "task"}, &1))
+
+    queued? =
+      Enum.any?(task_results, fn message ->
+        match?(%{status: "queued", task_id: task_id} when is_binary(task_id), message.details)
+      end)
+
+    joined? =
+      Enum.any?(task_results, fn message ->
+        message.details[:mode] == "wait_all" and
+          stringify_content(message.content) |> String.contains?(expected_text)
+      end)
+
+    cond do
+      length(task_results) < 2 ->
+        {:error, "expected queued and join task results, got #{inspect(task_results)}"}
+
+      not queued? ->
+        {:error, "expected async queued task result before join"}
+
+      not joined? ->
+        {:error, "expected join task result containing #{expected_text}"}
+
+      true ->
+        :ok
+    end
+  end
+
   defp assert_final_after_join(messages) do
     final_index =
       Enum.find_index(messages, fn
@@ -2153,6 +2284,34 @@ defmodule CodingAgent.Evals.Harness do
 
       not String.contains?(final_text, "child task output") ->
         {:error, "final answer did not include joined task output"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_final_after_tool(messages, tool_name) do
+    final_index =
+      Enum.find_index(messages, fn
+        %AssistantMessage{stop_reason: :stop} -> true
+        _ -> false
+      end)
+
+    tool_index =
+      Enum.find_index(messages, fn
+        %{role: :tool_result, tool_name: ^tool_name} -> true
+        _ -> false
+      end)
+
+    cond do
+      is_nil(tool_index) ->
+        {:error, "#{tool_name} result missing"}
+
+      is_nil(final_index) ->
+        {:error, "final answer missing"}
+
+      tool_index > final_index ->
+        {:error, "final answer appeared before #{tool_name} result"}
 
       true ->
         :ok
@@ -2361,6 +2520,58 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp delegation_artifact_stream_fn do
+    fn _model, context, _options ->
+      cond do
+        artifact_read?(context.messages) ->
+          {:ok,
+           response_stream(trace_final_response("ARTIFACT_VERIFIED: child side effect artifact"))}
+
+        task_joined?(context.messages) ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "read",
+                 %{"path" => "reports/child-release-lane.md"},
+                 id: "call-read-child-artifact"
+               )
+             ])
+           )}
+
+        task_id = queued_task_id(context.messages) ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{"action" => "join", "task_ids" => [task_id], "mode" => "wait_all"},
+                 id: "call-task-join-artifact"
+               )
+             ])
+           )}
+
+        true ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{
+                   "action" => "run",
+                   "description" => "Create artifact",
+                   "prompt" => "Write reports/child-release-lane.md.",
+                   "async" => true,
+                   "auto_followup" => false
+                 },
+                 id: "call-task-run-artifact"
+               )
+             ])
+           )}
+      end
+    end
+  end
+
   defp queued_task_id(messages) do
     Enum.find_value(messages, fn
       %{role: :tool_result, tool_name: "task", details: %{status: "queued", task_id: task_id}}
@@ -2387,6 +2598,16 @@ defmodule CodingAgent.Evals.Harness do
     Enum.any?(messages, fn
       %{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}} -> true
       _ -> false
+    end)
+  end
+
+  defp artifact_read?(messages) do
+    Enum.any?(messages, fn
+      %{role: :tool_result, tool_name: "read"} = message ->
+        stringify_content(message.content) |> String.contains?("child side effect artifact")
+
+      _ ->
+        false
     end)
   end
 
