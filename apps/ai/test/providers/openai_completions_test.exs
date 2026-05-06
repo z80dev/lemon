@@ -840,6 +840,53 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert second.arguments == %{"bar" => "baz"}
   end
 
+  test "preserves recoverable truncated streamed tool call arguments" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "id" => "call_batch",
+                      "type" => "function",
+                      "function" => %{
+                        "name" => "batch_read",
+                        "arguments" => "{\"files\":[\"mix.exs\""
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{"choices" => [%{"finish_reason" => "length"}]},
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_completions,
+      provider: :openai,
+      base_url: "https://example.test"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+    assert [%ToolCall{name: "batch_read", arguments: %{"files" => ["mix.exs"]}}] = result.content
+    assert result.stop_reason == :length
+  end
+
   test "streams chunked tool names without duplicating repeated suffixes" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =

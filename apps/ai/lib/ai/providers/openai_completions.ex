@@ -1401,7 +1401,7 @@ defmodule Ai.Providers.OpenAICompletions do
         final_args =
           case Jason.decode(info.partial_args) do
             {:ok, args} when is_map(args) -> args
-            _ -> %{}
+            _ -> parse_partial_json(info.partial_args)
           end
 
         final_block = %{info.block | arguments: final_args}
@@ -1473,20 +1473,50 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp attempt_partial_json_recovery(json) do
-    # Simple recovery: try adding closing brackets
     json = String.trim(json)
+    completed = complete_partial_json(json)
 
-    attempts = [
-      json <> "}",
-      json <> "\"}"
-    ]
-
-    Enum.find_value(attempts, %{}, fn attempt ->
+    [completed, json <> "}", json <> "\"}"]
+    |> Enum.uniq()
+    |> Enum.find_value(%{}, fn attempt ->
       case Jason.decode(attempt) do
         {:ok, result} when is_map(result) -> result
         _ -> nil
       end
     end)
+  end
+
+  defp complete_partial_json(json) do
+    {stack, in_string?, escaped?} =
+      json
+      |> String.graphemes()
+      |> Enum.reduce({[], false, false}, fn
+        "\\", {stack, true, false} ->
+          {stack, true, true}
+
+        _char, {stack, true, true} ->
+          {stack, true, false}
+
+        "\"", {stack, in_string?, false} ->
+          {stack, not in_string?, false}
+
+        "{", {stack, false, false} ->
+          {["}" | stack], false, false}
+
+        "[", {stack, false, false} ->
+          {["]" | stack], false, false}
+
+        "}", {["}" | rest], false, false} ->
+          {rest, false, false}
+
+        "]", {["]" | rest], false, false} ->
+          {rest, false, false}
+
+        _char, acc ->
+          acc
+      end)
+
+    json <> if(in_string? and not escaped?, do: "\"", else: "") <> Enum.join(stack, "")
   end
 
   defp extract_error_message(body) when is_binary(body) do
