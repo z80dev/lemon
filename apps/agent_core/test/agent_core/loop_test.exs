@@ -4,7 +4,15 @@ defmodule AgentCore.LoopTest do
   alias AgentCore.Loop
   alias AgentCore.EventStream
   alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+
+  alias AgentCore.Types.{
+    AgentContext,
+    AgentLoopConfig,
+    AgentTool,
+    AgentToolResult,
+    ToolSchemaSnapshot
+  }
+
   alias AgentCore.Test.Mocks
 
   alias Ai.Types.{
@@ -34,6 +42,7 @@ defmodule AgentCore.LoopTest do
       get_api_key: Keyword.get(opts, :get_api_key, nil),
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
+      tool_schema_snapshot: Keyword.get(opts, :tool_schema_snapshot, nil),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
     }
@@ -146,6 +155,59 @@ defmodule AgentCore.LoopTest do
 
       assert :agent_start in event_types
       assert :agent_end in event_types
+    end
+
+    test "emits a tool schema snapshot for the run" do
+      context = simple_context(tools: [Mocks.echo_tool(), Mocks.add_tool()])
+      response = Mocks.assistant_message("Response")
+      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+
+      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      assert [
+               {:agent_start},
+               {:tool_schema_snapshot, %ToolSchemaSnapshot{} = snapshot},
+               {:turn_start}
+               | _
+             ] = events
+
+      assert snapshot.tool_names == ["echo", "add"]
+      assert snapshot.id =~ ~r/^tool_schema_[a-f0-9]{16}_[a-z0-9]+$/
+    end
+
+    test "uses configured tool schema snapshot for provider schema and execution" do
+      parent = self()
+      echo_tool = Mocks.echo_tool()
+      snapshot = ToolSchemaSnapshot.new([echo_tool])
+      context = simple_context(tools: [Mocks.add_tool()])
+
+      tool_response =
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("echo", %{"text" => "snapshotted"}, id: "call_snapshot")
+        ])
+
+      final_response = Mocks.assistant_message("Done")
+      {:ok, responses} = Agent.start_link(fn -> [tool_response, final_response] end)
+
+      stream_fn = fn _model, llm_context, _options ->
+        send(parent, {:provider_tools, Enum.map(llm_context.tools, & &1.name)})
+        response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
+        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+      end
+
+      config = simple_config(tool_schema_snapshot: snapshot, stream_fn: stream_fn)
+
+      stream = Loop.agent_loop([user_message("Echo")], context, config, nil, nil)
+      {:ok, messages} = EventStream.result(stream)
+
+      assert_receive {:provider_tools, ["echo"]}
+      assert_receive {:provider_tools, ["echo"]}
+
+      assert [%ToolResultMessage{tool_name: "echo", is_error: false}] =
+               Enum.filter(
+                 messages,
+                 &match?(%ToolResultMessage{tool_call_id: "call_snapshot"}, &1)
+               )
     end
 
     test "accepts stream_fn returning stream directly" do

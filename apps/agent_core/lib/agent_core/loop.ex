@@ -47,7 +47,7 @@ defmodule AgentCore.Loop do
 
   alias AgentCore.EventStream
   alias AgentCore.Loop.{Streaming, ToolCalls}
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig}
+  alias AgentCore.Types.{AgentContext, AgentLoopConfig, ToolSchemaSnapshot}
 
   alias Ai.Types.{
     AssistantMessage,
@@ -314,8 +314,11 @@ defmodule AgentCore.Loop do
       | messages: context.messages ++ prompts
     }
 
+    {current_context, config, snapshot} = snapshot_tool_schema(current_context, config)
+
     # Emit initial events
     EventStream.push(stream, {:agent_start})
+    emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
 
     # Emit message events for each prompt
@@ -350,9 +353,10 @@ defmodule AgentCore.Loop do
     )
 
     new_messages = []
-    current_context = context
+    {current_context, config, snapshot} = snapshot_tool_schema(context, config)
 
     EventStream.push(stream, {:agent_start})
+    emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
 
     run_loop(current_context, new_messages, config, signal, stream_fn, stream)
@@ -369,6 +373,29 @@ defmodule AgentCore.Loop do
     Logger.debug("AgentCore.Loop run_loop pending_steering=#{length(pending_messages)}")
 
     do_run_loop(context, new_messages, config, signal, stream_fn, stream, pending_messages, true)
+  end
+
+  defp snapshot_tool_schema(context, %AgentLoopConfig{} = config) do
+    snapshot = config.tool_schema_snapshot || ToolSchemaSnapshot.new(context.tools)
+    context = %{context | tools: snapshot.tools}
+    config = %{config | tool_schema_snapshot: snapshot}
+
+    {context, config, snapshot}
+  end
+
+  defp emit_tool_schema_snapshot(stream, %ToolSchemaSnapshot{} = snapshot) do
+    EventStream.push(stream, {:tool_schema_snapshot, snapshot})
+
+    LemonCore.Telemetry.emit(
+      [:agent_core, :tool_schema_snapshot, :created],
+      %{system_time: System.system_time()},
+      %{
+        snapshot_id: snapshot.id,
+        fingerprint: snapshot.fingerprint,
+        tool_count: length(snapshot.tool_names),
+        tool_names: snapshot.tool_names
+      }
+    )
   end
 
   # Main loop with outer/inner loop structure

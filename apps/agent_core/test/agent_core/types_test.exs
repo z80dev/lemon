@@ -6,7 +6,8 @@ defmodule AgentCore.TypesTest do
     AgentTool,
     AgentContext,
     AgentState,
-    AgentLoopConfig
+    AgentLoopConfig,
+    ToolSchemaSnapshot
   }
 
   alias Ai.Types.{TextContent, ImageContent, StreamOptions}
@@ -399,6 +400,30 @@ defmodule AgentCore.TypesTest do
 
       assert is_function(config.stream_fn, 3)
     end
+
+    test "tool_schema_snapshot can be set" do
+      snapshot = ToolSchemaSnapshot.new([%AgentTool{name: "read"}])
+      config = %AgentLoopConfig{tool_schema_snapshot: snapshot}
+
+      assert config.tool_schema_snapshot == snapshot
+    end
+  end
+
+  describe "ToolSchemaSnapshot" do
+    test "captures tool names and stable fingerprint inputs" do
+      tools = [
+        %AgentTool{name: "read", description: "Read", parameters: %{"type" => "object"}},
+        %AgentTool{name: "write", description: "Write", parameters: %{"type" => "object"}}
+      ]
+
+      snapshot = ToolSchemaSnapshot.new(tools)
+
+      assert snapshot.tools == tools
+      assert snapshot.tool_names == ["read", "write"]
+      assert snapshot.id =~ ~r/^tool_schema_[a-f0-9]{16}_[a-z0-9]+$/
+      assert byte_size(snapshot.fingerprint) == 16
+      assert is_integer(snapshot.created_at_ms)
+    end
   end
 
   # ============================================================================
@@ -410,6 +435,11 @@ defmodule AgentCore.TypesTest do
       # These are tuples, testing the documented structure
       agent_start = {:agent_start}
       assert agent_start == {:agent_start}
+
+      snapshot = ToolSchemaSnapshot.new([])
+      tool_schema_snapshot = {:tool_schema_snapshot, snapshot}
+      assert elem(tool_schema_snapshot, 0) == :tool_schema_snapshot
+      assert elem(tool_schema_snapshot, 1) == snapshot
 
       agent_end = {:agent_end, []}
       assert elem(agent_end, 0) == :agent_end

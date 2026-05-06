@@ -9,6 +9,7 @@ defmodule AgentCore.Types do
 
   - `AgentTool` - Tool definition with execution function
   - `AgentToolResult` - Result returned from tool execution
+  - `ToolSchemaSnapshot` - Per-run immutable tool schema snapshot
   - `AgentContext` - Context for agent conversations
   - `AgentState` - Runtime state of the agent
   - `AgentLoopConfig` - Configuration for the agent loop
@@ -111,6 +112,59 @@ defmodule AgentCore.Types do
   end
 
   # ============================================================================
+  # Tool Schema Snapshot
+  # ============================================================================
+
+  defmodule ToolSchemaSnapshot do
+    @moduledoc """
+    Immutable tool schema snapshot used for one agent loop run.
+    """
+
+    @type t :: %__MODULE__{
+            id: String.t(),
+            tools: [AgentCore.Types.AgentTool.t()],
+            tool_names: [String.t()],
+            fingerprint: String.t(),
+            created_at_ms: integer()
+          }
+    defstruct id: "",
+              tools: [],
+              tool_names: [],
+              fingerprint: "",
+              created_at_ms: 0
+
+    @doc "Build a snapshot from the currently executable tool list."
+    @spec new([AgentCore.Types.AgentTool.t()]) :: t()
+    def new(tools) when is_list(tools) do
+      tool_names = Enum.map(tools, & &1.name)
+      fingerprint = fingerprint(tools)
+
+      %__MODULE__{
+        id: "tool_schema_" <> fingerprint <> "_" <> unique_suffix(),
+        tools: tools,
+        tool_names: tool_names,
+        fingerprint: fingerprint,
+        created_at_ms: System.system_time(:millisecond)
+      }
+    end
+
+    defp fingerprint(tools) do
+      tools
+      |> Enum.map(fn tool -> {tool.name, tool.description, tool.parameters} end)
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 16)
+    end
+
+    defp unique_suffix do
+      System.unique_integer([:positive, :monotonic])
+      |> Integer.to_string(36)
+      |> String.downcase()
+    end
+  end
+
+  # ============================================================================
   # Agent Context
   # ============================================================================
 
@@ -203,6 +257,7 @@ defmodule AgentCore.Types do
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
     - `max_tool_concurrency` - Max number of concurrent tool calls (`nil`/`:infinity` = unbounded)
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `AgentCore.ToolTaskSupervisor`)
+    - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to Ai.stream_simple/3)
     """
@@ -230,6 +285,7 @@ defmodule AgentCore.Types do
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
             max_tool_concurrency: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
+            tool_schema_snapshot: AgentCore.Types.ToolSchemaSnapshot.t() | nil,
             stream_options: Ai.Types.StreamOptions.t(),
             stream_fn: stream_fn() | nil
           }
@@ -241,6 +297,7 @@ defmodule AgentCore.Types do
               get_follow_up_messages: nil,
               max_tool_concurrency: nil,
               tool_task_supervisor: nil,
+              tool_schema_snapshot: nil,
               stream_options: %StreamOptions{},
               stream_fn: nil
   end
@@ -257,6 +314,7 @@ defmodule AgentCore.Types do
 
   ## Agent Lifecycle
   - `{:agent_start}` - Agent run has started
+  - `{:tool_schema_snapshot, snapshot}` - Tool schema was frozen for this run
   - `{:agent_end, messages}` - Agent run has ended with final messages
 
   ## Turn Lifecycle
@@ -280,6 +338,7 @@ defmodule AgentCore.Types do
   """
   @type agent_event ::
           {:agent_start}
+          | {:tool_schema_snapshot, snapshot :: AgentCore.Types.ToolSchemaSnapshot.t()}
           | {:agent_end, messages :: [agent_message()]}
           | {:turn_start}
           | {:turn_end, message :: agent_message(),

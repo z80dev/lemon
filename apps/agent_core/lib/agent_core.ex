@@ -114,6 +114,7 @@ defmodule AgentCore do
 
   ### Agent Lifecycle
   - `{:agent_start}` - Agent run has begun
+  - `{:tool_schema_snapshot, snapshot}` - Tool schema was frozen for the run
   - `{:agent_end, messages}` - Agent run completed with final message list
 
   ### Turn Lifecycle
