@@ -654,6 +654,65 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     EventStream.cancel(stream, :test_cleanup)
   end
 
+  test "process_stream normalizes malformed function call identity fields" do
+    {:ok, stream} = EventStream.start_link()
+
+    events = [
+      %{
+        "type" => "response.output_item.added",
+        "item" => %{
+          "type" => "function_call"
+        }
+      },
+      %{
+        "type" => "response.function_call_arguments.done",
+        "arguments" => "{\"path\":\"mix.exs\"}"
+      },
+      %{
+        "type" => "response.output_item.done",
+        "item" => %{
+          "type" => "function_call",
+          "arguments" => "{\"path\":\"mix.exs\"}"
+        }
+      },
+      %{"type" => "response.completed", "response" => %{"status" => "completed"}}
+    ]
+
+    output = %AssistantMessage{
+      role: :assistant,
+      content: [],
+      api: :openai_responses,
+      provider: :openai,
+      model: "gpt-4o",
+      usage: %Usage{cost: %Cost{}},
+      stop_reason: :stop,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      cost: %ModelCost{}
+    }
+
+    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+    assert [%ToolCall{} = tool_call] = final.content
+    assert final.stop_reason == :tool_use
+    assert tool_call.name == "unknown_tool"
+    assert tool_call.arguments == %{"path" => "mix.exs"}
+    assert String.contains?(tool_call.id, "|")
+    refute String.contains?(tool_call.id, "nil")
+
+    [call_id, item_id] = String.split(tool_call.id, "|")
+    assert String.starts_with?(call_id, "call_")
+    assert String.starts_with?(item_id, "fc_")
+
+    EventStream.cancel(stream, :test_cleanup)
+  end
+
   test "process_stream builds reasoning blocks with signature" do
     {:ok, stream} = EventStream.start_link()
 

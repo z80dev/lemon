@@ -781,12 +781,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
       "function_call" ->
-        tool_id = "#{item["call_id"]}|#{item["id"]}"
+        tool_id = response_tool_call_id(item, state.model)
 
         block = %ToolCall{
           type: :tool_call,
           id: tool_id,
-          name: item["name"],
+          name: response_tool_name(item),
           arguments: %{}
         }
 
@@ -972,7 +972,8 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         EventStream.push_async(state.stream, {:text_end, idx, text, output})
         {:ok, %{state | current_block: nil, output: output}}
 
-      "function_call" ->
+      "function_call"
+      when state.current_block != nil and state.current_block.type == :tool_call ->
         partial_json = Map.get(state.current_block, :partial_json, "")
 
         args =
@@ -990,8 +991,8 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
         tool_call = %ToolCall{
           type: :tool_call,
-          id: "#{item["call_id"]}|#{item["id"]}",
-          name: item["name"],
+          id: response_tool_call_id(item, state.model, state.current_block.id),
+          name: response_tool_name(item, state.current_block.name),
           arguments: args
         }
 
@@ -1074,6 +1075,50 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   defp process_event(_event, state) do
     {:ok, state}
   end
+
+  defp response_tool_call_id(item, model, fallback \\ nil)
+
+  defp response_tool_call_id(item, model, fallback) when is_binary(fallback) and fallback != "" do
+    call_id = Map.get(item, "call_id")
+    item_id = Map.get(item, "id")
+
+    if present_string?(call_id) and present_string?(item_id) do
+      normalize_tool_call_id("#{call_id}|#{item_id}", model.provider)
+    else
+      fallback
+    end
+  end
+
+  defp response_tool_call_id(item, model, _fallback) do
+    seed = inspect(item)
+    call_id = present_or_generated(Map.get(item, "call_id"), "call_", seed)
+    item_id = present_or_generated(Map.get(item, "id"), "fc_", seed)
+
+    normalize_tool_call_id("#{call_id}|#{item_id}", model.provider)
+  end
+
+  defp response_tool_name(item, fallback \\ nil)
+
+  defp response_tool_name(item, fallback) do
+    cond do
+      present_string?(Map.get(item, "name")) ->
+        Map.get(item, "name")
+
+      present_string?(fallback) ->
+        fallback
+
+      true ->
+        "unknown_tool"
+    end
+  end
+
+  defp present_or_generated(value, _prefix, _seed) when is_binary(value) and value != "" do
+    value
+  end
+
+  defp present_or_generated(_value, prefix, seed), do: prefix <> short_hash(seed)
+
+  defp present_string?(value), do: is_binary(value) and value != ""
 
   defp update_content_block(output, block) do
     content = List.replace_at(output.content, length(output.content) - 1, block)
