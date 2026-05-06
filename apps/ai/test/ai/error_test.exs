@@ -74,6 +74,44 @@ defmodule Ai.ErrorTest do
       assert result.category == :transient
       assert result.retryable == true
     end
+
+    test "parses provider-overloaded client error as retryable transient" do
+      body = %{
+        "error" => %{
+          "type" => "overloaded_error",
+          "message" => "Model is overloaded. Please try again later."
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.category == :transient
+      assert result.retryable == true
+      assert result.message =~ "Service temporarily unavailable"
+      assert Error.suggested_retry_delay_from_error(result) == 5_000
+    end
+
+    test "parses provider rate-limit text on non-429 status with retry headers" do
+      body = %{"error" => %{"message" => "Rate limit exceeded"}}
+      headers = [{"retry-after", "7"}]
+
+      result = Error.parse_http_error(400, body, headers)
+
+      assert result.category == :rate_limit
+      assert result.retryable == true
+      assert result.rate_limit_info.retry_after == 7_000
+      assert Error.suggested_retry_delay_from_error(result) == 7_000
+    end
+
+    test "does not retry quota errors without a rate-limit status" do
+      body = %{"error" => %{"code" => "insufficient_quota", "message" => "Quota exceeded"}}
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.category == :client
+      assert result.retryable == false
+      assert result.rate_limit_info == nil
+    end
   end
 
   describe "extract_rate_limit_info/1" do

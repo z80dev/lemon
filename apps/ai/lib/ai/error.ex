@@ -51,15 +51,11 @@ defmodule Ai.Error do
   """
   @spec parse_http_error(non_neg_integer(), term(), map() | [{term(), term()}]) :: parsed_error()
   def parse_http_error(status, body, headers \\ []) do
-    category =
-      if context_length_error?({:http_error, status, body}) do
-        :context_length
-      else
-        classify_status(status)
-      end
-
     provider_message = extract_provider_message(body)
-    rate_limit_info = if status == 429, do: extract_rate_limit_info(headers), else: nil
+    category = classify_error(status, body, provider_message)
+
+    rate_limit_info =
+      if category == :rate_limit, do: extract_rate_limit_info(headers), else: nil
 
     %{
       category: category,
@@ -67,7 +63,7 @@ defmodule Ai.Error do
       message: build_error_message(status, provider_message, category),
       provider_message: provider_message,
       rate_limit_info: rate_limit_info,
-      retryable: retryable_status?(status)
+      retryable: retryable_category?(category) or retryable_status?(status)
     }
   end
 
@@ -215,6 +211,9 @@ defmodule Ai.Error do
     end
   end
 
+  def suggested_retry_delay_from_error(%{category: :rate_limit}), do: 60_000
+  def suggested_retry_delay_from_error(%{category: :transient}), do: 5_000
+
   def suggested_retry_delay_from_error(%{status: status}) do
     suggested_retry_delay({:http_error, status, nil})
   end
@@ -328,6 +327,25 @@ defmodule Ai.Error do
   # Private Helpers
   # ============================================================================
 
+  defp classify_error(status, body, provider_message) do
+    cond do
+      context_length_error?({:http_error, status, body}) ->
+        :context_length
+
+      status in [401, 403] ->
+        :auth
+
+      status == 429 or provider_rate_limit_message?(provider_message) ->
+        :rate_limit
+
+      provider_transient_message?(provider_message) ->
+        :transient
+
+      true ->
+        classify_status(status)
+    end
+  end
+
   defp classify_status(status) do
     cond do
       status == 429 -> :rate_limit
@@ -342,6 +360,30 @@ defmodule Ai.Error do
   defp retryable_status?(status) do
     status in [429, 502, 503, 504, 520, 521, 522, 523, 524, 529]
   end
+
+  defp retryable_category?(category), do: category in [:rate_limit, :transient]
+
+  defp provider_rate_limit_message?(message) when is_binary(message) do
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "rate limit") or
+      String.contains?(downcased, "rate_limit") or
+      String.contains?(downcased, "too many requests")
+  end
+
+  defp provider_rate_limit_message?(_), do: false
+
+  defp provider_transient_message?(message) when is_binary(message) do
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "overloaded") or
+      String.contains?(downcased, "temporarily unavailable") or
+      String.contains?(downcased, "service unavailable") or
+      String.contains?(downcased, "try again later") or
+      String.contains?(downcased, "deadline exceeded")
+  end
+
+  defp provider_transient_message?(_), do: false
 
   defp extract_provider_message(body) when is_binary(body) do
     case Jason.decode(body) do
