@@ -53,7 +53,8 @@ defmodule CodingAgent.Evals.Harness do
       skill_curator_behavior_contract_eval(cwd),
       learning_tool_trace_contract_eval(cwd),
       tool_use_claim_contract_eval(cwd),
-      agent_loop_learning_trace_contract_eval(cwd)
+      agent_loop_learning_trace_contract_eval(cwd),
+      agent_loop_memory_trace_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -684,6 +685,118 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("agent_loop_learning_trace_contract", Exception.message(e), %{})
   end
 
+  @spec agent_loop_memory_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_memory_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        File.mkdir_p!(project_dir)
+        File.mkdir_p!(home_dir)
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+
+          [
+            %{
+              doc_id: "prior-release-handoff",
+              title: "Prior release handoff",
+              scope_key: Keyword.fetch!(opts, :scope_key),
+              query: query
+            }
+          ]
+        end
+
+        format_results_fn = fn docs ->
+          docs
+          |> Enum.map(&Map.fetch!(&1, :doc_id))
+          |> Enum.join(",")
+        end
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: format_results_fn
+          )
+
+        prompt =
+          PromptBuilder.build(project_dir, %{
+            base_prompt: "Base.",
+            context: "last time release handoff prior work",
+            include_skills: false,
+            include_commands: false,
+            include_mentions: false
+          })
+
+        responses = [
+          trace_tool_response([
+            trace_tool_call(
+              "search_memory",
+              %{
+                "query" => "last time release handoff",
+                "scope" => "current",
+                "limit" => "3"
+              },
+              id: "call-search-memory"
+            )
+          ]),
+          trace_final_response("I found the prior release handoff.")
+        ]
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [search_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: scripted_stream_fn(responses)
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("What did we do last time for the release handoff?")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
+             :ok <-
+               assert_loop_tool_result_details(messages, "search_memory", fn details ->
+                 details[:scope] == :current and details[:resolved_scopes] == [:project, :home]
+               end),
+             :ok <- assert_learning_search_calls(search_calls, 2) do
+          %{
+            name: "agent_loop_memory_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              search_calls: length(Agent.get(search_calls, & &1))
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("agent_loop_memory_trace_contract", format_reason(reason), %{})
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_memory_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_memory_trace_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -1078,6 +1191,38 @@ defmodule CodingAgent.Evals.Harness do
       :ok
     else
       {:error, "expected agent loop tool result for #{tool_name} containing #{expected_text}"}
+    end
+  end
+
+  defp assert_loop_tool_result_details(messages, tool_name, predicate) do
+    found? =
+      Enum.any?(messages, fn
+        %{role: :tool_result, tool_name: ^tool_name, details: details} ->
+          predicate.(details)
+
+        _ ->
+          false
+      end)
+
+    if found? do
+      :ok
+    else
+      {:error, "expected agent loop tool result details for #{tool_name}"}
+    end
+  end
+
+  defp assert_learning_search_calls(search_calls, expected_count) do
+    calls = Agent.get(search_calls, &Enum.reverse/1)
+
+    cond do
+      length(calls) != expected_count ->
+        {:error, "expected #{expected_count} search calls, got #{inspect(calls)}"}
+
+      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
+        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
+
+      true ->
+        :ok
     end
   end
 
