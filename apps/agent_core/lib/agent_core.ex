@@ -217,6 +217,7 @@ defmodule AgentCore do
     * `:transform_context` - Optional context transformation function
     * `:get_api_key` - Optional function to resolve API keys dynamically
     * `:stream_options` - Options for streaming requests
+    * `:max_tool_turns` - Max assistant tool-use turns before terminal fallback
 
   ## Examples
 

@@ -256,6 +256,7 @@ defmodule AgentCore.Types do
     - `get_steering_messages` - Returns messages to inject mid-run for steering
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
     - `max_tool_concurrency` - Max number of concurrent tool calls (`nil`/`:infinity` = unbounded)
+    - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `AgentCore.ToolTaskSupervisor`)
     - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
     - `stream_options` - Options for streaming requests
@@ -284,6 +285,7 @@ defmodule AgentCore.Types do
             get_steering_messages: get_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
             max_tool_concurrency: pos_integer() | :infinity | nil,
+            max_tool_turns: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
             tool_schema_snapshot: AgentCore.Types.ToolSchemaSnapshot.t() | nil,
             stream_options: Ai.Types.StreamOptions.t(),
@@ -296,6 +298,7 @@ defmodule AgentCore.Types do
               get_steering_messages: nil,
               get_follow_up_messages: nil,
               max_tool_concurrency: nil,
+              max_tool_turns: 25,
               tool_task_supervisor: nil,
               tool_schema_snapshot: nil,
               stream_options: %StreamOptions{},
@@ -321,6 +324,7 @@ defmodule AgentCore.Types do
   A turn is one assistant response plus any tool calls/results.
   - `{:turn_start}` - New turn has started
   - `{:turn_end, message, tool_results}` - Turn completed
+  - `{:loop_budget_exhausted, details}` - Tool loop budget exhausted with terminal fallback
 
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
@@ -343,6 +347,7 @@ defmodule AgentCore.Types do
           | {:turn_start}
           | {:turn_end, message :: agent_message(),
              tool_results :: [Ai.Types.ToolResultMessage.t()]}
+          | {:loop_budget_exhausted, details :: map()}
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}

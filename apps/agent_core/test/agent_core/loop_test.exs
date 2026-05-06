@@ -42,6 +42,7 @@ defmodule AgentCore.LoopTest do
       get_api_key: Keyword.get(opts, :get_api_key, nil),
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
+      max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
       tool_schema_snapshot: Keyword.get(opts, :tool_schema_snapshot, nil),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
@@ -208,6 +209,47 @@ defmodule AgentCore.LoopTest do
                  messages,
                  &match?(%ToolResultMessage{tool_call_id: "call_snapshot"}, &1)
                )
+    end
+
+    test "emits terminal fallback when max tool turns are exhausted" do
+      {:ok, call_counter} = Agent.start_link(fn -> 0 end)
+
+      stream_fn = fn model, context, options ->
+        call_number = Agent.get_and_update(call_counter, &{&1 + 1, &1 + 1})
+
+        response =
+          Mocks.assistant_message_with_tool_calls([
+            Mocks.tool_call("echo", %{"text" => "again"}, id: "call_#{call_number}")
+          ])
+
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      context = simple_context(tools: [Mocks.echo_tool()])
+      config = simple_config(stream_fn: stream_fn, max_tool_turns: 1)
+
+      stream = Loop.agent_loop([user_message("Loop until stopped")], context, config, nil, nil)
+      events = EventStream.events(stream) |> Enum.to_list()
+
+      assert Agent.get(call_counter, & &1) == 1
+
+      assert {:loop_budget_exhausted,
+              %{reason: :max_tool_turns_exhausted, max_tool_turns: 1, tool_turns: 1}} =
+               Enum.find(events, &match?({:loop_budget_exhausted, _}, &1))
+
+      assert Enum.count(events, &match?({:tool_execution_end, _, "echo", _, false}, &1)) == 1
+
+      assert {:agent_end, messages} = List.last(events)
+
+      assert %{role: :assistant, stop_reason: :error, error_message: "max_tool_turns_exhausted"} =
+               List.last(messages)
+
+      assert [text] =
+               List.last(messages).content
+               |> Enum.map(&Map.get(&1, :text))
+               |> Enum.reject(&is_nil/1)
+
+      assert text =~ "maximum tool-call turn budget"
     end
 
     test "accepts stream_fn returning stream directly" do

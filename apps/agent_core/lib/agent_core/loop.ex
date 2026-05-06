@@ -34,6 +34,7 @@ defmodule AgentCore.Loop do
       {:message_start, tool_result}
       {:message_end, tool_result}
       {:turn_end, assistant_msg, tool_results}
+      {:loop_budget_exhausted, details}
       ... (more turns if tool calls or steering)
       {:agent_end, new_messages}
 
@@ -51,6 +52,7 @@ defmodule AgentCore.Loop do
 
   alias Ai.Types.{
     AssistantMessage,
+    TextContent,
     ToolCall
   }
 
@@ -421,7 +423,8 @@ defmodule AgentCore.Loop do
         pending_messages,
         first_turn,
         _has_more_tool_calls = true,
-        _steering_after_tools = nil
+        _steering_after_tools = nil,
+        _tool_turn_count = 0
       )
 
     if continue_outer do
@@ -469,7 +472,8 @@ defmodule AgentCore.Loop do
          pending_messages,
          _first_turn,
          false = _has_more_tool_calls,
-         _steering_after_tools
+         _steering_after_tools,
+         _tool_turn_count
        )
        when pending_messages == [] do
     # Exit condition: no more tool calls and no pending messages
@@ -487,7 +491,8 @@ defmodule AgentCore.Loop do
          pending_messages,
          first_turn,
          _has_more_tool_calls,
-         _steering_after_tools
+         _steering_after_tools,
+         tool_turn_count
        ) do
     # Emit turn_start if not first turn
     if not first_turn do
@@ -557,27 +562,35 @@ defmodule AgentCore.Loop do
 
             EventStream.push(stream, {:turn_end, message, tool_results})
 
-            # Get steering messages after turn completes
-            pending_messages =
-              if steering_after_tools && steering_after_tools != [] do
-                steering_after_tools
-              else
-                get_steering_messages(config) || []
-              end
+            tool_turn_count =
+              if has_more_tool_calls, do: tool_turn_count + 1, else: tool_turn_count
 
-            # Continue inner loop
-            do_inner_loop(
-              context,
-              new_messages,
-              config,
-              signal,
-              stream_fn,
-              stream,
-              pending_messages,
-              false,
-              has_more_tool_calls,
-              nil
-            )
+            if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
+              complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
+            else
+              # Get steering messages after turn completes
+              pending_messages =
+                if steering_after_tools && steering_after_tools != [] do
+                  steering_after_tools
+                else
+                  get_steering_messages(config) || []
+                end
+
+              # Continue inner loop
+              do_inner_loop(
+                context,
+                new_messages,
+                config,
+                signal,
+                stream_fn,
+                stream,
+                pending_messages,
+                false,
+                has_more_tool_calls,
+                nil,
+                tool_turn_count
+              )
+            end
         end
 
       {:error, reason} ->
@@ -602,6 +615,61 @@ defmodule AgentCore.Loop do
     new_messages = new_messages ++ pending_messages
 
     {context, new_messages, []}
+  end
+
+  defp max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
+    case resolve_max_tool_turns(config) do
+      :infinity -> false
+      max_tool_turns -> has_more_tool_calls and tool_turn_count >= max_tool_turns
+    end
+  end
+
+  defp resolve_max_tool_turns(%AgentLoopConfig{max_tool_turns: :infinity}), do: :infinity
+
+  defp resolve_max_tool_turns(%AgentLoopConfig{max_tool_turns: max_tool_turns})
+       when is_integer(max_tool_turns) do
+    max(max_tool_turns, 1)
+  end
+
+  defp resolve_max_tool_turns(%AgentLoopConfig{}), do: 25
+
+  defp complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count) do
+    max_tool_turns = resolve_max_tool_turns(config)
+
+    details = %{
+      reason: :max_tool_turns_exhausted,
+      max_tool_turns: max_tool_turns,
+      tool_turns: tool_turn_count
+    }
+
+    EventStream.push(stream, {:loop_budget_exhausted, details})
+
+    message = %AssistantMessage{
+      role: :assistant,
+      content: [
+        %TextContent{
+          type: :text,
+          text:
+            "I stopped because the maximum tool-call turn budget was reached before a final answer."
+        }
+      ],
+      api: get_model_api(config),
+      provider: get_model_provider(config),
+      model: get_model_id(config),
+      stop_reason: :error,
+      error_message: "max_tool_turns_exhausted",
+      timestamp: System.system_time(:millisecond)
+    }
+
+    context = %{context | messages: context.messages ++ [message]}
+    new_messages = new_messages ++ [message]
+
+    EventStream.push(stream, {:message_start, message})
+    EventStream.push(stream, {:message_end, message})
+    EventStream.push(stream, {:agent_end, new_messages})
+    EventStream.complete(stream, new_messages)
+
+    {context, new_messages, [], false}
   end
 
   defp apply_queued_system_prompt(context, pending_messages) do
@@ -683,4 +751,10 @@ defmodule AgentCore.Loop do
 
   defp get_model_id(%AgentLoopConfig{model: nil}), do: nil
   defp get_model_id(%AgentLoopConfig{model: model}), do: Map.get(model, :id)
+
+  defp get_model_api(%AgentLoopConfig{model: nil}), do: nil
+  defp get_model_api(%AgentLoopConfig{model: model}), do: Map.get(model, :api)
+
+  defp get_model_provider(%AgentLoopConfig{model: nil}), do: nil
+  defp get_model_provider(%AgentLoopConfig{model: model}), do: Map.get(model, :provider)
 end

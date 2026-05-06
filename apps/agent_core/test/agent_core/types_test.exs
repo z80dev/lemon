@@ -283,6 +283,7 @@ defmodule AgentCore.TypesTest do
       assert config.get_steering_messages == nil
       assert config.get_follow_up_messages == nil
       assert config.max_tool_concurrency == nil
+      assert config.max_tool_turns == 25
       assert config.tool_task_supervisor == nil
       assert config.stream_options == %StreamOptions{}
       assert config.stream_fn == nil
