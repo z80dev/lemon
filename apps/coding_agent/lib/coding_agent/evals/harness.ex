@@ -954,7 +954,8 @@ defmodule CodingAgent.Evals.Harness do
         live_model_memory_trace_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
         live_model_skill_curator_contract_eval(cwd, opts),
-        live_model_cron_block_contract_eval(cwd, opts)
+        live_model_cron_block_contract_eval(cwd, opts),
+        live_model_parallel_delegation_contract_eval(cwd, opts)
       ]
     else
       []
@@ -1363,6 +1364,91 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_cron_block_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_parallel_delegation_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_parallel_delegation_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        clear_task_state()
+        {:ok, output_counter} = Agent.start_link(fn -> 0 end)
+
+        task_tool =
+          TaskTool.tool(tmp_dir,
+            run_override: fn _on_update, _signal ->
+              output_number = Agent.get_and_update(output_counter, &{&1 + 1, &1 + 1})
+
+              %AgentToolResult{
+                content: [%TextContent{text: "live child output #{output_number}"}],
+                details: %{status: "completed"}
+              }
+            end,
+            session_key: "agent:live-model-parallel-delegation-eval:main",
+            agent_id: "live-model-parallel-delegation-eval",
+            parent_run_id: "parent-run-live-model-parallel-delegation"
+          )
+
+        context =
+          AgentContext.new(
+            system_prompt: live_parallel_delegation_eval_prompt(),
+            tools: [task_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: live_delegation_stream_options(stream_options, opts),
+          max_tool_turns: 5
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("Research the two release lanes in parallel, then aggregate.")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 120_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_live_parallel_tasks_joined(messages),
+             :ok <-
+               assert_final_contains(messages, [
+                 "LIVE_DELEGATION_JOINED",
+                 "live child output 1",
+                 "live child output 2"
+               ]) do
+          %{
+            name: "live_model_parallel_delegation_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_task_tool_result_actions(messages),
+              child_runs: Agent.get(output_counter, & &1)
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_parallel_delegation_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id,
+              child_runs: Agent.get(output_counter, & &1)
+            })
+        end
+      after
+        clear_task_state()
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_parallel_delegation_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_parallel_delegation_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -1405,6 +1491,18 @@ defmodule CodingAgent.Evals.Harness do
     """
   end
 
+  defp live_parallel_delegation_eval_prompt do
+    """
+    You are running a live-model Lemon delegation eval.
+
+    Before answering, use the `task` tool to start exactly two async child tasks with `action` `run`, `async` true, and `auto_followup` false. One child prompt should ask for the first release lane finding. The other child prompt should ask for the second release lane finding.
+
+    Keep both returned task_ids. Then call the `task` tool with `action` `join`, `mode` `wait_all`, and both task_ids in one `task_ids` array. Do not answer until the join result arrives.
+
+    After the join result arrives, answer with the exact marker LIVE_DELEGATION_JOINED and include both joined outputs verbatim.
+    """
+  end
+
   defp blocked_cron_tool do
     %AgentTool{
       name: "cron",
@@ -1433,6 +1531,17 @@ defmodule CodingAgent.Evals.Harness do
       Keyword.get(
         opts,
         :live_curator_max_tokens,
+        max(stream_options.max_tokens || 0, 1024)
+      )
+
+    %{stream_options | max_tokens: max_tokens}
+  end
+
+  defp live_delegation_stream_options(stream_options, opts) do
+    max_tokens =
+      Keyword.get(
+        opts,
+        :live_delegation_max_tokens,
         max(stream_options.max_tokens || 0, 1024)
       )
 
@@ -2097,6 +2206,41 @@ defmodule CodingAgent.Evals.Harness do
 
       not String.contains?(join_text, "child output 2") ->
         {:error, "join result missing child output 2"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_live_parallel_tasks_joined(messages) do
+    task_results =
+      Enum.filter(messages, &match?(%{role: :tool_result, tool_name: "task"}, &1))
+
+    queued_count =
+      Enum.count(task_results, fn message ->
+        match?(%{status: "queued", task_id: task_id} when is_binary(task_id), message.details)
+      end)
+
+    join_result =
+      Enum.find(task_results, fn
+        %{details: %{mode: "wait_all", tasks: tasks}} when is_list(tasks) -> length(tasks) == 2
+        _ -> false
+      end)
+
+    join_text = if join_result, do: stringify_content(join_result.content), else: ""
+
+    cond do
+      queued_count != 2 ->
+        {:error, "expected two queued live task results, got #{inspect(task_results)}"}
+
+      is_nil(join_result) ->
+        {:error, "expected live wait_all join result for two tasks"}
+
+      not String.contains?(join_text, "live child output 1") ->
+        {:error, "live join result missing child output 1"}
+
+      not String.contains?(join_text, "live child output 2") ->
+        {:error, "live join result missing child output 2"}
 
       true ->
         :ok
