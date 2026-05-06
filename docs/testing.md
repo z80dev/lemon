@@ -40,7 +40,7 @@ The BEAM test lanes in `scripts/test` scrub ambient live credentials before runn
 Representative scrubbed variables include:
 
 - LLM/provider secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_GEMINI_CLI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `NOUS_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`.
-- OAuth/CLI and secret-store material: `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `LEMON_SECRETS_MASTER_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
+- OAuth/CLI and secret-store material: `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `LEMON_SECRETS_MASTER_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
 - Platform/cloud credentials: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `TWILIO_AUTH_TOKEN`, X API credentials, XMTP wallet keys, Feishu/DingTalk tokens.
 
 Live/integration runs that intentionally need real credentials must opt in explicitly:
@@ -52,7 +52,7 @@ LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/some_app/test --only 
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 
 - `credential_env_vars/0` returns the canonical scrub list.
-- `scrub_unit_credentials!/1` deletes those variables unless live credentials are explicitly allowed.
+- `scrub_unit_credentials!/1` deletes those variables unless live credentials are explicitly allowed. It returns `:ok` when scrubbing runs and `{:skipped, :live_credentials_allowed}` when the live-credential opt-in is active.
 - `with_restored_env/2` snapshots and restores env vars around synchronous tests that intentionally mutate process-wide env.
 
 Because environment variables are process-wide, tests that call `System.put_env/2` or `System.delete_env/1` should generally be `async: false` and should restore their changes with `with_restored_env/2` or an `on_exit/1` snapshot.

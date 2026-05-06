@@ -28,7 +28,9 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   FEISHU_BOT_TOKEN
   FIREWORKS_API_KEY
   GEMINI_API_KEY
+  GH_TOKEN
   GITHUB_COPILOT_API_KEY
+  GITHUB_TOKEN
   GOOGLE_API_KEY
   GOOGLE_APPLICATION_CREDENTIALS
   GOOGLE_APPLICATION_CREDENTIALS_JSON
@@ -83,7 +85,7 @@ Runner defaults:
   - Runs from the repository root.
   - Sets MIX_ENV=test for BEAM test lanes unless a lane intentionally overrides it.
   - Creates per-invocation temp LEMON_STORE_PATH and LEMON_TEST_TMPDIR when unset.
-  - Scrubs ambient provider/platform credentials unless LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1.
+  - BEAM test lanes scrub ambient provider/platform credentials unless LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1.
 EOF
 }
 

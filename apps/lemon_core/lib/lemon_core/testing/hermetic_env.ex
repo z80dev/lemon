@@ -28,7 +28,9 @@ defmodule LemonCore.Testing.HermeticEnv do
     FEISHU_BOT_TOKEN
     FIREWORKS_API_KEY
     GEMINI_API_KEY
+    GH_TOKEN
     GITHUB_COPILOT_API_KEY
+    GITHUB_TOKEN
     GOOGLE_API_KEY
     GOOGLE_APPLICATION_CREDENTIALS
     GOOGLE_APPLICATION_CREDENTIALS_JSON
@@ -70,6 +72,7 @@ defmodule LemonCore.Testing.HermeticEnv do
   @doc """
   Returns env vars considered live provider/platform credentials in unit tests.
   """
+  @spec credential_env_vars() :: [String.t()]
   def credential_env_vars, do: @credential_env_vars
 
   @doc """
@@ -77,7 +80,12 @@ defmodule LemonCore.Testing.HermeticEnv do
 
   Set `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` or pass `allow_live?: true` for an
   explicit live/integration run that should inherit credentials.
+
+  Returns `:ok` when credentials are scrubbed, or
+  `{:skipped, :live_credentials_allowed}` when live credentials are explicitly
+  allowed.
   """
+  @spec scrub_unit_credentials!(keyword()) :: :ok | {:skipped, :live_credentials_allowed}
   def scrub_unit_credentials!(opts \\ []) do
     if Keyword.get(opts, :allow_live?, false) or live_credentials_allowed?() do
       {:skipped, :live_credentials_allowed}
@@ -93,6 +101,7 @@ defmodule LemonCore.Testing.HermeticEnv do
   This helper is intentionally small and synchronous. Use it from `async: false`
   tests when mutating process-wide environment variables.
   """
+  @spec with_restored_env([String.t()], (-> result)) :: result when result: term()
   def with_restored_env(keys, fun) when is_list(keys) and is_function(fun, 0) do
     snapshot = snapshot_env(keys)
 
@@ -106,6 +115,7 @@ defmodule LemonCore.Testing.HermeticEnv do
   @doc """
   Captures current values for env vars.
   """
+  @spec snapshot_env([String.t()]) :: %{String.t() => String.t() | nil}
   def snapshot_env(keys) when is_list(keys) do
     Map.new(keys, fn key -> {key, System.get_env(key)} end)
   end
@@ -113,6 +123,7 @@ defmodule LemonCore.Testing.HermeticEnv do
   @doc """
   Restores env vars captured with `snapshot_env/1`.
   """
+  @spec restore_env(%{String.t() => String.t() | nil}) :: :ok
   def restore_env(snapshot) when is_map(snapshot) do
     Enum.each(snapshot, fn
       {key, nil} -> System.delete_env(key)

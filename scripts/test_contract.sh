@@ -23,7 +23,7 @@ done
 
 printf '%s\n' "$HELP" | grep -q "Usage: scripts/test" || fail "help output must include usage"
 printf '%s\n' "$HELP" | grep -q "MIX_ENV=test" || fail "help output must document test env"
-printf '%s\n' "$HELP" | grep -q "Scrubs ambient provider/platform credentials" || fail "help output must document credential scrubbing"
+printf '%s\n' "$HELP" | grep -q "BEAM test lanes scrub ambient provider/platform credentials" || fail "help output must document credential scrubbing"
 grep -q "LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1" "$DOC" || fail "docs/testing.md must document live credential opt-in"
 grep -q "LemonCore.Testing.HermeticEnv" "$DOC" || fail "docs/testing.md must mention shared hermetic env helper"
 grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider credentials"
@@ -41,7 +41,7 @@ if not runner_match or not elixir_match:
     raise SystemExit(1)
 
 def vars(block):
-    return sorted(line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#"))
+    return sorted(word for line in block.splitlines() if not line.strip().startswith("#") for word in line.split())
 
 if vars(runner_match.group(1)) != vars(elixir_match.group(1)):
     raise SystemExit(1)
