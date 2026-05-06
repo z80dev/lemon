@@ -16,7 +16,11 @@ defmodule CodingAgent.SystemPrompt do
           optional(:bootstrap_max_chars) => pos_integer(),
           optional(:session_scope) => :main | :subagent | String.t(),
           optional(:skill_context) => String.t(),
-          optional(:max_relevant_skills) => pos_integer()
+          optional(:max_relevant_skills) => pos_integer(),
+          optional(:run_id) => String.t(),
+          optional(:session_key) => String.t(),
+          optional(:session_id) => String.t(),
+          optional(:agent_id) => String.t()
         }
 
   @doc """
@@ -32,6 +36,7 @@ defmodule CodingAgent.SystemPrompt do
     session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
     skill_context = Map.get(opts, :skill_context, "")
     max_relevant_skills = Map.get(opts, :max_relevant_skills, 3)
+    skill_trace_opts = skill_trace_opts(opts)
 
     bootstrap_files =
       Workspace.load_bootstrap_files(
@@ -43,8 +48,8 @@ defmodule CodingAgent.SystemPrompt do
     sections = [
       "You are a personal assistant running inside Lemon.",
       build_runtime_section(session_scope),
-      build_relevant_skills_section(cwd, skill_context, max_relevant_skills),
-      build_skills_section(cwd),
+      build_relevant_skills_section(cwd, skill_context, max_relevant_skills, skill_trace_opts),
+      build_skills_section(cwd, skill_trace_opts),
       build_memory_workflow_section(session_scope),
       build_learning_workflow_section(session_scope),
       build_workspace_section(cwd, workspace_dir),
@@ -76,20 +81,23 @@ defmodule CodingAgent.SystemPrompt do
   # Sections
   # ============================================================================
 
-  defp build_relevant_skills_section(_cwd, context, _max_skills) when context in [nil, ""], do: ""
+  defp build_relevant_skills_section(_cwd, context, _max_skills, _trace_opts)
+       when context in [nil, ""],
+       do: ""
 
-  defp build_relevant_skills_section(cwd, context, max_skills) when is_binary(context) do
+  defp build_relevant_skills_section(cwd, context, max_skills, trace_opts)
+       when is_binary(context) do
     views =
       context
       |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: false)
       |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
       |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
 
-    PromptView.render_relevant_skills(views)
+    PromptView.render_relevant_skills(views, Keyword.put(trace_opts, :cwd, cwd))
   end
 
-  defp build_skills_section(cwd) do
-    PromptView.render_for_prompt(cwd)
+  defp build_skills_section(cwd, trace_opts) do
+    PromptView.render_for_prompt(cwd, trace_opts)
   end
 
   defp build_workspace_section(cwd, workspace_dir) do
@@ -142,6 +150,12 @@ defmodule CodingAgent.SystemPrompt do
 
   defp build_learning_workflow_section(:main) do
     CodingAgent.PromptBuilder.build_learning_section()
+  end
+
+  defp skill_trace_opts(opts) do
+    opts
+    |> Map.take([:run_id, :session_key, :session_id, :agent_id])
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   defp build_workspace_context_section([]), do: ""

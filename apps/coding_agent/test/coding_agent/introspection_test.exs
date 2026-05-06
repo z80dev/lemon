@@ -427,6 +427,65 @@ defmodule CodingAgent.IntrospectionTest do
 
       GenServer.stop(session, :normal)
     end
+
+    test "skill prompt render events from native sessions can be queried by run_id" do
+      token = unique_token()
+      cwd = Path.join(System.tmp_dir!(), "lemon-introspection-skill-render-#{token}")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      File.mkdir_p!(cwd)
+
+      write_skill!(
+        cwd,
+        "native-render-skill",
+        """
+        ---
+        name: Native Render Skill
+        description: Verifies run-scoped prompt render introspection
+        ---
+
+        Body
+        """
+      )
+
+      LemonSkills.refresh(cwd: cwd)
+
+      session_key = "agent:introspection_skill_render:#{token}:main"
+      run_id = "run_introspection_skill_render_#{token}"
+      agent_id = "skill-render-agent"
+
+      session =
+        start_session(
+          cwd: cwd,
+          session_key: session_key,
+          run_id: run_id,
+          agent_id: agent_id
+        )
+
+      wait_until(fn ->
+        Introspection.list(run_id: run_id, event_type: :skill_prompt_render_observed, limit: 20)
+        |> Enum.any?(fn event ->
+          event.payload.surface == "available" and
+            "native-render-skill" in event.payload.skill_keys
+        end)
+      end)
+
+      event =
+        Introspection.list(run_id: run_id, event_type: :skill_prompt_render_observed, limit: 20)
+        |> Enum.find(fn event ->
+          event.payload.surface == "available" and
+            "native-render-skill" in event.payload.skill_keys
+        end)
+
+      assert event.session_key == session_key
+      assert event.agent_id == agent_id
+      assert event.payload.skill_count >= 1
+      assert event.payload.active_count >= 1
+      refute Map.has_key?(event.payload, :session_key)
+      refute Map.has_key?(event.payload, :content)
+
+      GenServer.stop(session, :normal)
+    end
   end
 
   # ============================================================================

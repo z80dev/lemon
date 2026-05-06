@@ -27,7 +27,8 @@ defmodule CodingAgent.Session.PromptComposer do
           String.t() | nil,
           String.t(),
           :main | :subagent,
-          String.t()
+          String.t(),
+          map()
         ) :: String.t()
   def compose_system_prompt(
         cwd,
@@ -35,7 +36,8 @@ defmodule CodingAgent.Session.PromptComposer do
         prompt_template,
         workspace_dir,
         session_scope,
-        skill_context \\ ""
+        skill_context \\ "",
+        trace_opts \\ %{}
       ) do
     # Load prompt template if specified
     template_content =
@@ -52,11 +54,15 @@ defmodule CodingAgent.Session.PromptComposer do
 
     # Build Lemon base prompt (skills + workspace context)
     base_prompt =
-      CodingAgent.SystemPrompt.build(cwd, %{
-        workspace_dir: workspace_dir,
-        session_scope: session_scope,
-        skill_context: skill_context
-      })
+      CodingAgent.SystemPrompt.build(
+        cwd,
+        %{
+          workspace_dir: workspace_dir,
+          session_scope: session_scope,
+          skill_context: skill_context
+        }
+        |> Map.merge(trace_opts)
+      )
 
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
     instructions = ResourceLoader.load_instructions(cwd)
@@ -111,7 +117,8 @@ defmodule CodingAgent.Session.PromptComposer do
           String.t(),
           :main | :subagent,
           String.t(),
-          String.t()
+          String.t(),
+          map()
         ) :: {:changed, String.t()} | :unchanged
   def maybe_refresh_system_prompt(
         cwd,
@@ -120,7 +127,8 @@ defmodule CodingAgent.Session.PromptComposer do
         workspace_dir,
         session_scope,
         current_prompt,
-        skill_context \\ ""
+        skill_context \\ "",
+        trace_opts \\ %{}
       ) do
     next_prompt =
       compose_system_prompt(
@@ -129,7 +137,8 @@ defmodule CodingAgent.Session.PromptComposer do
         prompt_template,
         workspace_dir,
         session_scope,
-        skill_context
+        skill_context,
+        trace_opts
       )
 
     if next_prompt == current_prompt do

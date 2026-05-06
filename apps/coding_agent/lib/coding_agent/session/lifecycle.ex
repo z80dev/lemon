@@ -50,21 +50,29 @@ defmodule CodingAgent.Session.Lifecycle do
     settings_manager =
       Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
 
+    run_id = Keyword.get(opts, :run_id)
+    session_key = Keyword.get(opts, :session_key, session_manager.header.id)
+    agent_id = Keyword.get(opts, :agent_id, "default")
+
     system_prompt =
       PromptComposer.compose_system_prompt(
         cwd,
         explicit_system_prompt,
         prompt_template,
         workspace_dir,
-        session_scope
+        session_scope,
+        "",
+        %{
+          run_id: run_id,
+          session_key: session_key,
+          session_id: session_manager.header.id,
+          agent_id: agent_id
+        }
       )
 
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
     tool_policy = Keyword.get(opts, :tool_policy)
-    run_id = Keyword.get(opts, :run_id)
-    session_key = Keyword.get(opts, :session_key, session_manager.header.id)
-    agent_id = Keyword.get(opts, :agent_id, "default")
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)

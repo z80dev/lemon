@@ -74,6 +74,7 @@ defmodule LemonSkills.PromptView do
       ""
     else
       block = render_skill_list(views)
+      emit_prompt_render(:available, views, all_opts)
 
       """
       #{@header}
@@ -95,13 +96,16 @@ defmodule LemonSkills.PromptView do
   Returns an empty string when `views` is empty.
   """
   @spec render_relevant_skills([SkillView.t()]) :: String.t()
-  def render_relevant_skills([]), do: ""
+  def render_relevant_skills(views, opts \\ [])
+  def render_relevant_skills([], _opts), do: ""
 
-  def render_relevant_skills(views) when is_list(views) do
+  def render_relevant_skills(views, opts) when is_list(views) do
     inner =
       views
       |> Enum.map(&render_entry/1)
       |> Enum.join("\n")
+
+    emit_prompt_render(:relevant, views, opts)
 
     """
     <relevant-skills>
@@ -167,4 +171,30 @@ defmodule LemonSkills.PromptView do
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
   end
+
+  defp emit_prompt_render(surface, views, opts) do
+    metadata =
+      %{
+        surface: surface,
+        skill_count: length(views),
+        skill_keys: Enum.map(views, & &1.key),
+        active_count: Enum.count(views, &(&1.activation_state == :active)),
+        not_ready_count: Enum.count(views, &(&1.activation_state == :not_ready)),
+        missing_count: Enum.count(views, &(SkillView.all_missing(&1) != [])),
+        cwd: opt_get(opts, :cwd),
+        run_id: opt_get(opts, :run_id),
+        session_key: opt_get(opts, :session_key),
+        session_id: opt_get(opts, :session_id),
+        agent_id: opt_get(opts, :agent_id)
+      }
+
+    LemonSkills.Telemetry.skill_prompt_render(metadata)
+  end
+
+  defp opt_get(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+
+  defp opt_get(opts, key) when is_map(opts),
+    do: Map.get(opts, key) || Map.get(opts, Atom.to_string(key))
+
+  defp opt_get(_opts, _key), do: nil
 end

@@ -41,6 +41,9 @@ defmodule LemonCore.Telemetry do
   - `[:lemon_skills, :skill, :write]` - measurements: `%{count: 1, system_time: integer()}`,
     meta includes `result`, `action`, `name`, `scope`, `tool_call_id`, `session_key`, and redacted write metadata.
     Projected to introspection as `:skill_write_observed`.
+  - `[:lemon_skills, :skill, :prompt_render]` - measurements: `%{count: 1, system_time: integer()}`,
+    meta includes `surface`, `skill_count`, `skill_keys`, activation counts, `session_key`, and redacted prompt-render metadata.
+    Projected to introspection as `:skill_prompt_render_observed`.
   """
 
   @doc """

@@ -29,6 +29,10 @@ defmodule CodingAgent.PromptBuilder do
           optional(:include_commands) => boolean(),
           optional(:include_mentions) => boolean(),
           optional(:max_skills) => pos_integer(),
+          optional(:run_id) => String.t(),
+          optional(:session_key) => String.t(),
+          optional(:session_id) => String.t(),
+          optional(:agent_id) => String.t(),
           optional(:custom_sections) => [{String.t(), String.t()}]
         }
 
@@ -87,15 +91,15 @@ defmodule CodingAgent.PromptBuilder do
 
   Formatted skills section or empty string.
   """
-  @spec build_skills_section(String.t(), String.t(), pos_integer()) :: String.t()
-  def build_skills_section(cwd, context, max_skills \\ 3) do
+  @spec build_skills_section(String.t(), String.t(), pos_integer(), map()) :: String.t()
+  def build_skills_section(cwd, context, max_skills \\ 3, opts \\ %{}) do
     if context != "" do
       views =
         LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills, refresh: true)
         |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
         |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
 
-      LemonSkills.PromptView.render_relevant_skills(views)
+      LemonSkills.PromptView.render_relevant_skills(views, skill_trace_opts(opts, cwd))
     else
       ""
     end
@@ -245,7 +249,7 @@ defmodule CodingAgent.PromptBuilder do
 
   defp maybe_build_skills_section(cwd, opts) do
     if opts.include_skills do
-      build_skills_section(cwd, opts.context, opts.max_skills)
+      build_skills_section(cwd, opts.context, opts.max_skills, opts)
     else
       ""
     end
@@ -264,6 +268,13 @@ defmodule CodingAgent.PromptBuilder do
   end
 
   defp maybe_build_learning_section(_skills_section, _opts), do: ""
+
+  defp skill_trace_opts(opts, cwd) do
+    opts
+    |> Map.take([:run_id, :session_key, :session_id, :agent_id])
+    |> Map.put(:cwd, cwd)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  end
 
   defp maybe_build_commands_section(cwd, opts) do
     if opts.include_commands do

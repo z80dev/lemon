@@ -1,6 +1,7 @@
 defmodule LemonSkills.PromptViewTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias LemonCore.{Introspection, Store}
   alias LemonSkills.{PromptView, SkillView}
 
   defp view(overrides \\ []) do
@@ -13,6 +14,25 @@ defmodule LemonSkills.PromptViewTest do
     ]
 
     struct(SkillView, Keyword.merge(defaults, overrides))
+  end
+
+  def handle_telemetry(event_name, measurements, metadata, pid) do
+    send(pid, {:telemetry_event, event_name, measurements, metadata})
+  end
+
+  defp attach_handler(event_names) do
+    handler_id = "prompt-view-telemetry-#{System.unique_integer([:positive, :monotonic])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        event_names,
+        &__MODULE__.handle_telemetry/4,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   describe "render_skill_list/1" do
@@ -36,12 +56,13 @@ defmodule LemonSkills.PromptViewTest do
     end
 
     test "includes <missing> tag when deps are missing" do
-      v = view(
-        activation_state: :not_ready,
-        missing_bins: ["kubectl"],
-        missing_env_vars: ["AWS_KEY"],
-        missing_tools: []
-      )
+      v =
+        view(
+          activation_state: :not_ready,
+          missing_bins: ["kubectl"],
+          missing_env_vars: ["AWS_KEY"],
+          missing_tools: []
+        )
 
       result = PromptView.render_skill_list([v])
       assert result =~ "<missing>kubectl, AWS_KEY</missing>"
@@ -102,4 +123,101 @@ defmodule LemonSkills.PromptViewTest do
       end
     end
   end
+
+  describe "prompt render telemetry" do
+    test "emits redacted metadata for relevant skill render decisions" do
+      attach_handler([[:lemon_skills, :skill, :prompt_render]])
+
+      views = [
+        view(key: "active-skill"),
+        view(
+          key: "not-ready-skill",
+          activation_state: :not_ready,
+          missing_bins: ["gh"]
+        )
+      ]
+
+      assert PromptView.render_relevant_skills(views,
+               cwd: "/tmp/project",
+               run_id: "run-render",
+               session_key: "session-render",
+               session_id: "session-id-render",
+               agent_id: "agent-render"
+             ) =~ "<relevant-skills>"
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :prompt_render],
+                      %{count: 1, system_time: system_time},
+                      %{
+                        surface: "relevant",
+                        skill_count: 2,
+                        skill_keys: ["active-skill", "not-ready-skill"],
+                        active_count: 1,
+                        not_ready_count: 1,
+                        missing_count: 1,
+                        cwd: "/tmp/project",
+                        run_id: "run-render",
+                        session_key: "session-render",
+                        session_id: "session-id-render",
+                        agent_id: "agent-render"
+                      }}
+
+      assert is_integer(system_time)
+    end
+
+    test "projects prompt render telemetry into introspection without skill bodies" do
+      enable_introspection()
+
+      handler_id = "prompt-render-introspection-#{System.unique_integer([:positive, :monotonic])}"
+      LemonSkills.Telemetry.attach_introspection_bridge(handler_id)
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      run_id = "run_prompt_render_#{System.unique_integer([:positive, :monotonic])}"
+
+      assert PromptView.render_relevant_skills([view(key: "trace-skill")],
+               run_id: run_id,
+               session_key: "session-prompt-render",
+               agent_id: "agent-prompt-render"
+             ) =~ "trace-skill"
+
+      event =
+        eventually(fn ->
+          Introspection.list(run_id: run_id, event_type: :skill_prompt_render_observed, limit: 10)
+          |> Enum.find(&(&1.payload[:skill_keys] == ["trace-skill"]))
+        end)
+
+      assert event.session_key == "session-prompt-render"
+      assert event.agent_id == "agent-prompt-render"
+      assert event.engine == "lemon"
+      assert event.payload.surface == "relevant"
+      assert event.payload.skill_count == 1
+      refute Map.has_key?(event.payload, :session_key)
+      refute Map.has_key?(event.payload, :content)
+    end
+  end
+
+  defp enable_introspection do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
+    previous = Application.get_env(:lemon_core, :introspection, [])
+    Application.put_env(:lemon_core, :introspection, Keyword.put(previous, :enabled, true))
+    on_exit(fn -> Application.put_env(:lemon_core, :introspection, previous) end)
+  end
+
+  defp eventually(fun, attempts \\ 20)
+
+  defp eventually(fun, attempts) when attempts > 0 do
+    case fun.() do
+      nil ->
+        Process.sleep(10)
+        eventually(fun, attempts - 1)
+
+      value ->
+        value
+    end
+  end
+
+  defp eventually(fun, 0), do: flunk("expected condition to become true, got: #{inspect(fun.())}")
 end

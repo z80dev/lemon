@@ -7,7 +7,8 @@ defmodule LemonSkills.Telemetry do
   @introspection_handler_id "lemon-skills-introspection-bridge"
   @skill_events [
     [:lemon_skills, :skill, :load],
-    [:lemon_skills, :skill, :write]
+    [:lemon_skills, :skill, :write],
+    [:lemon_skills, :skill, :prompt_render]
   ]
   @max_reason_chars 500
 
@@ -17,6 +18,10 @@ defmodule LemonSkills.Telemetry do
 
   def skill_write(metadata) do
     emit([:lemon_skills, :skill, :write], metadata)
+  end
+
+  def skill_prompt_render(metadata) do
+    emit([:lemon_skills, :skill, :prompt_render], metadata)
   end
 
   def attach_introspection_bridge(handler_id \\ @introspection_handler_id) do
@@ -41,6 +46,15 @@ defmodule LemonSkills.Telemetry do
         _config
       ) do
     record_introspection(:skill_write_observed, metadata)
+  end
+
+  def handle_introspection_event(
+        [:lemon_skills, :skill, :prompt_render],
+        _measurements,
+        metadata,
+        _config
+      ) do
+    record_introspection(:skill_prompt_render_observed, metadata)
   end
 
   defp emit(event, metadata) do

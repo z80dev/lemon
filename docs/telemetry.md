@@ -242,9 +242,9 @@ Emitted when a tool result message is appended to context.
 
 ## LemonSkills Events
 
-These events record skill lifecycle decisions with redacted metadata. They include `tool_call_id` so operators can correlate them with `[:agent_core, :tool_task, ...]` and `[:agent_core, :tool_result, :emit]` events for the same tool invocation. When the tool is built through the CodingAgent tool factories, they also include `session_key`, `session_id`, and `agent_id`.
+These events record skill lifecycle decisions with redacted metadata. Tool events include `tool_call_id` so operators can correlate them with `[:agent_core, :tool_task, ...]` and `[:agent_core, :tool_result, :emit]` events for the same tool invocation. Prompt-render events record only surfaced skill keys/counts and never include skill bodies. When the event is emitted through CodingAgent prompt/tool paths, metadata includes `session_key`, `session_id`, and `agent_id`.
 
-LemonSkills also attaches an introspection bridge on application start. The bridge persists `[:lemon_skills, :skill, :load]` as `:skill_load_observed` and `[:lemon_skills, :skill, :write]` as `:skill_write_observed`, lifting `run_id`, `session_key`, and `agent_id` into the canonical introspection envelope when those fields are present. The same bridge updates `LemonSkills.Usage` sidecars for load/write counters and curation metadata.
+LemonSkills also attaches an introspection bridge on application start. The bridge persists `[:lemon_skills, :skill, :load]` as `:skill_load_observed`, `[:lemon_skills, :skill, :write]` as `:skill_write_observed`, and `[:lemon_skills, :skill, :prompt_render]` as `:skill_prompt_render_observed`, lifting `run_id`, `session_key`, and `agent_id` into the canonical introspection envelope when those fields are present. The same bridge updates `LemonSkills.Usage` sidecars for load/write counters and curation metadata.
 
 ### Skill Load Events
 
@@ -269,6 +269,30 @@ Emitted when `read_skill` returns a skill or a not-found result.
 | `include_status` | boolean | Whether status output was requested |
 | `include_manifest` | boolean | Whether manifest output was requested |
 | `tool_call_id` | string | Tool invocation identifier |
+| `run_id` | string | Run identifier, when provided |
+| `session_key` | string | CodingAgent session key, when provided |
+| `session_id` | string | CodingAgent session id, when provided |
+| `agent_id` | string | Agent id, when provided |
+| `cwd` | string | Project working directory, when present |
+
+### Skill Prompt Render Events
+
+#### [:lemon_skills, :skill, :prompt_render]
+
+Emitted when prompt composition renders an available-skills or relevant-skills block. The event intentionally excludes skill bodies and file contents.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `count` | integer | Always 1 |
+| `system_time` | integer | Emit time in native units |
+| **Metadata** | | |
+| `surface` | string | `available` or `relevant` |
+| `skill_count` | integer | Number of skills rendered |
+| `skill_keys` | list | Rendered skill keys |
+| `active_count` | integer | Rendered active skills |
+| `not_ready_count` | integer | Rendered not-ready skills |
+| `missing_count` | integer | Rendered skills with missing requirements |
 | `run_id` | string | Run identifier, when provided |
 | `session_key` | string | CodingAgent session key, when provided |
 | `session_id` | string | CodingAgent session id, when provided |
@@ -309,6 +333,7 @@ Emitted when `skill_manage` accepts or rejects a skill write operation. The even
 |---|---|---|
 | `:skill_load_observed` | `[:lemon_skills, :skill, :load]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
 | `:skill_write_observed` | `[:lemon_skills, :skill, :write]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
+| `:skill_prompt_render_observed` | `[:lemon_skills, :skill, :prompt_render]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
 | `:missed_skill_observed` | Session end audit | `missed_skill_keys` and `loaded_skill_keys` when the prompt surfaced `<relevant-skills>` but the agent did not load them |
 
 ### Context Events

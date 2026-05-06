@@ -40,7 +40,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
 | `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |
 
-`read_skill` emits `[:lemon_skills, :skill, :load]` telemetry for successful and missing skill loads. `skill_manage` emits `[:lemon_skills, :skill, :write]` telemetry for accepted and rejected write attempts. These events include `tool_call_id` plus session metadata when available, exclude skill body/supporting-file content, update `LemonSkills.Usage`, and are projected into introspection as `:skill_load_observed` / `:skill_write_observed`.
+`PromptView` emits `[:lemon_skills, :skill, :prompt_render]` telemetry when skills are surfaced in prompt blocks, with skill keys/counts only and no skill bodies. `read_skill` emits `[:lemon_skills, :skill, :load]` telemetry for successful and missing skill loads. `skill_manage` emits `[:lemon_skills, :skill, :write]` telemetry for accepted and rejected write attempts. These events include session metadata when available, exclude skill body/supporting-file content, update `LemonSkills.Usage` where applicable, and are projected into introspection as `:skill_prompt_render_observed` / `:skill_load_observed` / `:skill_write_observed`.
 
 ### Infrastructure
 

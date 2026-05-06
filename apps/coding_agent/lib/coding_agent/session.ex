@@ -1077,7 +1077,13 @@ defmodule CodingAgent.Session do
            state.workspace_dir,
            state.session_scope,
            state.system_prompt,
-           skill_context
+           skill_context,
+           %{
+             run_id: state.run_id,
+             session_key: state.session_key,
+             session_id: state.session_manager && state.session_manager.header.id,
+             agent_id: state.agent_id
+           }
          ) do
       :unchanged ->
         state

@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: Anthropic overloaded HTTP 529 responses are normalized as transient retryable provider errors instead of generic non-retryable server failures.
+Latest slice: skill prompt rendering now emits redacted telemetry and introspection events for available/relevant skill surfaces.
 
 ### Tool ergonomics and enforcement
 
@@ -226,8 +226,8 @@ Latest slice: Anthropic overloaded HTTP 529 responses are normalized as transien
   - Control plane exposes many RPCs.
   - Web UI has sessions/runs/tasks/events visibility.
   - Eval harness exists.
+  - Skill prompt render/load/write decisions are available through redacted telemetry and introspection events.
 - Gaps:
-  - Need first-class traces of skill list/render/load decisions.
   - Need dashboard panels for skill loads, memory searches, approvals, subagent tree, and cron job runs.
 - Priority: medium.
 
@@ -603,6 +603,12 @@ Latest slice: Anthropic overloaded HTTP 529 responses are normalized as transien
 1. Classified HTTP 529 provider responses as transient instead of generic server errors.
 2. Made HTTP 529 retryable so Anthropic `overloaded_error` responses follow the same recovery path as 502/503/504 provider failures.
 3. Updated provider-error regressions to assert Anthropic overloaded responses are transient and retryable.
+
+### Slice 62: Skill prompt-render observability
+
+1. Added `[:lemon_skills, :skill, :prompt_render]` telemetry with redacted skill keys/counts for available and relevant prompt surfaces.
+2. Projected prompt-render telemetry into `:skill_prompt_render_observed` introspection events with run/session/agent provenance.
+3. Passed native session provenance through prompt composition and added regressions for direct prompt rendering and native session introspection lookup.
 
 ## Follow-up backlog
 
