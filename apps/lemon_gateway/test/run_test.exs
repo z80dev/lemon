@@ -539,6 +539,15 @@ defmodule LemonGateway.RunTest do
     Run.start_link(args)
   end
 
+  defp receive_bus_event(type, timeout \\ 2_000) do
+    receive do
+      %LemonCore.Event{type: ^type} = event -> event
+      _other -> receive_bus_event(type, timeout)
+    after
+      timeout -> flunk("expected bus event #{inspect(type)}")
+    end
+  end
+
   defp wait_for(fun, timeout_ms, interval_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for(fun, deadline, interval_ms)
@@ -700,24 +709,50 @@ defmodule LemonGateway.RunTest do
 
     test "processes ActionEvent and continues" do
       scope = make_scope()
+      run_id = "run_#{System.unique_integer([:positive])}"
 
       job =
         make_job(scope,
           engine_hint: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
+        |> Map.put(:run_id, run_id)
 
+      LemonCore.Bus.subscribe("run:#{run_id}")
       {:ok, pid} = start_run_direct(job)
 
       assert_receive {:engine_started, run_ref}, 2000
 
-      # Simulate an action event
-      action = Event.action(%{id: "action_1", kind: :test, title: "Test Action"})
+      result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123}
+
+      action =
+        Event.action(%{
+          id: "action_1",
+          kind: :tool,
+          title: "slow_tool",
+          detail: %{name: "slow_tool", result_meta: result_meta}
+        })
 
       action_event =
-        Event.action_event(%{engine: "controllable", action: action, phase: :started})
+        Event.action_event(%{
+          engine: "controllable",
+          action: action,
+          phase: :completed,
+          ok: false,
+          level: :error
+        })
 
       send(pid, {:engine_event, run_ref, action_event})
+
+      assert %LemonCore.Event{
+               type: :engine_action,
+               payload: %{
+                 action: %{detail: %{result_meta: ^result_meta}},
+                 phase: :completed,
+                 ok: false,
+                 level: :error
+               }
+             } = receive_bus_event(:engine_action)
 
       # Run should still be alive (check without timing race)
       Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)

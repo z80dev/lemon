@@ -36,6 +36,26 @@ defmodule LemonGateway.CliAdapterTest do
            } = result
   end
 
+  test "maps action result metadata" do
+    result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123}
+
+    action =
+      Action.new("tool_1", :tool, "slow_tool", %{name: "slow_tool", result_meta: result_meta})
+
+    ev = ActionEvent.new("lemon", action, :completed, ok: false, level: :error)
+
+    result = CliAdapter.to_event_map(ev)
+
+    assert %{
+             __event__: :action_event,
+             engine: "lemon",
+             action: %{detail: %{result_meta: ^result_meta}},
+             phase: :completed,
+             ok: false,
+             level: :error
+           } = result
+  end
+
   test "maps completed event" do
     token = ResumeToken.new("codex", "thread_123")
     ev = CompletedEvent.ok("codex", "done", resume: token)
