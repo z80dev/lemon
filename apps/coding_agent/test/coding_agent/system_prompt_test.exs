@@ -47,6 +47,28 @@ defmodule CodingAgent.SystemPromptTest do
   end
 
   @tag :tmp_dir
+  test "includes learning trigger guidance for main sessions", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+
+    prompt =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main
+      })
+
+    assert String.contains?(prompt, "<learning-workflow>")
+    assert String.contains?(prompt, "When to capture learned context")
+    assert String.contains?(prompt, "reusable workflow, recurring command sequence")
+    assert String.contains?(prompt, "project convention")
+    assert String.contains?(prompt, "Use `skill_manage`")
+    assert String.contains?(prompt, "Use `memory_topic`")
+    assert String.contains?(prompt, "Use `search_memory`")
+    assert String.contains?(prompt, "At the end of substantial work")
+  end
+
+  @tag :tmp_dir
   test "tool names referenced by the system prompt are available in default coding tools", %{
     tmp_dir: tmp_dir
   } do

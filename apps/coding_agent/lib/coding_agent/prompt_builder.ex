@@ -57,10 +57,12 @@ defmodule CodingAgent.PromptBuilder do
   @spec build(String.t(), build_opts()) :: String.t()
   def build(cwd, opts \\ %{}) do
     opts = Map.merge(@default_opts, opts)
+    skills_section = maybe_build_skills_section(cwd, opts)
 
     sections = [
       {:base, opts.base_prompt},
-      {:skills, maybe_build_skills_section(cwd, opts)},
+      {:skills, skills_section},
+      {:learning, maybe_build_learning_section(skills_section, opts)},
       {:commands, maybe_build_commands_section(cwd, opts)},
       {:mentions, maybe_build_mentions_section(cwd, opts)},
       {:custom, build_custom_sections(opts)}
@@ -97,6 +99,23 @@ defmodule CodingAgent.PromptBuilder do
     else
       ""
     end
+  end
+
+  @doc """
+  Build procedural learning guidance for prompts that expose skill and memory tools.
+  """
+  @spec build_learning_section() :: String.t()
+  def build_learning_section do
+    """
+    <learning-workflow>
+    When to capture learned context:
+    - Use `skill_manage` when you discover a reusable workflow, recurring command sequence, API integration, debugging playbook, project convention, or verification checklist that will likely help future runs.
+    - Use `memory_topic` for durable facts, preferences, decisions, people, dates, or project context that should be recalled later but is not a reusable procedure.
+    - Use `search_memory` before answering prompts that mention prior work, previous decisions, remembered context, or "last time".
+    - At the end of substantial work, before the final answer, decide whether a new skill or memory topic should be written; if the reusable lesson is clear, write it before finalizing.
+    </learning-workflow>
+    """
+    |> String.trim()
   end
 
   @doc """
@@ -229,6 +248,20 @@ defmodule CodingAgent.PromptBuilder do
       ""
     end
   end
+
+  defp maybe_build_learning_section("", _opts), do: ""
+  defp maybe_build_learning_section(_skills_section, %{include_skills: false}), do: ""
+
+  defp maybe_build_learning_section(_skills_section, %{context: context})
+       when is_binary(context) do
+    if String.trim(context) == "" do
+      ""
+    else
+      build_learning_section()
+    end
+  end
+
+  defp maybe_build_learning_section(_skills_section, _opts), do: ""
 
   defp maybe_build_commands_section(cwd, opts) do
     if opts.include_commands do

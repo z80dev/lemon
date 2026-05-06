@@ -46,6 +46,7 @@ defmodule CodingAgent.SystemPrompt do
       build_relevant_skills_section(cwd, skill_context, max_relevant_skills),
       build_skills_section(cwd),
       build_memory_workflow_section(session_scope),
+      build_learning_workflow_section(session_scope),
       build_workspace_section(cwd, workspace_dir),
       build_workspace_context_section(bootstrap_files)
     ]
@@ -135,6 +136,12 @@ defmodule CodingAgent.SystemPrompt do
     - If confidence is still low after checking memory files, say so explicitly.
     """
     |> String.trim()
+  end
+
+  defp build_learning_workflow_section(:subagent), do: ""
+
+  defp build_learning_workflow_section(:main) do
+    CodingAgent.PromptBuilder.build_learning_section()
   end
 
   defp build_workspace_context_section([]), do: ""

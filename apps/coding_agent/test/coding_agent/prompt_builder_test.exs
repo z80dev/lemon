@@ -54,6 +54,42 @@ defmodule CodingAgent.PromptBuilderTest do
       assert result == "You are helpful."
     end
 
+    test "includes learning trigger guidance when skills are enabled", %{tmp_dir: tmp_dir} do
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "deployment-workflow"])
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        """
+        ---
+        name: deployment-workflow
+        description: Reusable deployment workflow and verification checklist
+        keywords:
+          - deployment
+          - workflow
+        ---
+
+        Deploy safely.
+        """
+      )
+
+      result =
+        PromptBuilder.build(tmp_dir, %{
+          base_prompt: "Base.",
+          context: "we learned a reusable deployment workflow",
+          include_skills: true,
+          include_commands: false,
+          include_mentions: false
+        })
+
+      assert String.contains?(result, "<learning-workflow>")
+      assert String.contains?(result, "Use `skill_manage`")
+      assert String.contains?(result, "recurring command sequence")
+      assert String.contains?(result, "Use `memory_topic`")
+      assert String.contains?(result, "Use `search_memory`")
+      assert String.contains?(result, "At the end of substantial work")
+    end
+
     test "includes skills section when enabled", %{tmp_dir: tmp_dir} do
       # Create a skill
       skill_dir = Path.join([tmp_dir, ".lemon", "skill", "test-skill"])
