@@ -39,7 +39,8 @@ defmodule CodingAgent.Evals.Harness do
       memory_topic_contract_eval(cwd),
       auto_skill_prompt_contract_eval(cwd),
       skill_curator_behavior_contract_eval(cwd),
-      learning_tool_trace_contract_eval(cwd)
+      learning_tool_trace_contract_eval(cwd),
+      tool_use_claim_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -522,6 +523,56 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("learning_tool_trace_contract", Exception.message(e), %{})
   end
 
+  @spec tool_use_claim_contract_eval(String.t()) :: eval_result()
+  def tool_use_claim_contract_eval(_cwd) do
+    unbacked_claim = [
+      %{role: :user, content: "Create a deployment notes file."},
+      %{role: :assistant, content: "Done, I created deployment-notes.md."}
+    ]
+
+    backed_claim = [
+      %{role: :user, content: "Create a deployment notes file."},
+      %{
+        role: :assistant,
+        content: "",
+        tool_calls: [%{id: "call_write", name: "write"}]
+      },
+      %{role: :tool_result, tool_call_id: "call_write", tool_name: "write", content: "ok"},
+      %{role: :assistant, content: "Done, I created deployment-notes.md."}
+    ]
+
+    unbacked_detected? = unbacked_tool_claim?(unbacked_claim)
+    backed_detected? = unbacked_tool_claim?(backed_claim)
+
+    cond do
+      not unbacked_detected? ->
+        contract_fail(
+          "tool_use_claim_contract",
+          "unbacked completed-action claim was missed",
+          %{}
+        )
+
+      backed_detected? ->
+        contract_fail(
+          "tool_use_claim_contract",
+          "tool-backed completed-action claim was flagged",
+          %{}
+        )
+
+      true ->
+        %{
+          name: "tool_use_claim_contract",
+          status: :pass,
+          details: %{
+            unbacked_claim_detected: true,
+            backed_claim_allowed: true
+          }
+        }
+    end
+  rescue
+    e -> contract_fail("tool_use_claim_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -569,6 +620,65 @@ defmodule CodingAgent.Evals.Harness do
     end)
     |> Enum.join("\n")
   end
+
+  defp unbacked_tool_claim?(messages) when is_list(messages) do
+    completed_action_claim?(final_assistant_content(messages)) and not tool_activity?(messages)
+  end
+
+  defp final_assistant_content(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find(&(message_role(&1) == :assistant))
+    |> message_content()
+  end
+
+  defp completed_action_claim?(text) when is_binary(text) do
+    side_effect? =
+      Regex.match?(
+        ~r/\b(I|I've|I have)\s+(created|updated|edited|modified|wrote|written|deleted|ran|executed|committed|merged|applied|changed)\b/i,
+        text
+      )
+
+    artifact? =
+      Regex.match?(
+        ~r/\b(file|files|doc|docs|test|tests|commit|branch|pr|code|script|config|database|migration|module|function|readme)\b|\.[a-z0-9]{1,6}\b/i,
+        text
+      )
+
+    side_effect? and artifact?
+  end
+
+  defp completed_action_claim?(_), do: false
+
+  defp tool_activity?(messages) do
+    Enum.any?(messages, fn message ->
+      message_role(message) == :tool_result or tool_calls(message) != []
+    end)
+  end
+
+  defp message_role(%{role: role}), do: role
+  defp message_role(%{"role" => "assistant"}), do: :assistant
+  defp message_role(%{"role" => "tool_result"}), do: :tool_result
+  defp message_role(%{"role" => "user"}), do: :user
+  defp message_role(_), do: nil
+
+  defp message_content(nil), do: ""
+  defp message_content(%{content: content}), do: stringify_content(content)
+  defp message_content(%{"content" => content}), do: stringify_content(content)
+  defp message_content(_), do: ""
+
+  defp stringify_content(content) when is_binary(content), do: content
+
+  defp stringify_content(content) when is_list(content),
+    do: Enum.map_join(content, "\n", &stringify_content/1)
+
+  defp stringify_content(%{text: text}) when is_binary(text), do: text
+  defp stringify_content(%{"text" => text}) when is_binary(text), do: text
+  defp stringify_content(_), do: ""
+
+  defp tool_calls(%{tool_calls: calls}) when is_list(calls), do: calls
+  defp tool_calls(%{"tool_calls" => calls}) when is_list(calls), do: calls
+  defp tool_calls(_), do: []
 
   defp assert_contains(text, expected) when is_binary(text) do
     if String.contains?(text, expected) do
