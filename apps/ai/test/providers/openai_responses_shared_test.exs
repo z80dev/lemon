@@ -188,6 +188,47 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert String.valid?(sanitized)
   end
 
+  test "convert_messages sanitizes invalid utf8 in assistant tool call arguments" do
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      cost: %ModelCost{}
+    }
+
+    invalid_utf8 = <<"ok", 0xED, 0xA0, 0x80>>
+
+    tool_call = %ToolCall{
+      id: "call_1|fc_1",
+      name: "echo",
+      arguments: %{"items" => [%{"text" => invalid_utf8}]}
+    }
+
+    assistant = %AssistantMessage{
+      role: :assistant,
+      content: [tool_call],
+      api: :openai_responses,
+      provider: :openai,
+      model: "gpt-4o",
+      usage: %Usage{cost: %Cost{}},
+      stop_reason: :tool_use,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    [converted | _] =
+      OpenAIResponsesShared.convert_messages(
+        model,
+        %Ai.Types.Context{system_prompt: nil, messages: [assistant]},
+        MapSet.new([:openai])
+      )
+
+    assert %{"items" => [%{"text" => sanitized_text}]} = Jason.decode!(converted["arguments"])
+    assert String.starts_with?(sanitized_text, "ok")
+    assert String.valid?(sanitized_text)
+  end
+
   test "convert_messages uses developer role for reasoning models" do
     model = %Model{
       id: "gpt-5",

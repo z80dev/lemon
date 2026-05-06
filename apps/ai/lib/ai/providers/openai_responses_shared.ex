@@ -414,13 +414,27 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       "type" => "function_call",
       "call_id" => call_id,
       "name" => block.name,
-      "arguments" => Jason.encode!(block.arguments)
+      "arguments" => block.arguments |> sanitize_json_value() |> Jason.encode!()
     }
 
     if item_id, do: Map.put(base, "id", item_id), else: base
   end
 
   defp convert_assistant_block(_block, _msg_index, _is_different_model), do: nil
+
+  defp sanitize_json_value(value) when is_binary(value), do: sanitize_surrogates(value)
+
+  defp sanitize_json_value(value) when is_list(value) do
+    Enum.map(value, &sanitize_json_value/1)
+  end
+
+  defp sanitize_json_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, val} -> {sanitize_json_value(key), sanitize_json_value(val)} end)
+    |> Map.new()
+  end
+
+  defp sanitize_json_value(value), do: value
 
   # ============================================================================
   # Message Transformation
