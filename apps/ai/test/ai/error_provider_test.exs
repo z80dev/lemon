@@ -944,9 +944,8 @@ defmodule Ai.ErrorProviderTest do
 
       result = Error.parse_http_error(500, body, [])
 
-      # Current implementation doesn't traverse deeply nested structures
       assert result.category == :server
-      assert result.provider_message =~ "details"
+      assert result.provider_message == "Deeply nested message"
     end
 
     test "handles error with multiple nested objects" do
@@ -1073,8 +1072,24 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.category == :client
-      # No matching pattern at top level
-      assert result.provider_message != nil
+      assert result.provider_message == "Cannot query field 'foo' on type 'Query'"
+    end
+
+    test "handles nested provider messages without top-level message fields" do
+      body = %{
+        "error" => %{
+          "details" => %{
+            "violations" => [
+              %{"field" => "items[0].quantity", "msg" => "Nested array message"}
+            ]
+          }
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.category == :client
+      assert result.provider_message == "Nested array message"
     end
 
     test "handles error with empty nested objects" do

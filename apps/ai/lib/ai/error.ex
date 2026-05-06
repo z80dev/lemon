@@ -485,7 +485,7 @@ defmodule Ai.Error do
     parts = if error_map["param"], do: ["param: #{error_map["param"]}" | parts], else: parts
 
     case parts do
-      [] -> inspect(error_map) |> truncate_message(200)
+      [] -> find_nested_provider_message(error_map) || inspect(error_map) |> truncate_message(200)
       _ -> Enum.join(parts, " - ")
     end
   end
@@ -531,6 +531,24 @@ defmodule Ai.Error do
 
   defp extract_detail_message([_ | rest]), do: extract_detail_message(rest)
   defp extract_detail_message(_), do: nil
+
+  defp find_nested_provider_message(%{} = map) do
+    direct_message(map) ||
+      map
+      |> Map.values()
+      |> Enum.find_value(&find_nested_provider_message/1)
+  end
+
+  defp find_nested_provider_message([head | tail]) do
+    find_nested_provider_message(head) || find_nested_provider_message(tail)
+  end
+
+  defp find_nested_provider_message(_), do: nil
+
+  defp direct_message(%{"message" => message}) when is_binary(message), do: message
+  defp direct_message(%{"msg" => message}) when is_binary(message), do: message
+  defp direct_message(%{"reason" => message}) when is_binary(message), do: message
+  defp direct_message(_), do: nil
 
   defp normalize_error_body(body) when is_binary(body) do
     case Jason.decode(body) do
