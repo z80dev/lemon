@@ -171,7 +171,7 @@ Skill loads and writes update a sidecar usage file outside `SKILL.md`:
 - global: `~/.lemon/agent/skills.usage.json`
 - project: `<cwd>/.lemon/skills.usage.json`
 
-The sidecar stores load/write counters, last-use metadata, agent-authored creation provenance, and lifecycle state. `skill_manage` supports `pin`, `unpin`, `archive`, and `restore`; pinned skills cannot be archived or deleted until unpinned, and archived project/global skills are disabled through `skills.json` so relevance selection stops surfacing them.
+The sidecar stores load/write counters, last-use metadata, agent-authored creation provenance, and lifecycle state. `skill_manage` supports `report`, `pin`, `unpin`, `archive`, and `restore`; `report` surfaces stale/archive candidates for agent-authored skills, pinned skills cannot be archived or deleted until unpinned, and archived project/global skills are disabled through `skills.json` so relevance selection stops surfacing them.
 
 ### HTTP Client Injection
 

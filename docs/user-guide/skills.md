@@ -85,7 +85,9 @@ Agents can also maintain procedural memory with `skill_manage`. Use project
 scope for repository-specific workflows and global scope for reusable workflows.
 The tool can create, edit, patch, delete, and maintain supporting files under
 `references/`, `templates/`, `scripts/`, and `assets/`; each write is audited
-before the registry is refreshed.
+before the registry is refreshed. Use `action="report"` to inspect usage and
+stale/archive candidates before pinning, archiving, restoring, or deleting
+agent-authored skills.
 
 ---
 

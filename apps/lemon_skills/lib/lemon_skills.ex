@@ -265,4 +265,10 @@ defmodule LemonSkills do
   """
   @spec usage(String.t(), keyword()) :: map()
   defdelegate usage(key, opts \\ []), to: Usage, as: :get
+
+  @doc """
+  Return skill usage and curation rows for a scope.
+  """
+  @spec usage_report(keyword()) :: [map()]
+  defdelegate usage_report(opts \\ []), to: Usage, as: :report
 end
