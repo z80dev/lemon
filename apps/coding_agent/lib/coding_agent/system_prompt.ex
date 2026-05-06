@@ -131,6 +131,7 @@ defmodule CodingAgent.SystemPrompt do
     """
     ## Memory Workflow
     Before answering about prior decisions, preferences, people, dates, or todos, inspect the right memory surface first.
+    Prefer the dedicated memory and skill tools below over shell commands for memory or skill work; use shell commands for project execution, not for bypassing `search_memory`, `memory_topic`, `read_skill`, or `skill_manage`.
     - Use `search_memory` to recall completed run history (past bug fixes, commands run, earlier answers, "last time" context).
       Prefer `scope: "current"` to search both the project root and assistant home.
       Use `scope: "project"` for repo-specific history, `scope: "home"` for assistant-home history, and `scope: "agent"` for longer-term patterns.

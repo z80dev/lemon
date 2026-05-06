@@ -36,6 +36,8 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     assert String.contains?(prompt, "## Memory Workflow")
+    assert String.contains?(prompt, "Prefer the dedicated memory and skill tools")
+    assert String.contains?(prompt, "not for bypassing `search_memory`")
     assert String.contains?(prompt, "Use `search_memory` to recall completed run history")
     assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes")
     assert String.contains?(prompt, "memory/topics/*.md")
@@ -62,6 +64,7 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert String.contains?(prompt, "<learning-workflow>")
     assert String.contains?(prompt, "Choose the right persistence surface")
+    assert String.contains?(prompt, "Prefer dedicated memory and skill tools")
     assert String.contains?(prompt, "Use `read_skill`")
     assert String.contains?(prompt, "reusable workflow, recurring command sequence")
     assert String.contains?(prompt, "project convention")

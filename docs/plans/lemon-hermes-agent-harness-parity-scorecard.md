@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers; seventieth slice backs dedicated memory/skill tool preference with prompt contracts.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: shared rate-limit parsing now honors both numeric and HTTP-date `Retry-After` headers.
+Latest slice: prompt contracts now require agents to prefer dedicated memory and skill tools over shell commands for learning surfaces.
 
 ### Tool ergonomics and enforcement
 
@@ -31,9 +31,9 @@ Latest slice: shared rate-limit parsing now honors both numeric and HTTP-date `R
   - Tool policies model read-only, safe-mode, subagent-restricted, no-external, and minimal-core profiles.
   - Context guardrails spill/truncate oversized tool outputs.
 - Gaps:
-  - Some prompt-level tool-use rules are not yet backed by evals.
+  - Some prompt-level tool-use rules are now backed by evals, including dedicated memory/skill tool preference.
   - Tool naming is Lemon-native; portability aliases may be useful later.
-  - Dedicated tools should be preferred over shell equivalents more explicitly.
+  - Dedicated memory/skill tools are explicitly preferred over shell equivalents; other tool families may need similar guidance later.
 - Priority: high.
 - Acceptance tests:
   - Default tool set contains every tool referenced by the system prompt.
@@ -57,6 +57,7 @@ Latest slice: shared rate-limit parsing now honors both numeric and HTTP-date `R
   - OpenAI-compatible streaming preserves recoverable truncated tool-call arguments at terminal finalization.
   - Shared provider error parsing classifies provider-body rate-limit text and overloaded/transient text independently of exact HTTP status.
   - Shared rate-limit parsing honors HTTP-date `Retry-After` headers and ignores malformed values.
+  - System and learning prompts tell agents to prefer dedicated memory and skill tools over shell commands, with a deterministic harness contract.
 
 ### Skills lifecycle and procedural memory
 
@@ -655,6 +656,12 @@ Latest slice: shared rate-limit parsing now honors both numeric and HTTP-date `R
 1. Extended shared rate-limit parsing to handle RFC-style HTTP dates in `Retry-After`.
 2. Converted future retry dates into millisecond delays while ignoring past or malformed values.
 3. Added regressions for numeric seconds, HTTP-date, and malformed retry headers.
+
+### Slice 70: Dedicated memory and skill tool preference
+
+1. Updated main-session memory guidance to prefer `search_memory`, `memory_topic`, `read_skill`, and `skill_manage` over shell commands for learning surfaces.
+2. Updated the shared learning workflow prompt with the same dedicated-tool preference.
+3. Added `dedicated_tool_preference_contract` so the deterministic eval lane fails if that guidance drifts.
 
 ## Follow-up backlog
 

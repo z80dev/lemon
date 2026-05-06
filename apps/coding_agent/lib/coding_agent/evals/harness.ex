@@ -56,6 +56,7 @@ defmodule CodingAgent.Evals.Harness do
         memory_scope_contract_eval(cwd),
         memory_topic_contract_eval(cwd),
         auto_skill_prompt_contract_eval(cwd),
+        dedicated_tool_preference_contract_eval(cwd),
         skill_curator_behavior_contract_eval(cwd),
         learning_tool_trace_contract_eval(cwd),
         tool_use_claim_contract_eval(cwd),
@@ -352,6 +353,74 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("auto_skill_prompt_contract", Exception.message(e), %{})
+  end
+
+  @spec dedicated_tool_preference_contract_eval(String.t()) :: eval_result()
+  def dedicated_tool_preference_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        workspace_dir = Path.join(tmp_dir, "workspace")
+        File.mkdir_p!(workspace_dir)
+        File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+
+        system_prompt =
+          CodingAgent.SystemPrompt.build(tmp_dir, %{
+            workspace_dir: workspace_dir,
+            session_scope: :main
+          })
+
+        learning_prompt = PromptBuilder.build_learning_section()
+
+        cond do
+          not String.contains?(system_prompt, "Prefer the dedicated memory and skill tools") ->
+            contract_fail(
+              "dedicated_tool_preference_contract",
+              "system prompt missing dedicated tool preference",
+              %{}
+            )
+
+          not String.contains?(system_prompt, "not for bypassing `search_memory`") ->
+            contract_fail(
+              "dedicated_tool_preference_contract",
+              "system prompt does not protect dedicated memory tools from shell bypass",
+              %{}
+            )
+
+          not String.contains?(learning_prompt, "Prefer dedicated memory and skill tools") ->
+            contract_fail(
+              "dedicated_tool_preference_contract",
+              "learning prompt missing dedicated tool preference",
+              %{}
+            )
+
+          not Enum.all?(
+            ["read_skill", "search_memory", "memory_topic", "skill_manage"],
+            fn tool ->
+              String.contains?(learning_prompt, "`#{tool}`")
+            end
+          ) ->
+            contract_fail(
+              "dedicated_tool_preference_contract",
+              "learning prompt missing dedicated memory or skill tool names",
+              %{prompt: learning_prompt}
+            )
+
+          true ->
+            %{
+              name: "dedicated_tool_preference_contract",
+              status: :pass,
+              details: %{memory_and_skill_tools_preferred: true}
+            }
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("dedicated_tool_preference_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("dedicated_tool_preference_contract", Exception.message(e), %{})
   end
 
   @spec skill_curator_behavior_contract_eval(String.t()) :: eval_result()

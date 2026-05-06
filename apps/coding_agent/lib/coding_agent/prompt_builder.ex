@@ -113,6 +113,7 @@ defmodule CodingAgent.PromptBuilder do
     """
     <learning-workflow>
     Choose the right persistence surface:
+    - Prefer dedicated memory and skill tools over shell commands for memory or skill work; use shell commands for project execution, not for bypassing these tools.
     - Use `read_skill` before following a relevant installed skill; skill hints are summaries, not the full procedure.
     - Use `search_memory` before answering prompts that mention prior work, previous decisions, remembered context, or "last time"; this recalls completed run history.
     - Use `memory_topic` for durable facts, preferences, decisions, people, dates, or project context that should be recalled later but is not a reusable procedure.

@@ -84,6 +84,7 @@ defmodule CodingAgent.PromptBuilderTest do
 
       assert String.contains?(result, "<learning-workflow>")
       assert String.contains?(result, "Choose the right persistence surface")
+      assert String.contains?(result, "Prefer dedicated memory and skill tools")
       assert String.contains?(result, "Use `read_skill`")
       assert String.contains?(result, "Use `skill_manage`")
       assert String.contains?(result, "recurring command sequence")
