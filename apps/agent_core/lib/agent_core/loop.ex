@@ -21,7 +21,9 @@ defmodule AgentCore.Loop do
   The loop emits events in a specific sequence:
 
       {:agent_start}
+      {:tool_schema_snapshot, snapshot}
       {:turn_start}
+      {:loop_state_transition, nil, :initializing, %{phase: :run_start}}
       {:message_start, prompt}
       {:message_end, prompt}
       {:message_start, assistant_msg}
@@ -47,7 +49,7 @@ defmodule AgentCore.Loop do
   require Logger
 
   alias AgentCore.EventStream
-  alias AgentCore.Loop.{Streaming, ToolCalls}
+  alias AgentCore.Loop.{StateMachine, Streaming, ToolCalls}
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, ToolSchemaSnapshot}
 
   alias Ai.Types.{
@@ -57,6 +59,7 @@ defmodule AgentCore.Loop do
   }
 
   @loop_abort_signal_pd_key :agent_abort_signal
+  @loop_state_pd_key :agent_loop_state
 
   # ============================================================================
   # Public API
@@ -322,6 +325,8 @@ defmodule AgentCore.Loop do
     EventStream.push(stream, {:agent_start})
     emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
+    reset_loop_state()
+    transition_loop_state(stream, :initializing, %{phase: :run_start})
 
     # Emit message events for each prompt
     for prompt <- prompts do
@@ -360,6 +365,8 @@ defmodule AgentCore.Loop do
     EventStream.push(stream, {:agent_start})
     emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
+    reset_loop_state()
+    transition_loop_state(stream, :initializing, %{phase: :run_continue})
 
     run_loop(current_context, new_messages, config, signal, stream_fn, stream)
   end
@@ -449,6 +456,7 @@ defmodule AgentCore.Loop do
         )
       else
         # No more messages, exit
+        transition_loop_state(stream, :finalizing, %{reason: :completed})
         emit_loop_end_telemetry(new_messages, config, :completed)
         EventStream.push(stream, {:agent_end, new_messages})
         EventStream.complete(stream, new_messages)
@@ -507,19 +515,24 @@ defmodule AgentCore.Loop do
     {context, new_messages, _cleared_pending} =
       process_pending_messages(context, new_messages, pending_messages, stream)
 
+    transition_loop_state(stream, :await_model, %{first_turn: first_turn})
+
     # Stream assistant response
     case Streaming.stream_assistant_response(context, config, signal, stream_fn, stream) do
       {:ok, message, context} ->
         new_messages = new_messages ++ [message]
+        transition_loop_state(stream, :normalizing_response, %{stop_reason: message.stop_reason})
 
         case message.stop_reason do
           :aborted ->
             Logger.info("AgentCore.Loop turn aborted")
+            transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
             EventStream.push(stream, {:turn_end, message, []})
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
 
           :error ->
+            transition_loop_state(stream, :recovering_provider_error, %{reason: :assistant_error})
             EventStream.push(stream, {:turn_end, message, []})
 
             Logger.error(
@@ -538,6 +551,7 @@ defmodule AgentCore.Loop do
               end
 
             EventStream.error(stream, reason, %{new_messages: new_messages})
+            transition_loop_state(stream, :finalizing, %{reason: :assistant_error})
             {context, new_messages, [], false}
 
           _ ->
@@ -548,6 +562,10 @@ defmodule AgentCore.Loop do
 
             {tool_results, steering_after_tools, context, new_messages} =
               if has_more_tool_calls do
+                transition_loop_state(stream, :executing_tools, %{
+                  tool_call_count: length(tool_calls)
+                })
+
                 ToolCalls.execute_and_collect_tools(
                   context,
                   new_messages,
@@ -556,6 +574,13 @@ defmodule AgentCore.Loop do
                   signal,
                   stream
                 )
+                |> then(fn result ->
+                  transition_loop_state(stream, :awaiting_tool_results, %{
+                    tool_call_count: length(tool_calls)
+                  })
+
+                  result
+                end)
               else
                 {[], nil, context, new_messages}
               end
@@ -594,7 +619,9 @@ defmodule AgentCore.Loop do
         end
 
       {:error, reason} ->
+        transition_loop_state(stream, :recovering_provider_error, %{reason: reason})
         EventStream.error(stream, reason, new_messages)
+        transition_loop_state(stream, :finalizing, %{reason: :stream_error})
         {context, new_messages, [], false}
     end
   end
@@ -643,6 +670,7 @@ defmodule AgentCore.Loop do
     }
 
     EventStream.push(stream, {:loop_budget_exhausted, details})
+    transition_loop_state(stream, :finalizing, %{reason: :max_tool_turns_exhausted})
 
     message = %AssistantMessage{
       role: :assistant,
@@ -703,6 +731,27 @@ defmodule AgentCore.Loop do
   end
 
   defp maybe_put_loop_abort_signal(_signal), do: :ok
+
+  defp reset_loop_state do
+    Process.delete(@loop_state_pd_key)
+    :ok
+  end
+
+  defp transition_loop_state(stream, next_state, metadata) do
+    current_state = Process.get(@loop_state_pd_key)
+    state = StateMachine.transition!(current_state, next_state)
+    Process.put(@loop_state_pd_key, state)
+
+    EventStream.push(stream, {:loop_state_transition, current_state, state, metadata})
+
+    LemonCore.Telemetry.emit(
+      [:agent_core, :loop, :state_transition],
+      %{system_time: System.system_time()},
+      Map.merge(metadata, %{from: current_state, to: state})
+    )
+
+    state
+  end
 
   defp get_steering_messages(%AgentLoopConfig{get_steering_messages: nil}), do: []
 

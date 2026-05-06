@@ -761,7 +761,9 @@ defmodule AgentCore.ModuleTest do
         system_prompt: "Test",
         messages: [
           Mocks.user_message("Hello"),
-          Mocks.assistant_message("Hi"),
+          Mocks.assistant_message_with_tool_calls([
+            Mocks.tool_call("tool", %{}, id: "call_1")
+          ]),
           Mocks.tool_result_message("call_1", "tool", "Result")
         ],
         tools: []

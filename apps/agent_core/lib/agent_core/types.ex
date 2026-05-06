@@ -321,6 +321,7 @@ defmodule AgentCore.Types do
   ## Agent Lifecycle
   - `{:agent_start}` - Agent run has started
   - `{:tool_schema_snapshot, snapshot}` - Tool schema was frozen for this run
+  - `{:loop_state_transition, from, to, metadata}` - Loop lifecycle state changed
   - `{:agent_end, messages}` - Agent run has ended with final messages
 
   ## Turn Lifecycle
@@ -346,6 +347,7 @@ defmodule AgentCore.Types do
   @type agent_event ::
           {:agent_start}
           | {:tool_schema_snapshot, snapshot :: AgentCore.Types.ToolSchemaSnapshot.t()}
+          | {:loop_state_transition, from :: atom() | nil, to :: atom(), metadata :: map()}
           | {:agent_end, messages :: [agent_message()]}
           | {:turn_start}
           | {:turn_end, message :: agent_message(),

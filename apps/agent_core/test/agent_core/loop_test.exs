@@ -178,6 +178,40 @@ defmodule AgentCore.LoopTest do
       assert snapshot.id =~ ~r/^tool_schema_[a-f0-9]{16}_[a-z0-9]+$/
     end
 
+    test "emits explicit loop state transitions for a tool turn" do
+      tool_response =
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_state")
+        ])
+
+      final_response = Mocks.assistant_message("Done")
+      {:ok, responses} = Agent.start_link(fn -> [tool_response, final_response] end)
+
+      stream_fn = fn _model, _llm_context, _options ->
+        response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
+        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+      end
+
+      context = simple_context(tools: [Mocks.echo_tool()])
+      config = simple_config(stream_fn: stream_fn)
+
+      events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
+
+      transitions =
+        for {:loop_state_transition, from, to, _meta} <- events, do: {from, to}
+
+      assert transitions == [
+               {nil, :initializing},
+               {:initializing, :await_model},
+               {:await_model, :normalizing_response},
+               {:normalizing_response, :executing_tools},
+               {:executing_tools, :awaiting_tool_results},
+               {:awaiting_tool_results, :await_model},
+               {:await_model, :normalizing_response},
+               {:normalizing_response, :finalizing}
+             ]
+    end
+
     test "uses configured tool schema snapshot for provider schema and execution" do
       parent = self()
       echo_tool = Mocks.echo_tool()
