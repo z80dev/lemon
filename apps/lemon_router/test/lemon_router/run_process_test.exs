@@ -71,6 +71,19 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule RunProcessToolStatusIntentDispatcherStub do
+    @moduledoc false
+
+    def dispatch(%LemonCore.DeliveryIntent{} = intent) do
+      case :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        pid when is_pid(pid) -> send(pid, {:dispatched_intent, intent})
+        _ -> :ok
+      end
+
+      :ok
+    end
+  end
+
   defmodule TestScheduler do
     @moduledoc false
     use GenServer
@@ -731,6 +744,130 @@ defmodule LemonRouter.RunProcessTest do
                Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", :status}) !=
                  []
              end)
+
+      GenServer.stop(pid)
+    end
+
+    test "failed tool action metadata reaches session subscribers and status intents" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, RunProcessToolStatusIntentDispatcherStub)
+      :persistent_term.put({RunProcessToolStatusIntentDispatcherStub, :test_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({RunProcessToolStatusIntentDispatcherStub, :test_pid})
+
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      result_meta = %{
+        error_type: :tool_task_timeout,
+        tool_name: "slow_tool",
+        timeout_ms: 123,
+        message: "timed out waiting for slow_tool"
+      }
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      job =
+        make_test_request(
+          run_id,
+          %{progress_msg_id: 111, user_msg_id: 222},
+          %{session_key: session_key, conversation_key: {:session, session_key}}
+        )
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            engine: "lemon",
+            phase: :completed,
+            ok: false,
+            action: %{
+              id: "tool_timeout_1",
+              kind: "tool",
+              title: "slow_tool",
+              detail: %{
+                name: "slow_tool",
+                result: "Tool slow_tool timed out",
+                result_meta: result_meta
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+
+      assert_receive %LemonCore.Event{
+                       type: :engine_action,
+                       payload: %{
+                         action: %{
+                           detail: %{result_meta: ^result_meta}
+                         }
+                       }
+                     },
+                     1_000
+
+      assert eventually(
+               fn ->
+                 case Registry.lookup(
+                        LemonRouter.ToolStatusRegistry,
+                        {session_key, "telegram"}
+                      ) do
+                   [{status_pid, _}] ->
+                     state = :sys.get_state(status_pid)
+                     action = Map.get(state.actions, "tool_timeout_1")
+                     get_in(action, [:detail, :result_meta]) == result_meta
+
+                   _ ->
+                     false
+                 end
+               end,
+               1_500
+             )
+
+      LemonRouter.ToolStatusCoalescer.flush(session_key, "telegram")
+
+      assert_receive {:dispatched_intent,
+                      %LemonCore.DeliveryIntent{
+                        kind: :tool_status_snapshot,
+                        body: %{tool_failures: [failure]}
+                      }},
+                     1_000
+
+      assert failure == %{
+               id: "tool_timeout_1",
+               title: "slow_tool",
+               kind: "tool",
+               ok: false,
+               error_type: :tool_task_timeout,
+               tool_name: "slow_tool",
+               timeout_ms: 123,
+               message: "timed out waiting for slow_tool"
+             }
 
       GenServer.stop(pid)
     end
