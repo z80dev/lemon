@@ -1056,7 +1056,8 @@ defmodule CodingAgent.Evals.Harness do
         live_model_skill_learning_contract_eval(cwd, opts),
         live_model_skill_curator_contract_eval(cwd, opts),
         live_model_cron_block_contract_eval(cwd, opts),
-        live_model_parallel_delegation_contract_eval(cwd, opts)
+        live_model_parallel_delegation_contract_eval(cwd, opts),
+        live_model_delegation_artifact_contract_eval(cwd, opts)
       ]
     else
       []
@@ -1550,6 +1551,117 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_parallel_delegation_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_delegation_artifact_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_delegation_artifact_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        clear_task_state()
+        artifact_path = Path.join(tmp_dir, "reports/live-child-release-lane.md")
+
+        task_tool =
+          TaskTool.tool(tmp_dir,
+            run_override: fn _on_update, _signal ->
+              File.mkdir_p!(Path.dirname(artifact_path))
+
+              File.write!(
+                artifact_path,
+                "# Live Child Release Lane\n\nlive child side effect artifact\n"
+              )
+
+              %AgentToolResult{
+                content: [
+                  %TextContent{
+                    text:
+                      "wrote reports/live-child-release-lane.md with live child side effect artifact"
+                  }
+                ],
+                details: %{
+                  status: "completed",
+                  artifact_path: "reports/live-child-release-lane.md"
+                }
+              }
+            end,
+            session_key: "agent:live-model-delegation-artifact-eval:main",
+            agent_id: "live-model-delegation-artifact-eval",
+            parent_run_id: "parent-run-live-model-delegation-artifact"
+          )
+
+        read_tool = Read.tool(tmp_dir)
+
+        context =
+          AgentContext.new(
+            system_prompt: live_delegation_artifact_eval_prompt(),
+            tools: [task_tool, read_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: live_delegation_stream_options(stream_options, opts),
+          max_tool_turns: 5
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message("Have a child create the release lane artifact, then verify it.")
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 120_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_async_task_joined_with(messages, "live child side effect artifact"),
+             :ok <- assert_loop_tool_result(messages, "read", "live child side effect artifact"),
+             :ok <- assert_final_after_tool(messages, "read"),
+             :ok <-
+               assert_final_contains(messages, [
+                 "LIVE_ARTIFACT_VERIFIED",
+                 "live child side effect artifact"
+               ]),
+             true <- File.exists?(artifact_path) do
+          %{
+            name: "live_model_delegation_artifact_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              artifact: "reports/live-child-release-lane.md",
+              verified_before_final: true
+            }
+          }
+        else
+          false ->
+            contract_fail(
+              "live_model_delegation_artifact_contract",
+              "artifact file missing",
+              %{provider: model.provider, model: model.id}
+            )
+
+          {:error, reason} ->
+            contract_fail("live_model_delegation_artifact_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        clear_task_state()
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_delegation_artifact_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_delegation_artifact_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -1601,6 +1713,18 @@ defmodule CodingAgent.Evals.Harness do
     Keep both returned task_ids. Then call the `task` tool with `action` `join`, `mode` `wait_all`, and both task_ids in one `task_ids` array. Do not answer until the join result arrives.
 
     After the join result arrives, answer with the exact marker LIVE_DELEGATION_JOINED and include both joined outputs verbatim.
+    """
+  end
+
+  defp live_delegation_artifact_eval_prompt do
+    """
+    You are running a live-model Lemon delegation artifact eval.
+
+    Before answering, use the `task` tool with `action` `run`, `async` true, and `auto_followup` false to start exactly one child task. The child prompt must ask it to write `reports/live-child-release-lane.md`.
+
+    Keep the returned task_id. Then call the `task` tool with `action` `join`, `mode` `wait_all`, and that task_id in a `task_ids` array. After the join result arrives, call `read` on `reports/live-child-release-lane.md` to verify the child side effect. Do not answer until the read result arrives.
+
+    After the read result arrives, answer with the exact marker LIVE_ARTIFACT_VERIFIED and include the artifact content verbatim.
     """
   end
 
