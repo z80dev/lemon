@@ -202,6 +202,69 @@ defmodule AgentCore.Loop.StreamingTest do
            end)
   end
 
+  test "preserves streamed partial tool arguments when final provider message is empty" do
+    context = simple_context(messages: [user_message("read mix")])
+    signal = AbortSignal.new()
+
+    empty_tool_call = Mocks.tool_call("read_file", %{}, id: "call_read_args")
+    partial_tool_call = Mocks.tool_call("read_file", %{"path" => "mix"}, id: "call_read_args")
+    final_tool_call = Mocks.tool_call("read_file", %{"path" => "mix.exs"}, id: "call_read_args")
+
+    started_partial = Mocks.assistant_message_with_tool_calls([empty_tool_call])
+    delta_partial = Mocks.assistant_message_with_tool_calls([partial_tool_call])
+    completed_partial = Mocks.assistant_message_with_tool_calls([final_tool_call])
+    final = %{completed_partial | content: [], stop_reason: :tool_use}
+
+    stream_fn = fn _model, _llm_context, _options ->
+      {:ok, ai_stream} = Ai.EventStream.start_link()
+
+      Task.start(fn ->
+        Ai.EventStream.push(ai_stream, {:start, %{started_partial | content: []}})
+        Ai.EventStream.push(ai_stream, {:tool_call_start, 0, started_partial})
+        Ai.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s({"path":"mix"), delta_partial})
+        Ai.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"}), completed_partial})
+        Ai.EventStream.push(ai_stream, {:tool_call_end, 0, final_tool_call, completed_partial})
+        Ai.EventStream.push(ai_stream, {:done, :tool_use, final})
+        Ai.EventStream.complete(ai_stream, final)
+      end)
+
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, message, updated_context} =
+             Streaming.stream_assistant_response(context, config, signal, stream_fn, stream)
+
+    assert [%ToolCall{id: "call_read_args", name: "read_file", arguments: %{"path" => "mix.exs"}}] =
+             message.content
+
+    assert [%ToolCall{id: "call_read_args", arguments: %{"path" => "mix.exs"}}] =
+             List.last(updated_context.messages).content
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, fn
+             {:message_update, %{content: [%ToolCall{arguments: %{"path" => "mix"}}]},
+              {:tool_call_delta, 0, ~s({"path":"mix"), _}} ->
+               true
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(events, fn
+             {:message_end,
+              %{role: :assistant, content: [%ToolCall{arguments: %{"path" => "mix.exs"}}]}} ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
   test "converts terminal :canceled stream event into aborted assistant message" do
     context = simple_context(messages: [user_message("cancel me")])
     signal = AbortSignal.new()
