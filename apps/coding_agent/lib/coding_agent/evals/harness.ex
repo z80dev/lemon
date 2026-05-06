@@ -1250,6 +1250,7 @@ defmodule CodingAgent.Evals.Harness do
       [
         live_model_memory_trace_contract_eval(cwd, opts),
         live_model_memory_topic_contract_eval(cwd, opts),
+        live_model_workspace_memory_file_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
         live_model_skill_curator_contract_eval(cwd, opts),
         live_model_cron_block_contract_eval(cwd, opts),
@@ -1472,6 +1473,114 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("live_model_memory_topic_contract", Exception.message(e), %{})
+  end
+
+  @spec live_model_workspace_memory_file_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_workspace_memory_file_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        memory_dir = Path.join([project_dir, "memory", "topics"])
+        memory_path = Path.join(memory_dir, "release-handoff.md")
+
+        File.mkdir_p!(memory_dir)
+        File.mkdir_p!(home_dir)
+
+        File.write!(
+          memory_path,
+          """
+          # Release Handoff
+
+          The workspace memory file says the release handoff baton is BLUE-WRENCH-17.
+          When answering release handoff questions, cite BLUE-WRENCH-17.
+          """
+        )
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+          []
+        end
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: fn _docs -> "No matching memory documents found." end
+          )
+
+        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+
+        context =
+          AgentContext.new(
+            system_prompt: live_workspace_memory_file_eval_prompt(),
+            tools: [
+              Grep.tool(project_dir),
+              Read.tool(project_dir),
+              search_tool,
+              memory_tool
+            ]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: stream_options,
+          max_tool_turns: 3
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "Inspect project memory files and tell me the release handoff baton."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "grep", "BLUE-WRENCH-17"),
+             :ok <- assert_loop_tool_result(messages, "read", "BLUE-WRENCH-17"),
+             :ok <- assert_tool_not_used(messages, "search_memory"),
+             :ok <- assert_tool_not_used(messages, "memory_topic"),
+             :ok <- assert_final_contains(messages, ["WORKSPACE_MEMORY_FILE_FOUND"]) do
+          %{
+            name: "live_model_workspace_memory_file_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              memory_path: Path.relative_to(memory_path, project_dir),
+              search_calls: length(Agent.get(search_calls, & &1))
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_workspace_memory_file_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id,
+              search_calls: length(Agent.get(search_calls, & &1))
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_workspace_memory_file_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_workspace_memory_file_contract", Exception.message(e), %{})
   end
 
   @spec live_model_skill_learning_contract_eval(String.t(), keyword()) :: eval_result()
@@ -2092,6 +2201,16 @@ defmodule CodingAgent.Evals.Harness do
     The user is giving durable project context. This is not a prior-work lookup and not a reusable procedural workflow. Before answering, call `memory_topic` with topic `Deployment Incident Handoff`. Do not call `search_memory` or `skill_manage`.
 
     After the memory_topic result arrives, answer with the exact marker MEMORY_TOPIC_CAPTURED_LIVE_MODEL and summarize only that the durable topic memory file was created.
+    """
+  end
+
+  defp live_workspace_memory_file_eval_prompt do
+    """
+    You are running a live-model Lemon workspace memory-file eval.
+
+    The project already has durable notes under `memory/topics/`. This task is not a prior-run lookup and not a request to create or update durable context. Before answering, first call `grep` with pattern `BLUE-WRENCH-17` and path `memory`. Then call `read` on `memory/topics/release-handoff.md`. Do not call `search_memory` or `memory_topic`.
+
+    After the read result arrives, answer with the exact marker WORKSPACE_MEMORY_FILE_FOUND and include the baton value from the file.
     """
   end
 
