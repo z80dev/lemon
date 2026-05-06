@@ -11,6 +11,8 @@ defmodule LemonSkills.Usage do
   @states ~w(active stale archived pinned)
   @lock_retries 50
   @lock_sleep_ms 10
+  @default_stale_after_days 30
+  @default_archive_after_days 90
 
   @type scope :: :global | :project
 
@@ -28,6 +30,34 @@ defmodule LemonSkills.Usage do
 
       :skip ->
         normalize_record(nil)
+    end
+  end
+
+  @doc """
+  Return a lifecycle report for all skills in the usage sidecar.
+
+  The report is intentionally sidecar-backed: it summarizes skills that have
+  usage/write telemetry, including agent-authored skills that are candidates
+  for curation.
+  """
+  @spec report(keyword()) :: [map()]
+  def report(opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    stale_after_days = positive_integer(opts, :stale_after_days, @default_stale_after_days)
+    archive_after_days = positive_integer(opts, :archive_after_days, @default_archive_after_days)
+
+    case resolve_usage_file(opts) do
+      {:ok, path} ->
+        path
+        |> read_usage()
+        |> Map.get("skills", %{})
+        |> Enum.map(fn {key, record} ->
+          report_row(key, normalize_record(record), now, stale_after_days, archive_after_days)
+        end)
+        |> Enum.sort_by(fn row -> {candidate_rank(row), row.name} end)
+
+      :skip ->
+        []
     end
   end
 
@@ -181,6 +211,80 @@ defmodule LemonSkills.Usage do
   defp normalize_scope("project"), do: :project
   defp normalize_scope(:project), do: :project
   defp normalize_scope(_), do: :global
+
+  defp report_row(key, record, now, stale_after_days, archive_after_days) do
+    last_activity_at = last_activity_at(record)
+    idle_days = idle_days(last_activity_at, now)
+    lifecycle_state = Map.get(record, "lifecycle_state", "active")
+    agent_authored? = Map.get(record, "created_by") == "agent"
+    protected? = lifecycle_state in ["pinned", "archived"]
+
+    stale_candidate? =
+      agent_authored? and not protected? and is_integer(idle_days) and
+        idle_days >= stale_after_days
+
+    archive_candidate? =
+      agent_authored? and not protected? and is_integer(idle_days) and
+        idle_days >= archive_after_days
+
+    %{
+      name: key,
+      lifecycle_state: lifecycle_state,
+      agent_authored: agent_authored?,
+      load_count: integer_field(record, "load_count"),
+      write_count: integer_field(record, "write_count"),
+      write_error_count: integer_field(record, "write_error_count"),
+      created_at: Map.get(record, "created_at"),
+      last_loaded_at: Map.get(record, "last_loaded_at"),
+      last_write_at: Map.get(record, "last_write_at"),
+      last_activity_at: last_activity_at,
+      idle_days: idle_days,
+      stale_candidate: stale_candidate?,
+      archive_candidate: archive_candidate?
+    }
+  end
+
+  defp candidate_rank(%{archive_candidate: true}), do: 0
+  defp candidate_rank(%{stale_candidate: true}), do: 1
+  defp candidate_rank(_), do: 2
+
+  defp last_activity_at(record) do
+    ["last_loaded_at", "last_write_at", "created_at"]
+    |> Enum.map(&Map.get(record, &1))
+    |> Enum.filter(&is_binary/1)
+    |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
+  end
+
+  defp timestamp_sort_value(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> DateTime.to_unix(dt)
+      _ -> 0
+    end
+  end
+
+  defp idle_days(nil, _now), do: nil
+
+  defp idle_days(timestamp, now) do
+    with {:ok, timestamp, _} <- DateTime.from_iso8601(timestamp) do
+      max(DateTime.diff(now, timestamp, :day), 0)
+    else
+      _ -> nil
+    end
+  end
+
+  defp integer_field(record, key) do
+    case Map.get(record, key, 0) do
+      value when is_integer(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp positive_integer(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> default
+    end
+  end
 
   defp read_usage(path) do
     case File.read(path) do

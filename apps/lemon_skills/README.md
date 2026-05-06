@@ -201,7 +201,7 @@ Project skills always rank above equivalently-scored global skills. Skills that 
 
 Every install/update for a non-builtin skill runs through the audit path before the skill is registered.
 
-Agent-authored skill writes use the same bundle audit path through `skill_manage`. The tool writes only to the configured project or global skill directories, restricts supporting files to `references/`, `templates/`, `scripts/`, and `assets/`, and rolls back blocked audit verdicts before refreshing the registry.
+Agent-authored skill writes use the same bundle audit path through `skill_manage`. The tool writes only to the configured project or global skill directories, restricts supporting files to `references/`, `templates/`, `scripts/`, and `assets/`, and rolls back blocked audit verdicts before refreshing the registry. `skill_manage` also exposes a `report` action that summarizes usage sidecar rows and flags stale/archive candidates before an agent curates skills.
 
 1. `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
 2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.

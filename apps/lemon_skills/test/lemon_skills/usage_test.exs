@@ -148,6 +148,63 @@ defmodule LemonSkills.UsageTest do
     refute Usage.pinned?("pin-me", scope: :project, cwd: tmp_dir)
   end
 
+  test "reports stale and archive candidates for agent-authored skills", %{tmp_dir: tmp_dir} do
+    usage_path = Path.join([tmp_dir, ".lemon", "skills.usage.json"])
+    File.mkdir_p!(Path.dirname(usage_path))
+
+    File.write!(
+      usage_path,
+      Jason.encode!(%{
+        "version" => 1,
+        "skills" => %{
+          "archive-me" => %{
+            "created_by" => "agent",
+            "lifecycle_state" => "active",
+            "load_count" => 3,
+            "write_count" => 1,
+            "last_loaded_at" => "2026-01-01T00:00:00Z"
+          },
+          "pin-me" => %{
+            "created_by" => "agent",
+            "lifecycle_state" => "pinned",
+            "last_loaded_at" => "2026-01-01T00:00:00Z"
+          },
+          "upstream" => %{
+            "lifecycle_state" => "active",
+            "last_loaded_at" => "2026-01-01T00:00:00Z"
+          }
+        }
+      })
+    )
+
+    now = ~U[2026-05-01 00:00:00Z]
+
+    rows =
+      Usage.report(
+        scope: :project,
+        cwd: tmp_dir,
+        now: now,
+        stale_after_days: 30,
+        archive_after_days: 90
+      )
+
+    archive_me = Enum.find(rows, &(&1.name == "archive-me"))
+    pin_me = Enum.find(rows, &(&1.name == "pin-me"))
+    upstream = Enum.find(rows, &(&1.name == "upstream"))
+
+    assert archive_me.agent_authored
+    assert archive_me.load_count == 3
+    assert archive_me.write_count == 1
+    assert archive_me.idle_days == 120
+    assert archive_me.stale_candidate
+    assert archive_me.archive_candidate
+
+    refute pin_me.stale_candidate
+    refute pin_me.archive_candidate
+    refute upstream.agent_authored
+    refute upstream.stale_candidate
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

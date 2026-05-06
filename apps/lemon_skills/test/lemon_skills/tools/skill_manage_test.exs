@@ -231,6 +231,47 @@ defmodule LemonSkills.Tools.SkillManageTest do
       assert {:ok, _entry} = LemonSkills.Registry.get("curated-skill", cwd: tmp_dir)
     end
 
+    test "reports curation candidates without requiring a skill name", %{tmp_dir: tmp_dir} do
+      attach_handler([[:lemon_skills, :skill, :write]])
+
+      usage_path = Path.join([tmp_dir, ".lemon", "skills.usage.json"])
+      File.mkdir_p!(Path.dirname(usage_path))
+
+      File.write!(
+        usage_path,
+        Jason.encode!(%{
+          "version" => 1,
+          "skills" => %{
+            "old-agent-skill" => %{
+              "created_by" => "agent",
+              "lifecycle_state" => "active",
+              "load_count" => 2,
+              "write_count" => 1,
+              "last_loaded_at" => "2026-01-01T00:00:00Z"
+            }
+          }
+        })
+      )
+
+      result =
+        execute(tmp_dir, %{
+          "action" => "report",
+          "stale_after_days" => 1,
+          "archive_after_days" => 1
+        })
+
+      assert result.details.action == "report"
+      assert result.details.scope == "project"
+      assert [row] = result.details.skills
+      assert row.name == "old-agent-skill"
+      assert row.archive_candidate
+
+      [text] = result.content
+      assert text.text =~ "old-agent-skill"
+      assert text.text =~ "archive-candidate"
+      refute_receive {:telemetry_event, [:lemon_skills, :skill, :write], _, _}, 100
+    end
+
     test "rejects invalid frontmatter before writing", %{tmp_dir: tmp_dir} do
       assert {:error, message} =
                execute(tmp_dir, %{

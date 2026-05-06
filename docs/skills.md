@@ -352,7 +352,7 @@ Usage and curation metadata lives outside `SKILL.md`:
 | Global | `~/.lemon/agent/skills.usage.json` |
 | Project | `<cwd>/.lemon/skills.usage.json` |
 
-The sidecar tracks load/write counters, last-use fields, agent-authored creation provenance, and `lifecycle_state` (`active`, `stale`, `archived`, or `pinned`). Agents can use `skill_manage` actions `pin`, `unpin`, `archive`, and `restore` for curation. Pinned skills are protected from delete/archive operations; archived skills are disabled through the normal `skills.json` mechanism.
+The sidecar tracks load/write counters, last-use fields, agent-authored creation provenance, and `lifecycle_state` (`active`, `stale`, `archived`, or `pinned`). Agents can use `skill_manage` actions `report`, `pin`, `unpin`, `archive`, and `restore` for curation. `report` returns usage rows plus stale/archive candidate flags for agent-authored skills; pinned skills are protected from delete/archive operations; archived skills are disabled through the normal `skills.json` mechanism.
 
 ## Project vs Global Skills
 

@@ -52,7 +52,8 @@ defmodule LemonSkills.Tools.SkillManage do
               "pin",
               "unpin",
               "archive",
-              "restore"
+              "restore",
+              "report"
             ],
             "description" => "Skill operation to perform."
           },
@@ -91,9 +92,19 @@ defmodule LemonSkills.Tools.SkillManage do
           "replace_all" => %{
             "type" => "boolean",
             "description" => "Replace all occurrences for patch. Defaults to false."
+          },
+          "stale_after_days" => %{
+            "type" => "integer",
+            "description" =>
+              "For report: mark active agent-authored skills stale after this many idle days. Defaults to 30."
+          },
+          "archive_after_days" => %{
+            "type" => "integer",
+            "description" =>
+              "For report: mark active agent-authored skills archive candidates after this many idle days. Defaults to 90."
           }
         },
-        "required" => ["action", "name"]
+        "required" => ["action"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, telemetry_context)
     }
@@ -124,10 +135,10 @@ defmodule LemonSkills.Tools.SkillManage do
         {:error, "Operation aborted"}
       else
         with {:ok, action} <- required_string(params, "action"),
-             {:ok, name} <- required_string(params, "name"),
-             :ok <- validate_name(name),
              {:ok, scope} <- parse_scope(Map.get(params, "scope", "project")),
-             {:ok, root} <- skills_root(scope, cwd) do
+             {:ok, root} <- skills_root(scope, cwd),
+             {:ok, name} <- name_for_action(action, params),
+             :ok <- validate_name_for_action(action, name) do
           dispatch(action, name, params, scope, root, cwd)
         end
       end
@@ -292,9 +303,26 @@ defmodule LemonSkills.Tools.SkillManage do
     end
   end
 
+  defp dispatch("report", _name, params, scope, _root, cwd) do
+    opts =
+      usage_opts(scope, cwd) ++
+        [
+          stale_after_days: positive_integer_param(params, "stale_after_days", 30),
+          archive_after_days: positive_integer_param(params, "archive_after_days", 90)
+        ]
+
+    rows = LemonSkills.Usage.report(opts)
+
+    ok(format_report(rows, scope), %{
+      action: "report",
+      scope: Atom.to_string(scope),
+      skills: rows
+    })
+  end
+
   defp dispatch(action, _name, _params, _scope, _root, _cwd) do
     {:error,
-     "Unknown action '#{action}'. Use create, edit, patch, delete, write_file, remove_file, pin, unpin, archive, or restore."}
+     "Unknown action '#{action}'. Use create, edit, patch, delete, write_file, remove_file, pin, unpin, archive, restore, or report."}
   end
 
   defp required_string(params, key, opts \\ []) do
@@ -319,6 +347,12 @@ defmodule LemonSkills.Tools.SkillManage do
   defp parse_scope("global"), do: {:ok, :global}
   defp parse_scope("project"), do: {:ok, :project}
   defp parse_scope(_), do: {:error, "scope must be 'project' or 'global'"}
+
+  defp name_for_action("report", params), do: {:ok, Map.get(params, "name", "")}
+  defp name_for_action(_action, params), do: required_string(params, "name")
+
+  defp validate_name_for_action("report", ""), do: :ok
+  defp validate_name_for_action(_action, name), do: validate_name(name)
 
   defp skills_root(:global, _cwd), do: {:ok, Config.global_skills_dir()}
 
@@ -492,6 +526,50 @@ defmodule LemonSkills.Tools.SkillManage do
   defp usage_opts(:global, _cwd), do: [scope: :global]
   defp usage_opts(:project, cwd), do: [scope: :project, cwd: cwd]
 
+  defp positive_integer_param(params, key, default) do
+    case Map.get(params, key, default) do
+      value when is_integer(value) and value > 0 ->
+        value
+
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> parsed
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp format_report([], scope), do: "No #{scope} skill usage records found."
+
+  defp format_report(rows, scope) do
+    header = "Skill usage report for #{scope} scope:"
+
+    body =
+      rows
+      |> Enum.map(fn row ->
+        markers =
+          [
+            if(row.archive_candidate, do: "archive-candidate"),
+            if(row.stale_candidate, do: "stale-candidate"),
+            row.lifecycle_state
+          ]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+          |> Enum.join(", ")
+
+        last_activity = row.last_activity_at || "never"
+        idle_days = row.idle_days || "unknown"
+
+        "- #{row.name}: #{markers}; loads=#{row.load_count}; writes=#{row.write_count}; idle_days=#{idle_days}; last_activity=#{last_activity}"
+      end)
+      |> Enum.join("\n")
+
+    header <> "\n" <> body
+  end
+
   defp reject_pinned(name, scope, cwd, action) do
     if LemonSkills.Usage.pinned?(name, usage_opts(scope, cwd)) do
       {:error, "Skill '#{name}' is pinned; unpin it before #{action}."}
@@ -625,36 +703,44 @@ defmodule LemonSkills.Tools.SkillManage do
          cwd,
          telemetry_context
        ) do
-    %{
-      result: :ok,
-      action: details[:action] || Map.get(params, "action"),
-      name: Map.get(params, "name"),
-      scope: Map.get(params, "scope", "project"),
-      path: details[:path],
-      file_path: details[:file_path],
-      audit_status: get_in(details, [:audit, :status]),
-      lifecycle_state: details[:lifecycle_state],
-      replacements: details[:replacements],
-      tool_call_id: tool_call_id,
-      cwd: cwd
-    }
-    |> Map.merge(telemetry_context)
-    |> LemonSkills.Telemetry.skill_write()
+    if (details[:action] || Map.get(params, "action")) == "report" do
+      :ok
+    else
+      %{
+        result: :ok,
+        action: details[:action] || Map.get(params, "action"),
+        name: Map.get(params, "name"),
+        scope: Map.get(params, "scope", "project"),
+        path: details[:path],
+        file_path: details[:file_path],
+        audit_status: get_in(details, [:audit, :status]),
+        lifecycle_state: details[:lifecycle_state],
+        replacements: details[:replacements],
+        tool_call_id: tool_call_id,
+        cwd: cwd
+      }
+      |> Map.merge(telemetry_context)
+      |> LemonSkills.Telemetry.skill_write()
+    end
   end
 
   defp emit_skill_write({:error, reason}, params, tool_call_id, cwd, telemetry_context) do
-    %{
-      result: :error,
-      action: Map.get(params, "action"),
-      name: Map.get(params, "name"),
-      scope: Map.get(params, "scope", "project"),
-      file_path: Map.get(params, "file_path"),
-      reason: reason,
-      tool_call_id: tool_call_id,
-      cwd: cwd
-    }
-    |> Map.merge(telemetry_context)
-    |> LemonSkills.Telemetry.skill_write()
+    if Map.get(params, "action") == "report" do
+      :ok
+    else
+      %{
+        result: :error,
+        action: Map.get(params, "action"),
+        name: Map.get(params, "name"),
+        scope: Map.get(params, "scope", "project"),
+        file_path: Map.get(params, "file_path"),
+        reason: reason,
+        tool_call_id: tool_call_id,
+        cwd: cwd
+      }
+      |> Map.merge(telemetry_context)
+      |> LemonSkills.Telemetry.skill_write()
+    end
   end
 
   defp emit_skill_write(_result, _params, _tool_call_id, _cwd, _telemetry_context), do: :ok
