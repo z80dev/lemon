@@ -9,6 +9,7 @@ defmodule AgentCore.Loop.StreamingTest do
 
   alias Ai.Types.{
     StreamOptions,
+    ToolCall,
     UserMessage
   }
 
@@ -154,6 +155,50 @@ defmodule AgentCore.Loop.StreamingTest do
     assert Enum.any?(events, fn
              {:message_end, %{role: :assistant, content: [%{text: "streamed answer"}]}} -> true
              _ -> false
+           end)
+  end
+
+  test "preserves streamed tool call when final provider message is empty" do
+    context = simple_context(messages: [user_message("read mix")])
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("read_file", %{"path" => "mix.exs"}, id: "call_read")
+    partial = Mocks.assistant_message_with_tool_calls([tool_call])
+    final = %{partial | content: [], stop_reason: :tool_use}
+
+    stream_fn = fn _model, _llm_context, _options ->
+      {:ok, ai_stream} = Ai.EventStream.start_link()
+
+      Task.start(fn ->
+        Ai.EventStream.push(ai_stream, {:start, %{partial | content: []}})
+        Ai.EventStream.push(ai_stream, {:tool_call_start, 0, partial})
+        Ai.EventStream.push(ai_stream, {:tool_call_end, 0, tool_call, partial})
+        Ai.EventStream.push(ai_stream, {:done, :tool_use, final})
+        Ai.EventStream.complete(ai_stream, final)
+      end)
+
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, message, updated_context} =
+             Streaming.stream_assistant_response(context, config, signal, stream_fn, stream)
+
+    assert [%ToolCall{name: "read_file", arguments: %{"path" => "mix.exs"}}] = message.content
+
+    assert [%ToolCall{name: "read_file", arguments: %{"path" => "mix.exs"}}] =
+             List.last(updated_context.messages).content
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, fn
+             {:message_end, %{role: :assistant, content: [%ToolCall{name: "read_file"}]}} ->
+               true
+
+             _ ->
+               false
            end)
   end
 
