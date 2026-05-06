@@ -244,7 +244,9 @@ The run marks idle agent-authored skills `stale`, archives long-idle candidates
 by disabling them, and reactivates stale skills that were used again. It never
 deletes skills and skips pinned or non-agent-authored entries. `--prompt` prints
 a curator prompt for an agent to consolidate narrow learned skills into broader
-umbrella skills with `read_skill` and `skill_manage`.
+umbrella skills with `read_skill` and `skill_manage`. The prompt asks the agent
+to patch existing class-level skills first, update supporting files when useful,
+and create a new umbrella skill only when no existing skill fits.
 
 Every run also writes `run.json` and `REPORT.md` under
 `.lemon/logs/curator/<run>/` for project skills, or

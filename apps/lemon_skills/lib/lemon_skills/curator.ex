@@ -19,6 +19,8 @@ defmodule LemonSkills.Curator do
 
   Goal: maintain a useful procedural-memory library. Prefer class-level skills
   with clear sections and supporting files over many one-session micro-skills.
+  Treat user corrections, repeated workflow preferences, formatting preferences,
+  and tool-specific lessons as first-class skill signals when they are reusable.
 
   Hard rules:
   1. Only touch agent-authored skills listed below.
@@ -28,9 +30,17 @@ defmodule LemonSkills.Curator do
   5. If several narrow skills share a domain, merge their reusable lessons into an umbrella skill,
      then archive the absorbed siblings.
 
+  Change preference:
+  1. Patch an existing class-level skill when the lesson fits.
+  2. Add or update supporting files such as references/, templates/, or scripts/ when the main skill
+     would become too long or the workflow needs reusable artifacts.
+  3. Create a new class-level umbrella skill only when no existing skill can own the lesson.
+  4. Avoid creating a new narrow skill just because a single run mentioned a new task.
+
   Use read_skill to inspect candidates before editing. Use skill_manage create, patch,
   write_file, pin, archive, or restore for changes. When done, summarize clusters processed,
-  skills patched, skills archived, new umbrellas created, and any clusters intentionally left alone.
+  skills patched, support files updated, skills archived, new umbrellas created, and any
+  clusters intentionally left alone.
   """
 
   @type scope :: :global | :project

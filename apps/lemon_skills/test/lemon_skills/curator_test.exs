@@ -151,6 +151,15 @@ defmodule LemonSkills.CuratorTest do
     refute Curator.should_run_now?(Keyword.put(opts, :now, ~U[2026-05-08 00:00:00Z]))
   end
 
+  test "review prompt prefers active updates before new narrow skills" do
+    prompt = Curator.review_prompt([])
+
+    assert prompt =~ "Treat user corrections"
+    assert prompt =~ "Patch an existing class-level skill"
+    assert prompt =~ "references/, templates/, or scripts/"
+    assert prompt =~ "Avoid creating a new narrow skill"
+  end
+
   defp write_usage!(tmp_dir, skills) do
     usage_path = Path.join([tmp_dir, ".lemon", "skills.usage.json"])
     File.mkdir_p!(Path.dirname(usage_path))

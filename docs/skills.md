@@ -371,7 +371,7 @@ Each curator run writes a machine report and a human report:
 
 `run.json` records the run timestamp, duration, transition counts, state transitions, candidates, and whether an agent review is required. `REPORT.md` mirrors the same information in a scan-friendly form. The latest `run.json` path is also stored in `skills.curator.json` as `last_report_path`.
 
-The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`.
+The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`. The prompt prefers patching an existing class-level skill first, then updating supporting files such as `references/`, `templates/`, or `scripts/`, then creating a new class-level umbrella only when no existing skill owns the reusable lesson.
 
 `LemonAutomation.SkillCuratorManager` provides the Hermes-style background path. It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. The default target is `agent:default:main`; override it with `config :lemon_automation, :skill_curator, agent_id: "...", session_key: "..."`.
 
