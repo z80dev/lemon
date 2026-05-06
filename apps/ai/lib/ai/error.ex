@@ -55,7 +55,7 @@ defmodule Ai.Error do
     category = classify_error(status, body, provider_message)
 
     rate_limit_info =
-      if category == :rate_limit, do: extract_rate_limit_info(headers), else: nil
+      if category == :rate_limit, do: extract_rate_limit_info(headers, body), else: nil
 
     %{
       category: category,
@@ -100,6 +100,12 @@ defmodule Ai.Error do
       reset_at: get_reset_time(headers_map),
       retry_after: get_retry_after(headers_map)
     }
+  end
+
+  defp extract_rate_limit_info(headers, body) do
+    headers
+    |> extract_rate_limit_info()
+    |> merge_body_rate_limit_info(body)
   end
 
   @doc """
@@ -338,6 +344,9 @@ defmodule Ai.Error do
       status == 429 or provider_rate_limit_message?(provider_message) ->
         :rate_limit
 
+      provider_rate_limit_body?(body) ->
+        :rate_limit
+
       provider_transient_message?(provider_message) ->
         :transient
 
@@ -372,6 +381,43 @@ defmodule Ai.Error do
   end
 
   defp provider_rate_limit_message?(_), do: false
+
+  defp provider_rate_limit_body?(body) do
+    body
+    |> normalize_error_body()
+    |> do_provider_rate_limit_body?()
+  end
+
+  defp do_provider_rate_limit_body?(%{"error" => error}) when is_map(error) do
+    rate_limit_field?(error["type"]) or
+      rate_limit_field?(error["code"]) or
+      rate_limit_field?(error["status"])
+  end
+
+  defp do_provider_rate_limit_body?(%{"__type" => type}), do: rate_limit_field?(type)
+
+  defp do_provider_rate_limit_body?(body) when is_map(body) do
+    rate_limit_field?(body["type"]) or
+      rate_limit_field?(body["code"]) or
+      rate_limit_field?(body["status"])
+  end
+
+  defp do_provider_rate_limit_body?(_), do: false
+
+  defp rate_limit_field?(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> then(fn value ->
+      String.contains?(value, "rate_limit") or
+        String.contains?(value, "ratelimit") or
+        String.contains?(value, "throttl") or
+        String.contains?(value, "too_many_requests") or
+        String.contains?(value, "resource_exhausted")
+    end)
+  end
+
+  defp rate_limit_field?(429), do: true
+  defp rate_limit_field?(_), do: false
 
   defp provider_transient_message?(message) when is_binary(message) do
     downcased = String.downcase(message)
@@ -454,6 +500,15 @@ defmodule Ai.Error do
     do: inspect(body) |> truncate_message(200)
 
   defp extract_provider_message(_), do: nil
+
+  defp normalize_error_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      _ -> body
+    end
+  end
+
+  defp normalize_error_body(body), do: body
 
   defp truncate_message(msg, max_length) when byte_size(msg) > max_length do
     String.slice(msg, 0, max_length) <> "..."
@@ -593,8 +648,8 @@ defmodule Ai.Error do
   defp parse_retry_after("retry-after", value) when is_binary(value) do
     value = String.trim(value)
 
-    case Integer.parse(value) do
-      {seconds, ""} -> seconds * 1000
+    case Float.parse(value) do
+      {seconds, ""} when seconds >= 0 -> trunc(seconds) * 1000
       _ -> parse_retry_after_http_date(value)
     end
   end
@@ -614,6 +669,43 @@ defmodule Ai.Error do
        do: value
 
   defp parse_retry_after(_, _), do: nil
+
+  defp merge_body_rate_limit_info(info, body) do
+    retry_after = info.retry_after || extract_body_retry_after(body)
+
+    %{info | retry_after: retry_after}
+  end
+
+  defp extract_body_retry_after(body) do
+    body
+    |> normalize_error_body()
+    |> find_retry_delay()
+  end
+
+  defp find_retry_delay(%{"error" => error}) when is_map(error), do: find_retry_delay(error)
+
+  defp find_retry_delay(%{"details" => details}) when is_list(details) do
+    Enum.find_value(details, &find_retry_delay/1)
+  end
+
+  defp find_retry_delay(%{"@type" => type, "retryDelay" => retry_delay})
+       when is_binary(type) and is_binary(retry_delay) do
+    if String.ends_with?(type, "/google.rpc.RetryInfo") do
+      parse_duration_ms(retry_delay)
+    end
+  end
+
+  defp find_retry_delay(%{"retryDelay" => retry_delay}) when is_binary(retry_delay) do
+    parse_duration_ms(retry_delay)
+  end
+
+  defp find_retry_delay(_), do: nil
+
+  defp parse_duration_ms(value) do
+    value
+    |> String.trim()
+    |> parse_reset_duration_ms()
+  end
 
   defp parse_retry_after_http_date(value) do
     with {{year, month, day}, {hour, minute, second}} <- convert_http_date(value),

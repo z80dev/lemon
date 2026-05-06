@@ -1375,6 +1375,73 @@ defmodule Ai.ErrorProviderTest do
       assert delay == 60_000
     end
 
+    test "Google RetryInfo body supplies retry delay when headers are missing" do
+      body = %{
+        "error" => %{
+          "code" => 429,
+          "message" => "Quota exceeded for quota metric",
+          "status" => "RESOURCE_EXHAUSTED",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+              "retryDelay" => "3.5s"
+            }
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(429, body, [])
+
+      assert result.category == :rate_limit
+      assert result.retryable == true
+      assert result.rate_limit_info.retry_after == 3_500
+      assert Error.suggested_retry_delay_from_error(result) == 3_500
+    end
+
+    test "retry-after header takes precedence over Google RetryInfo body" do
+      body = %{
+        "error" => %{
+          "code" => 429,
+          "message" => "Quota exceeded for quota metric",
+          "status" => "RESOURCE_EXHAUSTED",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+              "retryDelay" => "30s"
+            }
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(429, body, [{"retry-after", "5"}])
+
+      assert result.category == :rate_limit
+      assert result.rate_limit_info.retry_after == 5_000
+      assert Error.suggested_retry_delay_from_error(result) == 5_000
+    end
+
+    test "provider rate-limit body shape overrides non-429 status" do
+      body = %{
+        "error" => %{
+          "code" => 400,
+          "message" => "Quota exhausted for this project",
+          "status" => "RESOURCE_EXHAUSTED",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+              "retryDelay" => "2s"
+            }
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.category == :rate_limit
+      assert result.retryable == true
+      assert result.rate_limit_info.retry_after == 2_000
+    end
+
     test "Azure 503 transient error" do
       body = %{
         "error" => %{
