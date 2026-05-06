@@ -981,10 +981,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
         args =
           if partial_json && partial_json != "" do
-            case Jason.decode(partial_json) do
-              {:ok, decoded} -> decoded
-              _ -> %{}
-            end
+            parse_streaming_json(partial_json)
           else
             case Jason.decode(item["arguments"] || "{}") do
               {:ok, decoded} -> decoded
@@ -1222,23 +1219,36 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   def parse_streaming_json(_), do: %{}
 
   defp complete_json(json) do
-    # Count unmatched brackets and braces
-    {open_braces, open_brackets} =
+    {stack, in_string?, escaped?} =
       json
       |> String.graphemes()
-      |> Enum.reduce({0, 0}, fn
-        "{", {b, a} -> {b + 1, a}
-        "}", {b, a} -> {b - 1, a}
-        "[", {b, a} -> {b, a + 1}
-        "]", {b, a} -> {b, a - 1}
-        _, acc -> acc
+      |> Enum.reduce({[], false, false}, fn
+        "\\", {stack, true, false} ->
+          {stack, true, true}
+
+        _char, {stack, true, true} ->
+          {stack, true, false}
+
+        "\"", {stack, in_string?, false} ->
+          {stack, not in_string?, false}
+
+        "{", {stack, false, false} ->
+          {["}" | stack], false, false}
+
+        "[", {stack, false, false} ->
+          {["]" | stack], false, false}
+
+        "}", {["}" | rest], false, false} ->
+          {rest, false, false}
+
+        "]", {["]" | rest], false, false} ->
+          {rest, false, false}
+
+        _char, acc ->
+          acc
       end)
 
-    # Add closing characters
-    closing =
-      String.duplicate("}", max(open_braces, 0)) <> String.duplicate("]", max(open_brackets, 0))
-
-    json <> closing
+    json <> if(in_string? and not escaped?, do: "\"", else: "") <> Enum.join(stack, "")
   end
 
   # ============================================================================
