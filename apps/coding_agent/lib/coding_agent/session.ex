@@ -69,6 +69,9 @@ defmodule CodingAgent.Session do
   defstruct [
     :agent,
     :session_manager,
+    :run_id,
+    :session_key,
+    :agent_id,
     :settings_manager,
     :ui_context,
     :cwd,
@@ -125,6 +128,9 @@ defmodule CodingAgent.Session do
   @type t :: %__MODULE__{
           agent: pid() | nil,
           session_manager: Session.t(),
+          run_id: String.t() | nil,
+          session_key: String.t() | nil,
+          agent_id: String.t(),
           settings_manager: term() | nil,
           ui_context: UIContext.t() | nil,
           cwd: String.t(),
@@ -208,6 +214,9 @@ defmodule CodingAgent.Session do
     * `:extra_tools` - Additional `AgentTool` structs appended to the default toolset
     * `:session_file` - Path to existing session file to load
     * `:session_id` - Explicit session ID for new sessions (ignored when loading from file)
+    * `:run_id` - Optional native Lemon run identifier used for introspection and tool provenance
+    * `:session_key` - Optional logical session key used for introspection and tool provenance
+    * `:agent_id` - Optional agent identifier used for introspection and tool provenance
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
     * `:ui_context` - UI context for dialogs and notifications
     * `:thinking_level` - Extended reasoning level. If not provided, uses
@@ -550,8 +559,9 @@ defmodule CodingAgent.Session do
         model: state.model && state.model.id,
         session_scope: state.session_scope
       },
-      session_key: Keyword.get(opts, :session_key, state.session_manager.header.id),
-      agent_id: Keyword.get(opts, :agent_id, "default"),
+      run_id: state.run_id,
+      session_key: state.session_key,
+      agent_id: state.agent_id,
       engine: "lemon",
       provenance: :direct
     )
@@ -1008,6 +1018,9 @@ defmodule CodingAgent.Session do
         session_id: state.session_manager && state.session_manager.header.id,
         turn_count: state.turn_index
       },
+      run_id: state.run_id,
+      session_key: state.session_key,
+      agent_id: state.agent_id,
       engine: "lemon",
       provenance: :direct
     )

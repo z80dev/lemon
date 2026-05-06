@@ -79,6 +79,9 @@ defmodule CodingAgent.Session.EventHandler do
         tool_name: name,
         tool_call_id: id
       },
+      run_id: run_id(state),
+      session_key: session_key(state),
+      agent_id: agent_id(state),
       engine: "lemon",
       provenance: :direct
     )
@@ -148,6 +151,7 @@ defmodule CodingAgent.Session.EventHandler do
           missed_skill_keys: missed_keys,
           loaded_skill_keys: loaded_keys
         },
+        run_id: run_id(state),
         session_key: session_key(state),
         agent_id: agent_id(state),
         engine: "lemon",
@@ -210,6 +214,7 @@ defmodule CodingAgent.Session.EventHandler do
             missing_tools: missing_tools,
             used_learning_tools: Enum.filter(used_tools, &(&1 in learning_tool_names()))
           },
+          run_id: run_id(state),
           session_key: session_key(state),
           agent_id: agent_id(state),
           engine: "lemon",
@@ -310,9 +315,12 @@ defmodule CodingAgent.Session.EventHandler do
   defp content_block_text(text) when is_binary(text), do: text
   defp content_block_text(_block), do: ""
 
-  defp session_key(%{session_manager: %{header: %{id: id}}}) when is_binary(id), do: id
   defp session_key(%{session_key: id}) when is_binary(id), do: id
+  defp session_key(%{session_manager: %{header: %{id: id}}}) when is_binary(id), do: id
   defp session_key(_state), do: nil
+
+  defp run_id(%{run_id: id}) when is_binary(id), do: id
+  defp run_id(_state), do: nil
 
   defp agent_id(%{agent_id: id}) when is_binary(id), do: id
   defp agent_id(_state), do: "default"

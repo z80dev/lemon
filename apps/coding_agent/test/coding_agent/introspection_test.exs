@@ -34,6 +34,24 @@ defmodule CodingAgent.IntrospectionTest do
 
   defp unique_token, do: System.unique_integer([:positive, :monotonic])
 
+  defp wait_until(fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition not met before timeout")
+      else
+        Process.sleep(10)
+        do_wait_until(fun, deadline)
+      end
+    end
+  end
+
   defp mock_model do
     %Model{
       id: "mock-introspection-model",
@@ -158,6 +176,13 @@ defmodule CodingAgent.IntrospectionTest do
     end
   end
 
+  defp write_skill!(cwd, key, skill_md) do
+    skill_dir = Path.join([cwd, ".lemon", "skill", key])
+    File.mkdir_p!(skill_dir)
+    File.write!(Path.join(skill_dir, "SKILL.md"), skill_md)
+    skill_dir
+  end
+
   # ============================================================================
   # Session lifecycle introspection tests
   # ============================================================================
@@ -166,10 +191,12 @@ defmodule CodingAgent.IntrospectionTest do
     test "session_started event is emitted when Session process starts" do
       token = unique_token()
       session_key = "agent:introspection_session:#{token}:main"
+      run_id = "run_introspection_session_#{token}"
 
       session =
         start_session(
           session_key: session_key,
+          run_id: run_id,
           agent_id: "introspection_agent"
         )
 
@@ -182,6 +209,7 @@ defmodule CodingAgent.IntrospectionTest do
       assert length(started) >= 1
       [evt | _] = started
       assert evt.engine == "lemon"
+      assert evt.run_id == run_id
       assert evt.session_key == session_key
       assert evt.agent_id == "introspection_agent"
       assert is_binary(evt.payload.session_id)
@@ -234,6 +262,7 @@ defmodule CodingAgent.IntrospectionTest do
     test "tool_call_dispatched is emitted when a tool is invoked through a session" do
       token = unique_token()
       session_key = "agent:introspection_tool:#{token}:main"
+      run_id = "run_introspection_tool_#{token}"
 
       # Create a tool-calling response followed by a final text response
       tool_call = %ToolCall{
@@ -276,6 +305,8 @@ defmodule CodingAgent.IntrospectionTest do
       session =
         start_session(
           session_key: session_key,
+          run_id: run_id,
+          agent_id: "tool-test-agent",
           tools: [echo_tool()],
           stream_fn: multi_stream_fn
         )
@@ -299,7 +330,100 @@ defmodule CodingAgent.IntrospectionTest do
       assert length(tool_events) >= 1
       [evt | _] = tool_events
       assert evt.engine == "lemon"
+      assert evt.run_id == run_id
+      assert evt.session_key == session_key
+      assert evt.agent_id == "tool-test-agent"
       assert evt.payload.tool_name == "echo"
+
+      GenServer.stop(session, :normal)
+    end
+
+    test "skill load events from native session tools can be queried by run_id" do
+      token = unique_token()
+      cwd = Path.join(System.tmp_dir!(), "lemon-introspection-skill-#{token}")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      File.mkdir_p!(cwd)
+
+      write_skill!(
+        cwd,
+        "native-run-skill",
+        """
+        ---
+        name: Native Run Skill
+        description: Verifies run-scoped native Lemon skill introspection
+        ---
+
+        Body
+        """
+      )
+
+      LemonSkills.refresh(cwd: cwd)
+
+      session_key = "agent:introspection_skill:#{token}:main"
+      run_id = "run_introspection_skill_#{token}"
+      agent_id = "skill-test-agent"
+
+      tool_call = %ToolCall{
+        type: :tool_call,
+        id: "call_read_skill_#{token}",
+        name: "read_skill",
+        arguments: %{"key" => "native-run-skill", "view" => "summary"}
+      }
+
+      response_with_tool = %AssistantMessage{
+        role: :assistant,
+        content: [tool_call],
+        api: :mock,
+        provider: :mock_provider,
+        model: "mock-introspection-model",
+        usage: mock_usage(),
+        stop_reason: :tool_use,
+        error_message: nil,
+        timestamp: System.system_time(:millisecond)
+      }
+
+      final_response = assistant_message("Loaded skill.")
+      call_count = :counters.new(1, [:atomics])
+
+      multi_stream_fn = fn _model, _context, _options ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        response =
+          if count == 0 do
+            response_with_tool
+          else
+            final_response
+          end
+
+        {:ok, response_to_event_stream(response)}
+      end
+
+      session =
+        start_session(
+          cwd: cwd,
+          session_key: session_key,
+          run_id: run_id,
+          agent_id: agent_id,
+          stream_fn: multi_stream_fn
+        )
+
+      :ok = Session.prompt(session, "Load native-run-skill")
+      wait_for_streaming_complete(session)
+
+      wait_until(fn ->
+        Introspection.list(run_id: run_id, event_type: :skill_load_observed, limit: 20)
+        |> Enum.any?(&(&1.payload.key == "native-run-skill"))
+      end)
+
+      event =
+        Introspection.list(run_id: run_id, event_type: :skill_load_observed, limit: 20)
+        |> Enum.find(&(&1.payload.key == "native-run-skill"))
+
+      assert event.session_key == session_key
+      assert event.agent_id == agent_id
+      assert event.payload.tool_call_id == "call_read_skill_#{token}"
 
       GenServer.stop(session, :normal)
     end

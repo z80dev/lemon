@@ -62,6 +62,9 @@ defmodule CodingAgent.Session.Lifecycle do
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
     tool_policy = Keyword.get(opts, :tool_policy)
+    run_id = Keyword.get(opts, :run_id)
+    session_key = Keyword.get(opts, :session_key, session_manager.header.id)
+    agent_id = Keyword.get(opts, :agent_id, "default")
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
@@ -82,8 +85,9 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:parent_session, session_manager.header.id)
       |> Keyword.put(:session_id, session_manager.header.id)
       |> Keyword.put(:session_pid, session_pid)
-      |> Keyword.put(:session_key, Keyword.get(opts, :session_key, session_manager.header.id))
-      |> Keyword.put(:agent_id, Keyword.get(opts, :agent_id, "default"))
+      |> Keyword.put(:run_id, run_id)
+      |> Keyword.put(:session_key, session_key)
+      |> Keyword.put(:agent_id, agent_id)
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:ui_context, ui_context)
@@ -162,6 +166,9 @@ defmodule CodingAgent.Session.Lifecycle do
     state = %Session{
       agent: agent,
       session_manager: session_manager,
+      run_id: run_id,
+      session_key: session_key,
+      agent_id: agent_id,
       settings_manager: settings_manager,
       ui_context: ui_context,
       cwd: cwd,
@@ -228,8 +235,9 @@ defmodule CodingAgent.Session.Lifecycle do
       parent_session: state.session_manager.header.id,
       session_id: state.session_manager.header.id,
       session_pid: self(),
-      session_key: state.session_manager.header.id,
-      agent_id: "default",
+      run_id: state.run_id,
+      session_key: state.session_key,
+      agent_id: state.agent_id,
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
       ui_context: state.ui_context,

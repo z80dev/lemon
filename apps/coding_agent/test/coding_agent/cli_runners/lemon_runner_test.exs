@@ -185,6 +185,36 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
                  false
              end)
     end
+
+    @tag :tmp_dir
+    test "passes run provenance into native session state", %{tmp_dir: tmp_dir} do
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "hello",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: mock_stream_fn_single_delayed(assistant_message("ack"), 200),
+          run_id: "run-lemon-runner",
+          session_key: "session-lemon-runner",
+          agent_id: "agent-lemon-runner"
+        )
+
+      wait_until(fn ->
+        try do
+          session = :sys.get_state(runner).session
+          is_pid(session) and Process.alive?(session)
+        catch
+          :exit, _ -> false
+        end
+      end)
+
+      session = :sys.get_state(runner).session
+      session_state = Session.get_state(session)
+
+      assert session_state.run_id == "run-lemon-runner"
+      assert session_state.session_key == "session-lemon-runner"
+      assert session_state.agent_id == "agent-lemon-runner"
+    end
   end
 
   # ============================================================================
