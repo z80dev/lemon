@@ -29,6 +29,7 @@ defmodule CodingAgent.ToolsTest do
       expected_tools = [
         "read",
         "read_skill",
+        "skill_manage",
         "memory_topic",
         "search_memory",
         "write",
@@ -56,9 +57,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 22 tools" do
+    test "returns exactly 23 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 22
+      assert length(tools) == 23
     end
 
     test "passes cwd to each tool" do
@@ -77,7 +78,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 22
+      assert length(tools) == 23
     end
   end
 
@@ -146,6 +147,7 @@ defmodule CodingAgent.ToolsTest do
       expected_tools = [
         "read",
         "read_skill",
+        "skill_manage",
         "memory_topic",
         "search_memory",
         "write",
@@ -175,9 +177,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 23 tools (includes truncate plus read_skill, memory, parent_question, and X tools)" do
+    test "returns 24 tools (includes truncate plus skill_manage, memory, parent_question, and X tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 23
+      assert map_size(tools_map) == 24
     end
 
     test "tool names match map keys" do
@@ -228,6 +230,7 @@ defmodule CodingAgent.ToolsTest do
       known_tools = [
         "read",
         "read_skill",
+        "skill_manage",
         "memory_topic",
         "search_memory",
         "write",
@@ -304,6 +307,8 @@ defmodule CodingAgent.ToolsTest do
     test "returns all tools when all names are valid" do
       all_names = [
         "read",
+        "read_skill",
+        "skill_manage",
         "write",
         "edit",
         "hashline_edit",
