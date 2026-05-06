@@ -36,6 +36,7 @@ defmodule LemonSkills.Tools.ReadSkill do
   @spec tool(keyword()) :: AgentTool.t()
   def tool(opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
+    telemetry_context = telemetry_context(opts)
 
     %AgentTool{
       name: "read_skill",
@@ -82,7 +83,7 @@ defmodule LemonSkills.Tools.ReadSkill do
         },
         "required" => ["key"]
       },
-      execute: &execute(&1, &2, &3, &4, cwd)
+      execute: &execute(&1, &2, &3, &4, cwd, telemetry_context)
     }
   end
 
@@ -104,7 +105,19 @@ defmodule LemonSkills.Tools.ReadSkill do
           on_update :: function() | nil,
           cwd :: String.t() | nil
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, _signal, _on_update, cwd) do
+  def execute(tool_call_id, params, _signal, _on_update, cwd) do
+    execute(tool_call_id, params, nil, nil, cwd, %{})
+  end
+
+  @spec execute(
+          tool_call_id :: String.t(),
+          params :: map(),
+          signal :: reference() | nil,
+          on_update :: function() | nil,
+          cwd :: String.t() | nil,
+          telemetry_context :: map()
+        ) :: AgentToolResult.t() | {:error, term()}
+  def execute(tool_call_id, params, _signal, _on_update, cwd, telemetry_context) do
     key = Map.get(params, "key", "")
     view = Map.get(params, "view", "full")
     section = Map.get(params, "section")
@@ -126,10 +139,14 @@ defmodule LemonSkills.Tools.ReadSkill do
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        build_result(entry, view_opts, opts)
+        result = build_result(entry, view_opts, opts)
+        emit_skill_load(entry, view_opts, tool_call_id, cwd, telemetry_context, :ok)
+        result
 
       :error ->
-        build_not_found_result(key, opts)
+        result = build_not_found_result(key, opts)
+        emit_skill_load_miss(key, view_opts, tool_call_id, cwd, telemetry_context)
+        result
     end
   end
 
@@ -253,7 +270,11 @@ defmodule LemonSkills.Tools.ReadSkill do
     ["## Content", "", content_text]
   end
 
-  defp build_content_section(entry, %{view: "section", section: section_name, max_chars: max_chars}) do
+  defp build_content_section(entry, %{
+         view: "section",
+         section: section_name,
+         max_chars: max_chars
+       }) do
     content_text =
       case Entry.content(entry) do
         {:ok, content} ->
@@ -376,4 +397,52 @@ defmodule LemonSkills.Tools.ReadSkill do
   defp format_source(:project), do: "Project (.lemon/skill)"
   defp format_source(url) when is_binary(url), do: url
   defp format_source(other), do: inspect(other)
+
+  defp source_key(source) when is_atom(source), do: source
+  defp source_key(source) when is_binary(source), do: source
+  defp source_key(source), do: inspect(source)
+
+  defp emit_skill_load(%Entry{} = entry, view_opts, tool_call_id, cwd, telemetry_context, result) do
+    %{
+      result: result,
+      key: entry.key,
+      name: entry.name,
+      source: source_key(entry.source),
+      path: entry.path,
+      view: view_opts.view,
+      section: view_opts.section,
+      file_path: view_opts.path,
+      include_status: view_opts.include_status,
+      include_manifest: view_opts.include_manifest,
+      tool_call_id: tool_call_id,
+      cwd: cwd
+    }
+    |> Map.merge(telemetry_context)
+    |> LemonSkills.Telemetry.skill_load()
+  end
+
+  defp emit_skill_load_miss(key, view_opts, tool_call_id, cwd, telemetry_context) do
+    %{
+      result: :not_found,
+      key: key,
+      view: view_opts.view,
+      section: view_opts.section,
+      file_path: view_opts.path,
+      include_status: view_opts.include_status,
+      include_manifest: view_opts.include_manifest,
+      tool_call_id: tool_call_id,
+      cwd: cwd
+    }
+    |> Map.merge(telemetry_context)
+    |> LemonSkills.Telemetry.skill_load()
+  end
+
+  defp telemetry_context(opts) do
+    %{
+      run_id: Keyword.get(opts, :run_id),
+      session_key: Keyword.get(opts, :session_key),
+      session_id: Keyword.get(opts, :session_id),
+      agent_id: Keyword.get(opts, :agent_id)
+    }
+  end
 end

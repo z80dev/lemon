@@ -3,6 +3,7 @@ defmodule LemonSkills.Tools.ReadSkillTest do
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.TextContent
+  alias LemonCore.{Introspection, Store}
   alias LemonSkills.Tools.ReadSkill
 
   @moduletag :tmp_dir
@@ -30,7 +31,159 @@ defmodule LemonSkills.Tools.ReadSkillTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  def handle_telemetry(event_name, measurements, metadata, pid) do
+    send(pid, {:telemetry_event, event_name, measurements, metadata})
+  end
+
+  defp attach_handler(event_names) do
+    handler_id = "read-skill-telemetry-#{System.unique_integer([:positive, :monotonic])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        event_names,
+        &__MODULE__.handle_telemetry/4,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   describe "execute/5 — backwards compatible (default full view)" do
+    test "emits skill load telemetry when a skill is found", %{tmp_dir: tmp_dir} do
+      path =
+        write_skill!(
+          tmp_dir,
+          "telemetry-skill",
+          """
+          ---
+          name: Telemetry Skill
+          description: Emits skill load telemetry
+          ---
+
+          body
+          """
+        )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+      attach_handler([[:lemon_skills, :skill, :load]])
+
+      tool =
+        ReadSkill.tool(
+          cwd: tmp_dir,
+          run_id: "run-skill-load",
+          session_key: "session-telemetry",
+          session_id: "session-telemetry",
+          agent_id: "agent-telemetry"
+        )
+
+      assert %AgentToolResult{} =
+               tool.execute.(
+                 "call-telemetry",
+                 %{"key" => "telemetry-skill", "view" => "summary"},
+                 nil,
+                 nil
+               )
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :load],
+                      %{count: 1, system_time: system_time},
+                      %{
+                        result: "ok",
+                        key: "telemetry-skill",
+                        name: "Telemetry Skill",
+                        source: "project",
+                        path: ^path,
+                        view: "summary",
+                        tool_call_id: "call-telemetry",
+                        run_id: "run-skill-load",
+                        session_key: "session-telemetry",
+                        session_id: "session-telemetry",
+                        agent_id: "agent-telemetry",
+                        cwd: ^tmp_dir
+                      }}
+
+      assert is_integer(system_time)
+    end
+
+    test "projects skill load telemetry into introspection", %{tmp_dir: tmp_dir} do
+      enable_introspection()
+
+      write_skill!(
+        tmp_dir,
+        "introspection-skill",
+        """
+        ---
+        name: Introspection Skill
+        description: Persists skill load telemetry
+        ---
+
+        body
+        """
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      run_id = "run_skill_load_#{System.unique_integer([:positive, :monotonic])}"
+      session_key = "session_skill_load_#{System.unique_integer([:positive, :monotonic])}"
+
+      tool =
+        ReadSkill.tool(
+          cwd: tmp_dir,
+          run_id: run_id,
+          session_key: session_key,
+          agent_id: "agent-load"
+        )
+
+      assert %AgentToolResult{} =
+               tool.execute.(
+                 "call-introspection",
+                 %{"key" => "introspection-skill", "view" => "summary"},
+                 nil,
+                 nil
+               )
+
+      event =
+        eventually(fn ->
+          Introspection.list(run_id: run_id, event_type: :skill_load_observed, limit: 10)
+          |> Enum.find(&(&1.payload[:key] == "introspection-skill"))
+        end)
+
+      assert event.session_key == session_key
+      assert event.agent_id == "agent-load"
+      assert event.engine == "lemon"
+      assert event.payload.result == "ok"
+      assert event.payload.tool_call_id == "call-introspection"
+      refute Map.has_key?(event.payload, :session_key)
+
+      usage = LemonSkills.usage("introspection-skill", scope: :project, cwd: tmp_dir)
+      assert usage["load_count"] == 1
+      assert usage["last_session_key"] == session_key
+    end
+
+    test "emits skill load telemetry when a skill is missing", %{tmp_dir: tmp_dir} do
+      LemonSkills.refresh(cwd: tmp_dir)
+      attach_handler([[:lemon_skills, :skill, :load]])
+
+      assert %AgentToolResult{} =
+               ReadSkill.execute(
+                 "call-missing-telemetry",
+                 %{"key" => "missing-skill", "view" => "summary"},
+                 nil,
+                 nil,
+                 tmp_dir
+               )
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :load], %{count: 1},
+                      %{
+                        result: "not_found",
+                        key: "missing-skill",
+                        view: "summary",
+                        tool_call_id: "call-missing-telemetry",
+                        cwd: ^tmp_dir
+                      }}
+    end
+
     test "returns helpful suggestions when the skill is not found", %{tmp_dir: tmp_dir} do
       write_skill!(
         tmp_dir,
@@ -186,7 +339,11 @@ defmodule LemonSkills.Tools.ReadSkillTest do
       assert %AgentToolResult{content: [%TextContent{text: text}]} =
                ReadSkill.execute(
                  "call-s2",
-                 %{"key" => "summary-status-skill", "view" => "summary", "include_status" => true},
+                 %{
+                   "key" => "summary-status-skill",
+                   "view" => "summary",
+                   "include_status" => true
+                 },
                  nil,
                  nil,
                  tmp_dir
@@ -487,4 +644,30 @@ defmodule LemonSkills.Tools.ReadSkillTest do
 
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
+
+  defp enable_introspection do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
+    previous = Application.get_env(:lemon_core, :introspection, [])
+    Application.put_env(:lemon_core, :introspection, Keyword.put(previous, :enabled, true))
+    on_exit(fn -> Application.put_env(:lemon_core, :introspection, previous) end)
+  end
+
+  defp eventually(fun, attempts \\ 20)
+
+  defp eventually(fun, attempts) when attempts > 0 do
+    case fun.() do
+      nil ->
+        Process.sleep(10)
+        eventually(fun, attempts - 1)
+
+      value ->
+        value
+    end
+  end
+
+  defp eventually(fun, 0), do: flunk("expected condition to become true, got: #{inspect(fun.())}")
 end

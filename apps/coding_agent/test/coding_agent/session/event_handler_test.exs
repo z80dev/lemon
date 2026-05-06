@@ -1,9 +1,25 @@
 defmodule CodingAgent.Session.EventHandlerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias LemonCore.{Introspection, Store}
   alias CodingAgent.Session.EventHandler
 
   setup do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
+    previous_introspection = Application.get_env(:lemon_core, :introspection, [])
+
+    Application.put_env(
+      :lemon_core,
+      :introspection,
+      Keyword.put(previous_introspection, :enabled, true)
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :introspection, previous_introspection) end)
+
     test_pid = self()
 
     callbacks = %{
@@ -235,4 +251,105 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert result.event_streams == %{}
     end
   end
+
+  describe "handle/3 - missed skill audit" do
+    test "records missed relevant skills at agent end", %{callbacks: callbacks} do
+      session_key = "session_missed_skill_#{System.unique_integer([:positive, :monotonic])}"
+
+      state = %{
+        hooks: [],
+        is_streaming: true,
+        steering_queue: :queue.new(),
+        event_streams: %{},
+        session_key: session_key,
+        agent_id: "agent-1",
+        system_prompt: """
+        <relevant-skills>
+          <skill>
+            <name>GitHub PR Workflow</name>
+            <key>github-pr-workflow</key>
+          </skill>
+          <skill>
+            <name>CI Debugging</name>
+            <key>ci-debugging</key>
+          </skill>
+          Use `read_skill` with <key> to load the full content of any relevant skill.
+        </relevant-skills>
+        """
+      }
+
+      EventHandler.handle({:agent_end, []}, state, callbacks)
+
+      event =
+        eventually(fn ->
+          Introspection.list(
+            session_key: session_key,
+            event_type: :missed_skill_observed,
+            limit: 10
+          )
+          |> Enum.find(
+            &(&1.payload[:missed_skill_keys] == ["github-pr-workflow", "ci-debugging"])
+          )
+        end)
+
+      assert event.agent_id == "agent-1"
+      assert event.provenance == :inferred
+      assert event.payload.loaded_skill_keys == []
+    end
+
+    test "does not record a miss when relevant skills were loaded", %{callbacks: callbacks} do
+      session_key = "session_loaded_skill_#{System.unique_integer([:positive, :monotonic])}"
+
+      state = %{
+        hooks: [],
+        is_streaming: true,
+        steering_queue: :queue.new(),
+        event_streams: %{},
+        session_key: session_key,
+        system_prompt: """
+        <relevant-skills>
+          <skill>
+            <name>GitHub PR Workflow</name>
+            <key>github-pr-workflow</key>
+          </skill>
+        </relevant-skills>
+        """
+      }
+
+      messages = [
+        %Ai.Types.ToolResultMessage{
+          tool_name: "read_skill",
+          details: %{key: "github-pr-workflow"}
+        }
+      ]
+
+      EventHandler.handle({:agent_end, messages}, state, callbacks)
+
+      Process.sleep(20)
+
+      events =
+        Introspection.list(
+          session_key: session_key,
+          event_type: :missed_skill_observed,
+          limit: 10
+        )
+
+      assert events == []
+    end
+  end
+
+  defp eventually(fun, attempts \\ 20)
+
+  defp eventually(fun, attempts) when attempts > 0 do
+    case fun.() do
+      nil ->
+        Process.sleep(10)
+        eventually(fun, attempts - 1)
+
+      value ->
+        value
+    end
+  end
+
+  defp eventually(fun, 0), do: flunk("expected condition to become true, got: #{inspect(fun.())}")
 end

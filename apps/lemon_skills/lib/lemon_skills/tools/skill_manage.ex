@@ -26,6 +26,7 @@ defmodule LemonSkills.Tools.SkillManage do
   @spec tool(keyword()) :: AgentTool.t()
   def tool(opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
+    telemetry_context = telemetry_context(opts)
 
     %AgentTool{
       name: "skill_manage",
@@ -41,7 +42,18 @@ defmodule LemonSkills.Tools.SkillManage do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["create", "edit", "patch", "delete", "write_file", "remove_file"],
+            "enum" => [
+              "create",
+              "edit",
+              "patch",
+              "delete",
+              "write_file",
+              "remove_file",
+              "pin",
+              "unpin",
+              "archive",
+              "restore"
+            ],
             "description" => "Skill operation to perform."
           },
           "name" => %{
@@ -83,7 +95,7 @@ defmodule LemonSkills.Tools.SkillManage do
         },
         "required" => ["action", "name"]
       },
-      execute: &execute(&1, &2, &3, &4, cwd)
+      execute: &execute(&1, &2, &3, &4, cwd, telemetry_context)
     }
   end
 
@@ -94,18 +106,34 @@ defmodule LemonSkills.Tools.SkillManage do
           (AgentToolResult.t() -> :ok) | nil,
           String.t() | nil
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, cwd) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      with {:ok, action} <- required_string(params, "action"),
-           {:ok, name} <- required_string(params, "name"),
-           :ok <- validate_name(name),
-           {:ok, scope} <- parse_scope(Map.get(params, "scope", "project")),
-           {:ok, root} <- skills_root(scope, cwd) do
-        dispatch(action, name, params, scope, root, cwd)
+  def execute(tool_call_id, params, signal, _on_update, cwd) do
+    execute(tool_call_id, params, signal, nil, cwd, %{})
+  end
+
+  @spec execute(
+          String.t(),
+          map(),
+          reference() | nil,
+          (AgentToolResult.t() -> :ok) | nil,
+          String.t() | nil,
+          map()
+        ) :: AgentToolResult.t() | {:error, term()}
+  def execute(tool_call_id, params, signal, _on_update, cwd, telemetry_context) do
+    result =
+      if AbortSignal.aborted?(signal) do
+        {:error, "Operation aborted"}
+      else
+        with {:ok, action} <- required_string(params, "action"),
+             {:ok, name} <- required_string(params, "name"),
+             :ok <- validate_name(name),
+             {:ok, scope} <- parse_scope(Map.get(params, "scope", "project")),
+             {:ok, root} <- skills_root(scope, cwd) do
+          dispatch(action, name, params, scope, root, cwd)
+        end
       end
-    end
+
+    emit_skill_write(result, params, tool_call_id, cwd, telemetry_context)
+    result
   end
 
   defp dispatch("create", name, params, scope, root, cwd) do
@@ -167,6 +195,7 @@ defmodule LemonSkills.Tools.SkillManage do
 
   defp dispatch("delete", name, _params, scope, root, cwd) do
     with {:ok, dir} <- existing_skill_dir(root, name),
+         :ok <- reject_pinned(name, scope, cwd, "delete"),
          {:ok, _} <- File.rm_rf(dir),
          :ok <- refresh_registry(scope, cwd) do
       ok("Skill '#{name}' deleted.", %{action: "delete", path: dir})
@@ -214,9 +243,58 @@ defmodule LemonSkills.Tools.SkillManage do
     end
   end
 
+  defp dispatch("pin", name, _params, scope, root, cwd) do
+    with {:ok, dir} <- existing_skill_dir(root, name),
+         :ok <- LemonSkills.Usage.set_state(name, :pinned, usage_opts(scope, cwd)) do
+      ok("Skill '#{name}' pinned.", %{
+        action: "pin",
+        path: dir,
+        lifecycle_state: "pinned"
+      })
+    end
+  end
+
+  defp dispatch("unpin", name, _params, scope, root, cwd) do
+    with {:ok, dir} <- existing_skill_dir(root, name),
+         :ok <- LemonSkills.Usage.set_state(name, :active, usage_opts(scope, cwd)) do
+      ok("Skill '#{name}' unpinned.", %{
+        action: "unpin",
+        path: dir,
+        lifecycle_state: "active"
+      })
+    end
+  end
+
+  defp dispatch("archive", name, _params, scope, root, cwd) do
+    with {:ok, dir} <- existing_skill_dir(root, name),
+         :ok <- reject_pinned(name, scope, cwd, "archive"),
+         :ok <- LemonSkills.Usage.set_state(name, :archived, usage_opts(scope, cwd)),
+         :ok <- LemonSkills.Config.disable(name, global: scope == :global, cwd: cwd),
+         :ok <- refresh_registry(scope, cwd) do
+      ok("Skill '#{name}' archived.", %{
+        action: "archive",
+        path: dir,
+        lifecycle_state: "archived"
+      })
+    end
+  end
+
+  defp dispatch("restore", name, _params, scope, root, cwd) do
+    with {:ok, dir} <- existing_skill_dir(root, name),
+         :ok <- LemonSkills.Usage.set_state(name, :active, usage_opts(scope, cwd)),
+         :ok <- LemonSkills.Config.enable(name, global: scope == :global, cwd: cwd),
+         :ok <- refresh_registry(scope, cwd) do
+      ok("Skill '#{name}' restored.", %{
+        action: "restore",
+        path: dir,
+        lifecycle_state: "active"
+      })
+    end
+  end
+
   defp dispatch(action, _name, _params, _scope, _root, _cwd) do
     {:error,
-     "Unknown action '#{action}'. Use create, edit, patch, delete, write_file, or remove_file."}
+     "Unknown action '#{action}'. Use create, edit, patch, delete, write_file, remove_file, pin, unpin, archive, or restore."}
   end
 
   defp required_string(params, key, opts \\ []) do
@@ -411,6 +489,17 @@ defmodule LemonSkills.Tools.SkillManage do
   defp audit_scope(:global, _cwd), do: :global
   defp audit_scope(:project, cwd), do: {:project, cwd}
 
+  defp usage_opts(:global, _cwd), do: [scope: :global]
+  defp usage_opts(:project, cwd), do: [scope: :project, cwd: cwd]
+
+  defp reject_pinned(name, scope, cwd, action) do
+    if LemonSkills.Usage.pinned?(name, usage_opts(scope, cwd)) do
+      {:error, "Skill '#{name}' is pinned; unpin it before #{action}."}
+    else
+      :ok
+    end
+  end
+
   defp summarize_audit(audit) do
     %{
       status: Atom.to_string(BundleAudit.audit_status(audit)),
@@ -526,6 +615,56 @@ defmodule LemonSkills.Tools.SkillManage do
     %AgentToolResult{
       content: [%TextContent{text: message}],
       details: details
+    }
+  end
+
+  defp emit_skill_write(
+         %AgentToolResult{details: details},
+         params,
+         tool_call_id,
+         cwd,
+         telemetry_context
+       ) do
+    %{
+      result: :ok,
+      action: details[:action] || Map.get(params, "action"),
+      name: Map.get(params, "name"),
+      scope: Map.get(params, "scope", "project"),
+      path: details[:path],
+      file_path: details[:file_path],
+      audit_status: get_in(details, [:audit, :status]),
+      lifecycle_state: details[:lifecycle_state],
+      replacements: details[:replacements],
+      tool_call_id: tool_call_id,
+      cwd: cwd
+    }
+    |> Map.merge(telemetry_context)
+    |> LemonSkills.Telemetry.skill_write()
+  end
+
+  defp emit_skill_write({:error, reason}, params, tool_call_id, cwd, telemetry_context) do
+    %{
+      result: :error,
+      action: Map.get(params, "action"),
+      name: Map.get(params, "name"),
+      scope: Map.get(params, "scope", "project"),
+      file_path: Map.get(params, "file_path"),
+      reason: reason,
+      tool_call_id: tool_call_id,
+      cwd: cwd
+    }
+    |> Map.merge(telemetry_context)
+    |> LemonSkills.Telemetry.skill_write()
+  end
+
+  defp emit_skill_write(_result, _params, _tool_call_id, _cwd, _telemetry_context), do: :ok
+
+  defp telemetry_context(opts) do
+    %{
+      run_id: Keyword.get(opts, :run_id),
+      session_key: Keyword.get(opts, :session_key),
+      session_id: Keyword.get(opts, :session_id),
+      agent_id: Keyword.get(opts, :agent_id)
     }
   end
 end

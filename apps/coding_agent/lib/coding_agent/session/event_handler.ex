@@ -98,6 +98,7 @@ defmodule CodingAgent.Session.EventHandler do
   def handle({:agent_end, messages}, state, callbacks) do
     # Execute on_agent_end hooks
     Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
+    maybe_record_missed_skills(state, messages)
 
     # Clear working message and steering queue
     callbacks.set_working_message.(state, nil)
@@ -133,4 +134,71 @@ defmodule CodingAgent.Session.EventHandler do
   def handle(_event, state, _callbacks) do
     state
   end
+
+  defp maybe_record_missed_skills(state, messages) do
+    relevant_keys = extract_relevant_skill_keys(Map.get(state, :system_prompt, ""))
+    loaded_keys = extract_loaded_skill_keys(messages)
+    missed_keys = relevant_keys -- loaded_keys
+
+    if missed_keys != [] do
+      Introspection.record(
+        :missed_skill_observed,
+        %{
+          missed_skill_keys: missed_keys,
+          loaded_skill_keys: loaded_keys
+        },
+        session_key: session_key(state),
+        agent_id: agent_id(state),
+        engine: "lemon",
+        provenance: :inferred
+      )
+    end
+  end
+
+  defp extract_relevant_skill_keys(prompt) when is_binary(prompt) do
+    ~r/<relevant-skills>(.*?)<\/relevant-skills>/s
+    |> Regex.scan(prompt, capture: :all_but_first)
+    |> Enum.flat_map(fn [block] ->
+      ~r/<key>\s*([^<]+?)\s*<\/key>/
+      |> Regex.scan(block, capture: :all_but_first)
+      |> List.flatten()
+    end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp extract_relevant_skill_keys(_prompt), do: []
+
+  defp extract_loaded_skill_keys(messages) when is_list(messages) do
+    messages
+    |> Enum.filter(&read_skill_result?/1)
+    |> Enum.map(&skill_key_from_result/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp extract_loaded_skill_keys(_messages), do: []
+
+  defp read_skill_result?(%Ai.Types.ToolResultMessage{tool_name: "read_skill"}), do: true
+  defp read_skill_result?(%{tool_name: "read_skill"}), do: true
+  defp read_skill_result?(%{"tool_name" => "read_skill"}), do: true
+  defp read_skill_result?(_message), do: false
+
+  defp skill_key_from_result(%Ai.Types.ToolResultMessage{details: details}),
+    do: skill_key_from_details(details)
+
+  defp skill_key_from_result(%{details: details}), do: skill_key_from_details(details)
+  defp skill_key_from_result(%{"details" => details}), do: skill_key_from_details(details)
+
+  defp skill_key_from_details(%{key: key}) when is_binary(key), do: key
+  defp skill_key_from_details(%{"key" => key}) when is_binary(key), do: key
+  defp skill_key_from_details(_details), do: nil
+
+  defp session_key(%{session_manager: %{header: %{id: id}}}) when is_binary(id), do: id
+  defp session_key(%{session_key: id}) when is_binary(id), do: id
+  defp session_key(_state), do: nil
+
+  defp agent_id(%{agent_id: id}) when is_binary(id), do: id
+  defp agent_id(_state), do: "default"
 end

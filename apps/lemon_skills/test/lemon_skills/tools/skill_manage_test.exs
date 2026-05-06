@@ -1,6 +1,7 @@
 defmodule LemonSkills.Tools.SkillManageTest do
   use ExUnit.Case, async: false
 
+  alias LemonCore.{Introspection, Store}
   alias LemonSkills.Tools.SkillManage
 
   @moduletag :tmp_dir
@@ -8,6 +9,25 @@ defmodule LemonSkills.Tools.SkillManageTest do
   defp execute(tmp_dir, params) do
     tool = SkillManage.tool(cwd: tmp_dir)
     tool.execute.("call-1", params, nil, nil)
+  end
+
+  def handle_telemetry(event_name, measurements, metadata, pid) do
+    send(pid, {:telemetry_event, event_name, measurements, metadata})
+  end
+
+  defp attach_handler(event_names) do
+    handler_id = "skill-manage-telemetry-#{System.unique_integer([:positive, :monotonic])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        event_names,
+        &__MODULE__.handle_telemetry/4,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   defp valid_skill(name \\ "Learned Workflow") do
@@ -24,6 +44,126 @@ defmodule LemonSkills.Tools.SkillManageTest do
   end
 
   describe "create" do
+    test "emits skill write telemetry for successful writes", %{tmp_dir: tmp_dir} do
+      enable_introspection()
+      attach_handler([[:lemon_skills, :skill, :write]])
+      run_id = "run_skill_write_#{System.unique_integer([:positive, :monotonic])}"
+
+      tool =
+        SkillManage.tool(
+          cwd: tmp_dir,
+          run_id: run_id,
+          session_key: "session-write",
+          session_id: "session-write",
+          agent_id: "agent-write"
+        )
+
+      result =
+        tool.execute.(
+          "call-write-telemetry",
+          %{
+            "action" => "create",
+            "name" => "telemetry-write",
+            "content" => valid_skill("Telemetry Write")
+          },
+          nil,
+          nil
+        )
+
+      assert result.details.action == "create"
+
+      path = result.details.path
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :write],
+                      %{count: 1, system_time: system_time},
+                      %{
+                        result: "ok",
+                        action: "create",
+                        name: "telemetry-write",
+                        scope: "project",
+                        path: ^path,
+                        audit_status: "pass",
+                        tool_call_id: "call-write-telemetry",
+                        run_id: ^run_id,
+                        session_key: "session-write",
+                        session_id: "session-write",
+                        agent_id: "agent-write",
+                        cwd: ^tmp_dir
+                      }}
+
+      assert is_integer(system_time)
+
+      event =
+        eventually(fn ->
+          Introspection.list(run_id: run_id, event_type: :skill_write_observed, limit: 10)
+          |> Enum.find(&(&1.payload[:name] == "telemetry-write"))
+        end)
+
+      assert event.session_key == "session-write"
+      assert event.agent_id == "agent-write"
+      assert event.payload.result == "ok"
+      assert event.payload.action == "create"
+      refute Map.has_key?(event.payload, :session_key)
+
+      usage = LemonSkills.usage("telemetry-write", scope: :project, cwd: tmp_dir)
+      assert usage["write_count"] == 1
+      assert usage["created_by_agent_id"] == "agent-write"
+    end
+
+    test "emits skill write telemetry for direct tool calls", %{tmp_dir: tmp_dir} do
+      attach_handler([[:lemon_skills, :skill, :write]])
+
+      result =
+        execute(tmp_dir, %{
+          "action" => "create",
+          "name" => "direct-telemetry-write",
+          "content" => valid_skill("Direct Telemetry Write")
+        })
+
+      path = result.details.path
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :write],
+                      %{count: 1, system_time: system_time},
+                      %{
+                        result: "ok",
+                        action: "create",
+                        name: "direct-telemetry-write",
+                        scope: "project",
+                        path: ^path,
+                        audit_status: "pass",
+                        tool_call_id: "call-1",
+                        cwd: ^tmp_dir
+                      }}
+
+      assert is_integer(system_time)
+    end
+
+    test "emits skill write telemetry for rejected writes", %{tmp_dir: tmp_dir} do
+      attach_handler([[:lemon_skills, :skill, :write]])
+
+      assert {:error, message} =
+               execute(tmp_dir, %{
+                 "action" => "create",
+                 "name" => "bad-skill",
+                 "content" => "# Missing frontmatter"
+               })
+
+      assert message =~ "frontmatter"
+
+      assert_receive {:telemetry_event, [:lemon_skills, :skill, :write], %{count: 1},
+                      %{
+                        result: "error",
+                        action: "create",
+                        name: "bad-skill",
+                        scope: "project",
+                        reason: reason,
+                        tool_call_id: "call-1",
+                        cwd: ^tmp_dir
+                      }}
+
+      assert reason =~ "frontmatter"
+    end
+
     test "creates a project skill and refreshes the registry", %{tmp_dir: tmp_dir} do
       result =
         execute(tmp_dir, %{
@@ -39,6 +179,56 @@ defmodule LemonSkills.Tools.SkillManageTest do
       assert File.regular?(Path.join(skill_dir, "SKILL.md"))
       assert {:ok, entry} = LemonSkills.Registry.get("learned-workflow", cwd: tmp_dir)
       assert entry.name == "Learned Workflow"
+    end
+
+    test "pins, protects, archives, and restores a skill", %{tmp_dir: tmp_dir} do
+      execute(tmp_dir, %{
+        "action" => "create",
+        "name" => "curated-skill",
+        "content" => valid_skill("Curated Skill")
+      })
+
+      pin_result =
+        execute(tmp_dir, %{
+          "action" => "pin",
+          "name" => "curated-skill"
+        })
+
+      assert pin_result.details.lifecycle_state == "pinned"
+      assert LemonSkills.Usage.pinned?("curated-skill", scope: :project, cwd: tmp_dir)
+
+      assert {:error, message} =
+               execute(tmp_dir, %{
+                 "action" => "archive",
+                 "name" => "curated-skill"
+               })
+
+      assert message =~ "is pinned"
+
+      execute(tmp_dir, %{
+        "action" => "unpin",
+        "name" => "curated-skill"
+      })
+
+      archive_result =
+        execute(tmp_dir, %{
+          "action" => "archive",
+          "name" => "curated-skill"
+        })
+
+      assert archive_result.details.lifecycle_state == "archived"
+      assert LemonSkills.Usage.archived?("curated-skill", scope: :project, cwd: tmp_dir)
+      assert LemonSkills.Config.skill_disabled?("curated-skill", tmp_dir)
+
+      restore_result =
+        execute(tmp_dir, %{
+          "action" => "restore",
+          "name" => "curated-skill"
+        })
+
+      assert restore_result.details.lifecycle_state == "active"
+      refute LemonSkills.Config.skill_disabled?("curated-skill", tmp_dir)
+      assert {:ok, _entry} = LemonSkills.Registry.get("curated-skill", cwd: tmp_dir)
     end
 
     test "rejects invalid frontmatter before writing", %{tmp_dir: tmp_dir} do
@@ -257,4 +447,30 @@ defmodule LemonSkills.Tools.SkillManageTest do
       assert File.exists?(outside_file)
     end
   end
+
+  defp enable_introspection do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
+    previous = Application.get_env(:lemon_core, :introspection, [])
+    Application.put_env(:lemon_core, :introspection, Keyword.put(previous, :enabled, true))
+    on_exit(fn -> Application.put_env(:lemon_core, :introspection, previous) end)
+  end
+
+  defp eventually(fun, attempts \\ 20)
+
+  defp eventually(fun, attempts) when attempts > 0 do
+    case fun.() do
+      nil ->
+        Process.sleep(10)
+        eventually(fun, attempts - 1)
+
+      value ->
+        value
+    end
+  end
+
+  defp eventually(fun, 0), do: flunk("expected condition to become true, got: #{inspect(fun.())}")
 end

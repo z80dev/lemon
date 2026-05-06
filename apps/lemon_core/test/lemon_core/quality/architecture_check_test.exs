@@ -87,8 +87,8 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       refute :lemon_gateway in target.lemon_router
       refute :lemon_gateway in current.lemon_router
+      refute :lemon_gateway in current.lemon_control_plane
 
-      assert :lemon_channels in current.lemon_gateway
       assert :lemon_automation in current.lemon_gateway
       assert :ai in current.lemon_gateway
 
@@ -101,11 +101,11 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
   end
 
   describe "target dependency drift" do
-    test "tracks target drift independently from current enforcement" do
+    test "current repository has converged to the target dependency policy" do
       assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
       assert report.issue_count == 0
-      assert is_integer(report.target_drift_count)
-      assert is_list(report.target_dependency_drifts)
+      assert report.target_dependency_drifts == []
+      assert report.target_drift_count == 0
     end
 
     test "does not turn target-only drift into current policy issues" do

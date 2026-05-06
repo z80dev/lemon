@@ -26,6 +26,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/audit/engine.ex` | Deterministic skill security audit; merges static checks with optional LLM review | Changing audit behavior or verdict handling |
 | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed audit reviewer for suspicious/malicious skill content | Changing LLM audit prompts, model resolution, or parsing |
 | `lib/lemon_skills/audit/state.ex` | Reads/writes persisted bundle audit state per scope | Changing audit cache storage or state schema |
+| `lib/lemon_skills/usage.ex` | Persists skill usage counters, agent-authored provenance, and curation state (`active`/`stale`/`archived`/`pinned`) | Changing skill curation, pin/archive behavior, or usage analytics |
 | `lib/lemon_skills/builtin_seeder.ex` | Copies `priv/builtin_skills/` to `~/.lemon/agent/skill/` on startup (idempotent) | Adding/modifying bundled skills |
 | `lib/lemon_skills/discovery.ex` | GitHub topic search + registry URL probing for online skill discovery | Changing online discovery sources |
 
@@ -37,6 +38,8 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/tools/skill_manage.ex` | `skill_manage` | Creates, edits, patches, deletes, and audits local skills |
 | `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
 | `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |
+
+`read_skill` emits `[:lemon_skills, :skill, :load]` telemetry for successful and missing skill loads. `skill_manage` emits `[:lemon_skills, :skill, :write]` telemetry for accepted and rejected write attempts. These events include `tool_call_id` plus session metadata when available, exclude skill body/supporting-file content, update `LemonSkills.Usage`, and are projected into introspection as `:skill_load_observed` / `:skill_write_observed`.
 
 ### Infrastructure
 
@@ -161,6 +164,15 @@ Detailed audit state is stored outside the lockfile:
 
 `skills.lock.json` still carries the high-level provenance fields used by the registry (`content_hash`, `bundle_hash`, `audit_status`, etc.), but detailed cached findings live in the audit-state file.
 
+### Usage and Curation State
+
+Skill loads and writes update a sidecar usage file outside `SKILL.md`:
+
+- global: `~/.lemon/agent/skills.usage.json`
+- project: `<cwd>/.lemon/skills.usage.json`
+
+The sidecar stores load/write counters, last-use metadata, agent-authored creation provenance, and lifecycle state. `skill_manage` supports `pin`, `unpin`, `archive`, and `restore`; pinned skills cannot be archived or deleted until unpinned, and archived project/global skills are disabled through `skills.json` so relevance selection stops surfacing them.
+
 ### HTTP Client Injection
 
 `LemonSkills.HttpClient` is a behaviour. The default `Httpc` module uses Erlang `:httpc`. In tests, it is replaced with `LemonSkills.HttpClient.Mock` via `config :lemon_skills, :http_client, MockModule`.
@@ -269,7 +281,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
 | App | What LemonSkills uses from it |
 |-----|-------------------------------|
-| `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer; `LemonCore.Secrets` for GitHub token resolution in Discovery |
+| `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer; `LemonCore.Secrets` for GitHub token resolution in Discovery; `LemonCore.Telemetry` for skill load/write events |
 | `agent_core` | `AgentCore.Types.AgentTool` and `AgentCore.Types.AgentToolResult` structs for tool definitions |
 | `ai` | `Ai.Types.TextContent` struct for tool result content |
 | `lemon_channels` | `LemonChannels.Adapters.XAPI` for X API integration (post_to_x, get_x_mentions tools) |

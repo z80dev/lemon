@@ -35,7 +35,7 @@ defmodule LemonSkills do
   - `LemonSkills.Config` - Configuration paths and settings
   """
 
-  alias LemonSkills.{Registry, Entry, Status, Installer, Config}
+  alias LemonSkills.{Registry, Entry, Status, Installer, Config, Usage}
 
   # ============================================================================
   # Registry Operations
@@ -259,4 +259,10 @@ defmodule LemonSkills do
   """
   @spec find_relevant(String.t(), keyword()) :: [Entry.t()]
   defdelegate find_relevant(context, opts \\ []), to: Registry
+
+  @doc """
+  Return persisted usage and curation metadata for a skill.
+  """
+  @spec usage(String.t(), keyword()) :: map()
+  defdelegate usage(key, opts \\ []), to: Usage, as: :get
 end

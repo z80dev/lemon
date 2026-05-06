@@ -464,7 +464,6 @@ assert completed.ok == true
 | `agent_core` | `AgentCore.CliRunners.*` (ClaudeRunner, CodexRunner, etc.), `AgentCore.EventStream`, `AgentCore.Types.*` |
 | `coding_agent` | `CodingAgent.CliRunners.LemonRunner` (native engine), `CodingAgent.Session`, `CodingAgent.Config` |
 | `lemon_core` | `LemonCore.Store` (chat state, runs, progress), `LemonCore.Bus` (event broadcast), `LemonCore.Telemetry`, `LemonCore.ResumeToken`, `LemonCore.ChatScope`, `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Secrets`, `LemonCore.GatewayConfig`, `LemonCore.Introspection`, `LemonCore.Event` |
-| `lemon_channels` | Compile-time only (`runtime: false`). Telegram/Discord/XMTP adapters are implemented there but consume gateway bus events. |
 
 ### Dependents (apps that depend on this)
 
@@ -566,7 +565,7 @@ Emitted via `LemonCore.Telemetry`:
 ### Umbrella Apps
 - `agent_core` -- CLI runner infrastructure, tool types, event stream
 - `coding_agent` -- Native Lemon engine runner, session management
-- `lemon_channels` -- Telegram/Discord/XMTP adapters (compile-time dep, `runtime: false`)
+- `lemon_channels` -- Telegram/Discord/XMTP adapters live there and consume gateway bus events; LemonGateway must not depend on it directly. Optional health checks that inspect channel-owned processes must use runtime lookup/custom checks rather than compile-time references.
 - `lemon_core` -- Store, Bus, Telemetry, types, secrets, config loading
 
 ### External Libraries

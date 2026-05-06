@@ -9,6 +9,23 @@ import { ErrorBar } from './ErrorBar.js';
 
 function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
 
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(10);
+    }
+  }
+
+  throw lastError;
+}
+
 describe('ErrorBar', () => {
   it('should render nothing when there is no error', () => {
     const store = createTestStore();
@@ -50,8 +67,7 @@ describe('ErrorBar', () => {
     expect(lastFrame()).toContain('First error');
 
     store.setError('Second error');
-    await delay(10);
-    expect(lastFrame()).toContain('Second error');
+    await waitFor(() => expect(lastFrame()).toContain('Second error'));
   });
 
   it('should auto-dismiss after long timeout', async () => {

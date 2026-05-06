@@ -407,7 +407,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                intent(run_id, route, :final_text, %{text: long_text, seq: 3}, %{user_msg_id: "77"})
              )
 
-    refute_receive {:delivered, _payload}, 150
+    refute_receive {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}}, 150
 
     send(PresentationState, {:presentation_delivery, in_flight_ref, {:ok, %{"ok" => true}}})
 

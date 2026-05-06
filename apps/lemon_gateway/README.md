@@ -463,7 +463,6 @@ Custom health checks can be registered via the `:health_checks` application envi
 |-----|---------|
 | `agent_core` | CLI runner infrastructure, tool types (`AgentTool`, `AgentToolResult`), event stream |
 | `coding_agent` | Native Lemon AI engine (`CodingAgent.CliRunners.LemonRunner`, `CodingAgent.Session`) |
-| `lemon_channels` | Telegram, Discord, XMTP adapters (compile-time only dependency, runtime: false) |
 | `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
 
 ### External Libraries

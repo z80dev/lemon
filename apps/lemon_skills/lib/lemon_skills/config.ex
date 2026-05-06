@@ -67,6 +67,7 @@ defmodule LemonSkills.Config do
   """
 
   @skills_config_filename "skills.json"
+  @skills_usage_filename "skills.usage.json"
 
   @typedoc "MCP server configuration type"
   @type mcp_server_config ::
@@ -278,6 +279,14 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get the global skills usage/curation sidecar path.
+  """
+  @spec global_usage_file() :: String.t()
+  def global_usage_file do
+    Path.join(agent_dir(), @skills_usage_filename)
+  end
+
+  @doc """
   Get the project skills configuration file path.
 
   ## Parameters
@@ -287,6 +296,14 @@ defmodule LemonSkills.Config do
   @spec project_config_file(String.t()) :: String.t()
   def project_config_file(cwd) do
     Path.join([cwd, ".lemon", @skills_config_filename])
+  end
+
+  @doc """
+  Get the project skills usage/curation sidecar path.
+  """
+  @spec project_usage_file(String.t()) :: String.t()
+  def project_usage_file(cwd) do
+    Path.join([cwd, ".lemon", @skills_usage_filename])
   end
 
   @doc """
