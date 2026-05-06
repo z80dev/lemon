@@ -199,6 +199,33 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.message =~ "First top-level error array message"
     end
 
+    test "handles OAuth-style error descriptions" do
+      body = %{
+        "error" => "invalid_request",
+        "error_description" => "Missing authorization header"
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "invalid_request: Missing authorization header"
+      assert result.message =~ "Missing authorization header"
+    end
+
+    test "handles nested provider error descriptions" do
+      body = %{
+        "error" => %{
+          "details" => %{
+            "error_description" => "Nested provider description"
+          }
+        }
+      }
+
+      result = Error.parse_http_error(500, body, [])
+
+      assert result.provider_message == "Nested provider description"
+      assert result.message =~ "Nested provider description"
+    end
+
     test "handles nested provider details arrays" do
       body = %{
         "error" => %{

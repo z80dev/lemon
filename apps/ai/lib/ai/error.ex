@@ -473,6 +473,11 @@ defmodule Ai.Error do
        when is_binary(details) or is_list(details),
        do: extract_detail_message(details)
 
+  defp extract_provider_message(%{"error" => code, "error_description" => description})
+       when is_binary(code) and is_binary(description) do
+    "#{code}: #{description}"
+  end
+
   # Generic error formats
   defp extract_provider_message(%{"error" => error}) when is_binary(error), do: error
 
@@ -496,6 +501,12 @@ defmodule Ai.Error do
   # Direct message fields
   defp extract_provider_message(%{"message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"Message" => message}) when is_binary(message), do: message
+
+  defp extract_provider_message(%{"error_description" => message}) when is_binary(message),
+    do: message
+
+  defp extract_provider_message(%{"error_message" => message}) when is_binary(message),
+    do: message
 
   defp extract_provider_message(%{"detail" => detail})
        when is_binary(detail) or is_list(detail) or is_map(detail),
@@ -552,6 +563,8 @@ defmodule Ai.Error do
   defp direct_message(%{"message" => message}) when is_binary(message), do: message
   defp direct_message(%{"msg" => message}) when is_binary(message), do: message
   defp direct_message(%{"reason" => message}) when is_binary(message), do: message
+  defp direct_message(%{"error_description" => message}) when is_binary(message), do: message
+  defp direct_message(%{"error_message" => message}) when is_binary(message), do: message
   defp direct_message(_), do: nil
 
   defp normalize_error_body(body) when is_binary(body) do
