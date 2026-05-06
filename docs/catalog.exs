@@ -174,6 +174,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/security/agent-safety-contract.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-06],
+    max_age_days: 60
+  },
+  %{
     path: "docs/contributor/ownership.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],

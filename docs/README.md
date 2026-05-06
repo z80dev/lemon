@@ -41,6 +41,7 @@
 | [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
+| [security/agent-safety-contract.md](security/agent-safety-contract.md) | Agent safety layers: tool policies, approvals, memory screening, skill audits, telemetry |
 
 ## Runtime Core
 
