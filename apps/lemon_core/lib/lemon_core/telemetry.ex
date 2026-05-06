@@ -33,12 +33,21 @@ defmodule LemonCore.Telemetry do
     meta: `%{run_id, session_key, agent_id}`. Emitted after each successful ingest.
   - `[:lemon, :memory, :ingest, :failure]` - measurements: `%{count: 1, duration_us: integer()}`,
     meta: `%{run_id, error}`. Emitted when an ingest fails (after catching the exception).
+
+  ### Skills
+  - `[:lemon_skills, :skill, :load]` - measurements: `%{count: 1, system_time: integer()}`,
+    meta includes `result`, `key`, `view`, `tool_call_id`, `session_key`, and redacted skill metadata when available.
+    Projected to introspection as `:skill_load_observed`.
+  - `[:lemon_skills, :skill, :write]` - measurements: `%{count: 1, system_time: integer()}`,
+    meta includes `result`, `action`, `name`, `scope`, `tool_call_id`, `session_key`, and redacted write metadata.
+    Projected to introspection as `:skill_write_observed`.
   """
 
   @doc """
   Execute a function and emit start/stop/exception telemetry.
   """
-  @spec span(event_prefix :: [atom()], metadata :: map(), fun :: (-> result)) :: result when result: term()
+  @spec span(event_prefix :: [atom()], metadata :: map(), fun :: (-> result)) :: result
+        when result: term()
   def span(event_prefix, metadata, fun) do
     :telemetry.span(event_prefix, metadata, fn ->
       result = fun.()
@@ -73,7 +82,11 @@ defmodule LemonCore.Telemetry do
   """
   @spec run_start(run_id :: binary(), metadata :: map()) :: :ok
   def run_start(run_id, metadata \\ %{}) do
-    emit([:lemon, :run, :start], %{ts_ms: LemonCore.Clock.now_ms()}, Map.put(metadata, :run_id, run_id))
+    emit(
+      [:lemon, :run, :start],
+      %{ts_ms: LemonCore.Clock.now_ms()},
+      Map.put(metadata, :run_id, run_id)
+    )
   end
 
   @doc """
@@ -122,10 +135,14 @@ defmodule LemonCore.Telemetry do
   """
   @spec approval_requested(approval_id :: binary(), tool :: binary(), metadata :: map()) :: :ok
   def approval_requested(approval_id, tool, metadata \\ %{}) do
-    emit([:lemon, :approvals, :requested], %{count: 1}, Map.merge(metadata, %{
-      approval_id: approval_id,
-      tool: tool
-    }))
+    emit(
+      [:lemon, :approvals, :requested],
+      %{count: 1},
+      Map.merge(metadata, %{
+        approval_id: approval_id,
+        tool: tool
+      })
+    )
   end
 
   @doc """
@@ -133,10 +150,14 @@ defmodule LemonCore.Telemetry do
   """
   @spec approval_resolved(approval_id :: binary(), decision :: atom(), metadata :: map()) :: :ok
   def approval_resolved(approval_id, decision, metadata \\ %{}) do
-    emit([:lemon, :approvals, :resolved], %{count: 1}, Map.merge(metadata, %{
-      approval_id: approval_id,
-      decision: decision
-    }))
+    emit(
+      [:lemon, :approvals, :resolved],
+      %{count: 1},
+      Map.merge(metadata, %{
+        approval_id: approval_id,
+        decision: decision
+      })
+    )
   end
 
   # Cron events

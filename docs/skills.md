@@ -338,6 +338,22 @@ relevant = LemonSkills.find_relevant(user_query, cwd: cwd, max_results: 3)
 # Skills are automatically injected into the system prompt when relevant
 ```
 
+Agent tool usage emits skill-specific telemetry:
+
+- `read_skill` emits `[:lemon_skills, :skill, :load]` for successful and missing skill loads.
+- `skill_manage` emits `[:lemon_skills, :skill, :write]` for accepted and rejected write attempts.
+
+Both events include `tool_call_id`, include session metadata when built through CodingAgent tool factories, avoid recording skill body content, update `LemonSkills.Usage`, and are persisted into introspection as `:skill_load_observed` / `:skill_write_observed`.
+
+Usage and curation metadata lives outside `SKILL.md`:
+
+| Scope | Sidecar |
+|-------|---------|
+| Global | `~/.lemon/agent/skills.usage.json` |
+| Project | `<cwd>/.lemon/skills.usage.json` |
+
+The sidecar tracks load/write counters, last-use fields, agent-authored creation provenance, and `lifecycle_state` (`active`, `stale`, `archived`, or `pinned`). Agents can use `skill_manage` actions `pin`, `unpin`, `archive`, and `restore` for curation. Pinned skills are protected from delete/archive operations; archived skills are disabled through the normal `skills.json` mechanism.
+
 ## Project vs Global Skills
 
 | Aspect | Project Skills | Global Skills |

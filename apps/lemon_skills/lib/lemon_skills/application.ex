@@ -11,6 +11,7 @@ defmodule LemonSkills.Application do
     LemonSkills.BuiltinSeeder.seed!()
     # Back-fill lockfile provenance for any pre-existing installs.
     LemonSkills.Migrator.migrate()
+    LemonSkills.Telemetry.attach_introspection_bridge()
 
     children = [
       LemonSkills.Registry,

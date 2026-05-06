@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, and fourth slice adds an audited agent-facing skill authoring tool.
+Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, fourth slice adds an audited agent-facing skill authoring tool, fifth slice adds redacted skill load/write telemetry, sixth slice adds usage counters plus pin/archive curation state, and seventh slice audits missed relevant-skill loads.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded.
 
 ## Capability scorecard
 
@@ -56,11 +56,14 @@ The first code slice from this scorecard made `read_skill` available in the defa
   - Native session prompt refresh passes the current user prompt into relevance scoring and renders concise `<relevant-skills>` hints per turn.
   - `read_skill` can read full content, summaries, sections, and linked files.
   - `skill_manage` can create, edit, patch, delete, and maintain audited project/global skills and supporting files.
+  - `read_skill` and `skill_manage` emit redacted load/write telemetry with tool-call and session correlation fields, then project it into introspection events.
+  - `LemonSkills.Usage` persists load/write counters, agent-authored creation provenance, and curation state.
+  - `skill_manage` can pin/unpin/archive/restore skills; pinned skills are protected from archive/delete, and archived skills are disabled.
+  - Session end audits record `:missed_skill_observed` when `<relevant-skills>` hints were not loaded with `read_skill`.
   - Install/update audit gates exist.
 - Gaps:
-  - Missed-skill detection is not yet audited as a run outcome.
-  - Skill authoring now exists but lacks Hermes-style usage telemetry, curation lifecycle, and pin/archive workflows.
-  - Per-turn relevant-skill hints are guided, but not yet enforced through observed tool-call telemetry.
+  - Skill curation exists, but there is no automated stale-skill review or curator loop yet.
+  - Missed-skill detection is observable, but there is not yet a behavioral eval that drives a real model trace through the contract.
 - Priority: high.
 - Acceptance tests:
   - Native Lemon default tools include `read_skill`.
@@ -218,12 +221,31 @@ The first code slice from this scorecard made `read_skill` available in the defa
 2. Wrapped `skill_manage` into the default CodingAgent tool surface, builtin registry, minimal-core policy, and harness contract.
 3. Treated `skill_manage` as dangerous in safe/subagent-restricted profiles and documented audited write behavior.
 
+### Slice 5: Skill load/write telemetry
+
+1. Added `LemonSkills.Telemetry` and emitted `[:lemon_skills, :skill, :load]` from `read_skill` for found and missing skill requests.
+2. Emitted `[:lemon_skills, :skill, :write]` from `skill_manage` for accepted and rejected write attempts without recording skill bodies, patch strings, or supporting-file contents.
+3. Threaded CodingAgent `session_key`, `session_id`, `agent_id`, and optional `run_id` tool options into those events when available.
+4. Projected the telemetry into `:skill_load_observed` and `:skill_write_observed` introspection events.
+5. Documented event fields and added regression tests for successful/missing loads, successful/rejected writes, and introspection projection.
+
+### Slice 6: Skill usage and curation state
+
+1. Added `LemonSkills.Usage` sidecars for global and project usage metadata.
+2. Recorded load/write counters, last-use metadata, and agent-authored creation provenance from skill telemetry.
+3. Extended `skill_manage` with `pin`, `unpin`, `archive`, and `restore`; archived skills use the existing disabled-skill config, and pinned skills must be unpinned before archive/delete.
+4. Added regression tests for usage counters, provenance, curation state, and archived-skill restore behavior.
+
+### Slice 7: Missed relevant-skill audit
+
+1. Added a session-end audit that parses `<relevant-skills>` from the current prompt and compares those keys with observed `read_skill` tool results.
+2. Persisted `:missed_skill_observed` introspection events for relevant skills that were not loaded.
+3. Documented the event so operators can query missed skill usage.
+
 ## Follow-up backlog
 
-1. Add skill-load telemetry fields to run events or session metadata.
-2. Add skill-write and skill-load telemetry fields to run events or session metadata.
-3. Add missed-skill audit warnings based on `LemonSkills.find_relevant/2` and observed tool calls.
-4. Add Hermes-style skill curation lifecycle: usage counters, stale/archive/pinned states, and agent-authored provenance.
-5. Clarify memory/session-search/skills/todos in docs and prompt text.
-6. Add cron parity scorecard and scheduled job prompt validation.
-7. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, reusable workflow → `skill_manage`, async task receipt → `join` before final answer.
+1. Thread native Lemon run identifiers into tool options so persisted skill introspection can be queried by run as well as session.
+2. Add automated stale-skill review/curator prompts using `LemonSkills.Usage` lifecycle state.
+3. Clarify memory/session-search/skills/todos in docs and prompt text.
+4. Add cron parity scorecard and scheduled job prompt validation.
+5. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, reusable workflow → `skill_manage`, async task receipt → `join` before final answer.

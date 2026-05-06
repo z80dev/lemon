@@ -240,6 +240,77 @@ Emitted when a tool result message is appended to context.
 
 `trust` comes from tool result trust normalization in the tool-call loop. Only `:untrusted` is emitted as untrusted; all other values are emitted as `:trusted`.
 
+## LemonSkills Events
+
+These events record skill lifecycle decisions with redacted metadata. They include `tool_call_id` so operators can correlate them with `[:agent_core, :tool_task, ...]` and `[:agent_core, :tool_result, :emit]` events for the same tool invocation. When the tool is built through the CodingAgent tool factories, they also include `session_key`, `session_id`, and `agent_id`.
+
+LemonSkills also attaches an introspection bridge on application start. The bridge persists `[:lemon_skills, :skill, :load]` as `:skill_load_observed` and `[:lemon_skills, :skill, :write]` as `:skill_write_observed`, lifting `run_id`, `session_key`, and `agent_id` into the canonical introspection envelope when those fields are present. The same bridge updates `LemonSkills.Usage` sidecars for load/write counters and curation metadata.
+
+### Skill Load Events
+
+#### [:lemon_skills, :skill, :load]
+
+Emitted when `read_skill` returns a skill or a not-found result.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `count` | integer | Always 1 |
+| `system_time` | integer | Emit time in native units |
+| **Metadata** | | |
+| `result` | string | `ok` or `not_found` |
+| `key` | string | Requested skill key |
+| `name` | string | Skill display name when found |
+| `source` | string | Skill source when found |
+| `path` | string | Skill directory when found |
+| `view` | string | Requested `read_skill` view |
+| `section` | string | Requested section, when present |
+| `file_path` | string | Requested file path, when present |
+| `include_status` | boolean | Whether status output was requested |
+| `include_manifest` | boolean | Whether manifest output was requested |
+| `tool_call_id` | string | Tool invocation identifier |
+| `run_id` | string | Run identifier, when provided |
+| `session_key` | string | CodingAgent session key, when provided |
+| `session_id` | string | CodingAgent session id, when provided |
+| `agent_id` | string | Agent id, when provided |
+| `cwd` | string | Project working directory, when present |
+
+### Skill Write Events
+
+#### [:lemon_skills, :skill, :write]
+
+Emitted when `skill_manage` accepts or rejects a skill write operation. The event intentionally excludes skill body content, replacement strings, and supporting-file content.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `count` | integer | Always 1 |
+| `system_time` | integer | Emit time in native units |
+| **Metadata** | | |
+| `result` | string | `ok` or `error` |
+| `action` | string | `create`, `edit`, `patch`, `delete`, `write_file`, or `remove_file` |
+| `name` | string | Skill key requested by the agent |
+| `scope` | string | `project` or `global` |
+| `path` | string | Skill directory after a successful write |
+| `file_path` | string | Relative supporting file path, when applicable |
+| `audit_status` | string | Audit verdict for successful audited writes |
+| `replacements` | integer | Number of patch replacements, when applicable |
+| `reason` | string | Truncated rejection reason for failed writes |
+| `tool_call_id` | string | Tool invocation identifier |
+| `run_id` | string | Run identifier, when provided |
+| `session_key` | string | CodingAgent session key, when provided |
+| `session_id` | string | CodingAgent session id, when provided |
+| `agent_id` | string | Agent id, when provided |
+| `cwd` | string | Project working directory, when present |
+
+### Introspection Projection
+
+| Event Type | Source Telemetry | Payload |
+|---|---|---|
+| `:skill_load_observed` | `[:lemon_skills, :skill, :load]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
+| `:skill_write_observed` | `[:lemon_skills, :skill, :write]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
+| `:missed_skill_observed` | Session end audit | `missed_skill_keys` and `loaded_skill_keys` when the prompt surfaced `<relevant-skills>` but the agent did not load them |
+
 ### Context Events
 
 #### [:agent_core, :context, :size]
