@@ -259,7 +259,7 @@ defmodule AgentCore.Loop.ToolCalls do
                 {context, new_messages, results} =
                   emit_tool_result(
                     tool_call,
-                    error_to_result("Tool task crashed: #{inspect(reason)}"),
+                    tool_crash_result(reason),
                     true,
                     context,
                     new_messages,
@@ -748,6 +748,15 @@ defmodule AgentCore.Loop.ToolCalls do
         %TextContent{type: :text, text: "Tool task failed to start: #{inspect(reason)}"}
       ],
       details: %{error_type: :tool_task_start_failed, reason: inspect(reason)}
+    }
+  end
+
+  defp tool_crash_result(reason) do
+    %AgentToolResult{
+      content: [
+        %TextContent{type: :text, text: "Tool task crashed: #{inspect(reason)}"}
+      ],
+      details: %{error_type: :tool_task_crashed, reason: inspect(reason)}
     }
   end
 

@@ -197,6 +197,51 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert Enum.any?(events, &match?({:tool_execution_end, "call_start_failure", _, _, true}, &1))
   end
 
+  test "emits structured error tool_result when tool task process crashes" do
+    crashing_tool = %AgentTool{
+      name: "crashing_tool",
+      description: "Kills its task process",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Crashing",
+      execute: fn _id, _params, _signal, _on_update ->
+        Process.exit(self(), :kill)
+      end
+    }
+
+    context = simple_context(tools: [crashing_tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("crashing_tool", %{}, id: "call_task_crash")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert steering_messages == []
+    assert length(results) == 1
+
+    [tool_result_message] = results
+    assert tool_result_message.role == :tool_result
+    assert tool_result_message.tool_call_id == "call_task_crash"
+    assert tool_result_message.tool_name == "crashing_tool"
+    assert tool_result_message.is_error == true
+    assert tool_result_message.details == %{error_type: :tool_task_crashed, reason: ":killed"}
+
+    assert Enum.any?(tool_result_message.content, fn
+             %TextContent{text: text} -> String.contains?(text, "Tool task crashed: :killed")
+             _ -> false
+           end)
+
+    assert List.last(updated_context.messages).tool_call_id == "call_task_crash"
+    assert List.last(updated_new_messages).tool_call_id == "call_task_crash"
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, &match?({:tool_execution_start, "call_task_crash", _, _}, &1))
+    assert Enum.any?(events, &match?({:tool_execution_end, "call_task_crash", _, _, true}, &1))
+  end
+
   test "respects max_tool_concurrency while executing tool calls" do
     {:ok, counter} = Agent.start_link(fn -> %{current: 0, max: 0} end)
 
