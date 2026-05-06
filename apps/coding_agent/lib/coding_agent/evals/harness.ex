@@ -56,7 +56,8 @@ defmodule CodingAgent.Evals.Harness do
       tool_use_claim_contract_eval(cwd),
       agent_loop_learning_trace_contract_eval(cwd),
       agent_loop_memory_trace_contract_eval(cwd),
-      agent_loop_async_join_trace_contract_eval(cwd)
+      agent_loop_async_join_trace_contract_eval(cwd),
+      agent_loop_parallel_join_trace_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -866,6 +867,76 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("agent_loop_async_join_trace_contract", Exception.message(e), %{})
   end
 
+  @spec agent_loop_parallel_join_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_parallel_join_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        clear_task_state()
+        {:ok, output_counter} = Agent.start_link(fn -> 0 end)
+
+        task_tool =
+          TaskTool.tool(tmp_dir,
+            run_override: fn _on_update, _signal ->
+              output_number = Agent.get_and_update(output_counter, &{&1 + 1, &1 + 1})
+
+              %AgentToolResult{
+                content: [%TextContent{text: "child output #{output_number}"}],
+                details: %{status: "completed"}
+              }
+            end,
+            session_key: "agent:parallel-join-trace-eval:main",
+            agent_id: "parallel-join-trace-eval",
+            parent_run_id: "parent-run-parallel-join-trace"
+          )
+
+        context =
+          AgentContext.new(
+            system_prompt: "Run parallel child research, join all children, then aggregate.",
+            tools: [task_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: parallel_join_stream_fn()
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("Run two child research tasks, then aggregate both results.")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_parallel_tasks_joined(messages),
+             :ok <- assert_final_contains(messages, ["child output 1", "child output 2"]) do
+          %{
+            name: "agent_loop_parallel_join_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_task_tool_result_actions(messages),
+              joined_task_count: 2
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("agent_loop_parallel_join_trace_contract", format_reason(reason), %{})
+        end
+      after
+        clear_task_state()
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_parallel_join_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_parallel_join_trace_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -1378,6 +1449,59 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp assert_final_contains(messages, expected_texts) do
+    final_text =
+      messages
+      |> Enum.reverse()
+      |> Enum.find_value("", fn
+        %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
+        _ -> nil
+      end)
+
+    missing = Enum.reject(expected_texts, &String.contains?(final_text, &1))
+
+    if missing == [] do
+      :ok
+    else
+      {:error, "final answer missing #{inspect(missing)}"}
+    end
+  end
+
+  defp assert_parallel_tasks_joined(messages) do
+    task_results =
+      Enum.filter(messages, &match?(%{role: :tool_result, tool_name: "task"}, &1))
+
+    queued_count =
+      Enum.count(task_results, fn message ->
+        match?(%{status: "queued", task_id: task_id} when is_binary(task_id), message.details)
+      end)
+
+    join_result =
+      Enum.find(task_results, fn
+        %{details: %{mode: "wait_all", tasks: tasks}} when is_list(tasks) -> length(tasks) == 2
+        _ -> false
+      end)
+
+    join_text = if join_result, do: stringify_content(join_result.content), else: ""
+
+    cond do
+      queued_count != 2 ->
+        {:error, "expected two queued task results, got #{inspect(task_results)}"}
+
+      is_nil(join_result) ->
+        {:error, "expected wait_all join result for two tasks"}
+
+      not String.contains?(join_text, "child output 1") ->
+        {:error, "join result missing child output 1"}
+
+      not String.contains?(join_text, "child output 2") ->
+        {:error, "join result missing child output 2"}
+
+      true ->
+        :ok
+    end
+  end
+
   defp trace_task_tool_result_actions(messages) do
     messages
     |> Enum.filter(&match?(%{role: :tool_result, tool_name: "task"}, &1))
@@ -1448,6 +1572,50 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp parallel_join_stream_fn do
+    fn _model, context, _options ->
+      task_ids = queued_task_ids(context.messages)
+
+      cond do
+        task_joined?(context.messages) ->
+          {:ok,
+           response_stream(trace_final_response("Aggregated: child output 1; child output 2"))}
+
+        length(task_ids) >= 2 ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{"action" => "join", "task_ids" => task_ids, "mode" => "wait_all"},
+                 id: "call-task-join-all"
+               )
+             ])
+           )}
+
+        true ->
+          next = length(task_ids) + 1
+
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{
+                   "action" => "run",
+                   "description" => "Child research #{next}",
+                   "prompt" => "Return child output #{next}.",
+                   "async" => true,
+                   "auto_followup" => false
+                 },
+                 id: "call-task-run-#{next}"
+               )
+             ])
+           )}
+      end
+    end
+  end
+
   defp queued_task_id(messages) do
     Enum.find_value(messages, fn
       %{role: :tool_result, tool_name: "task", details: %{status: "queued", task_id: task_id}}
@@ -1456,6 +1624,17 @@ defmodule CodingAgent.Evals.Harness do
 
       _ ->
         nil
+    end)
+  end
+
+  defp queued_task_ids(messages) do
+    Enum.flat_map(messages, fn
+      %{role: :tool_result, tool_name: "task", details: %{status: "queued", task_id: task_id}}
+      when is_binary(task_id) ->
+        [task_id]
+
+      _ ->
+        []
     end)
   end
 

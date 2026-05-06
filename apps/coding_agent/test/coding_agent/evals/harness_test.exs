@@ -20,7 +20,8 @@ defmodule CodingAgent.Evals.HarnessTest do
              "tool_use_claim_contract",
              "agent_loop_learning_trace_contract",
              "agent_loop_memory_trace_contract",
-             "agent_loop_async_join_trace_contract"
+             "agent_loop_async_join_trace_contract",
+             "agent_loop_parallel_join_trace_contract"
            ]
   end
 end
