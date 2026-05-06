@@ -1261,7 +1261,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
     block =
       if provider_tool_id do
-        %{block | id: provider_tool_id}
+        %{block | id: unique_stream_tool_id(state, index, provider_tool_id)}
       else
         block
       end
@@ -1398,7 +1398,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
         new_block = %ToolCall{
           type: :tool_call,
-          id: tool_id,
+          id: unique_stream_tool_id(state, index, tool_id),
           name: normalize_stream_tool_name(func_name),
           arguments: %{},
           thought_signature: nil
@@ -1427,6 +1427,25 @@ defmodule Ai.Providers.OpenAICompletions do
 
   defp provider_stream_tool_id(_id), do: nil
   defp fallback_stream_tool_id(index), do: "call_stream_#{index}"
+
+  defp unique_stream_tool_id(state, index, requested_id) do
+    used_ids =
+      state.tool_call_blocks
+      |> Enum.reject(fn {existing_index, _info} -> existing_index == index end)
+      |> Enum.map(fn {_existing_index, info} -> info.block.id end)
+      |> MapSet.new()
+
+    if MapSet.member?(used_ids, requested_id) do
+      1
+      |> Stream.iterate(&(&1 + 1))
+      |> Enum.find_value(fn suffix ->
+        candidate = "#{requested_id}_#{index}_#{suffix}"
+        if MapSet.member?(used_ids, candidate), do: nil, else: candidate
+      end)
+    else
+      requested_id
+    end
+  end
 
   defp normalize_stream_tool_name(name) when is_binary(name) do
     if String.trim(name) == "", do: @fallback_tool_name, else: name

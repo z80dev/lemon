@@ -964,6 +964,79 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert result.stop_reason == :tool_use
   end
 
+  test "normalizes duplicate streamed tool call ids to unique ids" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "id" => "call_dup",
+                      "type" => "function",
+                      "function" => %{"name" => "tool_a", "arguments" => "{\"foo\":1}"}
+                    },
+                    %{
+                      "index" => 1,
+                      "id" => "call_dup",
+                      "type" => "function",
+                      "function" => %{"name" => "tool_b", "arguments" => "{\"bar\":"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 1,
+                      "id" => "call_dup",
+                      "function" => %{"arguments" => "2}"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{"choices" => [%{"finish_reason" => "tool_calls"}]},
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_completions,
+      provider: :openai,
+      base_url: "https://example.test"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+
+    assert [%ToolCall{} = first, %ToolCall{} = second] = result.content
+    assert first.id == "call_dup"
+    assert first.name == "tool_a"
+    assert first.arguments == %{"foo" => 1}
+
+    assert second.id == "call_dup_1_1"
+    assert second.name == "tool_b"
+    assert second.arguments == %{"bar" => 2}
+    assert result.stop_reason == :tool_use
+  end
+
   test "preserves recoverable truncated streamed tool call arguments" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =
