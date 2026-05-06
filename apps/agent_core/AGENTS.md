@@ -43,7 +43,7 @@ AgentCore.Supervisor (:one_for_one)
 | `lib/agent_core/types.ex` | All core structs: `AgentState`, `AgentContext`, `AgentTool`, `AgentToolResult`, `AgentLoopConfig`. Type union for `agent_event()`. |
 | `lib/agent_core/loop.ex` | Stateless agentic loop. Recursive inner/outer loop: stream LLM response -> execute tools -> check steering -> repeat. Outer loop checks follow-up messages after inner loop exits. |
 | `lib/agent_core/loop/streaming.ex` | Handles the LLM streaming call. Transforms context, converts messages, calls `Ai.stream/3` (or custom `stream_fn`), processes SSE events into `message_start`/`message_update`/`message_end`. |
-| `lib/agent_core/loop/tool_calls.ex` | Parallel tool execution under `ToolTaskSupervisor`. Respects `max_tool_concurrency`. Handles abort by terminating pending tasks. |
+| `lib/agent_core/loop/tool_calls.ex` | Parallel tool execution under `ToolTaskSupervisor`. Respects `max_tool_concurrency`. Handles abort by terminating pending tasks. Returns tool results in the original assistant tool-call order. |
 
 ### Infrastructure
 

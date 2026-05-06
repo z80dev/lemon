@@ -400,6 +400,48 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert Agent.get(counter, & &1.max) <= 2
   end
 
+  test "returns parallel tool results in assistant tool-call order" do
+    ordered_tool = %AgentTool{
+      name: "ordered_tool",
+      description: "finishes at configurable times",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"delay_ms" => %{"type" => "integer"}}
+      },
+      label: "Ordered",
+      execute: fn id, %{"delay_ms" => delay_ms}, _signal, _on_update ->
+        Process.sleep(delay_ms)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "result #{id}"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [ordered_tool])
+    config = simple_config(max_tool_concurrency: 2)
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_calls = [
+      Mocks.tool_call("ordered_tool", %{"delay_ms" => 120}, id: "call_order_1"),
+      Mocks.tool_call("ordered_tool", %{"delay_ms" => 5}, id: "call_order_2")
+    ]
+
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+
+    assert Enum.map(results, & &1.tool_call_id) == ["call_order_1", "call_order_2"]
+
+    assert Enum.map(updated_context.messages, & &1.tool_call_id) == [
+             "call_order_1",
+             "call_order_2"
+           ]
+
+    assert Enum.map(updated_new_messages, & &1.tool_call_id) == ["call_order_1", "call_order_2"]
+  end
+
   test "abort marks both running and queued tool calls as aborted when max_tool_concurrency is 1" do
     parent = self()
 

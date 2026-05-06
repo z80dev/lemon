@@ -61,6 +61,9 @@ defmodule AgentCore.Loop.ToolCalls do
     max_concurrency = resolve_max_tool_concurrency(config, length(tool_calls))
     tool_timeout_ms = resolve_tool_timeout_ms(config)
     tool_task_supervisor = config.tool_task_supervisor || AgentCore.ToolTaskSupervisor
+    tool_call_order = tool_call_order(tool_calls)
+    base_context_message_count = length(context.messages)
+    base_new_message_count = length(new_messages)
 
     {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
       start_tool_tasks(
@@ -90,7 +93,10 @@ defmodule AgentCore.Loop.ToolCalls do
       tool_timeout_ms,
       results,
       stream,
-      signal
+      signal,
+      tool_call_order,
+      base_context_message_count,
+      base_new_message_count
     )
   end
 
@@ -106,10 +112,20 @@ defmodule AgentCore.Loop.ToolCalls do
          tool_timeout_ms,
          results,
          stream,
-         signal
+         signal,
+         tool_call_order,
+         base_context_message_count,
+         base_new_message_count
        ) do
     if map_size(pending_by_ref) == 0 and remaining_tool_calls == [] do
-      {Enum.reverse(results), context, new_messages}
+      finish_tool_results(
+        results,
+        context,
+        new_messages,
+        tool_call_order,
+        base_context_message_count,
+        base_new_message_count
+      )
     else
       # Check for abort before waiting
       if aborted?(signal) do
@@ -164,7 +180,14 @@ defmodule AgentCore.Loop.ToolCalls do
             {acc_results, acc_ctx, acc_msgs}
           end)
 
-        {Enum.reverse(aborted_results), context, new_messages}
+        finish_tool_results(
+          aborted_results,
+          context,
+          new_messages,
+          tool_call_order,
+          base_context_message_count,
+          base_new_message_count
+        )
       else
         receive do
           {:tool_task_result, ref, tool_call, result, is_error} ->
@@ -217,7 +240,10 @@ defmodule AgentCore.Loop.ToolCalls do
               tool_timeout_ms,
               results,
               stream,
-              signal
+              signal,
+              tool_call_order,
+              base_context_message_count,
+              base_new_message_count
             )
 
           {:DOWN, mon_ref, :process, _pid, reason} ->
@@ -235,7 +261,10 @@ defmodule AgentCore.Loop.ToolCalls do
                   tool_timeout_ms,
                   results,
                   stream,
-                  signal
+                  signal,
+                  tool_call_order,
+                  base_context_message_count,
+                  base_new_message_count
                 )
 
               ref ->
@@ -290,7 +319,10 @@ defmodule AgentCore.Loop.ToolCalls do
                   tool_timeout_ms,
                   results,
                   stream,
-                  signal
+                  signal,
+                  tool_call_order,
+                  base_context_message_count,
+                  base_new_message_count
                 )
             end
 
@@ -309,7 +341,10 @@ defmodule AgentCore.Loop.ToolCalls do
                   tool_timeout_ms,
                   results,
                   stream,
-                  signal
+                  signal,
+                  tool_call_order,
+                  base_context_message_count,
+                  base_new_message_count
                 )
 
               %{tool_call: tool_call, mon_ref: mon_ref, pid: pid} ->
@@ -368,7 +403,10 @@ defmodule AgentCore.Loop.ToolCalls do
                   tool_timeout_ms,
                   results,
                   stream,
-                  signal
+                  signal,
+                  tool_call_order,
+                  base_context_message_count,
+                  base_new_message_count
                 )
             end
         after
@@ -386,12 +424,60 @@ defmodule AgentCore.Loop.ToolCalls do
               tool_timeout_ms,
               results,
               stream,
-              signal
+              signal,
+              tool_call_order,
+              base_context_message_count,
+              base_new_message_count
             )
         end
       end
     end
   end
+
+  defp tool_call_order(tool_calls) do
+    tool_calls
+    |> Enum.with_index()
+    |> Map.new(fn {tool_call, index} -> {tool_call.id, index} end)
+  end
+
+  defp finish_tool_results(
+         results,
+         context,
+         new_messages,
+         tool_call_order,
+         base_context_message_count,
+         base_new_message_count
+       ) do
+    results = order_tool_results(results, tool_call_order)
+
+    context = %{
+      context
+      | messages:
+          reorder_tool_result_tail(context.messages, base_context_message_count, tool_call_order)
+    }
+
+    new_messages =
+      reorder_tool_result_tail(new_messages, base_new_message_count, tool_call_order)
+
+    {results, context, new_messages}
+  end
+
+  defp order_tool_results(results, tool_call_order) do
+    results
+    |> Enum.reverse()
+    |> Enum.sort_by(&tool_result_order(&1, tool_call_order))
+  end
+
+  defp reorder_tool_result_tail(messages, base_count, tool_call_order) do
+    {prefix, suffix} = Enum.split(messages, base_count)
+    prefix ++ Enum.sort_by(suffix, &tool_result_order(&1, tool_call_order))
+  end
+
+  defp tool_result_order(%ToolResultMessage{tool_call_id: tool_call_id}, tool_call_order) do
+    {Map.get(tool_call_order, tool_call_id, map_size(tool_call_order)), tool_call_id || ""}
+  end
+
+  defp tool_result_order(_message, tool_call_order), do: {map_size(tool_call_order), ""}
 
   defp start_tool_tasks(
          _tools,
