@@ -821,14 +821,51 @@ defmodule AgentCore.Loop.ToolCalls do
     end
   end
 
-  defp coerce_value(%{"type" => "object"} = schema, value) when is_binary(value) do
+  defp coerce_value(%{"type" => types} = schema, value) when is_list(types) do
+    if null_value?(value) and "null" in types do
+      {:ok, nil}
+    else
+      types
+      |> Enum.reject(&(&1 == "null"))
+      |> Enum.reduce_while({:error, ["expected one of #{Enum.join(types, ", ")}"]}, fn type,
+                                                                                       _acc ->
+        case coerce_value(%{schema | "type" => type}, value) do
+          {:ok, coerced} ->
+            {:halt, {:ok, coerced}}
+
+          {:error, _errors} ->
+            {:cont, {:error, ["expected one of #{Enum.join(types, ", ")}"]}}
+        end
+      end)
+    end
+  end
+
+  defp coerce_value(schema, value) when is_map(schema) and is_nil(value) do
+    if nullable_schema?(schema) do
+      {:ok, nil}
+    else
+      coerce_typed_value(schema, value)
+    end
+  end
+
+  defp coerce_value(schema, value) when is_map(schema) and is_binary(value) do
+    if nullable_schema?(schema) and String.trim(value) == "null" do
+      {:ok, nil}
+    else
+      coerce_typed_value(schema, value)
+    end
+  end
+
+  defp coerce_value(schema, value) when is_map(schema), do: coerce_typed_value(schema, value)
+
+  defp coerce_typed_value(%{"type" => "object"} = schema, value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, decoded} -> coerce_value(schema, decoded)
       {:error, _reason} -> {:error, ["expected object, got string"]}
     end
   end
 
-  defp coerce_value(%{"type" => "object"} = schema, value) when is_map(value) do
+  defp coerce_typed_value(%{"type" => "object"} = schema, value) when is_map(value) do
     required_errors =
       schema
       |> Map.get("required", [])
@@ -852,9 +889,9 @@ defmodule AgentCore.Loop.ToolCalls do
     if errors == [], do: {:ok, properties}, else: {:error, errors}
   end
 
-  defp coerce_value(%{"type" => "object"}, _value), do: {:error, ["expected object"]}
+  defp coerce_typed_value(%{"type" => "object"}, _value), do: {:error, ["expected object"]}
 
-  defp coerce_value(%{"type" => "array"} = schema, value) when is_binary(value) do
+  defp coerce_typed_value(%{"type" => "array"} = schema, value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, decoded} when is_list(decoded) -> coerce_value(schema, decoded)
       {:ok, decoded} -> coerce_array_items(schema, [decoded])
@@ -862,15 +899,17 @@ defmodule AgentCore.Loop.ToolCalls do
     end
   end
 
-  defp coerce_value(%{"type" => "array"} = schema, value) when is_list(value) do
+  defp coerce_typed_value(%{"type" => "array"} = schema, value) when is_list(value) do
     coerce_array_items(schema, value)
   end
 
-  defp coerce_value(%{"type" => "array"} = schema, value), do: coerce_array_items(schema, [value])
+  defp coerce_typed_value(%{"type" => "array"} = schema, value),
+    do: coerce_array_items(schema, [value])
 
-  defp coerce_value(%{"type" => "boolean"}, value) when is_boolean(value), do: {:ok, value}
+  defp coerce_typed_value(%{"type" => "boolean"}, value) when is_boolean(value),
+    do: {:ok, value}
 
-  defp coerce_value(%{"type" => "boolean"}, value) when is_binary(value) do
+  defp coerce_typed_value(%{"type" => "boolean"}, value) when is_binary(value) do
     case String.downcase(String.trim(value)) do
       "true" -> {:ok, true}
       "false" -> {:ok, false}
@@ -878,22 +917,24 @@ defmodule AgentCore.Loop.ToolCalls do
     end
   end
 
-  defp coerce_value(%{"type" => "boolean"}, _value), do: {:error, ["expected boolean"]}
+  defp coerce_typed_value(%{"type" => "boolean"}, _value), do: {:error, ["expected boolean"]}
 
-  defp coerce_value(%{"type" => "integer"}, value) when is_integer(value), do: {:ok, value}
+  defp coerce_typed_value(%{"type" => "integer"}, value) when is_integer(value),
+    do: {:ok, value}
 
-  defp coerce_value(%{"type" => "integer"}, value) when is_binary(value) do
+  defp coerce_typed_value(%{"type" => "integer"}, value) when is_binary(value) do
     case Integer.parse(String.trim(value)) do
       {integer, ""} -> {:ok, integer}
       _ -> {:error, ["expected integer"]}
     end
   end
 
-  defp coerce_value(%{"type" => "integer"}, _value), do: {:error, ["expected integer"]}
+  defp coerce_typed_value(%{"type" => "integer"}, _value), do: {:error, ["expected integer"]}
 
-  defp coerce_value(%{"type" => "number"}, value) when is_number(value), do: {:ok, value}
+  defp coerce_typed_value(%{"type" => "number"}, value) when is_number(value),
+    do: {:ok, value}
 
-  defp coerce_value(%{"type" => "number"}, value) when is_binary(value) do
+  defp coerce_typed_value(%{"type" => "number"}, value) when is_binary(value) do
     trimmed = String.trim(value)
 
     case Float.parse(trimmed) do
@@ -902,11 +943,11 @@ defmodule AgentCore.Loop.ToolCalls do
     end
   end
 
-  defp coerce_value(%{"type" => "number"}, _value), do: {:error, ["expected number"]}
+  defp coerce_typed_value(%{"type" => "number"}, _value), do: {:error, ["expected number"]}
 
-  defp coerce_value(%{"type" => "string"}, value) when is_binary(value), do: {:ok, value}
-  defp coerce_value(%{"type" => "string"}, _value), do: {:error, ["expected string"]}
-  defp coerce_value(_schema, value), do: {:ok, value}
+  defp coerce_typed_value(%{"type" => "string"}, value) when is_binary(value), do: {:ok, value}
+  defp coerce_typed_value(%{"type" => "string"}, _value), do: {:error, ["expected string"]}
+  defp coerce_typed_value(_schema, value), do: {:ok, value}
 
   defp coerce_array_items(schema, values) do
     item_schema = Map.get(schema, "items", %{})
@@ -927,6 +968,14 @@ defmodule AgentCore.Loop.ToolCalls do
   defp prefix_errors(prefix, errors) do
     Enum.map(List.wrap(errors), &"#{prefix}: #{&1}")
   end
+
+  defp nullable_schema?(%{"nullable" => true}), do: true
+  defp nullable_schema?(%{"type" => types}) when is_list(types), do: "null" in types
+  defp nullable_schema?(_schema), do: false
+
+  defp null_value?(nil), do: true
+  defp null_value?(value) when is_binary(value), do: String.trim(value) == "null"
+  defp null_value?(_value), do: false
 
   defp unknown_tool_result(tool_call) do
     %AgentToolResult{

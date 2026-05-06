@@ -711,6 +711,95 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert List.last(updated_new_messages).tool_call_id == "call_schema_invalid"
   end
 
+  test "coerces nullable object and array string nulls before executing tool task" do
+    parent = self()
+
+    tool = %AgentTool{
+      name: "nullable_schema_tool",
+      description: "captures nullable coerced args",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "setting" => %{"type" => "object", "nullable" => true},
+          "stages" => %{"type" => "array", "items" => %{"type" => "object"}, "nullable" => true}
+        },
+        "required" => ["setting", "stages"]
+      },
+      label: "Nullable schema",
+      execute: fn _id, params, _signal, _on_update ->
+        send(parent, {:nullable_params, params})
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "ok"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_call =
+      Mocks.tool_call(
+        "nullable_schema_tool",
+        %{"setting" => "null", "stages" => "null"},
+        id: "call_schema_nullable"
+      )
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert_receive {:nullable_params, %{"setting" => nil, "stages" => nil}}
+    assert [%{is_error: false, tool_call_id: "call_schema_nullable"}] = results
+  end
+
+  test "coerces JSON schema union types in declared order" do
+    parent = self()
+
+    tool = %AgentTool{
+      name: "union_schema_tool",
+      description: "captures union coerced args",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "limit" => %{"type" => ["integer", "string"]},
+          "label" => %{"type" => ["integer", "boolean", "string"]},
+          "maybe" => %{"type" => ["null", "object"]}
+        },
+        "required" => ["limit", "label", "maybe"]
+      },
+      label: "Union schema",
+      execute: fn _id, params, _signal, _on_update ->
+        send(parent, {:union_params, params})
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "ok"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_call =
+      Mocks.tool_call(
+        "union_schema_tool",
+        %{"limit" => "42", "label" => "hello", "maybe" => "null"},
+        id: "call_schema_union"
+      )
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert_receive {:union_params, %{"limit" => 42, "label" => "hello", "maybe" => nil}}
+    assert [%{is_error: false, tool_call_id: "call_schema_union"}] = results
+  end
+
   test "normalize_tool_name/1 trims whitespace and normalizes Unicode" do
     # Basic trimming
     assert ToolCalls.normalize_tool_name("  read_file  ") == "read_file"
