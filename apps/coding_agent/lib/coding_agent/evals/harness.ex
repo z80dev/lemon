@@ -38,7 +38,8 @@ defmodule CodingAgent.Evals.Harness do
       memory_scope_contract_eval(cwd),
       memory_topic_contract_eval(cwd),
       auto_skill_prompt_contract_eval(cwd),
-      skill_curator_behavior_contract_eval(cwd)
+      skill_curator_behavior_contract_eval(cwd),
+      learning_tool_trace_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -421,6 +422,106 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("skill_curator_behavior_contract", Exception.message(e), %{})
   end
 
+  @spec learning_tool_trace_contract_eval(String.t()) :: eval_result()
+  def learning_tool_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        File.mkdir_p!(project_dir)
+        File.mkdir_p!(home_dir)
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+
+          [
+            %{
+              doc_id: "prior-deployment-incident",
+              title: "Prior deployment incident",
+              scope_key: Keyword.fetch!(opts, :scope_key),
+              query: query
+            }
+          ]
+        end
+
+        format_results_fn = fn docs ->
+          docs
+          |> Enum.map(&Map.fetch!(&1, :doc_id))
+          |> Enum.join(",")
+        end
+
+        tool_opts = [
+          run_id: "eval-learning-tool-trace",
+          session_key: "agent:learning-tool-trace-eval:main",
+          session_id: "agent:learning-tool-trace-eval:main",
+          agent_id: "learning-tool-trace-eval"
+        ]
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: format_results_fn
+          )
+
+        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+        skill_tool = SkillManage.tool(project_dir, tool_opts)
+        learning_prompt = PromptBuilder.build_learning_section()
+
+        with :ok <- assert_learning_prompt(learning_prompt),
+             {:ok, search_result} <-
+               execute_tool_result(search_tool, "trace-search-prior-work", %{
+                 "query" => "last time deployment incident handoff",
+                 "scope" => "current"
+               }),
+             :ok <- assert_contains(flatten_text(search_result), "prior-deployment-incident"),
+             :ok <- assert_learning_search(search_result, search_calls),
+             {:ok, memory_result} <-
+               execute_tool_result(memory_tool, "trace-create-memory-topic", %{
+                 "topic" => "Deployment Incident Handoff"
+               }),
+             :ok <- assert_memory_topic_created(memory_result, project_dir),
+             {:ok, _skill_create_result} <-
+               execute_tool_result(skill_tool, "trace-create-skill", %{
+                 "action" => "create",
+                 "name" => "deployment-incident-handoff",
+                 "scope" => "project",
+                 "content" => deployment_incident_handoff_skill()
+               }),
+             :ok <- assert_active_agent_skill(project_dir, "deployment-incident-handoff"),
+             {:ok, report_result} <-
+               execute_tool_result(skill_tool, "trace-skill-report", %{
+                 "action" => "report",
+                 "scope" => "project"
+               }),
+             :ok <- assert_contains(flatten_text(report_result), "deployment-incident-handoff") do
+          %{
+            name: "learning_tool_trace_contract",
+            status: :pass,
+            details: %{
+              search_calls: length(Agent.get(search_calls, & &1)),
+              memory_topic: memory_result.details[:slug],
+              skill: "deployment-incident-handoff",
+              report_action: report_result.details[:action]
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("learning_tool_trace_contract", format_reason(reason), %{})
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("learning_tool_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("learning_tool_trace_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -452,6 +553,10 @@ defmodule CodingAgent.Evals.Harness do
       {:ok, result} -> {:ok, flatten_text(result)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp execute_tool_result(tool, tool_call_id, params) do
+    normalize_tool_result(tool.execute.(tool_call_id, params, nil, nil))
   end
 
   defp flatten_text(%AgentToolResult{content: content}) do
@@ -548,6 +653,88 @@ defmodule CodingAgent.Evals.Harness do
 
     Run `kubectl rollout undo deployment/example` only after identifying the failed revision and impact.
     """
+  end
+
+  defp deployment_incident_handoff_skill do
+    """
+    ---
+    name: deployment-incident-handoff
+    description: Capture and hand off recurring deployment incident response steps
+    keywords:
+      - deployment
+      - incident
+      - handoff
+    ---
+
+    ## Usage
+
+    Use this when a deployment incident reveals a reusable handoff or verification workflow.
+
+    ## Steps
+
+    1. Search prior run memory for the last related deployment incident.
+    2. Create or update a topic memory with durable decisions and command paths.
+    3. Save the reusable handoff as a skill once the workflow is repeatable.
+    """
+  end
+
+  defp assert_learning_prompt(prompt) do
+    cond do
+      not String.contains?(prompt, "Use `skill_manage`") ->
+        {:error, "learning prompt does not mention skill_manage"}
+
+      not String.contains?(prompt, "Use `memory_topic`") ->
+        {:error, "learning prompt does not mention memory_topic"}
+
+      not String.contains?(prompt, "Use `search_memory`") ->
+        {:error, "learning prompt does not mention search_memory"}
+
+      not String.contains?(prompt, "At the end of substantial work") ->
+        {:error, "learning prompt does not include end-of-run capture trigger"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_learning_search(result, search_calls) do
+    calls = Agent.get(search_calls, &Enum.reverse/1)
+
+    cond do
+      result.details[:scope] != :current ->
+        {:error, "expected search_memory scope :current, got #{inspect(result.details)}"}
+
+      result.details[:resolved_scopes] != [:project, :home] ->
+        {:error, "expected current search to resolve project and home scopes"}
+
+      length(calls) != 2 ->
+        {:error, "expected search_memory to query project and home, got #{inspect(calls)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_memory_topic_created(result, workspace_dir) do
+    expected_path =
+      Path.join([workspace_dir, "memory", "topics", "deployment-incident-handoff.md"])
+
+    cond do
+      result.details[:created] != true ->
+        {:error, "expected memory_topic to create a topic, got #{inspect(result.details)}"}
+
+      result.details[:slug] != "deployment-incident-handoff" ->
+        {:error, "unexpected memory topic slug #{inspect(result.details)}"}
+
+      result.details[:path] != expected_path ->
+        {:error, "unexpected memory topic path #{inspect(result.details)}"}
+
+      not File.exists?(expected_path) ->
+        {:error, "memory topic file missing at #{expected_path}"}
+
+      true ->
+        :ok
+    end
   end
 
   defp assert_curator_prompt(prompt) do
