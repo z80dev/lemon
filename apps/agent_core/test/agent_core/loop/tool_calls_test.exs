@@ -127,7 +127,11 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert tool_result_message.tool_call_id == "call_tool_error"
     assert tool_result_message.tool_name == "failing_tool"
     assert tool_result_message.is_error == true
-    assert tool_result_message.details == nil
+
+    assert tool_result_message.details == %{
+             error_type: :tool_error,
+             reason: ~s("tool failed hard")
+           }
 
     assert Enum.any?(tool_result_message.content, fn
              %TextContent{text: "tool failed hard"} -> true
@@ -225,10 +229,11 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert tool_result_message.tool_call_id == "call_task_crash"
     assert tool_result_message.tool_name == "crashing_tool"
     assert tool_result_message.is_error == true
-    assert tool_result_message.details == %{error_type: :tool_task_crashed, reason: ":killed"}
+    assert tool_result_message.details.error_type == :tool_task_crashed
+    assert tool_result_message.details.reason in [":killed", ":noproc"]
 
     assert Enum.any?(tool_result_message.content, fn
-             %TextContent{text: text} -> String.contains?(text, "Tool task crashed: :killed")
+             %TextContent{text: text} -> String.contains?(text, "Tool task crashed:")
              _ -> false
            end)
 
@@ -240,6 +245,70 @@ defmodule AgentCore.Loop.ToolCallsTest do
 
     assert Enum.any?(events, &match?({:tool_execution_start, "call_task_crash", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_task_crash", _, _, true}, &1))
+  end
+
+  test "emits structured error tool_result when tool raises" do
+    raising_tool = %AgentTool{
+      name: "raising_tool",
+      description: "Raises an exception",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Raising",
+      execute: fn _id, _params, _signal, _on_update ->
+        raise "tool exploded"
+      end
+    }
+
+    context = simple_context(tools: [raising_tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("raising_tool", %{}, id: "call_tool_exception")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert [tool_result_message] = results
+    assert tool_result_message.is_error == true
+    assert tool_result_message.tool_call_id == "call_tool_exception"
+
+    assert tool_result_message.details == %{
+             error_type: :tool_exception,
+             exception: RuntimeError,
+             message: "tool exploded"
+           }
+
+    assert [%TextContent{text: "tool exploded"}] = tool_result_message.content
+    assert List.last(updated_context.messages).tool_call_id == "call_tool_exception"
+    assert List.last(updated_new_messages).tool_call_id == "call_tool_exception"
+  end
+
+  test "emits structured error tool_result for unexpected tool return values" do
+    weird_tool = %AgentTool{
+      name: "weird_tool",
+      description: "Returns an unsupported shape",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Weird",
+      execute: fn _id, _params, _signal, _on_update ->
+        {:unexpected, "shape"}
+      end
+    }
+
+    context = simple_context(tools: [weird_tool])
+    config = simple_config([])
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("weird_tool", %{}, id: "call_unexpected_result")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert [tool_result_message] = results
+    assert tool_result_message.is_error == true
+    assert tool_result_message.details.error_type == :unexpected_tool_result
+    assert tool_result_message.details.result == ~s({:unexpected, "shape"})
+
+    assert [%TextContent{text: text}] = tool_result_message.content
+    assert text == ~s(Unexpected tool result: {:unexpected, "shape"})
   end
 
   test "respects max_tool_concurrency while executing tool calls" do

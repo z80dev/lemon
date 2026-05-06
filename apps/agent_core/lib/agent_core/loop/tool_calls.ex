@@ -524,16 +524,16 @@ defmodule AgentCore.Loop.ToolCalls do
     try do
       case tool.execute.(tool_call.id, tool_call.arguments, signal, on_update) do
         {:ok, result} -> {result, false}
-        {:error, reason} -> {error_to_result(reason), true}
+        {:error, reason} -> {tool_error_result(reason), true}
         %AgentToolResult{} = result -> {result, false}
-        other -> {error_to_result("Unexpected tool result: #{inspect(other)}"), true}
+        other -> {unexpected_tool_result(other), true}
       end
     rescue
       e ->
-        {error_to_result(Exception.message(e)), true}
+        {tool_exception_result(e), true}
     catch
       kind, value ->
-        {error_to_result("#{kind}: #{inspect(value)}"), true}
+        {tool_caught_result(kind, value), true}
     end
   end
 
@@ -586,19 +586,42 @@ defmodule AgentCore.Loop.ToolCalls do
     |> String.trim()
   end
 
-  defp error_to_result(reason) when is_binary(reason) do
+  defp tool_error_result(reason) do
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: reason}],
-      details: nil
+      content: [%TextContent{type: :text, text: error_text(reason)}],
+      details: %{error_type: :tool_error, reason: inspect(reason)}
     }
   end
 
-  defp error_to_result(reason) do
+  defp unexpected_tool_result(result) do
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: inspect(reason)}],
-      details: nil
+      content: [
+        %TextContent{type: :text, text: "Unexpected tool result: #{inspect(result)}"}
+      ],
+      details: %{error_type: :unexpected_tool_result, result: inspect(result)}
     }
   end
+
+  defp tool_exception_result(exception) do
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: Exception.message(exception)}],
+      details: %{
+        error_type: :tool_exception,
+        exception: exception.__struct__,
+        message: Exception.message(exception)
+      }
+    }
+  end
+
+  defp tool_caught_result(kind, value) do
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: "#{kind}: #{inspect(value)}"}],
+      details: %{error_type: :tool_caught, kind: kind, value: inspect(value)}
+    }
+  end
+
+  defp error_text(reason) when is_binary(reason), do: reason
+  defp error_text(reason), do: inspect(reason)
 
   defp prepare_tool_call(nil, tool_call), do: {:error, unknown_tool_result(tool_call)}
 
