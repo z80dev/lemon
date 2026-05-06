@@ -282,20 +282,22 @@ defmodule LemonControlPlane.EventBridge do
 
   # Engine action events (tool_use)
   defp map_event_type(:engine_action, payload, meta) do
+    action = get_field(payload, :action) || payload
+
     {"agent",
      %{
        "type" => "tool_use",
-       "runId" => meta[:run_id],
-       "sessionKey" => meta[:session_key],
+       "runId" => get_field(meta, :run_id),
+       "sessionKey" => get_field(meta, :session_key),
        "action" => %{
-         "id" => payload[:id],
-         "kind" => payload[:kind],
-         "title" => payload[:title],
-         "detail" => payload[:detail]
+         "id" => get_field(action, :id),
+         "kind" => get_field(action, :kind),
+         "title" => get_field(action, :title),
+         "detail" => get_field(action, :detail)
        },
-       "phase" => payload[:phase],
-       "ok" => payload[:ok],
-       "message" => payload[:message]
+       "phase" => get_field(payload, :phase),
+       "ok" => get_field(payload, :ok),
+       "message" => get_field(payload, :message)
      }}
   end
 
@@ -634,7 +636,16 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   defp get_field(data, key) when is_map(data) do
-    Map.get(data, key)
+    cond do
+      Map.has_key?(data, key) ->
+        Map.get(data, key)
+
+      is_atom(key) and Map.has_key?(data, Atom.to_string(key)) ->
+        Map.get(data, Atom.to_string(key))
+
+      true ->
+        nil
+    end
   end
 
   defp get_field(_, _), do: nil

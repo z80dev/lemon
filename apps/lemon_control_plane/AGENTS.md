@@ -495,7 +495,7 @@ State-versioned events include a `stateVersion` map for client reconciliation (`
 
 | Event | Trigger |
 |-------|---------|
-| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`) |
+| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta`) |
 | `chat` | Chat delta/streaming content |
 | `presence` | Connection count changed |
 | `tick` | Heartbeat tick (from `:tick` or `:cron_tick` bus events) |

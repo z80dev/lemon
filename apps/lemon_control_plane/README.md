@@ -445,7 +445,7 @@ The EventBridge subscribes to `LemonCore.Bus` topics and maps internal bus event
 
 | Event | Trigger |
 |-------|---------|
-| `agent` | Run started/completed, tool use |
+| `agent` | Run started/completed, tool use; tool-use events preserve nested `action.detail` metadata |
 | `chat` | Chat delta/streaming content |
 | `presence` | Connection count changed |
 | `tick` | Heartbeat tick |
