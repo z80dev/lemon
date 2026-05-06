@@ -1217,12 +1217,7 @@ defmodule Ai.Providers.OpenAICompletions do
         block
       end
 
-    block =
-      if func_name && func_name != "" do
-        %{block | name: func_name}
-      else
-        block
-      end
+    block = %{block | name: merge_tool_name(block.name, func_name)}
 
     new_partial_args = info.partial_args <> func_args
     block = %{block | arguments: parse_partial_json(new_partial_args)}
@@ -1374,6 +1369,21 @@ defmodule Ai.Providers.OpenAICompletions do
 
       info ->
         {state, info}
+    end
+  end
+
+  defp merge_tool_name(current, nil), do: current || ""
+  defp merge_tool_name(current, ""), do: current || ""
+
+  defp merge_tool_name(nil, delta) when is_binary(delta), do: delta
+  defp merge_tool_name("", delta) when is_binary(delta), do: delta
+
+  defp merge_tool_name(current, delta) when is_binary(current) and is_binary(delta) do
+    cond do
+      current == delta -> current
+      String.starts_with?(delta, current) -> delta
+      String.ends_with?(current, delta) -> current
+      true -> current <> delta
     end
   end
 

@@ -796,6 +796,77 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert second.arguments == %{"bar" => "baz"}
   end
 
+  test "streams chunked tool names without duplicating repeated suffixes" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "id" => "call_read",
+                      "type" => "function",
+                      "function" => %{"name" => "read_", "arguments" => "{\"path\":"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "function" => %{"name" => "file", "arguments" => "\"mix.exs\"}"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{
+            "choices" => [
+              %{
+                "delta" => %{
+                  "tool_calls" => [
+                    %{
+                      "index" => 0,
+                      "function" => %{"name" => "file"}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          %{"choices" => [%{"finish_reason" => "tool_calls"}]},
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_completions,
+      provider: :openai,
+      base_url: "https://example.test"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+    assert [%ToolCall{name: "read_file", arguments: %{"path" => "mix.exs"}}] = result.content
+  end
+
   test "reasoning_details attaches thought signature to tool calls" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =
