@@ -126,27 +126,35 @@ defmodule LemonSkills.Curator do
   """
   @spec run(keyword()) :: {:ok, map()} | {:error, term()}
   def run(opts \\ []) do
+    monotonic_started_at = System.monotonic_time(:millisecond)
     started_at = Keyword.get(opts, :now, DateTime.utc_now())
-    counts = apply_automatic_transitions(Keyword.put(opts, :now, started_at))
-    rows = candidate_rows(Keyword.put(opts, :now, started_at))
+    run_opts = Keyword.put(opts, :now, started_at)
+    before_rows = candidate_rows(run_opts)
+    counts = apply_automatic_transitions(run_opts)
+    rows = candidate_rows(run_opts)
     prompt = review_prompt(rows, opts)
+    transitions = state_transitions(before_rows, rows)
+    duration_ms = max(System.monotonic_time(:millisecond) - monotonic_started_at, 0)
 
     previous_state = load_state(opts)
 
-    state =
-      Map.merge(previous_state, %{
-        "last_run_at" => DateTime.to_iso8601(started_at),
-        "run_count" => previous_state["run_count"] + 1,
-        "last_run_summary" => summarize_counts(counts),
-        "last_candidate_count" => length(rows)
-      })
-
-    with :ok <- save_state(state, opts) do
+    with {:ok, report} <- run_report(started_at, duration_ms, counts, transitions, rows, opts),
+         state =
+           Map.merge(previous_state, %{
+             "last_run_at" => DateTime.to_iso8601(started_at),
+             "run_count" => previous_state["run_count"] + 1,
+             "last_run_summary" => summarize_counts(counts),
+             "last_candidate_count" => length(rows),
+             "last_report_path" => report.path
+           }),
+         :ok <- write_run_report(report),
+         :ok <- save_state(state, opts) do
       {:ok,
        %{
          started_at: DateTime.to_iso8601(started_at),
          auto_transitions: counts,
          candidates: rows,
+         report_path: report.path,
          review_required: Enum.any?(rows, &review_candidate?/1),
          review_prompt: prompt,
          summary: summarize_counts(counts)
@@ -303,10 +311,180 @@ defmodule LemonSkills.Curator do
     %{
       "last_run_at" => Map.get(state, "last_run_at"),
       "last_run_summary" => Map.get(state, "last_run_summary"),
+      "last_report_path" => Map.get(state, "last_report_path"),
       "last_candidate_count" => integer_field(state, "last_candidate_count"),
       "paused" => Map.get(state, "paused") == true,
       "run_count" => integer_field(state, "run_count")
     }
+  end
+
+  defp state_transitions(before_rows, after_rows) do
+    after_by_name = Map.new(after_rows, &{&1.name, &1.lifecycle_state})
+
+    before_rows
+    |> Enum.flat_map(fn row ->
+      previous_state = row.lifecycle_state
+      current_state = Map.get(after_by_name, row.name, previous_state)
+
+      if previous_state == current_state do
+        []
+      else
+        [%{name: row.name, from: previous_state, to: current_state}]
+      end
+    end)
+  end
+
+  defp run_report(started_at, duration_ms, counts, transitions, rows, opts) do
+    with {:ok, report_root} <- curator_report_root(opts) do
+      scope = scope(opts)
+      report_dir = Path.join(report_root, report_run_id(started_at))
+      run_json_path = Path.join(report_dir, "run.json")
+      report_md_path = Path.join(report_dir, "REPORT.md")
+      summary = summarize_counts(counts)
+
+      archived = names_transitioned_to(transitions, "archived")
+      marked_stale = names_transitioned_to(transitions, "stale")
+      reactivated = names_transitioned_to(transitions, "active")
+
+      data = %{
+        "started_at" => DateTime.to_iso8601(started_at),
+        "duration_ms" => duration_ms,
+        "scope" => Atom.to_string(scope),
+        "auto_transitions" => stringify_count_keys(counts),
+        "counts" => stringify_count_keys(counts),
+        "summary" => summary,
+        "review_required" => Enum.any?(rows, &review_candidate?/1),
+        "candidate_count" => length(rows),
+        "archived" => archived,
+        "marked_stale" => marked_stale,
+        "reactivated" => reactivated,
+        "state_transitions" => Enum.map(transitions, &stringify_transition/1),
+        "candidates" => Enum.map(rows, &stringify_row/1)
+      }
+
+      {:ok,
+       %{
+         dir: report_dir,
+         path: run_json_path,
+         report_md_path: report_md_path,
+         data: data,
+         markdown: render_report_markdown(data)
+       }}
+    end
+  end
+
+  defp write_run_report(%{dir: dir, path: run_json_path, report_md_path: report_md_path} = report) do
+    with :ok <- File.mkdir_p(dir),
+         {:ok, json} <- Jason.encode(report.data, pretty: true),
+         :ok <- atomic_write(run_json_path, json),
+         :ok <- atomic_write(report_md_path, report.markdown) do
+      :ok
+    end
+  end
+
+  defp curator_report_root(opts) do
+    case scope(opts) do
+      :project ->
+        case Keyword.get(opts, :cwd) do
+          cwd when is_binary(cwd) and cwd != "" -> {:ok, Config.project_curator_report_dir(cwd)}
+          _ -> {:error, :missing_cwd}
+        end
+
+      :global ->
+        {:ok, Config.global_curator_report_dir()}
+    end
+  end
+
+  defp report_run_id(started_at) do
+    started_at
+    |> DateTime.to_iso8601(:basic)
+    |> String.replace("Z", "")
+  end
+
+  defp names_transitioned_to(transitions, state) do
+    transitions
+    |> Enum.filter(&(&1.to == state))
+    |> Enum.map(& &1.name)
+    |> Enum.sort()
+  end
+
+  defp stringify_count_keys(counts) do
+    Map.new(counts, fn {key, value} -> {Atom.to_string(key), value} end)
+  end
+
+  defp stringify_transition(transition) do
+    %{
+      "name" => transition.name,
+      "from" => transition.from,
+      "to" => transition.to
+    }
+  end
+
+  defp stringify_row(row) do
+    row
+    |> Map.take([
+      :name,
+      :lifecycle_state,
+      :agent_authored,
+      :load_count,
+      :write_count,
+      :write_error_count,
+      :created_at,
+      :last_loaded_at,
+      :last_write_at,
+      :last_activity_at,
+      :idle_days,
+      :stale_candidate,
+      :archive_candidate
+    ])
+    |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+  end
+
+  defp render_report_markdown(data) do
+    """
+    # Curator run
+
+    Started at: #{data["started_at"]}
+    Scope: #{data["scope"]}
+    Duration: #{data["duration_ms"]} ms
+    Summary: #{data["summary"]}
+    Review required: #{data["review_required"]}
+
+    ## Auto-transitions
+
+    - Checked: #{data["counts"]["checked"]}
+    - Marked stale: #{data["counts"]["marked_stale"]}
+    - Archived: #{data["counts"]["archived"]}
+    - Reactivated: #{data["counts"]["reactivated"]}
+
+    ## State transitions
+
+    #{transition_lines(data["state_transitions"])}
+
+    ## Candidates
+
+    #{candidate_lines(data["candidates"])}
+    """
+  end
+
+  defp transition_lines([]), do: "None."
+
+  defp transition_lines(transitions) do
+    transitions
+    |> Enum.map(fn transition ->
+      "- #{transition["name"]}: #{transition["from"]} -> #{transition["to"]}"
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp candidate_lines([]), do: "None."
+
+  defp candidate_lines(candidates) do
+    candidates
+    |> Enum.map(fn row ->
+      "- #{row["name"]} state=#{row["lifecycle_state"]} loads=#{row["load_count"]} writes=#{row["write_count"]} idle_days=#{row["idle_days"] || "unknown"}"
+    end)
+    |> Enum.join("\n")
   end
 
   defp parse_time(nil), do: nil

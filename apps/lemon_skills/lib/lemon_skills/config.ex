@@ -69,6 +69,7 @@ defmodule LemonSkills.Config do
   @skills_config_filename "skills.json"
   @skills_usage_filename "skills.usage.json"
   @skills_curator_filename "skills.curator.json"
+  @curator_report_dirname Path.join(["logs", "curator"])
 
   @typedoc "MCP server configuration type"
   @type mcp_server_config ::
@@ -296,6 +297,14 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get the global skill curator report directory.
+  """
+  @spec global_curator_report_dir() :: String.t()
+  def global_curator_report_dir do
+    Path.join(agent_dir(), @curator_report_dirname)
+  end
+
+  @doc """
   Get the project skills configuration file path.
 
   ## Parameters
@@ -321,6 +330,14 @@ defmodule LemonSkills.Config do
   @spec project_curator_state_file(String.t()) :: String.t()
   def project_curator_state_file(cwd) do
     Path.join([cwd, ".lemon", @skills_curator_filename])
+  end
+
+  @doc """
+  Get the project skill curator report directory.
+  """
+  @spec project_curator_report_dir(String.t()) :: String.t()
+  def project_curator_report_dir(cwd) do
+    Path.join([cwd, ".lemon", @curator_report_dirname])
   end
 
   @doc """

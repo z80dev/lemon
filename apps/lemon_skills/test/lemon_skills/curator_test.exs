@@ -98,7 +98,7 @@ defmodule LemonSkills.CuratorTest do
         "created_by" => "agent",
         "lifecycle_state" => "active",
         "write_count" => 1,
-        "last_write_at" => "2026-05-05T00:00:00Z"
+        "last_write_at" => "2026-04-01T00:00:00Z"
       }
     })
 
@@ -109,9 +109,26 @@ defmodule LemonSkills.CuratorTest do
     assert result.review_prompt =~ "Lemon's background skill curator"
     assert result.review_prompt =~ "deploy-helper"
     assert result.auto_transitions.checked == 1
+    assert result.auto_transitions.marked_stale == 1
+    assert result.report_path == Path.join([tmp_dir, ".lemon", "logs", "curator", "20260506T000000", "run.json"])
+
+    assert {:ok, report} = result.report_path |> File.read!() |> Jason.decode()
+    assert report["started_at"] == "2026-05-06T00:00:00Z"
+    assert report["scope"] == "project"
+    assert report["counts"]["checked"] == 1
+    assert report["counts"]["marked_stale"] == 1
+    assert report["candidate_count"] == 1
+    assert [%{"name" => "deploy-helper"}] = report["candidates"]
+    assert [%{"name" => "deploy-helper", "from" => "active", "to" => "stale"}] = report["state_transitions"]
+
+    human_report = result.report_path |> Path.dirname() |> Path.join("REPORT.md") |> File.read!()
+    assert human_report =~ "# Curator run"
+    assert human_report =~ "deploy-helper"
+    assert human_report =~ "deploy-helper: active -> stale"
 
     state = Curator.load_state(scope: :project, cwd: tmp_dir)
     assert state["last_run_at"] == "2026-05-06T00:00:00Z"
+    assert state["last_report_path"] == result.report_path
     assert state["last_candidate_count"] == 1
     assert state["run_count"] == 1
   end

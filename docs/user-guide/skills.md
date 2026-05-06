@@ -246,6 +246,11 @@ deletes skills and skips pinned or non-agent-authored entries. `--prompt` prints
 a curator prompt for an agent to consolidate narrow learned skills into broader
 umbrella skills with `read_skill` and `skill_manage`.
 
+Every run also writes `run.json` and `REPORT.md` under
+`.lemon/logs/curator/<run>/` for project skills, or
+`~/.lemon/agent/logs/curator/<run>/` for global skills. The JSON report is the
+machine-readable audit record; the markdown report is the quick human review.
+
 The runtime also has an idle background curator path. When enabled, Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
