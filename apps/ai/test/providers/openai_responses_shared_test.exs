@@ -188,6 +188,41 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert String.valid?(sanitized)
   end
 
+  test "convert_messages sanitizes invalid utf8 in system and user content" do
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      cost: %ModelCost{}
+    }
+
+    invalid_system = <<"system", 0xED, 0xA0, 0x80>>
+    invalid_user = <<"user", 0xED, 0xB0, 0x80>>
+
+    context =
+      %Ai.Types.Context{
+        system_prompt: invalid_system,
+        messages: [%UserMessage{content: invalid_user}]
+      }
+
+    messages = OpenAIResponsesShared.convert_messages(model, context, MapSet.new([:openai]))
+
+    assert [
+             %{"role" => "system", "content" => system_content},
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "input_text", "text" => user_content}]
+             }
+           ] = messages
+
+    assert String.valid?(system_content)
+    assert String.valid?(user_content)
+    assert String.starts_with?(system_content, "system")
+    assert String.starts_with?(user_content, "user")
+  end
+
   test "convert_messages sanitizes invalid utf8 in assistant tool call arguments" do
     model = %Model{
       id: "gpt-4o",
