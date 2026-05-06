@@ -389,6 +389,62 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     assert result.stop_reason == :length
   end
 
+  test "preserves recoverable truncated final-only function call arguments" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "type" => "response.output_item.added",
+            "item" => %{
+              "type" => "function_call",
+              "id" => "fc_batch",
+              "call_id" => "call_batch",
+              "name" => "batch_read"
+            }
+          },
+          %{
+            "type" => "response.output_item.done",
+            "item" => %{
+              "type" => "function_call",
+              "id" => "fc_batch",
+              "call_id" => "call_batch",
+              "name" => "batch_read",
+              "arguments" => "{\"files\":[\"mix.exs\""
+            }
+          },
+          %{"type" => "response.completed", "response" => %{"status" => "incomplete"}},
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://example.test",
+      reasoning: false
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+
+    assert [
+             %ToolCall{
+               id: "call_batch|fc_batch",
+               name: "batch_read",
+               arguments: %{"files" => ["mix.exs"]}
+             }
+           ] = result.content
+
+    assert result.stop_reason == :length
+  end
+
   test "errors when api key is missing" do
     test_pid = self()
 

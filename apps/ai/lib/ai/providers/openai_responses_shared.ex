@@ -983,10 +983,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
           if partial_json && partial_json != "" do
             parse_streaming_json(partial_json)
           else
-            case Jason.decode(item["arguments"] || "{}") do
-              {:ok, decoded} -> decoded
-              _ -> %{}
-            end
+            parse_streaming_json(item["arguments"] || "{}")
           end
 
         tool_call = %ToolCall{
