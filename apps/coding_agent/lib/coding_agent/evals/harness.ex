@@ -44,21 +44,22 @@ defmodule CodingAgent.Evals.Harness do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     iterations = Keyword.get(opts, :iterations, 25)
 
-    results = [
-      deterministic_contract_eval(cwd),
-      statistical_stability_eval(cwd, iterations),
-      read_edit_workflow_eval(cwd),
-      memory_scope_contract_eval(cwd),
-      memory_topic_contract_eval(cwd),
-      auto_skill_prompt_contract_eval(cwd),
-      skill_curator_behavior_contract_eval(cwd),
-      learning_tool_trace_contract_eval(cwd),
-      tool_use_claim_contract_eval(cwd),
-      agent_loop_learning_trace_contract_eval(cwd),
-      agent_loop_memory_trace_contract_eval(cwd),
-      agent_loop_async_join_trace_contract_eval(cwd),
-      agent_loop_parallel_join_trace_contract_eval(cwd)
-    ]
+    results =
+      [
+        deterministic_contract_eval(cwd),
+        statistical_stability_eval(cwd, iterations),
+        read_edit_workflow_eval(cwd),
+        memory_scope_contract_eval(cwd),
+        memory_topic_contract_eval(cwd),
+        auto_skill_prompt_contract_eval(cwd),
+        skill_curator_behavior_contract_eval(cwd),
+        learning_tool_trace_contract_eval(cwd),
+        tool_use_claim_contract_eval(cwd),
+        agent_loop_learning_trace_contract_eval(cwd),
+        agent_loop_memory_trace_contract_eval(cwd),
+        agent_loop_async_join_trace_contract_eval(cwd),
+        agent_loop_parallel_join_trace_contract_eval(cwd)
+      ] ++ live_model_results(cwd, opts)
 
     passed = Enum.count(results, &(&1.status == :pass))
     failed = Enum.count(results, &(&1.status == :fail))
@@ -946,6 +947,180 @@ defmodule CodingAgent.Evals.Harness do
     |> ToolRegistry.list_tool_names(include_extensions: false)
     |> Enum.sort()
   end
+
+  defp live_model_results(cwd, opts) do
+    if Keyword.get(opts, :live_model, false) do
+      [live_model_memory_trace_contract_eval(cwd, opts)]
+    else
+      []
+    end
+  end
+
+  @spec live_model_memory_trace_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_memory_trace_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        File.mkdir_p!(project_dir)
+        File.mkdir_p!(home_dir)
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+
+          [
+            %{
+              doc_id: "prior-release-handoff",
+              title: "Prior release handoff",
+              content: "Last time we wrote the release handoff and tagged the smoke run.",
+              scope_key: Keyword.fetch!(opts, :scope_key),
+              query: query
+            }
+          ]
+        end
+
+        format_results_fn = fn docs ->
+          docs
+          |> Enum.map(fn doc ->
+            "#{doc.title}: #{doc.doc_id}: #{doc.content}"
+          end)
+          |> Enum.join("\n")
+        end
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: format_results_fn
+          )
+
+        context =
+          AgentContext.new(
+            system_prompt: live_memory_eval_prompt(),
+            tools: [search_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: stream_options,
+          max_tool_turns: 2
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("What did we do last time for the release handoff?")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
+             :ok <- assert_learning_search_calls(search_calls, 2),
+             :ok <- assert_final_contains(messages, ["PRIOR_RELEASE_HANDOFF_FOUND"]) do
+          %{
+            name: "live_model_memory_trace_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              search_calls: length(Agent.get(search_calls, & &1))
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_memory_trace_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id,
+              search_calls: length(Agent.get(search_calls, & &1))
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_memory_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_memory_trace_contract", Exception.message(e), %{})
+  end
+
+  defp live_memory_eval_prompt do
+    """
+    You are running a live-model Lemon eval.
+
+    The user is asking about prior work. You must call `search_memory` with scope `current` before answering. After the tool result arrives, answer with the exact marker PRIOR_RELEASE_HANDOFF_FOUND and summarize only what the tool result says.
+    """
+  end
+
+  defp live_model_config(opts) do
+    api_key = Keyword.get(opts, :live_api_key) || live_env("API_KEY")
+
+    if is_binary(api_key) and api_key != "" do
+      model = %Model{
+        id: Keyword.get(opts, :live_model_id) || live_env("MODEL") || "kimi-for-coding",
+        name: "Live Eval Model",
+        api:
+          live_atom(
+            Keyword.get(opts, :live_api_type) || live_env("API_TYPE"),
+            :anthropic_messages
+          ),
+        provider: live_atom(Keyword.get(opts, :live_provider) || live_env("PROVIDER"), :kimi),
+        base_url:
+          Keyword.get(opts, :live_base_url) || live_env("BASE_URL") ||
+            "https://api.kimi.com/coding",
+        reasoning: false,
+        input: [:text],
+        cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+        context_window: 200_000,
+        max_tokens: 2_048,
+        headers: %{}
+      }
+
+      stream_options = %Ai.Types.StreamOptions{
+        api_key: api_key,
+        temperature: 0.0,
+        max_tokens: Keyword.get(opts, :live_max_tokens, 512)
+      }
+
+      {:ok, model, stream_options}
+    else
+      {:error, "live model eval requires LEMON_EVAL_API_KEY or INTEGRATION_API_KEY"}
+    end
+  end
+
+  defp live_env(name) do
+    System.get_env("LEMON_EVAL_#{name}") ||
+      System.get_env("INTEGRATION_#{name}") ||
+      legacy_live_env(name)
+  end
+
+  defp legacy_live_env("API_KEY"), do: System.get_env("ANTHROPIC_API_KEY")
+  defp legacy_live_env(_), do: nil
+
+  defp live_atom(nil, default), do: default
+  defp live_atom(value, _default) when is_atom(value), do: value
+
+  defp live_atom(value, default) when is_binary(value) do
+    value = String.trim(value)
+
+    if value == "" do
+      default
+    else
+      String.to_atom(value)
+    end
+  end
+
+  defp live_atom(_value, default), do: default
 
   defp run_tool(cwd, tool_name, params) do
     with {:ok, tool} <- ToolRegistry.get_tool(cwd, tool_name, include_extensions: false),

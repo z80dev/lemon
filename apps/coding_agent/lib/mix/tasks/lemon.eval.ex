@@ -11,6 +11,12 @@ defmodule Mix.Tasks.Lemon.Eval do
     mix lemon.eval
     mix lemon.eval --iterations 50
     mix lemon.eval --json
+    mix lemon.eval --live-model
+
+  `--live-model` adds opt-in model-backed checks. Configure them with
+  `LEMON_EVAL_API_KEY`, `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`,
+  `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; the matching
+  `INTEGRATION_*` variables are also accepted.
   """
 
   @impl true
@@ -19,14 +25,22 @@ defmodule Mix.Tasks.Lemon.Eval do
 
     {opts, _rest, _invalid} =
       OptionParser.parse(args,
-        switches: [iterations: :integer, json: :boolean, cwd: :string],
+        switches: [
+          iterations: :integer,
+          json: :boolean,
+          cwd: :string,
+          live_model: :boolean,
+          live_timeout_ms: :integer
+        ],
         aliases: [n: :iterations]
       )
 
     report =
       Harness.run(
         cwd: opts[:cwd] || File.cwd!(),
-        iterations: opts[:iterations] || 25
+        iterations: opts[:iterations] || 25,
+        live_model: opts[:live_model] || false,
+        live_timeout_ms: opts[:live_timeout_ms] || 90_000
       )
 
     if opts[:json] do

@@ -226,6 +226,8 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       doc = Mix.Task.moduledoc(Mix.Tasks.Lemon.Eval)
       assert is_binary(doc)
       assert doc =~ "coding eval harness"
+      assert doc =~ "--live-model"
+      assert doc =~ "LEMON_EVAL_API_KEY"
     end
   end
 
