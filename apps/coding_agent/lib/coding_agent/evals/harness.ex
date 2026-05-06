@@ -12,8 +12,10 @@ defmodule CodingAgent.Evals.Harness do
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Session.EventHandler
   alias CodingAgent.Tools.{Grep, MemoryTopic, Read, ReadSkill, SearchMemory, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
+  alias LemonCore.Introspection
   alias LemonSkills.Curator
 
   alias Ai.Types.{
@@ -1252,6 +1254,7 @@ defmodule CodingAgent.Evals.Harness do
         live_model_memory_topic_contract_eval(cwd, opts),
         live_model_workspace_memory_file_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
+        live_model_relevant_skill_usage_contract_eval(cwd, opts),
         live_model_skill_curator_contract_eval(cwd, opts),
         live_model_cron_block_contract_eval(cwd, opts),
         live_model_parallel_delegation_contract_eval(cwd, opts),
@@ -1660,6 +1663,92 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("live_model_skill_learning_contract", Exception.message(e), %{})
+  end
+
+  @spec live_model_relevant_skill_usage_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_relevant_skill_usage_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        :ok =
+          write_project_skill(
+            tmp_dir,
+            "release-hotfix-checklist",
+            release_hotfix_checklist_skill()
+          )
+
+        run_id = "eval-live-model-relevant-skill"
+        session_key = "agent:live-model-relevant-skill-eval:main"
+        agent_id = "live-model-relevant-skill-eval"
+
+        tool_opts = [
+          run_id: run_id,
+          session_key: session_key,
+          session_id: session_key,
+          agent_id: agent_id
+        ]
+
+        prompt = live_relevant_skill_usage_eval_prompt()
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [ReadSkill.tool(tmp_dir, tool_opts)]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: stream_options,
+          max_tool_turns: 2
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "Use the relevant skill to check what a release hotfix handoff requires."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "read_skill", "release-hotfix-checklist"),
+             :ok <- assert_final_contains(messages, ["RELEVANT_SKILL_LOADED_LIVE_MODEL"]),
+             :ok <-
+               assert_no_missed_skill_after_audit(messages, prompt, run_id, session_key, agent_id) do
+          %{
+            name: "live_model_relevant_skill_usage_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              loaded_skill: "release-hotfix-checklist"
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_relevant_skill_usage_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_relevant_skill_usage_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_relevant_skill_usage_contract", Exception.message(e), %{})
   end
 
   @spec live_model_skill_curator_contract_eval(String.t(), keyword()) :: eval_result()
@@ -2191,6 +2280,23 @@ defmodule CodingAgent.Evals.Harness do
     The user describes a reusable workflow. Before answering, you must first call `read_skill` with key `release-checklist` and view `summary`. Then call `skill_manage` to create a project skill named `live-release-retro-capture`. Use action `create`, scope `project`, and content that includes YAML front matter with name `live-release-retro-capture`, description `Capture repeated release retrospective handoff steps`, and steps for reviewing changed files, running focused tests, and recording follow-up memory.
 
     After the skill tool result arrives, answer with the exact marker SKILL_CAPTURED_LIVE_MODEL and summarize only that the skill was captured.
+    """
+  end
+
+  defp live_relevant_skill_usage_eval_prompt do
+    """
+    You are running a live-model Lemon relevant-skill usage eval.
+
+    <relevant-skills>
+      <skill>
+        <name>Release Hotfix Checklist</name>
+        <key>release-hotfix-checklist</key>
+        <description>Verify and document release hotfixes.</description>
+      </skill>
+      Use `read_skill` with <key> to load the full content of any relevant skill.
+    </relevant-skills>
+
+    Before answering, call `read_skill` with key `release-hotfix-checklist` and view `summary`. After the read_skill result arrives, answer with the exact marker RELEVANT_SKILL_LOADED_LIVE_MODEL and summarize only the hotfix handoff requirements from the skill.
     """
   end
 
@@ -2778,6 +2884,44 @@ defmodule CodingAgent.Evals.Harness do
       true ->
         :ok
     end
+  end
+
+  defp assert_no_missed_skill_after_audit(messages, prompt, run_id, session_key, agent_id) do
+    state = %{
+      hooks: [],
+      is_streaming: true,
+      steering_queue: :queue.new(),
+      event_streams: %{},
+      run_id: run_id,
+      session_key: session_key,
+      agent_id: agent_id,
+      system_prompt: prompt
+    }
+
+    EventHandler.handle({:agent_end, messages}, state, eval_event_callbacks())
+
+    events =
+      Introspection.list(
+        run_id: run_id,
+        session_key: session_key,
+        event_type: :missed_skill_observed,
+        limit: 10
+      )
+
+    case events do
+      [] -> :ok
+      _ -> {:error, "expected no missed_skill_observed events, got #{inspect(events)}"}
+    end
+  end
+
+  defp eval_event_callbacks do
+    %{
+      set_working_message: fn _state, _message -> :ok end,
+      notify: fn _state, _message, _type -> :ok end,
+      complete_event_streams: fn _state, _event -> :ok end,
+      maybe_trigger_compaction: fn state -> state end,
+      persist_message: fn state, _message -> state end
+    }
   end
 
   defp assert_loop_tool_result(messages, tool_name, expected_text) do

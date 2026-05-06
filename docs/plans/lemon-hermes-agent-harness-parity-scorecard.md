@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: the opt-in live-model lane now verifies workspace memory-file inspection with `grep` and `read` while avoiding `search_memory` and `memory_topic`.
+Latest slice: the opt-in live-model lane now verifies relevant-skill loading with `read_skill` and confirms the missed-skill audit stays clean.
 
 ### Tool ergonomics and enforcement
 
@@ -83,7 +83,7 @@ Latest slice: the opt-in live-model lane now verifies workspace memory-file insp
 - Gaps:
   - The live-model lane now covers basic reusable skill capture through `read_skill` and `skill_manage`.
   - Background curator submission now has deterministic scripted coverage and opt-in live-model coverage for useful umbrella consolidation over real skill clusters.
-  - Missed-skill detection is observable, but there is not yet a live-model eval that drives an independent model trace through the contract.
+  - No active high-priority harness gap remains for relevant-skill loading, missed-skill auditing, or reusable skill capture.
 - Priority: high.
 - Acceptance tests:
   - Native Lemon default tools include `read_skill`.
@@ -95,6 +95,7 @@ Latest slice: the opt-in live-model lane now verifies workspace memory-file insp
   - Eval harness verifies a skill-relevant fixture prompt surfaces a `<relevant-skills>` block, includes a `read_skill` reminder, and does not inline full skill bodies.
   - Eval harness drives `AgentCore.Loop` through real `read_skill` and `skill_manage` tool results before finalizing.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through `read_skill` and `skill_manage create` before answering a reusable-workflow prompt.
+  - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through relevant-skill `read_skill` usage and verifies no missed-skill audit event is recorded.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through curator-style skill reads, umbrella creation, and sibling archives.
 
 ### Memory and session recall
@@ -634,6 +635,12 @@ Latest slice: the opt-in live-model lane now verifies workspace memory-file insp
 1. Added `live_model_workspace_memory_file_contract` to the opt-in live-model eval lane.
 2. Seeded a workspace `memory/topics/release-handoff.md` note and exposed `grep`, `read`, `search_memory`, and `memory_topic` together.
 3. Required the provider-backed model to find and read the workspace memory file while avoiding prior-run search and durable-topic creation.
+
+### Slice 67: Live-model relevant-skill audit coverage
+
+1. Added `live_model_relevant_skill_usage_contract` to the opt-in live-model eval lane.
+2. Seeded a relevant project skill, required the provider-backed model to call `read_skill`, and checked the final answer marker.
+3. Ran the session missed-skill audit over the live transcript and asserted no `:missed_skill_observed` event was recorded for the loaded skill.
 
 ## Follow-up backlog
 
