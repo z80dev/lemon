@@ -170,6 +170,35 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.message =~ "Input should be a valid message"
     end
 
+    test "handles top-level detail maps" do
+      body = %{
+        "detail" => %{
+          "errors" => [
+            %{"loc" => ["body", "messages", 0], "msg" => "Nested detail map message"}
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(422, body, [])
+
+      assert result.provider_message == "Nested detail map message"
+      assert result.message =~ "Nested detail map message"
+    end
+
+    test "handles top-level error arrays" do
+      body = %{
+        "error" => [
+          %{"reason" => "First top-level error array message"},
+          %{"message" => "Second top-level error array message"}
+        ]
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "First top-level error array message"
+      assert result.message =~ "First top-level error array message"
+    end
+
     test "handles nested provider details arrays" do
       body = %{
         "error" => %{

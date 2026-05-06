@@ -476,6 +476,9 @@ defmodule Ai.Error do
   # Generic error formats
   defp extract_provider_message(%{"error" => error}) when is_binary(error), do: error
 
+  defp extract_provider_message(%{"error" => error}) when is_list(error),
+    do: extract_detail_message(error)
+
   defp extract_provider_message(%{"error" => error_map}) when is_map(error_map) do
     # Try to extract nested error information
     parts = []
@@ -493,13 +496,13 @@ defmodule Ai.Error do
   # Direct message fields
   defp extract_provider_message(%{"message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"Message" => message}) when is_binary(message), do: message
-  defp extract_provider_message(%{"detail" => detail}) when is_binary(detail), do: detail
 
-  defp extract_provider_message(%{"detail" => detail}) when is_list(detail),
-    do: extract_detail_message(detail)
+  defp extract_provider_message(%{"detail" => detail})
+       when is_binary(detail) or is_list(detail) or is_map(detail),
+       do: extract_detail_message(detail)
 
   defp extract_provider_message(%{"details" => details})
-       when is_binary(details) or is_list(details),
+       when is_binary(details) or is_list(details) or is_map(details),
        do: extract_detail_message(details)
 
   # Google API format
@@ -521,6 +524,7 @@ defmodule Ai.Error do
   defp extract_provider_message(_), do: nil
 
   defp extract_detail_message(message) when is_binary(message), do: message
+  defp extract_detail_message(%{} = detail), do: find_nested_provider_message(detail)
   defp extract_detail_message([message | _]) when is_binary(message), do: message
 
   defp extract_detail_message([%{"message" => message} | _]) when is_binary(message),
