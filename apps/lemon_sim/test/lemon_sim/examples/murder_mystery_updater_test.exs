@@ -103,7 +103,7 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
     world = Map.put(base_world(), :phase, "discussion")
     state = State.new(sim_id: "mm-test", world: world)
 
-    assert {:ok, next_state, {:decide, reason}} =
+    assert {:ok, _next_state, {:decide, reason}} =
              Updater.apply_event(state, Events.search_room("player_1", "library"), [])
 
     assert String.contains?(reason, "wrong phase")
@@ -117,7 +117,7 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
 
     state = State.new(sim_id: "mm-test", world: world)
 
-    assert {:ok, next_state, {:decide, prompt}} =
+    assert {:ok, next_state, {:decide, _prompt}} =
              Updater.apply_event(
                state,
                Events.ask_player("player_1", "player_2", "Where were you at midnight?"),

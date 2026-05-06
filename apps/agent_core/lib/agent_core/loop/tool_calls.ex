@@ -10,6 +10,27 @@ defmodule AgentCore.Loop.ToolCalls do
     ToolResultMessage
   }
 
+  @unicode_whitespace for codepoint <- [
+                            0x00A0,
+                            0x2000,
+                            0x2001,
+                            0x2002,
+                            0x2003,
+                            0x2004,
+                            0x2005,
+                            0x2006,
+                            0x2007,
+                            0x2008,
+                            0x2009,
+                            0x200A,
+                            0x202F,
+                            0x205F,
+                            0x3000
+                          ],
+                          into: "",
+                          do: <<codepoint::utf8>>
+  @whitespace_pattern Regex.compile!("[\\s" <> @unicode_whitespace <> "]+", "u")
+
   @spec execute_and_collect_tools(
           AgentCore.Types.AgentContext.t(),
           [AgentCore.Types.agent_message()],
@@ -474,10 +495,7 @@ defmodule AgentCore.Loop.ToolCalls do
     # \s in Elixir regex covers: space, tab, newline, carriage return, form feed
     # Plus explicit Unicode: non-breaking space, en/em space, etc.
     name
-    |> String.replace(
-      ~r/[\s\x{00A0}\x{2000}\x{2001}\x{2002}\x{2003}\x{2004}\x{2005}\x{2006}\x{2007}\x{2008}\x{2009}\x{200A}\x{202F}\x{205F}\x{3000}]+/u,
-      " "
-    )
+    |> String.replace(@whitespace_pattern, " ")
     |> String.trim()
   end
 

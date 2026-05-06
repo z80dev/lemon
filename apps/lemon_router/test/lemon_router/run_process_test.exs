@@ -1751,13 +1751,13 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
-                        meta: %{run_id: ^run_id, intent_meta: intent_meta_a} = meta_a
+                        meta: %{run_id: ^run_id, intent_meta: intent_meta_a}
                       } = payload_a},
                      3_000
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
-                        meta: %{run_id: ^run_id, intent_meta: intent_meta_b} = meta_b
+                        meta: %{run_id: ^run_id, intent_meta: intent_meta_b}
                       } = payload_b},
                      3_000
 

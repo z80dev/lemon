@@ -8,7 +8,7 @@ defmodule LemonSim.Examples.CourtroomUpdaterTest do
   # Shared helpers
   # ---------------------------------------------------------------------------
 
-  defp base_world(overrides \\ %{}) do
+  defp base_world(overrides) do
     default = %{
       case_file: %{
         title: "The Test Case",

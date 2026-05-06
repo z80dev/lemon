@@ -56,8 +56,6 @@ defmodule LemonSkills.DiscoveryTest do
                                 ]
                               })
 
-  @github_search_empty Jason.encode!(%{"items" => []})
-
   @valid_skill_md """
   ---
   name: hello-skill

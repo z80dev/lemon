@@ -4,7 +4,7 @@ defmodule LemonCore.TaskFingerprintTest do
   alias LemonCore.MemoryDocument
   alias LemonCore.TaskFingerprint
 
-  defp doc(overrides \\ %{}) do
+  defp doc(overrides) do
     base = %MemoryDocument{
       doc_id: "mem_test",
       run_id: "run_001",
@@ -88,9 +88,7 @@ defmodule LemonCore.TaskFingerprintTest do
 
     test "inherits model and provider" do
       fp =
-        TaskFingerprint.from_document(
-          doc(%{model: "claude-sonnet-4-6", provider: "anthropic"})
-        )
+        TaskFingerprint.from_document(doc(%{model: "claude-sonnet-4-6", provider: "anthropic"}))
 
       assert fp.model == "claude-sonnet-4-6"
       assert fp.provider == "anthropic"
@@ -131,12 +129,15 @@ defmodule LemonCore.TaskFingerprintTest do
     end
 
     test "same fingerprint always produces same key" do
-      fp = TaskFingerprint.from_document(doc(%{
-        prompt_summary: "implement the feature",
-        tools_used: ["bash"],
-        model: "opus",
-        provider: "anthropic"
-      }))
+      fp =
+        TaskFingerprint.from_document(
+          doc(%{
+            prompt_summary: "implement the feature",
+            tools_used: ["bash"],
+            model: "opus",
+            provider: "anthropic"
+          })
+        )
 
       assert TaskFingerprint.key(fp) == TaskFingerprint.key(fp)
     end

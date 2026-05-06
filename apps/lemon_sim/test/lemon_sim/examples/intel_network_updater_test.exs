@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
   alias LemonSim.Examples.IntelNetwork.{Events, Updater}
   alias LemonSim.State
 
-  defp base_world(overrides \\ %{}) do
+  defp base_world(overrides) do
     Map.merge(
       %{
         players: %{
@@ -120,7 +120,7 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
         turn_order: ["agent_1", "agent_2", "agent_4"]
       })
 
-    assert {:ok, next_state, {:decide, reason}} =
+    assert {:ok, _next_state, {:decide, reason}} =
              Updater.apply_event(
                state,
                Events.send_message("agent_1", "agent_4", "This should fail"),

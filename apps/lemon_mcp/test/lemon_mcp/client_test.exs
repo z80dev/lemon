@@ -1,7 +1,6 @@
 defmodule LemonMCP.ClientTest do
   use ExUnit.Case, async: false
 
-  alias LemonMCP.Client
   alias LemonMCP.Protocol
 
   describe "protocol operations" do

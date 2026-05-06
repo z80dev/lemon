@@ -7,7 +7,7 @@ defmodule CodingAgent.Wasm.SidecarSupervisorTest do
   """
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Wasm.{SidecarSupervisor, SidecarSession}
+  alias CodingAgent.Wasm.SidecarSupervisor
 
   setup do
     # Start the supervisor if not already running

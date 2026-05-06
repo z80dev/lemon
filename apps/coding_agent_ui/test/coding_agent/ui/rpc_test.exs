@@ -212,7 +212,7 @@ defmodule CodingAgent.UI.RPCTest do
     end
   end
 
-  defp wait_for_output_count(output, min_count, timeout_ms \\ 1000) do
+  defp wait_for_output_count(output, min_count, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_output_count(output, min_count, deadline)
   end

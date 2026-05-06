@@ -40,6 +40,8 @@ defmodule CodingAgent.RateLimitPauseTest do
       # resume_at should be approximately retry_after_ms in the future
       diff_ms = DateTime.diff(pause.resume_at, pause.paused_at, :millisecond)
       assert diff_ms >= 29_000 and diff_ms <= 31_000
+      assert DateTime.compare(pause.paused_at, before_create) != :lt
+      assert DateTime.compare(pause.paused_at, after_create) != :gt
     end
 
     test "accepts metadata option" do
@@ -209,7 +211,7 @@ defmodule CodingAgent.RateLimitPauseTest do
       session_id = "session_#{System.unique_integer([:positive])}"
 
       assert {:ok, pause1} = RateLimitPause.create(session_id, :anthropic, 600_000)
-      assert {:ok, pause2} = RateLimitPause.create(session_id, :openai, 600_000)
+      assert {:ok, _pause2} = RateLimitPause.create(session_id, :openai, 600_000)
 
       # Resume one
       Process.sleep(1)

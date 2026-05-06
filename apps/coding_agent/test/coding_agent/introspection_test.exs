@@ -141,7 +141,7 @@ defmodule CodingAgent.IntrospectionTest do
     )
   end
 
-  defp start_session(opts \\ []) do
+  defp start_session(opts) do
     opts = default_session_opts(opts)
     {:ok, session} = Session.start_link(opts)
     session

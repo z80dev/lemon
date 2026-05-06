@@ -516,7 +516,7 @@ defmodule LemonGateway.RunTest do
     }
   end
 
-  defp make_request(session_key, opts \\ []) do
+  defp make_request(session_key, opts) do
     job = make_job(session_key, opts)
     ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
   end

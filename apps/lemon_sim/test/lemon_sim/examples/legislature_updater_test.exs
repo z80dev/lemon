@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   alias LemonSim.Examples.Legislature.{Bills, Events, Updater}
   alias LemonSim.State
 
-  defp base_world(overrides \\ %{}) do
+  defp base_world(overrides) do
     player_ids = ["player_1", "player_2", "player_3", "player_4", "player_5"]
 
     base = %{
@@ -545,7 +545,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   test "rejects action from wrong player" do
     state = new_state()
 
-    assert {:ok, next_state, {:decide, msg}} =
+    assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(
                state,
                Events.send_message("player_2", "player_3", "Hello"),
@@ -558,7 +558,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   test "rejects action in wrong phase" do
     state = new_state(%{phase: "floor_debate"})
 
-    assert {:ok, next_state, {:decide, msg}} =
+    assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(
                state,
                Events.send_message("player_1", "player_2", "Hello"),
@@ -571,7 +571,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   test "rejects message to self" do
     state = new_state()
 
-    assert {:ok, next_state, {:decide, msg}} =
+    assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(
                state,
                Events.send_message("player_1", "player_1", "Talking to myself"),
@@ -597,7 +597,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
         }
       })
 
-    assert {:ok, next_state, {:decide, msg}} =
+    assert {:ok, _next_state, {:decide, msg}} =
              Updater.apply_event(
                state,
                Events.cast_votes("player_1", %{

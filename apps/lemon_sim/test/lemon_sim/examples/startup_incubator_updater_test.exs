@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.StartupIncubatorUpdaterTest do
   alias LemonSim.Examples.StartupIncubator.{Events, Updater}
   alias LemonSim.State
 
-  defp base_world(overrides \\ %{}) do
+  defp base_world(overrides) do
     Map.merge(
       %{
         players: %{

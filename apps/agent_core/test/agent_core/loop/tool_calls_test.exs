@@ -343,7 +343,7 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert ToolCalls.normalize_tool_name("read   file") == "read file"
 
     # Unicode whitespace (non-breaking space)
-    assert ToolCalls.normalize_tool_name("read\x{00A0}file") == "read file"
+    assert ToolCalls.normalize_tool_name("read\u00A0file") == "read file"
 
     # Already normalized passes through
     assert ToolCalls.normalize_tool_name("read_file") == "read_file"

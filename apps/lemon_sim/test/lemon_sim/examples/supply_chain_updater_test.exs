@@ -67,7 +67,7 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
     }
   }
 
-  defp base_world(overrides \\ %{}) do
+  defp base_world(overrides) do
     Map.merge(
       %{
         tiers: @initial_tiers,

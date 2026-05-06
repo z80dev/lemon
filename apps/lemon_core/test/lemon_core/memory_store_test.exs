@@ -32,7 +32,7 @@ defmodule LemonCore.MemoryStoreTest do
     %{store_pid: pid, dir: dir}
   end
 
-  defp make_doc(opts \\ []) do
+  defp make_doc(opts) do
     now = System.system_time(:millisecond)
     session_key = Keyword.get(opts, :session_key, "agent:test_agent_#{:rand.uniform(1000)}:main")
     agent_id = Keyword.get(opts, :agent_id, "test_agent_#{:rand.uniform(1000)}")
@@ -61,9 +61,9 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, "agent:rta:main", limit: 10)
-      Enum.any?(results, &(&1.doc_id == doc.doc_id))
-    end)
+             results = MemoryStore.get_by_session(pid, "agent:rta:main", limit: 10)
+             Enum.any?(results, &(&1.doc_id == doc.doc_id))
+           end)
   end
 
   test "get_by_session returns most recent first", %{store_pid: pid} do
@@ -77,9 +77,9 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc_new)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, session, limit: 10)
-      length(results) >= 2
-    end)
+             results = MemoryStore.get_by_session(pid, session, limit: 10)
+             length(results) >= 2
+           end)
 
     results = MemoryStore.get_by_session(pid, session, limit: 10)
     [first | _] = results
@@ -95,9 +95,9 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc2)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_agent(pid, agent_id, limit: 10)
-      length(results) >= 2
-    end)
+             results = MemoryStore.get_by_agent(pid, agent_id, limit: 10)
+             length(results) >= 2
+           end)
   end
 
   test "get_by_workspace filters by workspace_key", %{store_pid: pid} do
@@ -109,9 +109,9 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, other_doc)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_workspace(pid, wk, limit: 10)
-      Enum.any?(results, &(&1.doc_id == doc.doc_id))
-    end)
+             results = MemoryStore.get_by_workspace(pid, wk, limit: 10)
+             Enum.any?(results, &(&1.doc_id == doc.doc_id))
+           end)
 
     results = MemoryStore.get_by_workspace(pid, wk, limit: 10)
     refute Enum.any?(results, &(&1.doc_id == other_doc.doc_id))
@@ -123,16 +123,16 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, session, limit: 10)
-      Enum.any?(results, &(&1.doc_id == doc.doc_id))
-    end)
+             results = MemoryStore.get_by_session(pid, session, limit: 10)
+             Enum.any?(results, &(&1.doc_id == doc.doc_id))
+           end)
 
     MemoryStore.delete_by_session(pid, session)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, session, limit: 10)
-      Enum.empty?(results)
-    end)
+             results = MemoryStore.get_by_session(pid, session, limit: 10)
+             Enum.empty?(results)
+           end)
   end
 
   test "stats returns total count", %{store_pid: pid} do
@@ -140,9 +140,9 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc)
 
     assert eventually(fn ->
-      stats = MemoryStore.stats(pid)
-      stats.total > 0
-    end)
+             stats = MemoryStore.stats(pid)
+             stats.total > 0
+           end)
   end
 
   test "get_by_session returns empty list for unknown session", %{store_pid: pid} do
@@ -158,9 +158,9 @@ defmodule LemonCore.MemoryStoreTest do
     end
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, session, limit: 10)
-      length(results) >= 5
-    end)
+             results = MemoryStore.get_by_session(pid, session, limit: 10)
+             length(results) >= 5
+           end)
 
     results = MemoryStore.get_by_session(pid, session, limit: 3)
     assert length(results) == 3
@@ -169,19 +169,23 @@ defmodule LemonCore.MemoryStoreTest do
   test "search returns matching documents", %{store_pid: pid} do
     session = "agent:search_test_#{:rand.uniform(9999)}:main"
 
-    doc = make_doc(
-      session_key: session,
-      prompt: "How do I deploy to production?",
-      answer: "Run mix release and copy the tarball."
-    )
+    doc =
+      make_doc(
+        session_key: session,
+        prompt: "How do I deploy to production?",
+        answer: "Run mix release and copy the tarball."
+      )
+
     MemoryStore.put(pid, doc)
 
     assert eventually(fn ->
-      results = MemoryStore.get_by_session(pid, session, limit: 10)
-      length(results) >= 1
-    end)
+             results = MemoryStore.get_by_session(pid, session, limit: 10)
+             length(results) >= 1
+           end)
 
-    results = MemoryStore.search(pid, "deploy production", scope: :session, scope_key: session, limit: 5)
+    results =
+      MemoryStore.search(pid, "deploy production", scope: :session, scope_key: session, limit: 5)
+
     assert Enum.any?(results, &(&1.doc_id == doc.doc_id))
   end
 
@@ -190,8 +194,8 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, make_doc(session_key: session))
 
     assert eventually(fn ->
-      MemoryStore.get_by_session(pid, session, limit: 10) != []
-    end)
+             MemoryStore.get_by_session(pid, session, limit: 10) != []
+           end)
 
     assert {:ok, %{swept: _, pruned: _}} = MemoryStore.prune(pid)
   end
@@ -202,10 +206,16 @@ defmodule LemonCore.MemoryStoreTest do
     MemoryStore.put(pid, doc)
 
     assert eventually(fn ->
-      MemoryStore.get_by_session(pid, session, limit: 10) != []
-    end)
+             MemoryStore.get_by_session(pid, session, limit: 10) != []
+           end)
 
-    results = MemoryStore.search(pid, "completely unrelated xyzzy quux", scope: :session, scope_key: session, limit: 5)
+    results =
+      MemoryStore.search(pid, "completely unrelated xyzzy quux",
+        scope: :session,
+        scope_key: session,
+        limit: 5
+      )
+
     assert results == []
   end
 
@@ -220,8 +230,8 @@ defmodule LemonCore.MemoryStoreTest do
       MemoryStore.put(pid, doc_b)
 
       assert eventually(fn ->
-        MemoryStore.get_by_session(pid, session_a, limit: 10) != []
-      end)
+               MemoryStore.get_by_session(pid, session_a, limit: 10) != []
+             end)
 
       # Scoped search with nil scope_key must NOT fall back to :all
       results = MemoryStore.search(pid, "deploy", scope: :session, scope_key: nil, limit: 10)
@@ -230,12 +240,15 @@ defmodule LemonCore.MemoryStoreTest do
 
     test "scoped :agent search with nil scope_key returns empty list", %{store_pid: pid} do
       agent_id = "agent_j4_#{:rand.uniform(9999)}"
-      doc = make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main", prompt: "fix the bug")
+
+      doc =
+        make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main", prompt: "fix the bug")
+
       MemoryStore.put(pid, doc)
 
       assert eventually(fn ->
-        MemoryStore.get_by_agent(pid, agent_id, limit: 10) != []
-      end)
+               MemoryStore.get_by_agent(pid, agent_id, limit: 10) != []
+             end)
 
       results = MemoryStore.search(pid, "fix", scope: :agent, scope_key: nil, limit: 10)
       assert results == [], "agent-scoped search with nil scope_key must return empty"
@@ -247,8 +260,8 @@ defmodule LemonCore.MemoryStoreTest do
       MemoryStore.put(pid, doc)
 
       assert eventually(fn ->
-        MemoryStore.get_by_workspace(pid, wk, limit: 10) != []
-      end)
+               MemoryStore.get_by_workspace(pid, wk, limit: 10) != []
+             end)
 
       results = MemoryStore.search(pid, "refactor", scope: :workspace, scope_key: nil, limit: 10)
       assert results == [], "workspace-scoped search with nil scope_key must return empty"
@@ -260,8 +273,8 @@ defmodule LemonCore.MemoryStoreTest do
       MemoryStore.put(pid, doc)
 
       assert eventually(fn ->
-        MemoryStore.get_by_session(pid, session, limit: 10) != []
-      end)
+               MemoryStore.get_by_session(pid, session, limit: 10) != []
+             end)
 
       results = MemoryStore.search(pid, "deploy", scope: :all, limit: 10)
       assert Enum.any?(results, &(&1.doc_id == doc.doc_id))
@@ -293,6 +306,7 @@ defmodule LemonCore.MemoryStoreTest do
   end
 
   defp eventually(fun, attempts \\ 20)
+
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do
       true
@@ -301,5 +315,6 @@ defmodule LemonCore.MemoryStoreTest do
       eventually(fun, attempts - 1)
     end
   end
+
   defp eventually(_fun, 0), do: false
 end
