@@ -347,18 +347,12 @@ defmodule Ai.ErrorEdgeCasesTest do
     end
 
     test "handles ISO 8601 reset time format" do
-      # Use future date for this test
       headers = [
         {"x-ratelimit-reset-requests", "2030-01-15T12:00:00Z"}
       ]
 
       info = Error.extract_rate_limit_info(headers)
-      # The implementation tries Integer.parse first, which returns 2030
-      # (the year part before non-numeric characters), treating it as Unix timestamp
-      # This is actually year 1970 + a few seconds
-      assert info.reset_at != nil
-      # The parsed timestamp is 2030 seconds from Unix epoch
-      assert DateTime.to_unix(info.reset_at) == 2030
+      assert info.reset_at == ~U[2030-01-15 12:00:00Z]
     end
 
     test "handles Unix timestamp reset time" do

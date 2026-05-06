@@ -515,6 +515,8 @@ defmodule Ai.ErrorProviderTest do
 
   describe "rate limit header extraction - OpenAI format" do
     test "extracts OpenAI request-based rate limits" do
+      before = DateTime.utc_now()
+
       headers = [
         {"x-ratelimit-limit-requests", "10000"},
         {"x-ratelimit-remaining-requests", "9999"},
@@ -525,9 +527,12 @@ defmodule Ai.ErrorProviderTest do
 
       assert info.limit == 10000
       assert info.remaining == 9999
+      assert DateTime.diff(info.reset_at, before, :millisecond) >= 0
     end
 
     test "extracts OpenAI token-based rate limits" do
+      before = DateTime.utc_now()
+
       headers = [
         {"x-ratelimit-limit-tokens", "1000000"},
         {"x-ratelimit-remaining-tokens", "999500"},
@@ -538,6 +543,7 @@ defmodule Ai.ErrorProviderTest do
 
       assert info.limit == 1_000_000
       assert info.remaining == 999_500
+      assert DateTime.diff(info.reset_at, before, :millisecond) in 359_000..361_000
     end
 
     test "request limits take precedence over token limits" do
@@ -702,8 +708,7 @@ defmodule Ai.ErrorProviderTest do
       assert info.reset_at == DateTime.from_unix!(timestamp)
     end
 
-    test "parses Unix timestamp (milliseconds treated as large seconds)" do
-      # Millisecond timestamps cause overflow when treated as seconds
+    test "parses Unix timestamp in milliseconds" do
       timestamp_ms = 1_704_067_200_000
 
       headers = [
@@ -712,22 +717,17 @@ defmodule Ai.ErrorProviderTest do
 
       info = Error.extract_rate_limit_info(headers)
 
-      # Very large timestamps exceed DateTime range, returning :invalid_unix_time
-      # which the implementation converts to the error tuple value from DateTime.from_unix
-      assert info.reset_at == :invalid_unix_time
+      assert info.reset_at == DateTime.from_unix!(timestamp_ms, :millisecond)
     end
 
-    test "parses ISO 8601 datetime - note: integer prefix is parsed" do
-      # When a value starts with digits, Integer.parse captures those first
+    test "parses ISO 8601 datetime" do
       headers = [
         {"x-ratelimit-reset-requests", "2024-01-15T12:00:00Z"}
       ]
 
       info = Error.extract_rate_limit_info(headers)
 
-      # Implementation parses "2024" as integer first
-      assert info.reset_at != nil
-      assert DateTime.to_unix(info.reset_at) == 2024
+      assert info.reset_at == ~U[2024-01-15 12:00:00Z]
     end
 
     test "returns nil for non-parseable reset time" do

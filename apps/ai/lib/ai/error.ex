@@ -489,24 +489,64 @@ defmodule Ai.Error do
   defp parse_integer(_), do: nil
 
   defp parse_reset_time(value) when is_binary(value) do
-    # Try parsing as Unix timestamp first
-    case Integer.parse(value) do
-      {timestamp, _} ->
-        case DateTime.from_unix(timestamp) do
-          {:ok, datetime} -> datetime
-          {:error, reason} -> reason
-        end
+    value = String.trim(value)
 
-      :error ->
-        # Try parsing as ISO 8601
-        case DateTime.from_iso8601(value) do
-          {:ok, dt, _} -> dt
-          _ -> nil
-        end
+    cond do
+      duration_ms = parse_reset_duration_ms(value) ->
+        DateTime.utc_now() |> DateTime.add(duration_ms, :millisecond)
+
+      dt = parse_reset_iso8601(value) ->
+        dt
+
+      Regex.match?(~r/^\d+$/, value) ->
+        parse_reset_unix_time(value)
+
+      true ->
+        nil
     end
   end
 
   defp parse_reset_time(_), do: nil
+
+  defp parse_reset_iso8601(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+
+  defp parse_reset_unix_time(value) do
+    {timestamp, ""} = Integer.parse(value)
+    unit = if String.length(value) >= 13, do: :millisecond, else: :second
+
+    case DateTime.from_unix(timestamp, unit) do
+      {:ok, datetime} -> datetime
+      {:error, reason} -> reason
+    end
+  end
+
+  defp parse_reset_duration_ms(value) do
+    normalized = String.replace(value, " ", "")
+    matches = Regex.scan(~r/(\d+(?:\.\d+)?)(ms|h|m|s)/, normalized)
+
+    if matches == [] or Enum.map_join(matches, "", &Enum.at(&1, 0)) != normalized do
+      nil
+    else
+      matches
+      |> Enum.reduce(0.0, fn [_, amount, unit], total ->
+        {number, ""} = Float.parse(amount)
+
+        total +
+          case unit do
+            "h" -> number * 60 * 60 * 1000
+            "m" -> number * 60 * 1000
+            "s" -> number * 1000
+            "ms" -> number
+          end
+      end)
+      |> round()
+    end
+  end
 
   defp parse_retry_after("retry-after", value) when is_binary(value) do
     # Retry-After can be seconds or an HTTP date
