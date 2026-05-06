@@ -62,6 +62,7 @@ defmodule CodingAgent.Evals.Harness do
         tool_use_claim_contract_eval(cwd),
         untrusted_prompt_injection_contract_eval(cwd),
         agent_loop_learning_trace_contract_eval(cwd),
+        agent_loop_skill_refinement_trace_contract_eval(cwd),
         agent_loop_memory_trace_contract_eval(cwd),
         agent_loop_workspace_memory_file_contract_eval(cwd),
         agent_loop_async_join_trace_contract_eval(cwd),
@@ -808,6 +809,119 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("agent_loop_learning_trace_contract", Exception.message(e), %{})
+  end
+
+  @spec agent_loop_skill_refinement_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_skill_refinement_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        :ok =
+          write_project_skill(
+            tmp_dir,
+            "release-hotfix-checklist",
+            release_hotfix_checklist_skill()
+          )
+
+        tool_opts = [
+          run_id: "eval-agent-loop-skill-refinement-trace",
+          session_key: "agent:agent-loop-skill-refinement-trace-eval:main",
+          session_id: "agent:agent-loop-skill-refinement-trace-eval:main",
+          agent_id: "agent-loop-skill-refinement-trace-eval"
+        ]
+
+        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+
+        prompt =
+          PromptBuilder.build(tmp_dir, %{
+            base_prompt: "Base.",
+            context: "release hotfix checklist needs an added follow-up owner step",
+            include_skills: true,
+            include_commands: false,
+            include_mentions: false
+          })
+
+        responses = [
+          trace_tool_response([
+            trace_tool_call(
+              "read_skill",
+              %{"key" => "release-hotfix-checklist", "view" => "full"},
+              id: "call-read-existing-skill"
+            )
+          ]),
+          trace_tool_response([
+            trace_tool_call(
+              "skill_manage",
+              %{
+                "action" => "patch",
+                "name" => "release-hotfix-checklist",
+                "scope" => "project",
+                "old_string" => "3. Record the result and rollback note.",
+                "new_string" => "3. Record the result, rollback note, and exact follow-up owner."
+              },
+              id: "call-patch-existing-skill"
+            )
+          ]),
+          trace_final_response("Skill refined.")
+        ]
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [read_tool, skill_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: scripted_stream_fn(responses)
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "We learned release hotfix handoffs must name the follow-up owner. Update the existing checklist."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        skill_path =
+          Path.join([tmp_dir, ".lemon", "skill", "release-hotfix-checklist", "SKILL.md"])
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_loop_tool_result(messages, "read_skill", "rollback note"),
+             :ok <- assert_loop_tool_result(messages, "skill_manage", "Patched"),
+             :ok <- assert_contains(File.read!(skill_path), "exact follow-up owner") do
+          %{
+            name: "agent_loop_skill_refinement_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              updated: "release-hotfix-checklist"
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail(
+              "agent_loop_skill_refinement_trace_contract",
+              format_reason(reason),
+              %{}
+            )
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_skill_refinement_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_skill_refinement_trace_contract", Exception.message(e), %{})
   end
 
   @spec agent_loop_memory_trace_contract_eval(String.t()) :: eval_result()
