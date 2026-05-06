@@ -387,6 +387,23 @@ defmodule CodingAgent.Tools.TaskTest do
   end
 
   describe "prompt tool-only guardrails" do
+    test "defaults internal task child sessions to leaf_worker policy" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "Inspect repo",
+                   "prompt" => "Check whether foo exists."
+                 },
+                 "/tmp"
+               )
+
+      assert validated.engine == nil
+      assert validated.tool_policy.profile == :leaf_worker
+      refute CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "task")
+      refute CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "agent")
+      assert CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "read")
+    end
+
     test "infers an internal tool policy from tool-only prompt wording" do
       assert {:ok, validated} =
                Params.validate_run_params(
@@ -414,7 +431,7 @@ defmodule CodingAgent.Tools.TaskTest do
                  "/tmp"
                )
 
-      assert validated.tool_policy == nil
+      assert validated.tool_policy.profile == :leaf_worker
       assert validated.prompt == "Use bash/read/curl tools only."
     end
 

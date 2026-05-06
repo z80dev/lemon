@@ -134,8 +134,11 @@ defmodule CodingAgent.Tools.Task.Params do
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
 
-        {effective_prompt, effective_tool_policy} =
+        {effective_prompt, guarded_tool_policy} =
           apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy)
+
+        effective_tool_policy =
+          guarded_tool_policy || default_task_tool_policy(normalized_engine)
 
         followup_queue_mode =
           if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
@@ -228,6 +231,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "- role: Optional specialization that applies to ANY engine\n" <>
         "- cwd: Optional working directory override\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>
+        "  - Internal task children default to leaf_worker policy, so they cannot recursively use task/agent unless this is explicitly overridden\n" <>
         "- session_key/agent_id: Optional async followup routing overrides\n" <>
         "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>
         "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
@@ -352,6 +356,9 @@ defmodule CodingAgent.Tools.Task.Params do
       {prompt, tool_policy}
     end
   end
+
+  defp default_task_tool_policy(nil), do: ToolPolicy.from_profile(:leaf_worker)
+  defp default_task_tool_policy(_engine), do: nil
 
   defp infer_tool_only_policy(prompt) when is_binary(prompt) do
     case Regex.run(@tool_only_guardrail_regex, prompt) do
