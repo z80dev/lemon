@@ -590,7 +590,7 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.CronStore` | Persistence via LemonCore.Store (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | Persistent markdown-based cross-run memory; auto-compaction |
 | `LemonAutomation.HeartbeatManager` | Heartbeat suppression GenServer; manages timer and cron heartbeats |
-| `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts |
+| `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts with a learning-only default tool policy |
 | `LemonAutomation.SkillCuratorManager` | Periodic idle scheduler for `SkillCurator.run_once/1` |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |
 | `LemonAutomation.RunCompletionWaiter` | Waits on Bus for `:run_completed` event; handles multiple payload formats |

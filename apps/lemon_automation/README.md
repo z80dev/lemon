@@ -50,7 +50,10 @@ CronManager (tick every 60s)
 been idle long enough and the persisted curator interval gate is due. It asks
 `LemonSkills.Curator` to apply conservative stale/archive/reactivation
 transitions, then submits the generated review prompt to `LemonRouter` only when
-agent-authored skills require a consolidation pass.
+agent-authored skills require a consolidation pass. Curator review runs default
+to a learning-only tool policy that exposes `read_skill`, `skill_manage`,
+`search_memory`, and `memory_topic`; override it with `tool_policy` in the
+curator config when an operator needs a narrower or broader surface.
 
 ### Session Isolation
 
@@ -89,7 +92,7 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Output truncation**: Run output capped at 1,000 characters in CronStore; forwarded summaries capped at 12,000 bytes
 - **Memory file limits**: 24,000 chars max per memory file, 8,000 chars injected into prompts, 2,000 chars per run result entry
 - **Memory file location**: Defaults to `~/.lemon/cron_memory/{job_id}.md`, overridable via `memory_file` field on the job or in `meta`
-- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2`
+- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}`
 
 ## Usage
 

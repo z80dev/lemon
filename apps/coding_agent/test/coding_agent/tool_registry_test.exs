@@ -136,6 +136,22 @@ defmodule CodingAgent.ToolRegistryTest do
         assert tool.name in builtin_names
       end
     end
+
+    test "respects tool policy allow list", %{tmp_dir: tmp_dir} do
+      tools =
+        ToolRegistry.get_tools(tmp_dir,
+          tool_policy: %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}
+        )
+
+      names = Enum.map(tools, & &1.name)
+
+      assert Enum.sort(names) ==
+               Enum.sort(["read_skill", "skill_manage", "search_memory", "memory_topic"])
+
+      refute "bash" in names
+      refute "webfetch" in names
+      refute "task" in names
+    end
   end
 
   describe "get_tool/3" do

@@ -12,6 +12,7 @@ defmodule LemonAutomation.SkillCurator do
   @default_stale_after_days 30
   @default_archive_after_days 90
   @default_agent_id "default"
+  @curator_allowed_tools ["read_skill", "skill_manage", "search_memory", "memory_topic"]
 
   @doc """
   Run one curator pass and submit the review prompt when needed.
@@ -111,6 +112,7 @@ defmodule LemonAutomation.SkillCurator do
       session_key: session_key,
       agent_id: agent_id,
       prompt: prompt,
+      tool_policy: curator_tool_policy(cfg),
       meta: %{
         skill_curator: true,
         skill_curator_started_at: result.started_at,
@@ -167,9 +169,17 @@ defmodule LemonAutomation.SkillCurator do
       min_idle_hours: @default_min_idle_hours,
       stale_after_days: @default_stale_after_days,
       archive_after_days: @default_archive_after_days,
+      tool_policy: nil,
       agent_id: @default_agent_id,
       session_key: nil
     ]
+  end
+
+  defp curator_tool_policy(cfg) do
+    case Keyword.get(cfg, :tool_policy) do
+      policy when is_map(policy) -> policy
+      _ -> %{allow: @curator_allowed_tools}
+    end
   end
 
   defp normalize_config(config) when is_map(config) do
@@ -195,6 +205,7 @@ defmodule LemonAutomation.SkillCurator do
       "min_idle_hours" -> :min_idle_hours
       "stale_after_days" -> :stale_after_days
       "archive_after_days" -> :archive_after_days
+      "tool_policy" -> :tool_policy
       "agent_id" -> :agent_id
       "session_key" -> :session_key
       _ -> key

@@ -105,8 +105,26 @@ defmodule LemonAutomation.SkillCuratorTest do
     assert params.agent_id == "curator-agent"
     assert params.session_key == "agent:curator-agent:main"
     assert params.prompt == "review demo"
+    assert params.tool_policy == %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}
     assert params.meta.skill_curator == true
     assert params.meta.skill_curator_candidate_count == 1
+  end
+
+  test "allows explicit curator tool policy override" do
+    assert {:ok, result} =
+             SkillCurator.run_once(
+               enabled: true,
+               curator_mod: ReviewCurator,
+               router_mod: RouterStub,
+               tool_policy: %{allow: ["read_skill"], blocked_tools: ["bash"]}
+             )
+
+    assert result.submitted == true
+
+    assert_receive {:should_run_now, _opts}
+    assert_receive {:curator_run, _opts}
+    assert_receive {:router_submit, params}
+    assert params.tool_policy == %{allow: ["read_skill"], blocked_tools: ["bash"]}
   end
 
   test "does not submit when only automatic transitions ran" do

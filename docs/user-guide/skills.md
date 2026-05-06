@@ -256,6 +256,8 @@ machine-readable audit record; the markdown report is the quick human review.
 The runtime also has an idle background curator path. When enabled, Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
+Those background reviews default to the learning tools only: `read_skill`,
+`skill_manage`, `search_memory`, and `memory_topic`.
 
 ---
 
