@@ -781,7 +781,10 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
       "function_call" ->
-        tool_id = response_tool_call_id(item, state.model)
+        tool_id =
+          item
+          |> response_tool_call_id(state.model)
+          |> unique_response_tool_call_id(state)
 
         block = %ToolCall{
           type: :tool_call,
@@ -991,14 +994,15 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
         tool_call = %ToolCall{
           type: :tool_call,
-          id: response_tool_call_id(item, state.model, state.current_block.id),
+          id:
+            item
+            |> response_tool_call_id(state.model, state.current_block.id)
+            |> unique_response_tool_call_id(state, exclude_current: true),
           name: response_tool_name(item, state.current_block.name),
           arguments: args
         }
 
-        # Remove :partial_json from the block stored in output
-        clean_block = Map.delete(state.current_block, :partial_json) |> Map.put(:arguments, args)
-        output = update_content_block(state.output, clean_block)
+        output = update_content_block(state.output, tool_call)
         idx = length(output.content) - 1
 
         EventStream.push_async(state.stream, {:tool_call_end, idx, tool_call, output})
@@ -1095,6 +1099,32 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     item_id = present_or_generated(Map.get(item, "id"), "fc_", seed)
 
     normalize_tool_call_id("#{call_id}|#{item_id}", model.provider)
+  end
+
+  defp unique_response_tool_call_id(requested_id, state, opts \\ []) do
+    content =
+      if Keyword.get(opts, :exclude_current, false) do
+        Enum.drop(state.output.content, -1)
+      else
+        state.output.content
+      end
+
+    used_ids =
+      content
+      |> Enum.filter(&match?(%ToolCall{}, &1))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    if MapSet.member?(used_ids, requested_id) do
+      1
+      |> Stream.iterate(&(&1 + 1))
+      |> Enum.find_value(fn suffix ->
+        candidate = "#{requested_id}_#{suffix}"
+        if MapSet.member?(used_ids, candidate), do: nil, else: candidate
+      end)
+    else
+      requested_id
+    end
   end
 
   defp response_tool_name(item, fallback \\ nil)

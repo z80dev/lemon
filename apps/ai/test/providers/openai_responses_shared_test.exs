@@ -713,6 +713,92 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     EventStream.cancel(stream, :test_cleanup)
   end
 
+  test "process_stream normalizes duplicate function call ids to unique ids" do
+    {:ok, stream} = EventStream.start_link()
+
+    events = [
+      %{
+        "type" => "response.output_item.added",
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "call_dup",
+          "id" => "fc_dup",
+          "name" => "tool_a"
+        }
+      },
+      %{
+        "type" => "response.function_call_arguments.done",
+        "arguments" => "{\"foo\":1}"
+      },
+      %{
+        "type" => "response.output_item.done",
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "call_dup",
+          "id" => "fc_dup",
+          "name" => "tool_a",
+          "arguments" => "{\"foo\":1}"
+        }
+      },
+      %{
+        "type" => "response.output_item.added",
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "call_dup",
+          "id" => "fc_dup",
+          "name" => "tool_b"
+        }
+      },
+      %{"type" => "response.function_call_arguments.delta", "delta" => "{\"bar\":"},
+      %{"type" => "response.function_call_arguments.delta", "delta" => "2}"},
+      %{
+        "type" => "response.output_item.done",
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "call_dup",
+          "id" => "fc_dup",
+          "name" => "tool_b",
+          "arguments" => "{\"bar\":2}"
+        }
+      },
+      %{"type" => "response.completed", "response" => %{"status" => "completed"}}
+    ]
+
+    output = %AssistantMessage{
+      role: :assistant,
+      content: [],
+      api: :openai_responses,
+      provider: :openai,
+      model: "gpt-4o",
+      usage: %Usage{cost: %Cost{}},
+      stop_reason: :stop,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      cost: %ModelCost{}
+    }
+
+    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+    assert [%ToolCall{} = first, %ToolCall{} = second] = final.content
+    assert final.stop_reason == :tool_use
+
+    assert first.id == "call_dup|fc_dup"
+    assert first.name == "tool_a"
+    assert first.arguments == %{"foo" => 1}
+
+    assert second.id == "call_dup|fc_dup_1"
+    assert second.name == "tool_b"
+    assert second.arguments == %{"bar" => 2}
+
+    EventStream.cancel(stream, :test_cleanup)
+  end
+
   test "process_stream builds reasoning blocks with signature" do
     {:ok, stream} = EventStream.start_link()
 
