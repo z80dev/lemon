@@ -546,71 +546,7 @@ defmodule Ai.Providers.GoogleShared do
   """
   @spec extract_retry_delay(String.t(), map()) :: non_neg_integer() | nil
   def extract_retry_delay(error_text, headers \\ %{}) do
-    normalize_delay = fn ms ->
-      if ms > 0, do: ceil(ms) + 1000, else: nil
-    end
-
-    # Check headers first
-    delay_from_headers =
-      cond do
-        retry_after = Map.get(headers, "retry-after") ->
-          case Float.parse(retry_after) do
-            {seconds, ""} when seconds > 0 -> normalize_delay.(seconds * 1000)
-            _ -> nil
-          end
-
-        reset = Map.get(headers, "x-ratelimit-reset-after") ->
-          case Float.parse(reset) do
-            {seconds, ""} when seconds > 0 -> normalize_delay.(seconds * 1000)
-            _ -> nil
-          end
-
-        true ->
-          nil
-      end
-
-    if delay_from_headers,
-      do: delay_from_headers,
-      else: extract_delay_from_text(error_text, normalize_delay)
-  end
-
-  defp extract_delay_from_text(text, normalize_delay) do
-    # Pattern 1: "Your quota will reset after ..." (formats: "18h31m10s", "10m15s", "6s", "39s")
-    duration_pattern = ~r/reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i
-
-    case Regex.run(duration_pattern, text) do
-      [_, hours, minutes, seconds] ->
-        h = if hours && hours != "", do: String.to_integer(hours), else: 0
-        m = if minutes && minutes != "", do: String.to_integer(minutes), else: 0
-        {s, _} = Float.parse(seconds)
-        total_ms = ((h * 60 + m) * 60 + s) * 1000
-        normalize_delay.(total_ms)
-
-      _ ->
-        # Pattern 2: "Please retry in X[ms|s]"
-        retry_in_pattern = ~r/Please retry in ([0-9.]+)(ms|s)/i
-
-        case Regex.run(retry_in_pattern, text) do
-          [_, value, unit] ->
-            {num, _} = Float.parse(value)
-            ms = if String.downcase(unit) == "ms", do: num, else: num * 1000
-            normalize_delay.(ms)
-
-          _ ->
-            # Pattern 3: "retryDelay": "34.074824224s"
-            retry_delay_pattern = ~r/"retryDelay":\s*"([0-9.]+)(ms|s)"/i
-
-            case Regex.run(retry_delay_pattern, text) do
-              [_, value, unit] ->
-                {num, _} = Float.parse(value)
-                ms = if String.downcase(unit) == "ms", do: num, else: num * 1000
-                normalize_delay.(ms)
-
-              _ ->
-                nil
-            end
-        end
-    end
+    Ai.Providers.RetryHelper.extract_retry_delay_ms(error_text, headers)
   end
 
   @doc """

@@ -491,7 +491,13 @@ The first code slice from this scorecard made `read_skill` available in the defa
 2. Replaced the simple closing-brace fallback with stack-based completion so nested arrays/objects close in the correct order.
 3. Added a regression that streams a truncated `{"files":["mix.exs"` argument and verifies finalization keeps `%{"files" => ["mix.exs"]}`.
 
+### Slice 44: Provider retry delay normalization
+
+1. Moved retry-delay extraction for `retry-after`, `x-ratelimit-reset-after`, `Please retry in`, reset-after, and `retryDelay` hints into `Ai.Providers.RetryHelper`.
+2. Wired OpenAI-compatible streaming retries to honor provider-supplied retry delays before falling back to jittered exponential backoff.
+3. Added focused retry-helper coverage plus an OpenAI-compatible 429 regression that verifies the retry waits for the supplied header.
+
 ## Follow-up backlog
 
 1. Add live-model delegation evals for side-effect verification and leaf/orchestrator toolset restrictions.
-2. Continue provider-weirdness regressions for retry-after/rate-limit paths, context overflow, and provider-normalized response errors.
+2. Continue provider-weirdness regressions for context overflow and provider-normalized response errors.

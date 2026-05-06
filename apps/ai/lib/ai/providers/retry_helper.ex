@@ -97,4 +97,108 @@ defmodule Ai.Providers.RetryHelper do
   end
 
   def retryable_error_text?(_), do: false
+
+  @doc """
+  Extract a provider retry delay from headers or error text.
+
+  Returns milliseconds with a 1s buffer, matching the existing provider retry
+  behavior for `retry-after`, `x-ratelimit-reset-after`, `retryDelay`, and
+  common text retry hints.
+  """
+  @spec extract_retry_delay_ms(String.t(), map() | list()) :: non_neg_integer() | nil
+  def extract_retry_delay_ms(error_text, headers \\ %{}) do
+    headers = normalize_headers(headers)
+
+    delay_from_headers =
+      cond do
+        retry_after = Map.get(headers, "retry-after") ->
+          parse_seconds_delay(retry_after)
+
+        reset_after = Map.get(headers, "x-ratelimit-reset-after") ->
+          parse_seconds_delay(reset_after)
+
+        true ->
+          nil
+      end
+
+    delay_from_headers || extract_retry_delay_from_text(error_text)
+  end
+
+  defp normalize_headers(headers) when is_map(headers) do
+    Map.new(headers, fn {key, value} ->
+      {normalize_header_key(key), normalize_header_value(value)}
+    end)
+  end
+
+  defp normalize_headers(headers) when is_list(headers) do
+    Map.new(headers, fn {key, value} ->
+      {normalize_header_key(key), normalize_header_value(value)}
+    end)
+  end
+
+  defp normalize_headers(_), do: %{}
+
+  defp normalize_header_key(key), do: key |> to_string() |> String.downcase()
+
+  defp normalize_header_value([value | _]), do: normalize_header_value(value)
+  defp normalize_header_value(value), do: to_string(value)
+
+  defp parse_seconds_delay(value) do
+    case Float.parse(value) do
+      {seconds, ""} when seconds > 0 -> normalize_delay_ms(seconds * 1000)
+      _ -> nil
+    end
+  end
+
+  defp extract_retry_delay_from_text(text) when is_binary(text) do
+    duration_pattern = ~r/reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i
+
+    case Regex.run(duration_pattern, text) do
+      [_, hours, minutes, seconds] ->
+        h = if hours && hours != "", do: String.to_integer(hours), else: 0
+        m = if minutes && minutes != "", do: String.to_integer(minutes), else: 0
+        {s, _} = Float.parse(seconds)
+        normalize_delay_ms(((h * 60 + m) * 60 + s) * 1000)
+
+      _ ->
+        extract_retry_in_delay(text)
+    end
+  end
+
+  defp extract_retry_delay_from_text(_), do: nil
+
+  defp extract_retry_in_delay(text) do
+    retry_in_pattern = ~r/Please retry in ([0-9.]+)(ms|s)/i
+
+    case Regex.run(retry_in_pattern, text) do
+      [_, value, unit] ->
+        parse_unit_delay(value, unit)
+
+      _ ->
+        extract_json_retry_delay(text)
+    end
+  end
+
+  defp extract_json_retry_delay(text) do
+    retry_delay_pattern = ~r/"retryDelay":\s*"([0-9.]+)(ms|s)"/i
+
+    case Regex.run(retry_delay_pattern, text) do
+      [_, value, unit] -> parse_unit_delay(value, unit)
+      _ -> nil
+    end
+  end
+
+  defp parse_unit_delay(value, unit) do
+    case Float.parse(value) do
+      {num, _} ->
+        ms = if String.downcase(unit) == "ms", do: num, else: num * 1000
+        normalize_delay_ms(ms)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp normalize_delay_ms(ms) when ms > 0, do: ceil(ms) + 1000
+  defp normalize_delay_ms(_), do: nil
 end

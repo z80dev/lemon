@@ -860,7 +860,7 @@ defmodule Ai.Providers.OpenAICompletions do
             output = process_sse_stream(stream, initial_output, response)
 
             if attempt < @max_retries and retryable_stream_output_error?(output) do
-              Process.sleep(retry_delay_ms(attempt))
+              Process.sleep(retry_delay_ms(attempt, output.error_message))
 
               stream_request_with_retries(
                 stream,
@@ -876,7 +876,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
           attempt < @max_retries and
               Ai.Providers.RetryHelper.retryable_http_status?(response.status) ->
-            Process.sleep(retry_delay_ms(attempt))
+            Process.sleep(retry_delay_ms(attempt, response))
             stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
 
           true ->
@@ -1038,6 +1038,19 @@ defmodule Ai.Providers.OpenAICompletions do
   defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
     Ai.Providers.RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
   end
+
+  defp retry_delay_ms(attempt, %Req.Response{} = response) do
+    error_text = extract_error_message(response.body)
+
+    Ai.Providers.RetryHelper.extract_retry_delay_ms(error_text, response.headers) ||
+      retry_delay_ms(attempt)
+  end
+
+  defp retry_delay_ms(attempt, error_text) when is_binary(error_text) do
+    Ai.Providers.RetryHelper.extract_retry_delay_ms(error_text) || retry_delay_ms(attempt)
+  end
+
+  defp retry_delay_ms(attempt, _), do: retry_delay_ms(attempt)
 
   defp retryable_stream_output_error?(
          %AssistantMessage{

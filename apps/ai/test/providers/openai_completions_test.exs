@@ -254,6 +254,48 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:ok, _result} = EventStream.result(stream, 2000)
   end
 
+  test "honors retry-after headers for retryable HTTP failures" do
+    test_pid = self()
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      attempt =
+        Agent.get_and_update(attempts, fn count ->
+          next = count + 1
+          {next, next}
+        end)
+
+      send(test_pid, {:retry_after_attempt, attempt, System.monotonic_time(:millisecond)})
+
+      case attempt do
+        1 ->
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "0.001")
+          |> Plug.Conn.send_resp(429, ~s({"error":"rate limited"}))
+
+        _ ->
+          Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end
+    end)
+
+    model = %Model{
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/api/coding/paas/v4"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert_receive {:retry_after_attempt, 1, first_at}, 1000
+    assert_receive {:retry_after_attempt, 2, second_at}, 1600
+    assert second_at - first_at >= 950
+    assert {:ok, _result} = EventStream.result(stream, 2000)
+  end
+
   test "merges headers with opts overriding model headers" do
     test_pid = self()
 
