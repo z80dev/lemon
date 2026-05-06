@@ -621,8 +621,8 @@ defmodule Ai.Providers.OpenAICompletions do
           "id" => normalize_tool_call_id(tc.id, model, compat),
           "type" => "function",
           "function" => %{
-            "name" => tc.name,
-            "arguments" => Jason.encode!(tc.arguments)
+            "name" => sanitize_surrogates(tc.name),
+            "arguments" => tc.arguments |> sanitize_json_value() |> Jason.encode!()
           }
         }
       end)
@@ -1443,6 +1443,20 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp sanitize_surrogates(text), do: text
+
+  defp sanitize_json_value(value) when is_binary(value), do: sanitize_surrogates(value)
+
+  defp sanitize_json_value(value) when is_list(value) do
+    Enum.map(value, &sanitize_json_value/1)
+  end
+
+  defp sanitize_json_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, val} -> {sanitize_json_value(key), sanitize_json_value(val)} end)
+    |> Map.new()
+  end
+
+  defp sanitize_json_value(value), do: value
 
   defp parse_partial_json(""), do: %{}
 

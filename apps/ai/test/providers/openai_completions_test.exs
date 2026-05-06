@@ -505,6 +505,50 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
+  test "sanitizes invalid utf8 in assistant tool call arguments before encoding request" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_completions,
+      provider: :openai,
+      base_url: "https://example.test"
+    }
+
+    invalid_utf8 = <<"ok", 0xED, 0xA0, 0x80>>
+    tool_call = %ToolCall{id: "call_1", name: "echo", arguments: %{"text" => invalid_utf8}}
+
+    assistant = %AssistantMessage{
+      role: :assistant,
+      content: [tool_call],
+      api: :openai_completions,
+      provider: :openai,
+      model: "gpt-4o-mini",
+      usage: %Ai.Types.Usage{cost: %Ai.Types.Cost{}},
+      stop_reason: :tool_use,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    context = Context.new(messages: [assistant])
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert_receive {:request_body, req_body}, 1000
+
+    [%{"tool_calls" => [%{"function" => %{"arguments" => encoded_args}}]}] =
+      req_body["messages"]
+
+    assert Jason.decode!(encoded_args) == %{"text" => "ok"}
+    assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
   test "uses developer role for reasoning models when supported" do
     test_pid = self()
 
