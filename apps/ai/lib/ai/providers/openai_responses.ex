@@ -371,7 +371,9 @@ defmodule Ai.Providers.OpenAIResponses do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         {:ok, receive_sse_events()}
 
-      {:ok, %Req.Response{status: status, body: response_body, headers: response_headers}} ->
+      {:ok, %Req.Response{status: status, headers: response_headers} = response} ->
+        response_body = materialize_response_body(response.body)
+
         HttpTrace.log_error("openai-responses", "http_error", %{
           trace_id: trace_id,
           status: status,
@@ -387,7 +389,8 @@ defmodule Ai.Providers.OpenAIResponses do
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        {:error, "HTTP #{status}: #{inspect(response_body)}"}
+        error = Ai.Error.parse_http_error(status, response_body, response_headers)
+        {:error, error.message}
 
       {:error, reason} ->
         HttpTrace.log_error("openai-responses", "transport_error", %{
@@ -398,6 +401,34 @@ defmodule Ai.Providers.OpenAIResponses do
         })
 
         {:error, "Request failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp materialize_response_body(%Req.Response.Async{} = async) do
+    case collect_async_response_body(async, []) do
+      [] -> inspect(async)
+      chunks -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
+    end
+  end
+
+  defp materialize_response_body(body), do: body
+
+  defp collect_async_response_body(%Req.Response.Async{ref: ref, pid: pid} = async, chunks) do
+    receive do
+      {^ref, {:data, chunk}} ->
+        collect_async_response_body(async, [chunk | chunks])
+
+      {^ref, :done} ->
+        chunks
+
+      {^ref, {:done, _}} ->
+        chunks
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        chunks
+    after
+      5_000 ->
+        chunks
     end
   end
 

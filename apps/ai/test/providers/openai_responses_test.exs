@@ -298,6 +298,40 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 
+  test "normalizes HTTP error responses" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body = %{
+        "error" => %{
+          "message" =>
+            "This model's maximum context length is 8192 tokens. However, you requested 10000 tokens.",
+          "code" => "context_length_exceeded"
+        }
+      }
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(400, Jason.encode!(body))
+    end)
+
+    model = %Model{
+      id: "gpt-4o-mini",
+      name: "GPT-4o mini",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://example.test",
+      reasoning: false
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:error, %Ai.Types.AssistantMessage{} = result} = EventStream.result(stream, 1000)
+    assert result.stop_reason == :error
+    assert result.error_message =~ "Context length exceeded (HTTP 400)"
+    assert result.error_message =~ "maximum context length"
+  end
+
   test "errors when api key is missing" do
     test_pid = self()
 
