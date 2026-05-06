@@ -950,7 +950,10 @@ defmodule CodingAgent.Evals.Harness do
 
   defp live_model_results(cwd, opts) do
     if Keyword.get(opts, :live_model, false) do
-      [live_model_memory_trace_contract_eval(cwd, opts)]
+      [
+        live_model_memory_trace_contract_eval(cwd, opts),
+        live_model_skill_learning_contract_eval(cwd, opts)
+      ]
     else
       []
     end
@@ -1054,11 +1057,100 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_memory_trace_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_skill_learning_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_skill_learning_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        :ok = write_project_skill(tmp_dir, "release-checklist", release_checklist_skill())
+
+        tool_opts = [
+          run_id: "eval-live-model-skill-learning",
+          session_key: "agent:live-model-skill-learning-eval:main",
+          session_id: "agent:live-model-skill-learning-eval:main",
+          agent_id: "live-model-skill-learning-eval"
+        ]
+
+        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+
+        context =
+          AgentContext.new(
+            system_prompt: live_skill_learning_eval_prompt(),
+            tools: [read_tool, skill_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: stream_options,
+          max_tool_turns: 3
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "We repeated the release retrospective handoff again. Save the reusable workflow."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "read_skill", "release-checklist"),
+             :ok <-
+               assert_loop_tool_result(messages, "skill_manage", "live-release-retro-capture"),
+             :ok <- assert_active_agent_skill(tmp_dir, "live-release-retro-capture"),
+             :ok <- assert_final_contains(messages, ["SKILL_CAPTURED_LIVE_MODEL"]) do
+          %{
+            name: "live_model_skill_learning_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              created: "live-release-retro-capture"
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_skill_learning_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_skill_learning_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_skill_learning_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
 
     The user is asking about prior work. You must call `search_memory` with scope `current` before answering. After the tool result arrives, answer with the exact marker PRIOR_RELEASE_HANDOFF_FOUND and summarize only what the tool result says.
+    """
+  end
+
+  defp live_skill_learning_eval_prompt do
+    """
+    You are running a live-model Lemon skill-learning eval.
+
+    The user describes a reusable workflow. Before answering, you must first call `read_skill` with key `release-checklist` and view `summary`. Then call `skill_manage` to create a project skill named `live-release-retro-capture`. Use action `create`, scope `project`, and content that includes YAML front matter with name `live-release-retro-capture`, description `Capture repeated release retrospective handoff steps`, and steps for reviewing changed files, running focused tests, and recording follow-up memory.
+
+    After the skill tool result arrives, answer with the exact marker SKILL_CAPTURED_LIVE_MODEL and summarize only that the skill was captured.
     """
   end
 
