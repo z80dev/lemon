@@ -24,6 +24,7 @@ defmodule CodingAgent.Evals.HarnessTest do
              "agent_loop_skill_refinement_trace_contract",
              "agent_loop_memory_trace_contract",
              "agent_loop_workspace_memory_file_contract",
+             "agent_loop_workspace_memory_update_contract",
              "agent_loop_async_join_trace_contract",
              "agent_loop_parallel_join_trace_contract",
              "agent_loop_delegation_artifact_trace_contract",

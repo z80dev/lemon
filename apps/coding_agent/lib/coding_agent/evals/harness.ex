@@ -13,7 +13,7 @@ defmodule CodingAgent.Evals.Harness do
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Security.UntrustedToolBoundary
   alias CodingAgent.Session.EventHandler
-  alias CodingAgent.Tools.{Grep, MemoryTopic, Read, ReadSkill, SearchMemory, SkillManage}
+  alias CodingAgent.Tools.{Grep, MemoryTopic, Patch, Read, ReadSkill, SearchMemory, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonCore.Introspection
   alias LemonSkills.Curator
@@ -65,6 +65,7 @@ defmodule CodingAgent.Evals.Harness do
         agent_loop_skill_refinement_trace_contract_eval(cwd),
         agent_loop_memory_trace_contract_eval(cwd),
         agent_loop_workspace_memory_file_contract_eval(cwd),
+        agent_loop_workspace_memory_update_contract_eval(cwd),
         agent_loop_async_join_trace_contract_eval(cwd),
         agent_loop_parallel_join_trace_contract_eval(cwd),
         agent_loop_delegation_artifact_trace_contract_eval(cwd),
@@ -1139,6 +1140,130 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("agent_loop_workspace_memory_file_contract", Exception.message(e), %{})
+  end
+
+  @spec agent_loop_workspace_memory_update_contract_eval(String.t()) :: eval_result()
+  def agent_loop_workspace_memory_update_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        memory_dir = Path.join([project_dir, "memory", "topics"])
+        File.mkdir_p!(memory_dir)
+        File.mkdir_p!(home_dir)
+
+        memory_path = Path.join(memory_dir, "release-handoff.md")
+
+        original_line =
+          "Before answering release handoff questions, inspect this note and cite the deployment baton."
+
+        updated_line =
+          "Before answering release handoff questions, inspect this note, cite the deployment baton, and name the follow-up owner."
+
+        File.write!(
+          memory_path,
+          """
+          # Release Handoff
+
+          The deployment baton lives in the workspace memory file.
+          #{original_line}
+          """
+        )
+
+        read_tool = Read.tool(project_dir)
+        patch_tool = Patch.tool(project_dir)
+
+        prompt =
+          CodingAgent.SystemPrompt.build(project_dir, %{
+            workspace_dir: home_dir,
+            session_scope: :main,
+            skill_context: "release handoff workspace memory update"
+          })
+
+        responses = [
+          trace_tool_response([
+            trace_tool_call(
+              "read",
+              %{
+                "path" => "memory/topics/release-handoff.md",
+                "limit" => 20
+              },
+              id: "call-read-memory-before-update"
+            )
+          ]),
+          trace_tool_response([
+            trace_tool_call(
+              "patch",
+              %{
+                "patch_text" => """
+                *** Begin Patch
+                *** Update File: memory/topics/release-handoff.md
+                @@
+                -#{original_line}
+                +#{updated_line}
+                *** End Patch
+                """
+              },
+              id: "call-patch-memory-topic"
+            )
+          ]),
+          trace_final_response("Workspace memory was updated.")
+        ]
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [read_tool, patch_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: scripted_stream_fn(responses)
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "We learned release handoffs must name the follow-up owner. Update project memory."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_loop_tool_result(messages, "read", "deployment baton"),
+             :ok <- assert_loop_tool_result(messages, "patch", "Patch applied successfully"),
+             :ok <- assert_contains(File.read!(memory_path), "name the follow-up owner") do
+          %{
+            name: "agent_loop_workspace_memory_update_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              memory_path: Path.relative_to(memory_path, project_dir)
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail(
+              "agent_loop_workspace_memory_update_contract",
+              format_reason(reason),
+              %{}
+            )
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_workspace_memory_update_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_workspace_memory_update_contract", Exception.message(e), %{})
   end
 
   @spec agent_loop_async_join_trace_contract_eval(String.t()) :: eval_result()
