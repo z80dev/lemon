@@ -340,6 +340,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
         execute: fn id, _params, _signal, _on_update ->
           send(test_pid, {:slow_tool_started, id})
           Process.sleep(500)
+          send(test_pid, {:slow_tool_finished, id})
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Slow done"}],
@@ -377,13 +378,8 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       # In CI or under heavy local load this can be a bit slower, so keep a generous bound.
       assert elapsed < 800
 
-      # All tool results should be present (some may be aborted)
-      tool_ends =
-        Enum.filter(events, fn e ->
-          match?({:tool_execution_end, _, _, _, _}, e)
-        end)
-
-      assert length(tool_ends) >= 1
+      assert events != []
+      refute_receive {:slow_tool_finished, _id}, 600
     end
 
     test "abort returns detailed context in aborted tool results" do
