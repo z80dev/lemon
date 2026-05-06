@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: skill prompt rendering now emits redacted telemetry and introspection events for available/relevant skill surfaces.
+Latest slice: workspace memory-file inspection now has a deterministic AgentCore loop contract over real `grep` and `read` tools.
 
 ### Tool ergonomics and enforcement
 
@@ -111,13 +111,13 @@ Latest slice: skill prompt rendering now emits redacted telemetry and introspect
   - Ingest-time secret screening is shared by memory ingest and skill synthesis, with regressions for documented secret patterns.
   - Skill synthesis can mine successful runs.
 - Gaps:
-  - Workspace memory-file inspection still needs a sharper contract distinct from topic memories and run search.
   - The live-model lane now covers prior-work `search_memory` recall and durable-topic `memory_topic` capture; workspace memory-file inspection still needs independent-model coverage.
 - Priority: high.
 - Acceptance tests:
   - `search_memory` defaults to current scope and searches both project and assistant-home memory without broadening missing contexts.
   - `memory_topic` scaffolds `memory/topics/<slug>.md` from the workspace template and replaces the slug placeholder.
   - Eval harness drives `AgentCore.Loop` through a `search_memory` tool result for a “last time” prompt before finalizing.
+  - Eval harness drives `AgentCore.Loop` through real `grep` and `read` results for a workspace `memory/topics/*.md` note before finalizing.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model to call `search_memory` before answering a prior-work prompt.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model to call `memory_topic` for durable project context while avoiding `search_memory` and `skill_manage`.
   - Memory-topic creation does not replace procedural skill authoring.
@@ -609,6 +609,12 @@ Latest slice: skill prompt rendering now emits redacted telemetry and introspect
 1. Added `[:lemon_skills, :skill, :prompt_render]` telemetry with redacted skill keys/counts for available and relevant prompt surfaces.
 2. Projected prompt-render telemetry into `:skill_prompt_render_observed` introspection events with run/session/agent provenance.
 3. Passed native session provenance through prompt composition and added regressions for direct prompt rendering and native session introspection lookup.
+
+### Slice 63: Workspace memory-file inspection contract
+
+1. Added `agent_loop_workspace_memory_file_contract` to the eval harness.
+2. Seeded a workspace `memory/topics/*.md` note and drove `AgentCore.Loop` through real `grep` and `read` tool results before finalizing.
+3. Added harness regressions so the workspace memory-file lane stays distinct from prior-run `search_memory` and durable `memory_topic` coverage.
 
 ## Follow-up backlog
 

@@ -21,6 +21,7 @@ defmodule CodingAgent.Evals.HarnessTest do
              "untrusted_prompt_injection_contract",
              "agent_loop_learning_trace_contract",
              "agent_loop_memory_trace_contract",
+             "agent_loop_workspace_memory_file_contract",
              "agent_loop_async_join_trace_contract",
              "agent_loop_parallel_join_trace_contract",
              "agent_loop_delegation_artifact_trace_contract",

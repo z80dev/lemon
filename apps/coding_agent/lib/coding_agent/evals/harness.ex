@@ -12,7 +12,7 @@ defmodule CodingAgent.Evals.Harness do
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Security.UntrustedToolBoundary
-  alias CodingAgent.Tools.{MemoryTopic, Read, ReadSkill, SearchMemory, SkillManage}
+  alias CodingAgent.Tools.{Grep, MemoryTopic, Read, ReadSkill, SearchMemory, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonSkills.Curator
 
@@ -60,6 +60,7 @@ defmodule CodingAgent.Evals.Harness do
         untrusted_prompt_injection_contract_eval(cwd),
         agent_loop_learning_trace_contract_eval(cwd),
         agent_loop_memory_trace_contract_eval(cwd),
+        agent_loop_workspace_memory_file_contract_eval(cwd),
         agent_loop_async_join_trace_contract_eval(cwd),
         agent_loop_parallel_join_trace_contract_eval(cwd),
         agent_loop_delegation_artifact_trace_contract_eval(cwd),
@@ -848,6 +849,111 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("agent_loop_memory_trace_contract", Exception.message(e), %{})
+  end
+
+  @spec agent_loop_workspace_memory_file_contract_eval(String.t()) :: eval_result()
+  def agent_loop_workspace_memory_file_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        memory_dir = Path.join([project_dir, "memory", "topics"])
+        File.mkdir_p!(memory_dir)
+        File.mkdir_p!(home_dir)
+
+        memory_path = Path.join(memory_dir, "release-handoff.md")
+
+        File.write!(
+          memory_path,
+          """
+          # Release Handoff
+
+          The deployment baton lives in the workspace memory file.
+          Before answering release handoff questions, inspect this note and cite the deployment baton.
+          """
+        )
+
+        grep_tool = Grep.tool(project_dir)
+        read_tool = Read.tool(project_dir)
+
+        prompt =
+          CodingAgent.SystemPrompt.build(project_dir, %{
+            workspace_dir: home_dir,
+            session_scope: :main,
+            skill_context: "release handoff workspace memory"
+          })
+
+        responses = [
+          trace_tool_response([
+            trace_tool_call(
+              "grep",
+              %{
+                "pattern" => "deployment baton",
+                "path" => "memory",
+                "literal" => true,
+                "max_results" => 5
+              },
+              id: "call-grep-workspace-memory"
+            )
+          ]),
+          trace_tool_response([
+            trace_tool_call(
+              "read",
+              %{
+                "path" => "memory/topics/release-handoff.md",
+                "limit" => 20
+              },
+              id: "call-read-workspace-memory"
+            )
+          ]),
+          trace_final_response("Workspace memory says to cite the deployment baton.")
+        ]
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [grep_tool, read_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: scripted_stream_fn(responses)
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("What does project memory say about release handoff?")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_loop_tool_result(messages, "grep", "deployment baton"),
+             :ok <- assert_loop_tool_result(messages, "read", "deployment baton") do
+          %{
+            name: "agent_loop_workspace_memory_file_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              memory_path: Path.relative_to(memory_path, project_dir)
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("agent_loop_workspace_memory_file_contract", format_reason(reason), %{})
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_workspace_memory_file_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_workspace_memory_file_contract", Exception.message(e), %{})
   end
 
   @spec agent_loop_async_join_trace_contract_eval(String.t()) :: eval_result()
