@@ -99,6 +99,7 @@ defmodule CodingAgent.Session.EventHandler do
     # Execute on_agent_end hooks
     Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
     maybe_record_missed_skills(state, messages)
+    maybe_record_missed_learning(state, messages)
 
     # Clear working message and steering queue
     callbacks.set_working_message.(state, nil)
@@ -194,6 +195,120 @@ defmodule CodingAgent.Session.EventHandler do
   defp skill_key_from_details(%{key: key}) when is_binary(key), do: key
   defp skill_key_from_details(%{"key" => key}) when is_binary(key), do: key
   defp skill_key_from_details(_details), do: nil
+
+  defp maybe_record_missed_learning(state, messages) do
+    if learning_workflow_prompt?(Map.get(state, :system_prompt, "")) do
+      triggers = learning_triggers(messages)
+      used_tools = extract_tool_result_names(messages)
+      missing_tools = recommended_learning_tools(triggers) -- used_tools
+
+      if triggers != [] and missing_tools != [] do
+        Introspection.record(
+          :missed_learning_observed,
+          %{
+            triggers: triggers,
+            missing_tools: missing_tools,
+            used_learning_tools: Enum.filter(used_tools, &(&1 in learning_tool_names()))
+          },
+          session_key: session_key(state),
+          agent_id: agent_id(state),
+          engine: "lemon",
+          provenance: :inferred
+        )
+      end
+    end
+  end
+
+  defp learning_workflow_prompt?(prompt) when is_binary(prompt) do
+    String.contains?(prompt, "<learning-workflow>")
+  end
+
+  defp learning_workflow_prompt?(_prompt), do: false
+
+  defp learning_triggers(messages) when is_list(messages) do
+    text =
+      messages
+      |> Enum.map(&message_text/1)
+      |> Enum.join("\n")
+      |> String.downcase()
+
+    []
+    |> maybe_add_trigger(:prior_memory, prior_memory_trigger?(text))
+    |> maybe_add_trigger(:reusable_skill, reusable_skill_trigger?(text))
+    |> maybe_add_trigger(:durable_memory, durable_memory_trigger?(text))
+    |> Enum.reverse()
+  end
+
+  defp learning_triggers(_messages), do: []
+
+  defp maybe_add_trigger(triggers, trigger, true), do: [trigger | triggers]
+  defp maybe_add_trigger(triggers, _trigger, false), do: triggers
+
+  defp prior_memory_trigger?(text) do
+    text =~ ~r/\b(last time|previous(?:ly)?|prior work|past work|earlier|recall|remember when)\b/
+  end
+
+  defp reusable_skill_trigger?(text) do
+    text =~
+      ~r/\b(reusable workflow|recurring command|recurring workflow|debugging playbook|verification checklist|create a skill|new skill|learned? .*workflow|learned? .*command)\b/
+  end
+
+  defp durable_memory_trigger?(text) do
+    text =~
+      ~r/\b(remember this|store this|save this|durable (?:fact|decision|context|memory)|project context|preference|decision)\b/
+  end
+
+  defp recommended_learning_tools(triggers) do
+    triggers
+    |> Enum.flat_map(fn
+      :prior_memory -> ["search_memory"]
+      :reusable_skill -> ["skill_manage"]
+      :durable_memory -> ["memory_topic"]
+    end)
+    |> Enum.uniq()
+  end
+
+  defp extract_tool_result_names(messages) when is_list(messages) do
+    messages
+    |> Enum.map(&tool_result_name/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp extract_tool_result_names(_messages), do: []
+
+  defp tool_result_name(%Ai.Types.ToolResultMessage{tool_name: name}) when is_binary(name),
+    do: name
+
+  defp tool_result_name(%{tool_name: name}) when is_binary(name), do: name
+  defp tool_result_name(%{"tool_name" => name}) when is_binary(name), do: name
+  defp tool_result_name(_message), do: nil
+
+  defp learning_tool_names, do: ["search_memory", "skill_manage", "memory_topic"]
+
+  defp message_text(%Ai.Types.UserMessage{content: content}), do: content_text(content)
+  defp message_text(%Ai.Types.AssistantMessage{content: content}), do: content_text(content)
+  defp message_text(%Ai.Types.ToolResultMessage{content: content}), do: content_text(content)
+  defp message_text(%{content: content}), do: content_text(content)
+  defp message_text(%{"content" => content}), do: content_text(content)
+  defp message_text(message) when is_binary(message), do: message
+  defp message_text(_message), do: ""
+
+  defp content_text(content) when is_binary(content), do: content
+
+  defp content_text(content) when is_list(content) do
+    content
+    |> Enum.map(&content_block_text/1)
+    |> Enum.join("\n")
+  end
+
+  defp content_text(_content), do: ""
+
+  defp content_block_text(%Ai.Types.TextContent{text: text}) when is_binary(text), do: text
+  defp content_block_text(%{text: text}) when is_binary(text), do: text
+  defp content_block_text(%{"text" => text}) when is_binary(text), do: text
+  defp content_block_text(text) when is_binary(text), do: text
+  defp content_block_text(_block), do: ""
 
   defp session_key(%{session_manager: %{header: %{id: id}}}) when is_binary(id), do: id
   defp session_key(%{session_key: id}) when is_binary(id), do: id

@@ -338,6 +338,96 @@ defmodule CodingAgent.Session.EventHandlerTest do
     end
   end
 
+  describe "handle/3 - missed learning audit" do
+    test "records missed learning opportunities at agent end", %{callbacks: callbacks} do
+      session_key = "session_missed_learning_#{System.unique_integer([:positive, :monotonic])}"
+
+      state = %{
+        hooks: [],
+        is_streaming: true,
+        steering_queue: :queue.new(),
+        event_streams: %{},
+        session_key: session_key,
+        agent_id: "agent-learning",
+        system_prompt: CodingAgent.PromptBuilder.build_learning_section()
+      }
+
+      messages = [
+        %Ai.Types.UserMessage{
+          content:
+            "Last time we learned a reusable workflow for deployment incidents. Remember this decision and create a skill next time.",
+          timestamp: System.system_time(:millisecond)
+        }
+      ]
+
+      EventHandler.handle({:agent_end, messages}, state, callbacks)
+
+      event =
+        eventually(fn ->
+          Introspection.list(
+            session_key: session_key,
+            event_type: :missed_learning_observed,
+            limit: 10
+          )
+          |> Enum.find(&(:prior_memory in &1.payload[:triggers]))
+        end)
+
+      assert event.agent_id == "agent-learning"
+      assert event.provenance == :inferred
+
+      assert Enum.sort(event.payload.triggers) == [
+               :durable_memory,
+               :prior_memory,
+               :reusable_skill
+             ]
+
+      assert Enum.sort(event.payload.missing_tools) == [
+               "memory_topic",
+               "search_memory",
+               "skill_manage"
+             ]
+    end
+
+    test "does not record missed learning when recommended tools were used", %{
+      callbacks: callbacks
+    } do
+      session_key = "session_learning_used_#{System.unique_integer([:positive, :monotonic])}"
+
+      state = %{
+        hooks: [],
+        is_streaming: true,
+        steering_queue: :queue.new(),
+        event_streams: %{},
+        session_key: session_key,
+        system_prompt: CodingAgent.PromptBuilder.build_learning_section()
+      }
+
+      messages = [
+        %Ai.Types.UserMessage{
+          content:
+            "Last time we learned a reusable workflow for deployment incidents. Remember this decision.",
+          timestamp: System.system_time(:millisecond)
+        },
+        %Ai.Types.ToolResultMessage{tool_name: "search_memory", content: []},
+        %Ai.Types.ToolResultMessage{tool_name: "skill_manage", content: []},
+        %Ai.Types.ToolResultMessage{tool_name: "memory_topic", content: []}
+      ]
+
+      EventHandler.handle({:agent_end, messages}, state, callbacks)
+
+      Process.sleep(20)
+
+      events =
+        Introspection.list(
+          session_key: session_key,
+          event_type: :missed_learning_observed,
+          limit: 10
+        )
+
+      assert events == []
+    end
+  end
+
   defp eventually(fun, attempts \\ 20)
 
   defp eventually(fun, attempts) when attempts > 0 do
