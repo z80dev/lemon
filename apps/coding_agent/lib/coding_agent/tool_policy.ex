@@ -20,6 +20,8 @@ defmodule CodingAgent.ToolPolicy do
 
   @type profile ::
           :full_access
+          | :orchestrator
+          | :leaf_worker
           | :minimal_core
           | :read_only
           | :safe_mode
@@ -71,6 +73,30 @@ defmodule CodingAgent.ToolPolicy do
       approvals: %{},
       no_reply: false,
       profile: :full_access
+    }
+  end
+
+  def from_profile(:orchestrator) do
+    %{
+      allow: :all,
+      deny: [],
+      blocked_tools: [],
+      require_approval: [],
+      approvals: %{},
+      no_reply: false,
+      profile: :orchestrator
+    }
+  end
+
+  def from_profile(:leaf_worker) do
+    %{
+      allow: :all,
+      deny: ["task", "agent"],
+      blocked_tools: [],
+      require_approval: [],
+      approvals: %{},
+      no_reply: false,
+      profile: :leaf_worker
     }
   end
 

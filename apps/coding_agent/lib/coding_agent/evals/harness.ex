@@ -59,7 +59,8 @@ defmodule CodingAgent.Evals.Harness do
         agent_loop_memory_trace_contract_eval(cwd),
         agent_loop_async_join_trace_contract_eval(cwd),
         agent_loop_parallel_join_trace_contract_eval(cwd),
-        agent_loop_delegation_artifact_trace_contract_eval(cwd)
+        agent_loop_delegation_artifact_trace_contract_eval(cwd),
+        delegation_toolset_contract_eval(cwd)
       ] ++ live_model_results(cwd, opts)
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -1039,6 +1040,48 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("agent_loop_delegation_artifact_trace_contract", Exception.message(e), %{})
   end
 
+  @spec delegation_toolset_contract_eval(String.t()) :: eval_result()
+  def delegation_toolset_contract_eval(cwd) do
+    orchestrator_tools =
+      ToolRegistry.get_tools(cwd,
+        include_extensions: false,
+        tool_policy: ToolPolicy.from_profile(:orchestrator)
+      )
+
+    leaf_tools =
+      ToolRegistry.get_tools(cwd,
+        include_extensions: false,
+        tool_policy: ToolPolicy.from_profile(:leaf_worker)
+      )
+
+    with :ok <- assert_tool_available(orchestrator_tools, "task"),
+         :ok <- assert_tool_available(orchestrator_tools, "agent"),
+         :ok <- assert_tool_available(orchestrator_tools, "read"),
+         :ok <- assert_tool_filtered(leaf_tools, "task"),
+         :ok <- assert_tool_filtered(leaf_tools, "agent"),
+         :ok <- assert_tool_available(leaf_tools, "read"),
+         :ok <- assert_tool_available(leaf_tools, "write"),
+         :ok <- assert_tool_available(leaf_tools, "bash") do
+      %{
+        name: "delegation_toolset_contract",
+        status: :pass,
+        details: %{
+          orchestrator_delegates: true,
+          leaf_blocks_recursive_delegation: true,
+          leaf_tools:
+            leaf_tools
+            |> Enum.map(& &1.name)
+            |> Enum.sort()
+        }
+      }
+    else
+      {:error, reason} ->
+        contract_fail("delegation_toolset_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("delegation_toolset_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -1057,7 +1100,8 @@ defmodule CodingAgent.Evals.Harness do
         live_model_skill_curator_contract_eval(cwd, opts),
         live_model_cron_block_contract_eval(cwd, opts),
         live_model_parallel_delegation_contract_eval(cwd, opts),
-        live_model_delegation_artifact_contract_eval(cwd, opts)
+        live_model_delegation_artifact_contract_eval(cwd, opts),
+        live_model_leaf_toolset_contract_eval(cwd, opts)
       ]
     else
       []
@@ -1662,6 +1706,99 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_delegation_artifact_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_leaf_toolset_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_leaf_toolset_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        leaf_file = Path.join(tmp_dir, "leaf-input.txt")
+        File.write!(leaf_file, "leaf toolset restriction evidence\n")
+
+        tools =
+          ToolPolicy.from_profile(:leaf_worker)
+          |> ToolPolicy.apply_policy([
+            TaskTool.tool(tmp_dir,
+              run_override: fn _on_update, _signal ->
+                %AgentToolResult{
+                  content: [%TextContent{text: "TASK_TOOL_SHOULD_BE_FILTERED"}],
+                  details: %{status: "completed"}
+                }
+              end
+            ),
+            Read.tool(tmp_dir)
+          ])
+
+        with :ok <- assert_tool_filtered(tools, "task"),
+             :ok <- assert_tool_available(tools, "read") do
+          context =
+            AgentContext.new(
+              system_prompt: live_leaf_toolset_eval_prompt(),
+              tools: tools
+            )
+
+          config = %AgentLoopConfig{
+            model: model,
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_options: stream_options,
+            max_tool_turns: 2
+          }
+
+          stream =
+            Loop.agent_loop(
+              [
+                trace_user_message("Verify the leaf worker input without spawning another task.")
+              ],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+          with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+               :ok <- assert_loop_tool_result(messages, "read", "leaf toolset restriction"),
+               :ok <- assert_tool_not_used(messages, "task"),
+               :ok <-
+                 assert_final_contains(messages, [
+                   "LEAF_TOOLSET_RESTRICTED",
+                   "leaf toolset restriction evidence"
+                 ]) do
+            %{
+              name: "live_model_leaf_toolset_contract",
+              status: :pass,
+              details: %{
+                provider: model.provider,
+                model: model.id,
+                tool_results: trace_tool_result_names(messages),
+                filtered_tools: ["task"]
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("live_model_leaf_toolset_contract", format_reason(reason), %{
+                provider: model.provider,
+                model: model.id
+              })
+          end
+        else
+          {:error, reason} ->
+            contract_fail("live_model_leaf_toolset_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_leaf_toolset_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_leaf_toolset_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -1725,6 +1862,16 @@ defmodule CodingAgent.Evals.Harness do
     Keep the returned task_id. Then call the `task` tool with `action` `join`, `mode` `wait_all`, and that task_id in a `task_ids` array. After the join result arrives, call `read` on `reports/live-child-release-lane.md` to verify the child side effect. Do not answer until the read result arrives.
 
     After the read result arrives, answer with the exact marker LIVE_ARTIFACT_VERIFIED and include the artifact content verbatim.
+    """
+  end
+
+  defp live_leaf_toolset_eval_prompt do
+    """
+    You are running a live-model Lemon leaf-worker toolset eval.
+
+    This is a leaf worker, not an orchestrator. Recursive delegation tools are intentionally unavailable. Before answering, call `read` on `leaf-input.txt`. Do not try to spawn another task.
+
+    After the read result arrives, answer with the exact marker LEAF_TOOLSET_RESTRICTED and include the file content verbatim.
     """
   end
 

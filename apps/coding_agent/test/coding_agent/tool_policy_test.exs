@@ -26,6 +26,24 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "bash")
     end
 
+    test "orchestrator can delegate" do
+      policy = ToolPolicy.from_profile(:orchestrator)
+
+      assert ToolPolicy.allowed?(policy, "task")
+      assert ToolPolicy.allowed?(policy, "agent")
+      assert ToolPolicy.allowed?(policy, "read")
+    end
+
+    test "leaf_worker cannot recursively delegate" do
+      policy = ToolPolicy.from_profile(:leaf_worker)
+
+      refute ToolPolicy.allowed?(policy, "task")
+      refute ToolPolicy.allowed?(policy, "agent")
+      assert ToolPolicy.allowed?(policy, "read")
+      assert ToolPolicy.allowed?(policy, "write")
+      assert ToolPolicy.allowed?(policy, "bash")
+    end
+
     test "minimal_core allows core tools and excludes redundant ones" do
       policy = ToolPolicy.from_profile(:minimal_core)
 

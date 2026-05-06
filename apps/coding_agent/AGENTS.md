@@ -98,7 +98,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.Tools` | Tool factory -- `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin > WASM > extension); ETS extension cache |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper |
-| `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
+| `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
 
 ### Budget & Resource Management
 
