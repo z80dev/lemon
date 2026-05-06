@@ -11,6 +11,7 @@ LemonAutomation.Supervisor
   |-- Task.Supervisor (LemonAutomation.TaskSupervisor)
   |-- CronManager     (GenServer - scheduling engine)
   |-- HeartbeatManager (GenServer - health check suppression)
+  |-- SkillCuratorManager (GenServer - idle learned-skill maintenance)
 ```
 
 ### Execution Flow
@@ -45,6 +46,12 @@ CronManager (tick every 60s)
 
 **HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every `:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to decide suppression.
 
+**SkillCuratorManager** runs Lemon's learned-skill curator after the runtime has
+been idle long enough and the persisted curator interval gate is due. It asks
+`LemonSkills.Curator` to apply conservative stale/archive/reactivation
+transitions, then submits the generated review prompt to `LemonRouter` only when
+agent-authored skills require a consolidation pass.
+
 ### Session Isolation
 
 Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_12345`) to prevent cron activity from polluting the originating session's conversation history. Completion summaries are forwarded back to the base session as synthetic `run_completed` entries with `meta.cron_forwarded_summary = true`.
@@ -66,6 +73,8 @@ The `CronMemory` module gives each cron job a markdown file that accumulates run
 | `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | `lib/lemon_automation/cron_memory.ex` | Persistent markdown-based cross-run memory for cron jobs |
 | `LemonAutomation.HeartbeatManager` | `lib/lemon_automation/heartbeat_manager.ex` | Heartbeat suppression GenServer; manages both cron-based and timer-based heartbeats |
+| `LemonAutomation.SkillCurator` | `lib/lemon_automation/skill_curator.ex` | Applies idle/config gates and submits learned-skill curator prompts |
+| `LemonAutomation.SkillCuratorManager` | `lib/lemon_automation/skill_curator_manager.ex` | Periodic idle scheduler for background skill curation |
 | `LemonAutomation.Wake` | `lib/lemon_automation/wake.ex` | Manual immediate job triggering with batch and pattern-matching support |
 | `LemonAutomation.RunSubmitter` | `lib/lemon_automation/run_submitter.ex` | Builds run params, pre-subscribes to bus, submits to LemonRouter, appends to CronMemory |
 | `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Waits on Bus for `:run_completed` events; handles multiple payload formats |
@@ -73,13 +82,14 @@ The `CronMemory` module gives each cron job a markdown file that accumulates run
 
 ## Configuration
 
-LemonAutomation has no application-level configuration keys. Behavior is controlled through:
+LemonAutomation behavior is controlled through cron job fields plus a small application-level curator config:
 
 - **Tick interval**: Hardcoded at 60,000ms (`@tick_interval_ms` in CronManager)
 - **Default timeout**: 300,000ms (5 minutes) per job, overridable per-job via `timeout_ms`
 - **Output truncation**: Run output capped at 1,000 characters in CronStore; forwarded summaries capped at 12,000 bytes
 - **Memory file limits**: 24,000 chars max per memory file, 8,000 chars injected into prompts, 2,000 chars per run result entry
 - **Memory file location**: Defaults to `~/.lemon/cron_memory/{job_id}.md`, overridable via `memory_file` field on the job or in `meta`
+- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2`
 
 ## Usage
 

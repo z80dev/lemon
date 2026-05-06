@@ -239,6 +239,10 @@ deletes skills and skips pinned or non-agent-authored entries. `--prompt` prints
 a curator prompt for an agent to consolidate narrow learned skills into broader
 umbrella skills with `read_skill` and `skill_manage`.
 
+The runtime also has an idle background curator path. When enabled, Lemon waits
+for active router sessions to drain, applies the same interval/pause gates, and
+submits the curator prompt to the configured agent only when review is required.
+
 ---
 
 ## Skill Locations

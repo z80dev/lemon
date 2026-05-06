@@ -364,6 +364,8 @@ The sidecar tracks load/write counters, last-use fields, agent-authored creation
 
 The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`.
 
+`LemonAutomation.SkillCuratorManager` provides the Hermes-style background path. It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. The default target is `agent:default:main`; override it with `config :lemon_automation, :skill_curator, agent_id: "...", session_key: "..."`.
+
 ## Project vs Global Skills
 
 | Aspect | Project Skills | Global Skills |

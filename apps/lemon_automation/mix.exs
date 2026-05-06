@@ -27,6 +27,7 @@ defmodule LemonAutomation.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
+      {:lemon_skills, in_umbrella: true},
       {:jason, "~> 1.4"}
     ]
   end

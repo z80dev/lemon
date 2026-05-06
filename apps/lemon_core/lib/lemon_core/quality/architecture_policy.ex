@@ -15,7 +15,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     ai: [],
     coding_agent: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core, :lemon_skills],
     coding_agent_ui: [:coding_agent],
-    lemon_automation: [:lemon_core, :lemon_router],
+    lemon_automation: [:lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_ai_runtime, :lemon_core],
     lemon_ai_runtime: [:ai, :lemon_core],
     lemon_control_plane: [

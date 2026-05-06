@@ -40,6 +40,10 @@ config :coding_agent,
 config :lemon_skills, seed_builtin_skills: false
 config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
 
+# Background skill curation is tested explicitly; keep the runtime scheduler
+# from submitting real agent runs during unrelated test suites.
+config :lemon_automation, :skill_curator, enabled: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.

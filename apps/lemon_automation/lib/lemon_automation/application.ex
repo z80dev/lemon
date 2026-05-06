@@ -8,7 +8,8 @@ defmodule LemonAutomation.Application do
     children = [
       {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
       LemonAutomation.CronManager,
-      LemonAutomation.HeartbeatManager
+      LemonAutomation.HeartbeatManager,
+      LemonAutomation.SkillCuratorManager
     ]
 
     opts = [strategy: :one_for_one, name: LemonAutomation.Supervisor]

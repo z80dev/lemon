@@ -18,6 +18,7 @@ LemonAutomation.Supervisor (one_for_one)
 +-- LemonAutomation.TaskSupervisor  (Task.Supervisor)
 +-- LemonAutomation.CronManager     (GenServer)
 +-- LemonAutomation.HeartbeatManager (GenServer)
++-- LemonAutomation.SkillCuratorManager (GenServer)
 ```
 
 ## Cron System Architecture
@@ -51,6 +52,12 @@ CronManager (GenServer, ticks every 60s)
 **Wake** is a separate module (not intermediary in the above flow). It creates runs with `triggered_by: :wake`, submits directly to `LemonRouter`, and sends `{:run_complete, ...}` back to `CronManager`.
 
 **HeartbeatManager** subscribes to the "cron" bus and auto-processes every `:cron_run_completed` event for suppression checks.
+
+**SkillCuratorManager** is the idle-triggered background path for learned-skill
+maintenance. It checks active router sessions every minute, waits for the
+configured idle window, then calls `LemonAutomation.SkillCurator`. That module
+delegates lifecycle transitions and prompt rendering to `LemonSkills.Curator`
+and submits the review prompt to `LemonRouter` only when review is required.
 
 ## Key Flow Details
 
@@ -574,7 +581,7 @@ LemonAutomation.CronManager.tick()
 | Module | Purpose |
 |--------|---------|
 | `LemonAutomation` | Top-level facade with delegating functions |
-| `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, HeartbeatManager) |
+| `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, HeartbeatManager, SkillCuratorManager) |
 | `LemonAutomation.CronManager` | Scheduling GenServer; owns job state in-memory + persists to CronStore |
 | `LemonAutomation.CronJob` | Job struct, CRUD ops, `due?/1` predicate |
 | `LemonAutomation.CronRun` | Run struct, state machine transitions |
@@ -582,6 +589,8 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.CronStore` | Persistence via LemonCore.Store (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | Persistent markdown-based cross-run memory; auto-compaction |
 | `LemonAutomation.HeartbeatManager` | Heartbeat suppression GenServer; manages timer and cron heartbeats |
+| `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts |
+| `LemonAutomation.SkillCuratorManager` | Periodic idle scheduler for `SkillCurator.run_once/1` |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |
 | `LemonAutomation.RunCompletionWaiter` | Waits on Bus for `:run_completed` event; handles multiple payload formats |
 | `LemonAutomation.RunSubmitter` | Builds params, pre-subscribes to bus, submits to LemonRouter, manages CronMemory |
