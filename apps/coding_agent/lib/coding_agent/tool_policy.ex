@@ -11,6 +11,7 @@ defmodule CodingAgent.ToolPolicy do
   @type policy :: %{
           allow: :all | [String.t()],
           deny: [String.t()],
+          blocked_tools: [String.t()],
           require_approval: [String.t()],
           approvals: %{optional(String.t()) => approval_mode()},
           no_reply: boolean(),
@@ -65,6 +66,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: :all,
       deny: [],
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -76,6 +78,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: @minimal_core_tools,
       deny: [],
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -87,6 +90,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: @read_tools,
       deny: [],
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -98,6 +102,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: :all,
       deny: @dangerous_tools,
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -109,6 +114,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: :all,
       deny: @dangerous_tools,
+      blocked_tools: [],
       require_approval: ["write", "edit"],
       approvals: %{},
       no_reply: false,
@@ -120,6 +126,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: :all,
       deny: @external_tools,
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -131,6 +138,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: :all,
       deny: [],
+      blocked_tools: [],
       require_approval: [],
       approvals: %{},
       no_reply: false,
@@ -147,6 +155,7 @@ defmodule CodingAgent.ToolPolicy do
 
   - `:allow` - List of allowed tools or :all
   - `:deny` - List of denied tools
+  - `:blocked_tools` - Router-style list of denied tools
   - `:require_approval` - List of tools requiring approval
   - `:approvals` - Router-style explicit approvals map (tool => always|never)
   - `:no_reply` - Enable NO_REPLY mode
@@ -156,6 +165,7 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: Keyword.get(opts, :allow, :all),
       deny: Keyword.get(opts, :deny, []),
+      blocked_tools: Keyword.get(opts, :blocked_tools, []),
       require_approval: Keyword.get(opts, :require_approval, []),
       approvals: normalize_approvals(Keyword.get(opts, :approvals, %{})),
       no_reply: Keyword.get(opts, :no_reply, false),
@@ -175,7 +185,13 @@ defmodule CodingAgent.ToolPolicy do
     allow = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
     deny = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
 
+    blocked =
+      normalize_string_list(Map.get(policy, :blocked_tools) || Map.get(policy, "blocked_tools"))
+
     cond do
+      tool_name in blocked ->
+        false
+
       allow == :all ->
         tool_name not in deny
 
@@ -245,7 +261,13 @@ defmodule CodingAgent.ToolPolicy do
     allowed = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
     denied = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
 
+    blocked =
+      normalize_string_list(Map.get(policy, :blocked_tools) || Map.get(policy, "blocked_tools"))
+
     cond do
+      tool_name in blocked ->
+        "Tool '#{tool_name}' is in blocked_tools list"
+
       tool_name in denied ->
         "Tool '#{tool_name}' is in deny list"
 
@@ -331,6 +353,7 @@ defmodule CodingAgent.ToolPolicy do
 
     custom_allow = Keyword.get(opts, :allow)
     custom_deny = Keyword.get(opts, :deny, [])
+    custom_blocked = Keyword.get(opts, :blocked_tools, [])
     custom_approval = Keyword.get(opts, :require_approval, [])
     custom_approvals = normalize_approvals(Keyword.get(opts, :approvals, %{}))
     no_reply = Keyword.get(opts, :no_reply, false)
@@ -339,6 +362,7 @@ defmodule CodingAgent.ToolPolicy do
       base_policy
       | allow: custom_allow || base_policy.allow,
         deny: base_policy.deny ++ custom_deny,
+        blocked_tools: base_policy.blocked_tools ++ custom_blocked,
         require_approval: base_policy.require_approval ++ custom_approval,
         approvals: Map.merge(base_policy.approvals, custom_approvals),
         no_reply: no_reply || base_policy.no_reply
@@ -357,6 +381,9 @@ defmodule CodingAgent.ToolPolicy do
     allow = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
     deny = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
 
+    blocked_tools =
+      normalize_string_list(Map.get(policy, :blocked_tools) || Map.get(policy, "blocked_tools"))
+
     require_approval =
       normalize_string_list(
         Map.get(policy, :require_approval) || Map.get(policy, "require_approval")
@@ -371,6 +398,7 @@ defmodule CodingAgent.ToolPolicy do
           list -> list
         end,
       "deny" => deny,
+      "blocked_tools" => blocked_tools,
       "require_approval" => require_approval,
       "approvals" =>
         approvals
@@ -394,6 +422,8 @@ defmodule CodingAgent.ToolPolicy do
     %{
       allow: normalize_allow(Map.get(map, "allow") || Map.get(map, :allow)),
       deny: normalize_string_list(Map.get(map, "deny") || Map.get(map, :deny)),
+      blocked_tools:
+        normalize_string_list(Map.get(map, "blocked_tools") || Map.get(map, :blocked_tools)),
       require_approval:
         normalize_string_list(Map.get(map, "require_approval") || Map.get(map, :require_approval)),
       approvals: normalize_approvals(Map.get(map, "approvals") || Map.get(map, :approvals)),

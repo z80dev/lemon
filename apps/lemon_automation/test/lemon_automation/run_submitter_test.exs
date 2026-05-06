@@ -86,6 +86,7 @@ defmodule LemonAutomation.RunSubmitterTest do
              origin: :cron,
              prompt: prompt,
              agent_id: "agent_build",
+             tool_policy: %{blocked_tools: ["cron"]},
              meta: %{
                cron_job_id: "cron_build",
                cron_run_id: "run_build",

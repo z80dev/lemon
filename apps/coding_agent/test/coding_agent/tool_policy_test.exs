@@ -145,6 +145,13 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "exec")
     end
 
+    test "respects router-style blocked_tools" do
+      policy = %{allow: :all, blocked_tools: ["cron"]}
+
+      assert ToolPolicy.allowed?(policy, "read")
+      refute ToolPolicy.allowed?(policy, "cron")
+    end
+
     test "empty allow list denies all" do
       policy = %{allow: [], deny: []}
 
@@ -178,6 +185,12 @@ defmodule CodingAgent.ToolPolicyTest do
 
       assert ToolPolicy.denial_reason(policy, "write") == "Tool 'write' not in allowed list"
       assert ToolPolicy.denial_reason(policy, "bash") == "Tool 'bash' is in deny list"
+    end
+
+    test "returns blocked_tools reason before allow list reason" do
+      policy = %{allow: [], blocked_tools: ["cron"]}
+
+      assert ToolPolicy.denial_reason(policy, "cron") == "Tool 'cron' is in blocked_tools list"
     end
 
     test "returns nil for allowed tool" do
@@ -301,18 +314,28 @@ defmodule CodingAgent.ToolPolicyTest do
 
       assert deserialized.allow == original.allow
       assert deserialized.deny == original.deny
+      assert deserialized.blocked_tools == original.blocked_tools
       assert deserialized.require_approval == original.require_approval
       assert deserialized.no_reply == original.no_reply
     end
 
     test "handles :all in allow list" do
-      policy = %{allow: :all, deny: [], require_approval: [], no_reply: false}
+      policy = %{
+        allow: :all,
+        deny: [],
+        blocked_tools: ["cron"],
+        require_approval: [],
+        no_reply: false
+      }
+
       serialized = ToolPolicy.to_map(policy)
 
       assert serialized["allow"] == "all"
+      assert serialized["blocked_tools"] == ["cron"]
 
       deserialized = ToolPolicy.from_map(serialized)
       assert deserialized.allow == :all
+      assert deserialized.blocked_tools == ["cron"]
     end
   end
 

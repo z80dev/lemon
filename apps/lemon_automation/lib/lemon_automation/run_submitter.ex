@@ -5,6 +5,7 @@ defmodule LemonAutomation.RunSubmitter do
   alias LemonCore.{Bus, SessionKey}
 
   @default_timeout_ms 300_000
+  @cron_blocked_tools ["cron"]
 
   @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
           {:ok, binary()} | {:error, binary()} | :timeout
@@ -70,6 +71,7 @@ defmodule LemonAutomation.RunSubmitter do
       session_key: session_key,
       prompt: prompt,
       agent_id: job.agent_id,
+      tool_policy: cron_tool_policy(),
       meta: %{
         cron_job_id: job.id,
         cron_run_id: run.id,
@@ -141,6 +143,12 @@ defmodule LemonAutomation.RunSubmitter do
     end
   rescue
     _ -> prompt
+  end
+
+  defp cron_tool_policy do
+    %{
+      blocked_tools: @cron_blocked_tools
+    }
   end
 
   defp append_memory(memory_mod, job, run, params, result) do

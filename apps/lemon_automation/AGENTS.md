@@ -64,6 +64,7 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - `RunSubmitter` pre-subscribes to `Bus.run_topic(run_id)` BEFORE submitting to `LemonRouter` (avoids race condition)
 - `RunSubmitter` passes `run_id` in params so the router uses the same ID it already subscribed to
 - `RunSubmitter` executes each cron run in a forked `:sub:<id>` session for isolation; the originating base session is preserved in run metadata
+- `RunSubmitter` adds a cron-run tool policy with `blocked_tools: ["cron"]`; scheduled runs may do the task work, but they cannot recursively manage cron jobs through a cron tool
 - `RunSubmitter` reads `CronMemory` for the job and injects memory context into the prompt, then appends run results back to the memory file
 - If the router returns a different `run_id`, `RunSubmitter` falls back to `RunCompletionWaiter.wait/3`
 - Output is truncated to 1000 chars before storage
