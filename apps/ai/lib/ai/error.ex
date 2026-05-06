@@ -439,10 +439,12 @@ defmodule Ai.Error do
   end
 
   # Provider-specific error message extraction
-  # Google API format (prefer first entry in errors array when a top-level message is present)
-  defp extract_provider_message(%{
-         "error" => %{"errors" => [%{"message" => message} | _], "message" => _top_message}
-       })
+  # Google API format (prefer first entry in errors array when present)
+  defp extract_provider_message(%{"error" => %{"errors" => [%{"message" => message} | _]}})
+       when is_binary(message),
+       do: message
+
+  defp extract_provider_message(%{"errors" => [%{"message" => message} | _]})
        when is_binary(message),
        do: message
 

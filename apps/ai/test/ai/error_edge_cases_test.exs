@@ -162,7 +162,6 @@ defmodule Ai.ErrorEdgeCasesTest do
     end
 
     test "handles array of error objects - nested errors structure" do
-      # When there's an "errors" array but no top-level message, falls back to map inspection
       body = %{
         "error" => %{
           "errors" => [
@@ -174,8 +173,7 @@ defmodule Ai.ErrorEdgeCasesTest do
 
       result = Error.parse_http_error(400, body, [])
 
-      # The implementation inspects the error map when no pattern matches
-      assert result.provider_message =~ "errors"
+      assert result.provider_message == "First error"
     end
 
     test "handles Google-style errors array with message field" do
@@ -191,8 +189,20 @@ defmodule Ai.ErrorEdgeCasesTest do
 
       result = Error.parse_http_error(400, body, [])
 
-      # Should extract the top-level message
       assert result.provider_message == "First error"
+    end
+
+    test "handles top-level errors array with message field" do
+      body = %{
+        "errors" => [
+          %{"message" => "First top-level error"},
+          %{"message" => "Second top-level error"}
+        ]
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "First top-level error"
     end
   end
 

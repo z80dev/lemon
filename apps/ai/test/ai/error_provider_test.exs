@@ -980,8 +980,7 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.category == :client
-      # No matching pattern, falls back to inspection
-      assert result.provider_message =~ "errors"
+      assert result.provider_message == "Name is required"
     end
 
     test "handles error with mixed types in error object" do
