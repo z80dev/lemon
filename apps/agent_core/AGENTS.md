@@ -176,6 +176,7 @@ The `start_loop/2` function builds the `AgentLoopConfig`, creates an abort signa
   get_steering_messages: fn -> [] end,       # Wired by Agent GenServer
   get_follow_up_messages: fn -> [] end,      # Wired by Agent GenServer
   max_tool_concurrency: nil,                 # nil/:infinity = unbounded, or pos_integer
+  tool_timeout_ms: nil,                      # nil/:infinity = unbounded, or pos_integer ms
   stream_options: %Ai.Types.StreamOptions{},
   stream_fn: nil                             # custom stream fn, defaults to Ai.stream/3
 }

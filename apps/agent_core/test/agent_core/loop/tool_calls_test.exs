@@ -30,6 +30,7 @@ defmodule AgentCore.Loop.ToolCallsTest do
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
       max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency, nil),
+      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms, nil),
       tool_task_supervisor: Keyword.get(opts, :tool_task_supervisor, nil),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
@@ -309,6 +310,50 @@ defmodule AgentCore.Loop.ToolCallsTest do
 
     assert [%TextContent{text: text}] = tool_result_message.content
     assert text == ~s(Unexpected tool result: {:unexpected, "shape"})
+  end
+
+  test "terminates long-running tool task after configured timeout" do
+    parent = self()
+
+    slow_tool = %AgentTool{
+      name: "timeout_tool",
+      description: "Runs longer than the configured timeout",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Timeout",
+      execute: fn id, _params, _signal, _on_update ->
+        send(parent, {:timeout_tool_started, id})
+        Process.sleep(5_000)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "unexpected"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [slow_tool])
+    config = simple_config(tool_timeout_ms: 50)
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("timeout_tool", %{}, id: "call_tool_timeout")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    assert_receive {:timeout_tool_started, "call_tool_timeout"}, 1_000
+    assert [tool_result_message] = results
+    assert tool_result_message.is_error == true
+    assert tool_result_message.tool_call_id == "call_tool_timeout"
+    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 50}
+    assert [%TextContent{text: "Tool task timed out after 50ms"}] = tool_result_message.content
+    assert List.last(updated_context.messages).tool_call_id == "call_tool_timeout"
+    assert List.last(updated_new_messages).tool_call_id == "call_tool_timeout"
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, &match?({:tool_execution_start, "call_tool_timeout", _, _}, &1))
+    assert Enum.any?(events, &match?({:tool_execution_end, "call_tool_timeout", _, _, true}, &1))
   end
 
   test "respects max_tool_concurrency while executing tool calls" do

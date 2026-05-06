@@ -59,6 +59,7 @@ defmodule AgentCore.Loop.ToolCalls do
 
   defp execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream) do
     max_concurrency = resolve_max_tool_concurrency(config, length(tool_calls))
+    tool_timeout_ms = resolve_tool_timeout_ms(config)
     tool_task_supervisor = config.tool_task_supervisor || AgentCore.ToolTaskSupervisor
 
     {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
@@ -68,6 +69,7 @@ defmodule AgentCore.Loop.ToolCalls do
         %{},
         %{},
         max_concurrency,
+        tool_timeout_ms,
         signal,
         stream,
         tool_task_supervisor
@@ -85,6 +87,7 @@ defmodule AgentCore.Loop.ToolCalls do
       context.tools,
       tool_task_supervisor,
       max_concurrency,
+      tool_timeout_ms,
       results,
       stream,
       signal
@@ -100,6 +103,7 @@ defmodule AgentCore.Loop.ToolCalls do
          tools,
          tool_task_supervisor,
          max_concurrency,
+         tool_timeout_ms,
          results,
          stream,
          signal
@@ -174,6 +178,7 @@ defmodule AgentCore.Loop.ToolCalls do
                 pending_by_ref,
                 pending_by_mon,
                 max_concurrency - map_size(pending_by_ref),
+                tool_timeout_ms,
                 signal,
                 stream,
                 tool_task_supervisor
@@ -209,6 +214,7 @@ defmodule AgentCore.Loop.ToolCalls do
               tools,
               tool_task_supervisor,
               max_concurrency,
+              tool_timeout_ms,
               results,
               stream,
               signal
@@ -226,6 +232,7 @@ defmodule AgentCore.Loop.ToolCalls do
                   tools,
                   tool_task_supervisor,
                   max_concurrency,
+                  tool_timeout_ms,
                   results,
                   stream,
                   signal
@@ -244,6 +251,7 @@ defmodule AgentCore.Loop.ToolCalls do
                     pending_by_ref,
                     pending_by_mon,
                     max_concurrency - map_size(pending_by_ref),
+                    tool_timeout_ms,
                     signal,
                     stream,
                     tool_task_supervisor
@@ -279,6 +287,85 @@ defmodule AgentCore.Loop.ToolCalls do
                   tools,
                   tool_task_supervisor,
                   max_concurrency,
+                  tool_timeout_ms,
+                  results,
+                  stream,
+                  signal
+                )
+            end
+
+          {:tool_task_timeout, ref} ->
+            case Map.get(pending_by_ref, ref) do
+              nil ->
+                collect_parallel_tool_results(
+                  context,
+                  new_messages,
+                  pending_by_ref,
+                  pending_by_mon,
+                  remaining_tool_calls,
+                  tools,
+                  tool_task_supervisor,
+                  max_concurrency,
+                  tool_timeout_ms,
+                  results,
+                  stream,
+                  signal
+                )
+
+              %{tool_call: tool_call, mon_ref: mon_ref, pid: pid} ->
+                Task.Supervisor.terminate_child(tool_task_supervisor, pid)
+                Process.demonitor(mon_ref, [:flush])
+
+                {pending_by_ref, pending_by_mon} =
+                  drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
+                  start_tool_tasks(
+                    tools,
+                    remaining_tool_calls,
+                    pending_by_ref,
+                    pending_by_mon,
+                    max_concurrency - map_size(pending_by_ref),
+                    tool_timeout_ms,
+                    signal,
+                    stream,
+                    tool_task_supervisor
+                  )
+
+                LemonCore.Telemetry.emit(
+                  [:agent_core, :tool_task, :error],
+                  %{system_time: System.system_time()},
+                  %{
+                    tool_name: tool_call.name,
+                    tool_call_id: tool_call.id,
+                    reason: :timeout
+                  }
+                )
+
+                {context, new_messages, results} =
+                  emit_tool_result(
+                    tool_call,
+                    tool_timeout_result(tool_timeout_ms),
+                    true,
+                    context,
+                    new_messages,
+                    results,
+                    stream
+                  )
+
+                {context, new_messages, results} =
+                  emit_start_failures(start_failures, context, new_messages, results, stream)
+
+                collect_parallel_tool_results(
+                  context,
+                  new_messages,
+                  pending_by_ref,
+                  pending_by_mon,
+                  remaining_tool_calls,
+                  tools,
+                  tool_task_supervisor,
+                  max_concurrency,
+                  tool_timeout_ms,
                   results,
                   stream,
                   signal
@@ -296,6 +383,7 @@ defmodule AgentCore.Loop.ToolCalls do
               tools,
               tool_task_supervisor,
               max_concurrency,
+              tool_timeout_ms,
               results,
               stream,
               signal
@@ -311,6 +399,7 @@ defmodule AgentCore.Loop.ToolCalls do
          pending_by_ref,
          pending_by_mon,
          available_slots,
+         _tool_timeout_ms,
          _signal,
          _stream,
          _tool_task_supervisor
@@ -325,6 +414,7 @@ defmodule AgentCore.Loop.ToolCalls do
          pending_by_ref,
          pending_by_mon,
          available_slots,
+         tool_timeout_ms,
          signal,
          stream,
          tool_task_supervisor
@@ -372,13 +462,15 @@ defmodule AgentCore.Loop.ToolCalls do
                          ) do
                       {:ok, pid} ->
                         mon_ref = Process.monitor(pid)
+                        timeout_ref = schedule_tool_timeout(ref, tool_timeout_ms)
 
                         {:cont,
                          {
                            Map.put(by_ref, ref, %{
                              tool_call: prepared_tool_call,
                              mon_ref: mon_ref,
-                             pid: pid
+                             pid: pid,
+                             timeout_ref: timeout_ref
                            }),
                            Map.put(by_mon, mon_ref, ref),
                            rest,
@@ -458,8 +550,9 @@ defmodule AgentCore.Loop.ToolCalls do
       {nil, pending_by_ref} ->
         {pending_by_ref, pending_by_mon}
 
-      {%{mon_ref: mon_ref}, pending_by_ref} ->
+      {%{mon_ref: mon_ref, timeout_ref: timeout_ref}, pending_by_ref} ->
         Process.demonitor(mon_ref, [:flush])
+        cancel_tool_timeout(timeout_ref)
         pending_by_mon = Map.delete(pending_by_mon, mon_ref)
         {pending_by_ref, pending_by_mon}
     end
@@ -783,6 +876,15 @@ defmodule AgentCore.Loop.ToolCalls do
     }
   end
 
+  defp tool_timeout_result(timeout_ms) do
+    %AgentToolResult{
+      content: [
+        %TextContent{type: :text, text: "Tool task timed out after #{timeout_ms}ms"}
+      ],
+      details: %{error_type: :tool_task_timeout, timeout_ms: timeout_ms}
+    }
+  end
+
   defp resolve_max_tool_concurrency(_config, total_tool_calls) when total_tool_calls <= 0, do: 0
 
   defp resolve_max_tool_concurrency(
@@ -803,6 +905,28 @@ defmodule AgentCore.Loop.ToolCalls do
   end
 
   defp resolve_max_tool_concurrency(%AgentLoopConfig{}, total_tool_calls), do: total_tool_calls
+
+  defp resolve_tool_timeout_ms(%AgentLoopConfig{tool_timeout_ms: :infinity}), do: nil
+
+  defp resolve_tool_timeout_ms(%AgentLoopConfig{tool_timeout_ms: timeout_ms})
+       when is_integer(timeout_ms) and timeout_ms > 0 do
+    timeout_ms
+  end
+
+  defp resolve_tool_timeout_ms(%AgentLoopConfig{}), do: nil
+
+  defp schedule_tool_timeout(_ref, nil), do: nil
+
+  defp schedule_tool_timeout(ref, timeout_ms) do
+    Process.send_after(self(), {:tool_task_timeout, ref}, timeout_ms)
+  end
+
+  defp cancel_tool_timeout(nil), do: :ok
+
+  defp cancel_tool_timeout(timeout_ref) do
+    Process.cancel_timer(timeout_ref)
+    :ok
+  end
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 

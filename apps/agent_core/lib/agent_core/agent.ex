@@ -92,6 +92,7 @@ defmodule AgentCore.Agent do
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           waiters: list(waiter())
         }
@@ -108,6 +109,7 @@ defmodule AgentCore.Agent do
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           name: GenServer.name()
         ]
@@ -132,6 +134,7 @@ defmodule AgentCore.Agent do
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
   - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback
+  - `:tool_timeout_ms` - Optional per-tool task timeout in milliseconds
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
 
@@ -506,6 +509,7 @@ defmodule AgentCore.Agent do
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
+      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       queue_call_timeout: queue_call_timeout,
       waiters: []
     }
@@ -944,6 +948,7 @@ defmodule AgentCore.Agent do
         GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref}, queue_call_timeout)
       end,
       max_tool_turns: state.max_tool_turns,
+      tool_timeout_ms: state.tool_timeout_ms,
       stream_options: stream_options,
       stream_fn: state.stream_fn
     }
