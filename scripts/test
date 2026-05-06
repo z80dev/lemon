@@ -8,6 +8,65 @@ if [ "$#" -gt 0 ]; then
   shift
 fi
 
+SCRUB_CREDENTIAL_ENV_VARS=(
+  AI21_API_KEY
+  ANTHROPIC_API_KEY
+  ANTHROPIC_TOKEN
+  AWS_ACCESS_KEY_ID
+  AWS_PROFILE
+  AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN
+  AZURE_OPENAI_API_KEY
+  BRAVE_API_KEY
+  CHATGPT_TOKEN
+  CLAUDE_CODE_OAUTH_TOKEN
+  DEEPGRAM_API_KEY
+  DINGTALK_BOT_TOKEN
+  DISCORD_BOT_TOKEN
+  ELEVENLABS_API_KEY
+  FEISHU_APP_SECRET
+  FEISHU_BOT_TOKEN
+  FIREWORKS_API_KEY
+  GEMINI_API_KEY
+  GH_TOKEN
+  GITHUB_COPILOT_API_KEY
+  GITHUB_TOKEN
+  GOOGLE_API_KEY
+  GOOGLE_APPLICATION_CREDENTIALS
+  GOOGLE_APPLICATION_CREDENTIALS_JSON
+  GOOGLE_CLOUD_PROJECT
+  GOOGLE_CLOUD_PROJECT_ID
+  GOOGLE_GENERATIVE_AI_API_KEY
+  GOOGLE_GEMINI_CLI_API_KEY
+  GROQ_API_KEY
+  KIMI_API_KEY
+  LEMON_SECRETS_MASTER_KEY
+  MINIMAX_API_KEY
+  MISTRAL_API_KEY
+  MOONSHOT_API_KEY
+  NOUS_API_KEY
+  OPENAI_API_KEY
+  OPENAI_CODEX_API_KEY
+  OPENCODE_API_KEY
+  OPENROUTER_API_KEY
+  SLACK_APP_TOKEN
+  SLACK_BOT_TOKEN
+  TELEGRAM_BOT_TOKEN
+  TWILIO_AUTH_TOKEN
+  XAI_API_KEY
+  X_API_ACCESS_TOKEN
+  X_API_ACCESS_TOKEN_SECRET
+  X_API_BEARER_TOKEN
+  X_API_CLIENT_ID
+  X_API_CLIENT_SECRET
+  X_API_CONSUMER_KEY
+  X_API_CONSUMER_SECRET
+  X_API_REFRESH_TOKEN
+  X_BEARER_TOKEN
+  XMTP_WALLET_KEY
+  ZAI_API_KEY
+)
+
 usage() {
   cat <<'EOF'
 Usage: scripts/test <lane> [args]
@@ -26,6 +85,7 @@ Runner defaults:
   - Runs from the repository root.
   - Sets MIX_ENV=test for BEAM test lanes unless a lane intentionally overrides it.
   - Creates per-invocation temp LEMON_STORE_PATH and LEMON_TEST_TMPDIR when unset.
+  - BEAM test lanes scrub ambient provider/platform credentials unless LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1.
 EOF
 }
 
@@ -35,6 +95,7 @@ ensure_repo_root() {
 
 setup_test_env() {
   export MIX_ENV="${MIX_ENV:-test}"
+  scrub_live_credentials
 
   if [ -z "${LEMON_TEST_TMPDIR:-}" ]; then
     export LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
@@ -43,6 +104,17 @@ setup_test_env() {
 
   export LEMON_STORE_PATH="${LEMON_STORE_PATH:-$LEMON_TEST_TMPDIR/store}"
   mkdir -p "$LEMON_STORE_PATH"
+}
+
+scrub_live_credentials() {
+  case "${LEMON_TEST_ALLOW_LIVE_CREDENTIALS:-}" in
+    1|true|TRUE|yes|YES) return 0 ;;
+  esac
+
+  local key
+  for key in "${SCRUB_CREDENTIAL_ENV_VARS[@]}"; do
+    unset "$key"
+  done
 }
 
 run_fast() {

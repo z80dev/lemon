@@ -17,7 +17,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 
 ## Lanes
 
-- `fast`: compiles with `mix compile --warnings-as-errors`, then runs `mix test --exclude integration`. The lane defaults to `MIX_ENV=test` and creates per-invocation temp `LEMON_TEST_TMPDIR` and `LEMON_STORE_PATH` values when they are not already set.
+- `fast`: compiles with `mix compile --warnings-as-errors`, then runs `mix test --exclude integration`. The lane defaults to `MIX_ENV=test`, creates per-invocation temp `LEMON_TEST_TMPDIR` and `LEMON_STORE_PATH` values when they are not already set, and scrubs ambient live provider/platform credentials unless explicitly opted in.
 - `quality`: runs Lemon's lightweight policy/quality gates: `scripts/lint_ci_docs.sh`, `scripts/test_contract.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the focused quality/eval contract tests used by CI. `mix lemon.quality` already runs the duplicate test module guard internally.
 - `clients`: mirrors the client CI job for `clients/lemon-web`, `clients/lemon-tui`, and `clients/lemon-browser-node`: install dependencies when `node_modules` is absent, typecheck, lint, build, run coverage tests, and audit production dependencies.
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
@@ -33,9 +33,33 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `eval-fast` is intentionally smaller than CI's `mix lemon.eval --iterations 20` so developers can run it frequently.
 - `smoke` is CI-only until there is a stable local release-smoke wrapper; use the GitHub workflow for the full product smoke.
 
+## Hermetic unit-test environment
+
+The BEAM test lanes in `scripts/test` scrub ambient live credentials before running Mix commands. This keeps normal unit tests from accidentally depending on a developer's local provider, cloud, or platform tokens.
+
+Representative scrubbed variables include:
+
+- LLM/provider secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_GEMINI_CLI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `NOUS_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`.
+- OAuth/CLI and secret-store material: `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `LEMON_SECRETS_MASTER_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
+- Platform/cloud credentials: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `TWILIO_AUTH_TOKEN`, X API credentials, XMTP wallet keys, Feishu/DingTalk tokens.
+
+Live/integration runs that intentionally need real credentials must opt in explicitly:
+
+```bash
+LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/some_app/test --only integration
+```
+
+Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
+
+- `credential_env_vars/0` returns the canonical scrub list.
+- `scrub_unit_credentials!/1` deletes those variables unless live credentials are explicitly allowed. It returns `:ok` when scrubbing runs and `{:skipped, :live_credentials_allowed}` when the live-credential opt-in is active.
+- `with_restored_env/2` snapshots and restores env vars around synchronous tests that intentionally mutate process-wide env.
+
+Because environment variables are process-wide, tests that call `System.put_env/2` or `System.delete_env/1` should generally be `async: false` and should restore their changes with `with_restored_env/2` or an `on_exit/1` snapshot.
+
 ## Notes for agents
 
 - Prefer `scripts/test fast` over ad hoc `mix test` for broad local checks.
 - Prefer `scripts/test path ...` when validating a narrow change.
 - Keep new lanes documented here and visible in `scripts/test help`.
-- Do not add full hermetic environment scrubbing in this runner without a separate design; Phase 1 only sets basic deterministic temp paths for test lanes.
+- Do not bypass credential scrubbing for unit lanes. Use `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` only for explicit live/integration validation.
