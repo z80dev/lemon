@@ -10,6 +10,23 @@ import { SelectOverlay } from './SelectOverlay.js';
 
 function delay(ms = 5) { return new Promise<void>(r => setTimeout(r, ms)); }
 
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(10);
+    }
+  }
+
+  throw lastError;
+}
+
 function renderOverlay(props: {
   title: string;
   options: Array<{ label: string; value: string; description?: string }>;
@@ -84,7 +101,7 @@ describe('SelectOverlay', () => {
 
   it('should navigate down with arrow key', async () => {
     const onSelect = vi.fn();
-    const { stdin } = renderOverlay({
+    const { stdin, lastFrame } = renderOverlay({
       title: 'Test',
       options: testOptions,
       onSelect,
@@ -94,15 +111,14 @@ describe('SelectOverlay', () => {
     // Press down arrow then Enter
     await delay();
     stdin.write('\x1B[B'); // Down arrow
-    await delay(20);
+    await waitFor(() => expect(lastFrame()).toContain('> Option B'));
     stdin.write('\r'); // Enter
-    await delay();
-    expect(onSelect).toHaveBeenCalledWith('b');
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('b'));
   });
 
   it('should navigate up with arrow key', async () => {
     const onSelect = vi.fn();
-    const { stdin } = renderOverlay({
+    const { stdin, lastFrame } = renderOverlay({
       title: 'Test',
       options: testOptions,
       onSelect,
@@ -116,10 +132,9 @@ describe('SelectOverlay', () => {
     stdin.write('\x1B[B'); // Down
     await delay();
     stdin.write('\x1B[A'); // Up
-    await delay(20);
+    await waitFor(() => expect(lastFrame()).toContain('> Option B'));
     stdin.write('\r');
-    await delay();
-    expect(onSelect).toHaveBeenCalledWith('b');
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('b'));
   });
 
   it('should cancel on Escape', async () => {
