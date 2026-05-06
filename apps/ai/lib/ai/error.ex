@@ -15,7 +15,8 @@ defmodule Ai.Error do
   # Types
   # ============================================================================
 
-  @type error_category :: :rate_limit | :auth | :client | :server | :transient | :unknown
+  @type error_category ::
+          :rate_limit | :auth | :client | :context_length | :server | :transient | :unknown
 
   @type rate_limit_info :: %{
           limit: non_neg_integer() | nil,
@@ -50,7 +51,13 @@ defmodule Ai.Error do
   """
   @spec parse_http_error(non_neg_integer(), term(), [{String.t(), String.t()}]) :: parsed_error()
   def parse_http_error(status, body, headers \\ []) do
-    category = classify_status(status)
+    category =
+      if context_length_error?({:http_error, status, body}) do
+        :context_length
+      else
+        classify_status(status)
+      end
+
     provider_message = extract_provider_message(body)
     rate_limit_info = if status == 429, do: extract_rate_limit_info(headers), else: nil
 
@@ -276,6 +283,8 @@ defmodule Ai.Error do
     context_length_error_string?(nil, error)
   end
 
+  def context_length_error?(%{category: :context_length}), do: true
+
   def context_length_error?(_), do: false
 
   @doc """
@@ -415,6 +424,7 @@ defmodule Ai.Error do
         :rate_limit -> "Rate limit exceeded"
         :auth -> "Authentication failed"
         :client -> "Invalid request"
+        :context_length -> "Context length exceeded"
         :server -> "Server error"
         :transient -> "Service temporarily unavailable"
         :unknown -> "Request failed"

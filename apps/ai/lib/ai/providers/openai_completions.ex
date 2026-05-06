@@ -880,13 +880,13 @@ defmodule Ai.Providers.OpenAICompletions do
             stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
 
           true ->
-            body = response.body
-            error_msg = extract_error_message(body)
+            error_body = materialize_response_body(response)
+            error = Ai.Error.parse_http_error(response.status, error_body, response.headers)
 
             %{
               initial_output
               | stop_reason: :error,
-                error_message: "HTTP #{response.status}: #{error_msg}"
+                error_message: error.message
             }
         end
 
@@ -935,6 +935,37 @@ defmodule Ai.Providers.OpenAICompletions do
     |> finalize_current_block(stream)
     |> finalize_tool_call_blocks(stream)
     |> Map.get(:output)
+  end
+
+  defp materialize_response_body(%Req.Response{body: %Req.Response.Async{}} = response) do
+    {pid, ref} = extract_stream_ref(response)
+    receive_response_body(pid, ref, [])
+  end
+
+  defp materialize_response_body(%Req.Response{body: body}), do: body
+
+  defp receive_response_body(pid, ref, chunks) do
+    receive do
+      {^ref, {:data, chunk}} ->
+        receive_response_body(pid, ref, [chunk | chunks])
+
+      {^ref, :done} ->
+        chunks
+        |> Enum.reverse()
+        |> IO.iodata_to_binary()
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        case chunks do
+          [] -> "Response body stream ended unexpectedly: #{inspect(reason)}"
+          _ -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
+        end
+    after
+      5_000 ->
+        case chunks do
+          [] -> "Response body stream timed out"
+          _ -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
+        end
+    end
   end
 
   defp extract_stream_ref(%Req.Response{} = response) do
@@ -1040,7 +1071,10 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp retry_delay_ms(attempt, %Req.Response{} = response) do
-    error_text = extract_error_message(response.body)
+    error_text =
+      response
+      |> materialize_response_body()
+      |> extract_error_message()
 
     Ai.Providers.RetryHelper.extract_retry_delay_ms(error_text, response.headers) ||
       retry_delay_ms(attempt)

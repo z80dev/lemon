@@ -199,8 +199,10 @@ defmodule Ai.ErrorProviderTest do
 
       result = Error.parse_http_error(400, body, [])
 
-      assert result.category == :client
+      assert result.category == :context_length
       assert result.provider_message =~ "maximum context length"
+      assert result.message =~ "Context length exceeded"
+      assert Error.context_length_error?(result)
     end
 
     test "parses OpenAI server_error" do
