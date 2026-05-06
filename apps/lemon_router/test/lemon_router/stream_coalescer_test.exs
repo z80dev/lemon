@@ -389,6 +389,70 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert state.finalized == true
       assert state.last_sent_text == "Final answer"
     end
+
+    test "late deltas after finalization do not mutate finalized stream state" do
+      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+      Application.put_env(:lemon_router, :dispatcher, IntentDispatcherStub)
+      :persistent_term.put({IntentDispatcherStub, :test_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({IntentDispatcherStub, :test_pid})
+
+        if is_nil(previous_dispatcher) do
+          Application.delete_env(:lemon_router, :dispatcher)
+        else
+          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+        end
+      end)
+
+      session_key = "agent:test:telegram:bot:group:12345:thread:777"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "partial"
+               )
+
+      assert eventually(fn ->
+               StreamCoalescer.current_text(session_key, channel_id, run_id) == "partial"
+             end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{user_msg_id: 9},
+                 final_text: "Final answer"
+               )
+
+      assert_receive {:dispatched_intent, %DeliveryIntent{kind: :stream_finalize}}, 1_000
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 2,
+                 " late"
+               )
+
+      refute_receive {:dispatched_intent, _}, 100
+
+      [{pid, _}] =
+        Registry.lookup(
+          Elixir.LemonRouter.CoalescerRegistry,
+          {session_key, channel_id}
+        )
+
+      state = :sys.get_state(pid)
+      assert state.finalized == true
+      assert state.last_seq == 1
+      assert state.full_text == "partial"
+      assert state.last_sent_text == "Final answer"
+    end
   end
 
   describe "atom exhaustion protection" do
