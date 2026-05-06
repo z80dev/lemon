@@ -464,6 +464,15 @@ defmodule Ai.Error do
   end
 
   defp extract_provider_message(%{"error" => %{"code" => code}}) when is_binary(code), do: code
+
+  defp extract_provider_message(%{"error" => %{"detail" => detail}})
+       when is_binary(detail) or is_list(detail),
+       do: extract_detail_message(detail)
+
+  defp extract_provider_message(%{"error" => %{"details" => details}})
+       when is_binary(details) or is_list(details),
+       do: extract_detail_message(details)
+
   # Generic error formats
   defp extract_provider_message(%{"error" => error}) when is_binary(error), do: error
 
@@ -485,6 +494,14 @@ defmodule Ai.Error do
   defp extract_provider_message(%{"message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"Message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"detail" => detail}) when is_binary(detail), do: detail
+
+  defp extract_provider_message(%{"detail" => detail}) when is_list(detail),
+    do: extract_detail_message(detail)
+
+  defp extract_provider_message(%{"details" => details})
+       when is_binary(details) or is_list(details),
+       do: extract_detail_message(details)
+
   # Google API format
   defp extract_provider_message(%{"error" => %{"status" => status, "message" => message}})
        when is_binary(status) and is_binary(message) do
@@ -502,6 +519,18 @@ defmodule Ai.Error do
     do: inspect(body) |> truncate_message(200)
 
   defp extract_provider_message(_), do: nil
+
+  defp extract_detail_message(message) when is_binary(message), do: message
+  defp extract_detail_message([message | _]) when is_binary(message), do: message
+
+  defp extract_detail_message([%{"message" => message} | _]) when is_binary(message),
+    do: message
+
+  defp extract_detail_message([%{"msg" => message} | _]) when is_binary(message), do: message
+  defp extract_detail_message([%{"reason" => message} | _]) when is_binary(message), do: message
+
+  defp extract_detail_message([_ | rest]), do: extract_detail_message(rest)
+  defp extract_detail_message(_), do: nil
 
   defp normalize_error_body(body) when is_binary(body) do
     case Jason.decode(body) do

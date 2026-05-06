@@ -153,6 +153,38 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.provider_message == "Not authenticated"
     end
 
+    test "handles FastAPI-style detail arrays" do
+      body = %{
+        "detail" => [
+          %{
+            "loc" => ["body", "messages", 0],
+            "msg" => "Input should be a valid message",
+            "type" => "value_error"
+          }
+        ]
+      }
+
+      result = Error.parse_http_error(422, body, [])
+
+      assert result.provider_message == "Input should be a valid message"
+      assert result.message =~ "Input should be a valid message"
+    end
+
+    test "handles nested provider details arrays" do
+      body = %{
+        "error" => %{
+          "details" => [
+            %{"reason" => "First provider detail"},
+            %{"message" => "Second provider detail"}
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(500, body, [])
+
+      assert result.provider_message == "First provider detail"
+    end
+
     test "handles error with capitalized Message field" do
       body = %{"Message" => "Service error"}
 
