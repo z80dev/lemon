@@ -145,6 +145,20 @@ defmodule Ai.ErrorExtendedTest do
       assert result.remaining == 50
     end
 
+    test "handles Req-style header maps with list values" do
+      headers = %{
+        "x-ratelimit-limit-requests" => ["100"],
+        "x-ratelimit-remaining-requests" => ["0"],
+        "retry-after" => ["30"]
+      }
+
+      result = Error.extract_rate_limit_info(headers)
+
+      assert result.limit == 100
+      assert result.remaining == 0
+      assert result.retry_after == 30_000
+    end
+
     test "returns nil for missing headers" do
       headers = []
       result = Error.extract_rate_limit_info(headers)

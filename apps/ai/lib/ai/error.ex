@@ -49,7 +49,7 @@ defmodule Ai.Error do
       iex> Ai.Error.parse_http_error(500, "Internal Server Error", [])
       %{category: :server, status: 500, message: "Internal server error", ...}
   """
-  @spec parse_http_error(non_neg_integer(), term(), [{String.t(), String.t()}]) :: parsed_error()
+  @spec parse_http_error(non_neg_integer(), term(), map() | [{term(), term()}]) :: parsed_error()
   def parse_http_error(status, body, headers \\ []) do
     category =
       if context_length_error?({:http_error, status, body}) do
@@ -83,7 +83,7 @@ defmodule Ai.Error do
   - `x-ratelimit-reset-requests`, `x-ratelimit-reset-tokens` - Reset timestamp
   - `retry-after` - Seconds until retry is allowed
   """
-  @spec extract_rate_limit_info([{String.t(), String.t()}]) :: rate_limit_info()
+  @spec extract_rate_limit_info(map() | [{term(), term()}]) :: rate_limit_info()
   def extract_rate_limit_info(headers) do
     headers_map = headers_to_map(headers)
 
@@ -437,11 +437,16 @@ defmodule Ai.Error do
     end
   end
 
-  defp headers_to_map(headers) do
+  defp headers_to_map(headers) when is_map(headers) or is_list(headers) do
     Enum.reduce(headers, %{}, fn {key, value}, acc ->
-      Map.put(acc, String.downcase(key), value)
+      Map.put(acc, key |> to_string() |> String.downcase(), normalize_header_value(value))
     end)
   end
+
+  defp headers_to_map(_), do: %{}
+
+  defp normalize_header_value([value | _]), do: normalize_header_value(value)
+  defp normalize_header_value(value), do: value
 
   defp get_rate_limit_value(headers_map, keys) do
     Enum.find_value(keys, fn key ->
