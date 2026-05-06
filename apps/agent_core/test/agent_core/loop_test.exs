@@ -614,9 +614,11 @@ defmodule AgentCore.LoopTest do
 
       assert Enum.map(second_turn_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
       assert Enum.all?(second_turn_tool_results, &(&1.is_error == false))
+      assert Enum.map(second_turn_tool_results, & &1.details) == [%{sum: 3}, nil]
 
       final_tool_results = Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
       assert Enum.map(final_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
+      assert Enum.map(final_tool_results, & &1.details) == [%{sum: 3}, nil]
 
       final_answer_index =
         Enum.find_index(messages, fn

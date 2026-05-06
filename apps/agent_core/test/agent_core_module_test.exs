@@ -12,7 +12,7 @@ defmodule AgentCore.ModuleTest do
 
   alias AgentCore.Test.Mocks
   alias AgentCore.Types.{AgentContext, AgentTool, AgentToolResult, AgentLoopConfig}
-  alias Ai.Types.{TextContent, ImageContent}
+  alias Ai.Types.{ImageContent, TextContent, ToolResultMessage}
 
   # ============================================================================
   # Setup Helpers
@@ -1226,22 +1226,22 @@ defmodule AgentCore.ModuleTest do
     end
 
     test "complete flow with tool execution" do
-      tool_call = Mocks.tool_call("echo", %{"text" => "Hello"}, id: "call_echo_1")
+      tool_call = Mocks.tool_call("add", %{"a" => 2, "b" => 3}, id: "call_add_1")
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Echo completed!")
+      final_response = Mocks.assistant_message("Add completed!")
 
       {:ok, agent} =
         start_agent(
-          tools: [Mocks.echo_tool()],
+          tools: [Mocks.add_tool()],
           stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
         )
 
       _unsub = AgentCore.subscribe(agent, self())
 
-      :ok = AgentCore.prompt(agent, "Echo hello")
+      :ok = AgentCore.prompt(agent, "Add numbers")
 
-      assert_receive {:agent_event, {:tool_execution_start, "call_echo_1", "echo", _}}, 1000
-      assert_receive {:agent_event, {:tool_execution_end, "call_echo_1", "echo", _, _}}, 1000
+      assert_receive {:agent_event, {:tool_execution_start, "call_add_1", "add", _}}, 1000
+      assert_receive {:agent_event, {:tool_execution_end, "call_add_1", "add", _, _}}, 1000
       assert_receive {:agent_event, {:agent_end, _}}, 2000
 
       :ok = AgentCore.wait_for_idle(agent, timeout: 2000)
@@ -1249,6 +1249,9 @@ defmodule AgentCore.ModuleTest do
       state = AgentCore.get_state(agent)
       # Should have: user, assistant (with tool call), tool result, assistant (final)
       assert length(state.messages) >= 4
+
+      assert [%ToolResultMessage{tool_call_id: "call_add_1", details: %{sum: 5}}] =
+               Enum.filter(state.messages, &match?(%ToolResultMessage{}, &1))
     end
 
     test "multiple prompts in sequence" do
