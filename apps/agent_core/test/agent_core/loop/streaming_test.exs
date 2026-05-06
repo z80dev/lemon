@@ -120,6 +120,43 @@ defmodule AgentCore.Loop.StreamingTest do
            end)
   end
 
+  test "preserves streamed content when final provider message is empty" do
+    context = simple_context(messages: [user_message("hi")])
+    signal = AbortSignal.new()
+    partial = Mocks.assistant_message("streamed answer")
+    final = %{partial | content: [], stop_reason: :stop}
+
+    stream_fn = fn _model, _llm_context, _options ->
+      {:ok, ai_stream} = Ai.EventStream.start_link()
+
+      Task.start(fn ->
+        Ai.EventStream.push(ai_stream, {:start, %{partial | content: []}})
+        Ai.EventStream.push(ai_stream, {:text_delta, 0, "streamed answer", partial})
+        Ai.EventStream.push(ai_stream, {:done, :stop, final})
+        Ai.EventStream.complete(ai_stream, final)
+      end)
+
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, message, updated_context} =
+             Streaming.stream_assistant_response(context, config, signal, stream_fn, stream)
+
+    assert [%{text: "streamed answer"}] = message.content
+    assert [%{text: "streamed answer"}] = List.last(updated_context.messages).content
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, fn
+             {:message_end, %{role: :assistant, content: [%{text: "streamed answer"}]}} -> true
+             _ -> false
+           end)
+  end
+
   test "converts terminal :canceled stream event into aborted assistant message" do
     context = simple_context(messages: [user_message("cancel me")])
     signal = AbortSignal.new()

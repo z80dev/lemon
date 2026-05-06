@@ -185,24 +185,26 @@ defmodule AgentCore.Loop.Streaming do
 
   defp process_stream_event(
          {:done, _reason, final_message},
-         _partial,
+         partial,
          context,
          added,
          stream,
          _config
        ) do
+    final_message = reconcile_final_message(final_message, partial)
     {final_message, context} = finalize_message(final_message, context, added, stream)
     {:done, final_message, context}
   end
 
   defp process_stream_event(
          {:error, _reason, final_message},
-         _partial,
+         partial,
          context,
          added,
          stream,
          _config
        ) do
+    final_message = reconcile_final_message(final_message, partial)
     {final_message, context} = finalize_message(final_message, context, added, stream)
     {:done, final_message, context}
   end
@@ -282,6 +284,20 @@ defmodule AgentCore.Loop.Streaming do
   defp terminal_ai_event?({:error, _reason, _message}), do: true
   defp terminal_ai_event?({:canceled, _reason}), do: true
   defp terminal_ai_event?(_event), do: false
+
+  defp reconcile_final_message(%AssistantMessage{} = final, %AssistantMessage{} = partial) do
+    if empty_content?(final.content) and not empty_content?(partial.content) do
+      %{final | content: partial.content}
+    else
+      final
+    end
+  end
+
+  defp reconcile_final_message(final, _partial), do: final
+
+  defp empty_content?(nil), do: true
+  defp empty_content?([]), do: true
+  defp empty_content?(_content), do: false
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 
