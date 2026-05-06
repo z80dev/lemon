@@ -952,7 +952,8 @@ defmodule CodingAgent.Evals.Harness do
     if Keyword.get(opts, :live_model, false) do
       [
         live_model_memory_trace_contract_eval(cwd, opts),
-        live_model_skill_learning_contract_eval(cwd, opts)
+        live_model_skill_learning_contract_eval(cwd, opts),
+        live_model_skill_curator_contract_eval(cwd, opts)
       ]
     else
       []
@@ -1136,6 +1137,115 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_skill_learning_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_skill_curator_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_skill_curator_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        tool_opts = [
+          run_id: "eval-live-model-skill-curator",
+          session_key: "agent:live-model-skill-curator-eval:main",
+          session_id: "agent:live-model-skill-curator-eval:main",
+          agent_id: "live-model-skill-curator-eval"
+        ]
+
+        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+
+        with {:ok, _} <-
+               execute_tool(skill_tool, "seed-live-rollout-verify", %{
+                 "action" => "create",
+                 "name" => "kube-live-rollout-verify",
+                 "scope" => "project",
+                 "content" => narrow_skill_content("Kube Live Rollout Verify", "verify")
+               }),
+             {:ok, _} <-
+               execute_tool(skill_tool, "seed-live-rollout-rollback", %{
+                 "action" => "create",
+                 "name" => "kube-live-rollout-rollback",
+                 "scope" => "project",
+                 "content" => narrow_skill_content("Kube Live Rollout Rollback", "rollback")
+               }),
+             {:ok, curator_result} <-
+               Curator.run(
+                 scope: :project,
+                 cwd: tmp_dir,
+                 now: ~U[2026-05-06 00:00:00Z],
+                 interval_hours: 1
+               ),
+             :ok <- assert_live_curator_prompt(curator_result.review_prompt) do
+          context =
+            AgentContext.new(
+              system_prompt: live_curator_eval_prompt(curator_result.review_prompt),
+              tools: [read_tool, skill_tool]
+            )
+
+          config = %AgentLoopConfig{
+            model: model,
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_options: live_curator_stream_options(stream_options, opts),
+            max_tool_turns: 5
+          }
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("Run the curator review for this candidate cluster.")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          timeout_ms = Keyword.get(opts, :live_timeout_ms, 120_000)
+
+          with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+               :ok <- assert_loop_tool_result(messages, "read_skill", "kubectl rollout status"),
+               :ok <- assert_loop_tool_result(messages, "read_skill", "kubectl rollout undo"),
+               :ok <-
+                 assert_loop_tool_result(messages, "skill_manage", "kube-live-rollout-operations"),
+               :ok <- assert_loop_tool_result(messages, "skill_manage", "archived"),
+               :ok <- assert_archived(tmp_dir, "kube-live-rollout-verify"),
+               :ok <- assert_archived(tmp_dir, "kube-live-rollout-rollback"),
+               :ok <- assert_active_agent_skill(tmp_dir, "kube-live-rollout-operations"),
+               :ok <- assert_final_contains(messages, ["SKILL_CURATOR_LIVE_MODEL_DONE"]) do
+            %{
+              name: "live_model_skill_curator_contract",
+              status: :pass,
+              details: %{
+                provider: model.provider,
+                model: model.id,
+                tool_results: trace_tool_result_names(messages),
+                prompt_candidates: Enum.map(curator_result.candidates, & &1.name),
+                created: "kube-live-rollout-operations",
+                archived: ["kube-live-rollout-verify", "kube-live-rollout-rollback"]
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("live_model_skill_curator_contract", format_reason(reason), %{
+                provider: model.provider,
+                model: model.id,
+                prompt_candidates: Enum.map(curator_result.candidates, & &1.name)
+              })
+          end
+        else
+          {:error, reason} ->
+            contract_fail("live_model_skill_curator_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_skill_curator_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_skill_curator_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -1152,6 +1262,29 @@ defmodule CodingAgent.Evals.Harness do
 
     After the skill tool result arrives, answer with the exact marker SKILL_CAPTURED_LIVE_MODEL and summarize only that the skill was captured.
     """
+  end
+
+  defp live_curator_eval_prompt(review_prompt) do
+    """
+    You are running a live-model Lemon skill-curator eval.
+
+    #{review_prompt}
+
+    For this eval, the two candidates `kube-live-rollout-verify` and `kube-live-rollout-rollback` are one reusable Kubernetes rollout cluster. Before answering, call `read_skill` with view `full` for both candidates. Then call `skill_manage` to create a project skill named `kube-live-rollout-operations` that combines rollout verification and rollback steps. Then call `skill_manage` with action `archive` for both absorbed candidate skills. Never delete skills.
+
+    After the archive tool results arrive, answer with the exact marker SKILL_CURATOR_LIVE_MODEL_DONE and summarize only that the umbrella skill was created and the absorbed skills were archived.
+    """
+  end
+
+  defp live_curator_stream_options(stream_options, opts) do
+    max_tokens =
+      Keyword.get(
+        opts,
+        :live_curator_max_tokens,
+        max(stream_options.max_tokens || 0, 1024)
+      )
+
+    %{stream_options | max_tokens: max_tokens}
   end
 
   defp live_model_config(opts) do
@@ -1562,6 +1695,25 @@ defmodule CodingAgent.Evals.Harness do
 
       not String.contains?(prompt, "kube-rollout-rollback") ->
         {:error, "curator prompt missing kube-rollout-rollback"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_live_curator_prompt(prompt) do
+    cond do
+      not String.contains?(prompt, "Use read_skill") ->
+        {:error, "live curator prompt does not require read_skill"}
+
+      not String.contains?(prompt, "skill_manage") ->
+        {:error, "live curator prompt does not mention skill_manage"}
+
+      not String.contains?(prompt, "kube-live-rollout-verify") ->
+        {:error, "live curator prompt missing kube-live-rollout-verify"}
+
+      not String.contains?(prompt, "kube-live-rollout-rollback") ->
+        {:error, "live curator prompt missing kube-live-rollout-rollback"}
 
       true ->
         :ok
