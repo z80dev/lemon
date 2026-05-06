@@ -16,7 +16,9 @@ defmodule AgentCore.LoopTest do
   alias AgentCore.Test.Mocks
 
   alias Ai.Types.{
+    AssistantMessage,
     TextContent,
+    ToolCall,
     ToolResultMessage,
     UserMessage,
     StreamOptions
@@ -596,6 +598,36 @@ defmodule AgentCore.LoopTest do
 
       assert final_answer_index != nil
       assert Enum.all?(tool_result_indices, &(&1 < final_answer_index))
+    end
+
+    test "rejects invalid tool transcripts before calling the model" do
+      parent = self()
+
+      invalid_context =
+        simple_context(
+          messages: [
+            %UserMessage{role: :user, content: "read the file"},
+            %AssistantMessage{
+              role: :assistant,
+              content: [%ToolCall{id: "call_missing", name: "read", arguments: %{}}]
+            },
+            %UserMessage{role: :user, content: "continue before tool result"}
+          ]
+        )
+
+      stream_fn = fn _model, _llm_context, _options ->
+        send(parent, :stream_called)
+        raise "stream should not be called for an invalid transcript"
+      end
+
+      config = simple_config(stream_fn: stream_fn)
+      stream = Loop.agent_loop_continue(invalid_context, config, nil, nil)
+
+      assert {:error, {:invalid_tool_transcript, violations}, _partial} =
+               EventStream.result(stream)
+
+      assert Enum.any?(violations, &(&1.type == :missing_tool_result))
+      refute_receive :stream_called, 50
     end
 
     test "emits tool_execution_update for streaming tools" do

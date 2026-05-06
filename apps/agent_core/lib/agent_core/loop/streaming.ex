@@ -3,6 +3,7 @@ defmodule AgentCore.Loop.Streaming do
 
   alias AgentCore.AbortSignal
   alias AgentCore.EventStream
+  alias AgentCore.Loop.TranscriptValidator
   alias AgentCore.Types.{AgentLoopConfig, AgentTool}
 
   alias Ai.Types.{
@@ -31,6 +32,7 @@ defmodule AgentCore.Loop.Streaming do
       _ = AgentCore.Context.check_size(context.messages, context.system_prompt)
 
       with {:ok, messages} <- transform_messages(context, config, signal),
+           :ok <- TranscriptValidator.validate(messages),
            {:ok, llm_messages} <- convert_messages(config, messages) do
         # Build LLM context
         llm_context = %Context{

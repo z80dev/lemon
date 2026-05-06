@@ -43,6 +43,7 @@ AgentCore.Supervisor (:one_for_one)
 | `lib/agent_core/types.ex` | All core structs: `AgentState`, `AgentContext`, `AgentTool`, `AgentToolResult`, `AgentLoopConfig`. Type union for `agent_event()`. |
 | `lib/agent_core/loop.ex` | Stateless agentic loop. Recursive inner/outer loop: stream LLM response -> execute tools -> check steering -> repeat. Outer loop checks follow-up messages after inner loop exits. |
 | `lib/agent_core/loop/streaming.ex` | Handles the LLM streaming call. Transforms context, converts messages, calls `Ai.stream/3` (or custom `stream_fn`), processes SSE events into `message_start`/`message_update`/`message_end`. |
+| `lib/agent_core/loop/transcript_validator.ex` | Enforces tool transcript invariants before provider calls: each assistant tool call must be followed by exactly one matching tool result before the next model turn. |
 | `lib/agent_core/loop/tool_calls.ex` | Parallel tool execution under `ToolTaskSupervisor`. Respects `max_tool_concurrency`. Handles abort by terminating pending tasks. Returns tool results in the original assistant tool-call order. |
 
 ### Infrastructure
@@ -119,7 +120,7 @@ The execute function signature is `(String.t(), map(), reference() | nil, (Agent
 The loop is in `lib/agent_core/loop.ex`. The inner loop (`do_inner_loop/10`) handles tool calls and steering. The outer loop (`do_run_loop/8`) handles follow-up messages. LLM streaming is delegated to `Loop.Streaming`. Tool execution is delegated to `Loop.ToolCalls`.
 
 Key change points:
-- **Before each LLM call**: `Loop.Streaming.stream_assistant_response/5` calls `transform_messages` then `convert_messages` then the stream function.
+- **Before each LLM call**: `Loop.Streaming.stream_assistant_response/5` calls `transform_messages`, validates tool transcript shape, calls `convert_messages`, then calls the stream function.
 - **After tool execution**: `Loop.ToolCalls.execute_and_collect_tools/6` returns results and any steering messages.
 - **Loop exit**: The outer loop checks `get_follow_up_messages` before emitting `{:agent_end, new_messages}`.
 
