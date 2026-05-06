@@ -172,6 +172,20 @@ defmodule LemonSkills.Curator do
     end
   end
 
+  @doc "Record a submitted agent review run in a curator run report."
+  @spec record_review_submission(String.t() | nil, map()) :: :ok | {:error, term()}
+  def record_review_submission(nil, _submission), do: :ok
+
+  def record_review_submission(report_path, submission) when is_binary(report_path) and is_map(submission) do
+    with {:ok, report} <- read_run_report(report_path),
+         updated = Map.put(report, "review_submission", stringify_submission(submission)),
+         {:ok, json} <- Jason.encode(updated, pretty: true),
+         :ok <- atomic_write(report_path, json),
+         :ok <- atomic_write(Path.join(Path.dirname(report_path), "REPORT.md"), render_report_markdown(updated)) do
+      :ok
+    end
+  end
+
   @doc "Render the curator review prompt for candidate rows."
   @spec review_prompt([map()], keyword()) :: String.t()
   def review_prompt(rows, opts \\ []) when is_list(rows) do
@@ -392,6 +406,27 @@ defmodule LemonSkills.Curator do
     end
   end
 
+  defp read_run_report(path) do
+    with {:ok, content} <- File.read(path),
+         {:ok, %{} = report} <- Jason.decode(content) do
+      {:ok, report}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_report}
+    end
+  end
+
+  defp stringify_submission(submission) do
+    %{
+      "run_id" => string_value(Map.get(submission, :run_id) || Map.get(submission, "run_id")),
+      "submitted_at" =>
+        string_value(Map.get(submission, :submitted_at) || Map.get(submission, "submitted_at")),
+      "status" => string_value(Map.get(submission, :status) || Map.get(submission, "status"))
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
   defp curator_report_root(opts) do
     case scope(opts) do
       :project ->
@@ -462,10 +497,10 @@ defmodule LemonSkills.Curator do
 
     ## Auto-transitions
 
-    - Checked: #{data["counts"]["checked"]}
-    - Marked stale: #{data["counts"]["marked_stale"]}
-    - Archived: #{data["counts"]["archived"]}
-    - Reactivated: #{data["counts"]["reactivated"]}
+    - Checked: #{count_value(data, "checked")}
+    - Marked stale: #{count_value(data, "marked_stale")}
+    - Archived: #{count_value(data, "archived")}
+    - Reactivated: #{count_value(data, "reactivated")}
 
     ## State transitions
 
@@ -474,10 +509,15 @@ defmodule LemonSkills.Curator do
     ## Candidates
 
     #{candidate_lines(data["candidates"])}
+
+    ## Review submission
+
+    #{review_submission_lines(data["review_submission"])}
     """
   end
 
   defp transition_lines([]), do: "None."
+  defp transition_lines(nil), do: "None."
 
   defp transition_lines(transitions) do
     transitions
@@ -488,6 +528,7 @@ defmodule LemonSkills.Curator do
   end
 
   defp candidate_lines([]), do: "None."
+  defp candidate_lines(nil), do: "None."
 
   defp candidate_lines(candidates) do
     candidates
@@ -496,6 +537,32 @@ defmodule LemonSkills.Curator do
     end)
     |> Enum.join("\n")
   end
+
+  defp review_submission_lines(%{} = submission) do
+    [
+      if(submission["run_id"], do: "- Run id: #{submission["run_id"]}"),
+      if(submission["submitted_at"], do: "- Submitted at: #{submission["submitted_at"]}"),
+      if(submission["status"], do: "- Status: #{submission["status"]}")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "Not submitted."
+      lines -> Enum.join(lines, "\n")
+    end
+  end
+
+  defp review_submission_lines(_), do: "Not submitted."
+
+  defp count_value(data, key) do
+    case data["counts"] do
+      %{} = counts -> counts[key] || 0
+      _ -> 0
+    end
+  end
+
+  defp string_value(nil), do: nil
+  defp string_value(value) when is_binary(value), do: value
+  defp string_value(value), do: to_string(value)
 
   defp parse_time(nil), do: nil
 

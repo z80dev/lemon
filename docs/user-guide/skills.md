@@ -252,6 +252,8 @@ Every run also writes `run.json` and `REPORT.md` under
 `.lemon/logs/curator/<run>/` for project skills, or
 `~/.lemon/agent/logs/curator/<run>/` for global skills. The JSON report is the
 machine-readable audit record; the markdown report is the quick human review.
+When a background curator run submits an agent review, the report records the
+submitted review run id.
 
 The runtime also has an idle background curator path. When enabled, Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and

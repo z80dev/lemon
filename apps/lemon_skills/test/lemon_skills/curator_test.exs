@@ -133,6 +133,47 @@ defmodule LemonSkills.CuratorTest do
     assert state["run_count"] == 1
   end
 
+  test "record_review_submission links report artifacts to submitted review run", %{
+    tmp_dir: tmp_dir
+  } do
+    write_usage!(tmp_dir, %{
+      "deploy-helper" => %{
+        "created_by" => "agent",
+        "lifecycle_state" => "active",
+        "last_write_at" => "2026-05-05T00:00:00Z"
+      }
+    })
+
+    assert {:ok, result} =
+             Curator.run(scope: :project, cwd: tmp_dir, now: ~U[2026-05-06 00:00:00Z])
+
+    assert :ok =
+             Curator.record_review_submission(result.report_path, %{
+               run_id: "run_review_123",
+               submitted_at: "2026-05-06T00:00:05Z",
+               status: :submitted
+             })
+
+    assert {:ok, report} = result.report_path |> File.read!() |> Jason.decode()
+
+    assert report["review_submission"] == %{
+             "run_id" => "run_review_123",
+             "submitted_at" => "2026-05-06T00:00:05Z",
+             "status" => "submitted"
+           }
+
+    human_report = result.report_path |> Path.dirname() |> Path.join("REPORT.md") |> File.read!()
+    assert human_report =~ "## Review submission"
+    assert human_report =~ "Run id: run_review_123"
+  end
+
+  test "record_review_submission reports invalid paths" do
+    assert {:error, :enoent} =
+             Curator.record_review_submission("/tmp/missing-curator-report.json", %{
+               run_id: "run_missing"
+             })
+  end
+
   test "should_run_now honors pause and interval state", %{tmp_dir: tmp_dir} do
     opts = [scope: :project, cwd: tmp_dir, now: ~U[2026-05-06 00:00:00Z], interval_hours: 24]
 

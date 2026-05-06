@@ -369,7 +369,7 @@ Each curator run writes a machine report and a human report:
 | Global | `~/.lemon/agent/logs/curator/<run>/run.json` and `REPORT.md` |
 | Project | `<cwd>/.lemon/logs/curator/<run>/run.json` and `REPORT.md` |
 
-`run.json` records the run timestamp, duration, transition counts, state transitions, candidates, and whether an agent review is required. `REPORT.md` mirrors the same information in a scan-friendly form. The latest `run.json` path is also stored in `skills.curator.json` as `last_report_path`.
+`run.json` records the run timestamp, duration, transition counts, state transitions, candidates, whether an agent review is required, and the submitted review run id when the background curator launches a follow-up review. `REPORT.md` mirrors the same information in a scan-friendly form. The latest `run.json` path is also stored in `skills.curator.json` as `last_report_path`.
 
 The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`. The prompt prefers patching an existing class-level skill first, then updating supporting files such as `references/`, `templates/`, or `scripts/`, then creating a new class-level umbrella only when no existing skill owns the reusable lesson.
 

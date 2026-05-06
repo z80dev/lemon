@@ -53,7 +53,9 @@ transitions, then submits the generated review prompt to `LemonRouter` only when
 agent-authored skills require a consolidation pass. Curator review runs default
 to a learning-only tool policy that exposes `read_skill`, `skill_manage`,
 `search_memory`, and `memory_topic`; override it with `tool_policy` in the
-curator config when an operator needs a narrower or broader surface.
+curator config when an operator needs a narrower or broader surface. When a
+review is submitted, the curator report is updated with the router run id so the
+automatic pass and model review can be audited together.
 
 ### Session Isolation
 

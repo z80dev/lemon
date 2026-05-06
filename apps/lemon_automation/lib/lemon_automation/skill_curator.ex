@@ -117,13 +117,22 @@ defmodule LemonAutomation.SkillCurator do
         skill_curator: true,
         skill_curator_started_at: result.started_at,
         skill_curator_summary: result.summary,
-        skill_curator_candidate_count: length(Map.get(result, :candidates, []))
+        skill_curator_candidate_count: length(Map.get(result, :candidates, [])),
+        skill_curator_report_path: Map.get(result, :report_path)
       }
     }
 
     case router_mod.submit(params) do
       {:ok, router_run_id} ->
-        {:ok, Map.merge(result, %{submitted: true, run_id: router_run_id})}
+        report_result = record_review_submission(result, router_run_id)
+
+        {:ok,
+         Map.merge(result, %{
+           submitted: true,
+           run_id: router_run_id,
+           review_report_updated: report_result == :ok
+         })
+         |> maybe_put_report_error(report_result)}
 
       {:error, reason} ->
         {:error, reason}
@@ -132,6 +141,17 @@ defmodule LemonAutomation.SkillCurator do
         {:error, {:unexpected_submit_result, other}}
     end
   end
+
+  defp record_review_submission(result, router_run_id) do
+    LemonSkills.Curator.record_review_submission(Map.get(result, :report_path), %{
+      run_id: router_run_id,
+      submitted_at: DateTime.to_iso8601(DateTime.utc_now()),
+      status: :submitted
+    })
+  end
+
+  defp maybe_put_report_error(result, :ok), do: result
+  defp maybe_put_report_error(result, {:error, reason}), do: Map.put(result, :review_report_error, reason)
 
   defp enabled?(cfg), do: Keyword.get(cfg, :enabled, true) == true
 

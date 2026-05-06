@@ -17,6 +17,7 @@ defmodule LemonAutomation.SkillCuratorTest do
          started_at: "2026-05-06T00:00:00Z",
          summary: "checked=1 stale=0 archived=0 reactivated=0",
          candidates: [%{name: "demo"}],
+         report_path: Process.get(:curator_report_path),
          review_required: true,
          review_prompt: "review demo"
        }}
@@ -108,6 +109,37 @@ defmodule LemonAutomation.SkillCuratorTest do
     assert params.tool_policy == %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}
     assert params.meta.skill_curator == true
     assert params.meta.skill_curator_candidate_count == 1
+  end
+
+  test "records submitted review run in curator report" do
+    report_path = Path.join(System.tmp_dir!(), "lemon_curator_report_#{System.unique_integer([:positive])}.json")
+    File.mkdir_p!(Path.dirname(report_path))
+    File.write!(report_path, Jason.encode!(%{"started_at" => "2026-05-06T00:00:00Z"}))
+    Process.put(:curator_report_path, report_path)
+
+    on_exit(fn ->
+      File.rm(report_path)
+      File.rm(Path.join(Path.dirname(report_path), "REPORT.md"))
+    end)
+
+    assert {:ok, result} =
+             SkillCurator.run_once(
+               enabled: true,
+               curator_mod: ReviewCurator,
+               router_mod: RouterStub,
+               run_id: "run_curator_report_link"
+             )
+
+    assert result.review_report_updated == true
+
+    assert_receive {:should_run_now, _opts}
+    assert_receive {:curator_run, _opts}
+    assert_receive {:router_submit, params}
+    assert params.meta.skill_curator_report_path == report_path
+
+    assert {:ok, report} = report_path |> File.read!() |> Jason.decode()
+    assert report["review_submission"]["run_id"] == "run_curator_report_link"
+    assert report["review_submission"]["status"] == "submitted"
   end
 
   test "allows explicit curator tool policy override" do
