@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, fourth slice adds an audited agent-facing skill authoring tool, fifth slice adds redacted skill load/write telemetry, sixth slice adds usage counters plus pin/archive curation state, seventh slice audits missed relevant-skill loads, eighth slice exposes usage/curation reports to agents, ninth slice adds conservative curator lifecycle transitions plus review prompts, tenth slice wires those prompts into an idle background submission path, and eleventh slice adds a scripted curator behavior eval using real skill tools.
+Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, fourth slice adds an audited agent-facing skill authoring tool, fifth slice adds redacted skill load/write telemetry, sixth slice adds usage counters plus pin/archive curation state, seventh slice audits missed relevant-skill loads, eighth slice exposes usage/curation reports to agents, ninth slice adds conservative curator lifecycle transitions plus review prompts, tenth slice wires those prompts into an idle background submission path, eleventh slice adds a scripted curator behavior eval using real skill tools, and twelfth slice hardens the AgentCore tool-call lifecycle contract.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills. The ninth slice adds `LemonSkills.Curator` and `mix lemon.skill curator` commands for stale/archive/reactivation transitions plus an agent review prompt for umbrella-style consolidation. The tenth slice adds an idle automation manager that submits that prompt through `LemonRouter` when review is due. The eleventh slice adds an eval that seeds narrow agent-authored skills, renders the curator prompt, uses real `read_skill` and `skill_manage` tool calls to create an umbrella skill, and archives absorbed siblings.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills. The ninth slice adds `LemonSkills.Curator` and `mix lemon.skill curator` commands for stale/archive/reactivation transitions plus an agent review prompt for umbrella-style consolidation. The tenth slice adds an idle automation manager that submits that prompt through `LemonRouter` when review is due. The eleventh slice adds an eval that seeds narrow agent-authored skills, renders the curator prompt, uses real `read_skill` and `skill_manage` tool calls to create an umbrella skill, and archives absorbed siblings. The twelfth slice closes the remaining tool-call lifecycle hardening gaps by turning task-supervisor startup failures into normal error `tool_result` messages and testing that full turns feed exactly one result per tool call into the next model call.
 
 ## Capability scorecard
 
@@ -37,6 +37,8 @@ The first code slice from this scorecard made `read_skill` available in the defa
   - Default tool set contains every tool referenced by the system prompt.
   - Read-only and minimal-core policies allow context-loading tools such as `read_skill` and `search_memory`.
   - Eval harness includes deterministic contracts for memory scopes, memory-topic scaffolding, and relevant-skill prompt progressive disclosure.
+  - Tool-task startup failures emit exactly one error `tool_result` instead of crashing the loop.
+  - Full turns append exactly one `tool_result` per tool call before the next model turn.
   - Eval catches an agent finalizing after promising an action without calling a tool.
 
 ### Skills lifecycle and procedural memory
@@ -265,6 +267,13 @@ The first code slice from this scorecard made `read_skill` available in the defa
 1. Added `skill_curator_behavior_contract` to `CodingAgent.Evals.Harness.run/1`.
 2. The eval seeds two narrow project skills through real `skill_manage create` calls, runs `LemonSkills.Curator`, verifies the review prompt requires `read_skill` and `skill_manage`, then calls real `read_skill` and `skill_manage` operations to create an umbrella skill and archive the absorbed siblings.
 3. Added harness contract tests so `mix lemon.eval` keeps this procedural-memory behavior in the eval suite.
+
+### Slice 12: Tool call lifecycle hardening
+
+1. Made `AgentCore.Loop.ToolCalls` handle `Task.Supervisor.start_child/2` failures and exits as synthetic error `tool_result` messages.
+2. Preserved `tool_execution_start`, `tool_execution_end`, and `tool_result:emit` events for failed-start tool calls so UI and telemetry consumers still see a complete lifecycle.
+3. Added a regression test that uses a missing task supervisor and verifies the tool body is not run, the loop does not crash, and exactly one error `tool_result` is appended.
+4. Added a full-turn regression test that verifies a model response with N tool calls appends exactly N `tool_result` messages, passes those results into the next model turn, and only then emits the final answer.
 
 ## Follow-up backlog
 

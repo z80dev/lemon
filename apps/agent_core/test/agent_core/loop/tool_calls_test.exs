@@ -30,6 +30,7 @@ defmodule AgentCore.Loop.ToolCallsTest do
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
       max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency, nil),
+      tool_task_supervisor: Keyword.get(opts, :tool_task_supervisor, nil),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
     }
@@ -141,6 +142,59 @@ defmodule AgentCore.Loop.ToolCallsTest do
 
     assert Enum.any?(events, &match?({:tool_execution_start, "call_tool_error", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_tool_error", _, _, true}, &1))
+  end
+
+  test "emits error tool_result when tool task supervisor cannot start a task" do
+    parent = self()
+
+    tool = %AgentTool{
+      name: "startup_failure_tool",
+      description: "Should not run when the task supervisor is missing",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Startup failure",
+      execute: fn _id, _params, _signal, _on_update ->
+        send(parent, :unexpected_tool_execution)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "unexpected"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [tool])
+    config = simple_config(tool_task_supervisor: :missing_tool_task_supervisor)
+    signal = AbortSignal.new()
+    tool_call = Mocks.tool_call("startup_failure_tool", %{}, id: "call_start_failure")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
+
+    refute_received :unexpected_tool_execution
+    assert steering_messages == []
+    assert length(results) == 1
+
+    [tool_result_message] = results
+    assert tool_result_message.role == :tool_result
+    assert tool_result_message.tool_call_id == "call_start_failure"
+    assert tool_result_message.tool_name == "startup_failure_tool"
+    assert tool_result_message.is_error == true
+    assert tool_result_message.details.error_type == :tool_task_start_failed
+
+    assert Enum.any?(tool_result_message.content, fn
+             %TextContent{text: text} -> String.contains?(text, "Tool task failed to start")
+             _ -> false
+           end)
+
+    assert List.last(updated_context.messages).tool_call_id == "call_start_failure"
+    assert List.last(updated_new_messages).tool_call_id == "call_start_failure"
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, &match?({:tool_execution_start, "call_start_failure", _, _}, &1))
+    assert Enum.any?(events, &match?({:tool_execution_end, "call_start_failure", _, _, true}, &1))
   end
 
   test "respects max_tool_concurrency while executing tool calls" do

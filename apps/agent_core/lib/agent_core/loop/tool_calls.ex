@@ -59,8 +59,9 @@ defmodule AgentCore.Loop.ToolCalls do
 
   defp execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream) do
     max_concurrency = resolve_max_tool_concurrency(config, length(tool_calls))
+    tool_task_supervisor = config.tool_task_supervisor || AgentCore.ToolTaskSupervisor
 
-    {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+    {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
       start_tool_tasks(
         context.tools,
         tool_calls,
@@ -68,8 +69,12 @@ defmodule AgentCore.Loop.ToolCalls do
         %{},
         max_concurrency,
         signal,
-        stream
+        stream,
+        tool_task_supervisor
       )
+
+    {context, new_messages, results} =
+      emit_start_failures(start_failures, context, new_messages, [], stream)
 
     collect_parallel_tool_results(
       context,
@@ -78,8 +83,9 @@ defmodule AgentCore.Loop.ToolCalls do
       pending_by_mon,
       remaining_tool_calls,
       context.tools,
+      tool_task_supervisor,
       max_concurrency,
-      [],
+      results,
       stream,
       signal
     )
@@ -92,6 +98,7 @@ defmodule AgentCore.Loop.ToolCalls do
          pending_by_mon,
          remaining_tool_calls,
          tools,
+         tool_task_supervisor,
          max_concurrency,
          results,
          stream,
@@ -104,7 +111,7 @@ defmodule AgentCore.Loop.ToolCalls do
       if aborted?(signal) do
         # Terminate all pending tool tasks on abort
         Enum.each(pending_by_ref, fn {_ref, %{mon_ref: mon_ref, pid: pid, tool_call: tool_call}} ->
-          Task.Supervisor.terminate_child(AgentCore.ToolTaskSupervisor, pid)
+          Task.Supervisor.terminate_child(tool_task_supervisor, pid)
           Process.demonitor(mon_ref, [:flush])
 
           LemonCore.Telemetry.emit(
@@ -160,7 +167,7 @@ defmodule AgentCore.Loop.ToolCalls do
             {pending_by_ref, pending_by_mon} =
               drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
-            {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+            {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
               start_tool_tasks(
                 tools,
                 remaining_tool_calls,
@@ -168,7 +175,8 @@ defmodule AgentCore.Loop.ToolCalls do
                 pending_by_mon,
                 max_concurrency - map_size(pending_by_ref),
                 signal,
-                stream
+                stream,
+                tool_task_supervisor
               )
 
             # Emit telemetry for tool task end
@@ -189,6 +197,9 @@ defmodule AgentCore.Loop.ToolCalls do
                 stream
               )
 
+            {context, new_messages, results} =
+              emit_start_failures(start_failures, context, new_messages, results, stream)
+
             collect_parallel_tool_results(
               context,
               new_messages,
@@ -196,6 +207,7 @@ defmodule AgentCore.Loop.ToolCalls do
               pending_by_mon,
               remaining_tool_calls,
               tools,
+              tool_task_supervisor,
               max_concurrency,
               results,
               stream,
@@ -212,6 +224,7 @@ defmodule AgentCore.Loop.ToolCalls do
                   pending_by_mon,
                   remaining_tool_calls,
                   tools,
+                  tool_task_supervisor,
                   max_concurrency,
                   results,
                   stream,
@@ -224,7 +237,7 @@ defmodule AgentCore.Loop.ToolCalls do
                 {pending_by_ref, pending_by_mon} =
                   drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
-                {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+                {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
                   start_tool_tasks(
                     tools,
                     remaining_tool_calls,
@@ -232,7 +245,8 @@ defmodule AgentCore.Loop.ToolCalls do
                     pending_by_mon,
                     max_concurrency - map_size(pending_by_ref),
                     signal,
-                    stream
+                    stream,
+                    tool_task_supervisor
                   )
 
                 # Emit telemetry for tool task error (crash)
@@ -253,6 +267,9 @@ defmodule AgentCore.Loop.ToolCalls do
                     stream
                   )
 
+                {context, new_messages, results} =
+                  emit_start_failures(start_failures, context, new_messages, results, stream)
+
                 collect_parallel_tool_results(
                   context,
                   new_messages,
@@ -260,6 +277,7 @@ defmodule AgentCore.Loop.ToolCalls do
                   pending_by_mon,
                   remaining_tool_calls,
                   tools,
+                  tool_task_supervisor,
                   max_concurrency,
                   results,
                   stream,
@@ -276,6 +294,7 @@ defmodule AgentCore.Loop.ToolCalls do
               pending_by_mon,
               remaining_tool_calls,
               tools,
+              tool_task_supervisor,
               max_concurrency,
               results,
               stream,
@@ -293,10 +312,11 @@ defmodule AgentCore.Loop.ToolCalls do
          pending_by_mon,
          available_slots,
          _signal,
-         _stream
+         _stream,
+         _tool_task_supervisor
        )
        when available_slots <= 0 do
-    {pending_by_ref, pending_by_mon, remaining_tool_calls}
+    {pending_by_ref, pending_by_mon, remaining_tool_calls, []}
   end
 
   defp start_tool_tasks(
@@ -306,55 +326,111 @@ defmodule AgentCore.Loop.ToolCalls do
          pending_by_mon,
          available_slots,
          signal,
-         stream
+         stream,
+         tool_task_supervisor
        ) do
     if aborted?(signal) do
-      {pending_by_ref, pending_by_mon, remaining_tool_calls}
+      {pending_by_ref, pending_by_mon, remaining_tool_calls, []}
     else
       parent = self()
 
-      Enum.reduce_while(
-        1..available_slots,
-        {pending_by_ref, pending_by_mon, remaining_tool_calls},
-        fn _, {by_ref, by_mon, remaining} ->
-          case remaining do
-            [] ->
-              {:halt, {by_ref, by_mon, remaining}}
+      {by_ref, by_mon, remaining, start_failures} =
+        Enum.reduce_while(
+          1..available_slots,
+          {pending_by_ref, pending_by_mon, remaining_tool_calls, []},
+          fn _, {by_ref, by_mon, remaining, start_failures} ->
+            case remaining do
+              [] ->
+                {:halt, {by_ref, by_mon, remaining, start_failures}}
 
-            [tool_call | rest] ->
-              tool = find_tool(tools, tool_call.name)
+              [tool_call | rest] ->
+                tool = find_tool(tools, tool_call.name)
 
-              EventStream.push(
-                stream,
-                {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
-              )
+                EventStream.push(
+                  stream,
+                  {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
+                )
 
-              ref = make_ref()
+                ref = make_ref()
 
-              LemonCore.Telemetry.emit(
-                [:agent_core, :tool_task, :start],
-                %{system_time: System.system_time()},
-                %{tool_name: tool_call.name, tool_call_id: tool_call.id}
-              )
+                LemonCore.Telemetry.emit(
+                  [:agent_core, :tool_task, :start],
+                  %{system_time: System.system_time()},
+                  %{tool_name: tool_call.name, tool_call_id: tool_call.id}
+                )
 
-              {:ok, pid} =
-                Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
-                  {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
-                  send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-                end)
+                case start_tool_task(
+                       tool_task_supervisor,
+                       parent,
+                       ref,
+                       tool,
+                       tool_call,
+                       signal,
+                       stream
+                     ) do
+                  {:ok, pid} ->
+                    mon_ref = Process.monitor(pid)
 
-              mon_ref = Process.monitor(pid)
+                    {:cont,
+                     {
+                       Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
+                       Map.put(by_mon, mon_ref, ref),
+                       rest,
+                       start_failures
+                     }}
 
-              {:cont,
-               {
-                 Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
-                 Map.put(by_mon, mon_ref, ref),
-                 rest
-               }}
+                  {:error, reason} ->
+                    LemonCore.Telemetry.emit(
+                      [:agent_core, :tool_task, :error],
+                      %{system_time: System.system_time()},
+                      %{
+                        tool_name: tool_call.name,
+                        tool_call_id: tool_call.id,
+                        reason: {:start_failed, reason}
+                      }
+                    )
+
+                    failure = {tool_call, tool_start_failure_result(reason)}
+                    {:cont, {by_ref, by_mon, rest, [failure | start_failures]}}
+                end
+            end
           end
-        end
-      )
+        )
+
+      {by_ref, by_mon, remaining, Enum.reverse(start_failures)}
     end
+  end
+
+  defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream) do
+    try do
+      Task.Supervisor.start_child(tool_task_supervisor, fn ->
+        {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
+        send(parent, {:tool_task_result, ref, tool_call, result, is_error})
+      end)
+    catch
+      :exit, reason -> {:error, reason}
+    else
+      {:ok, pid} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:unexpected_start_result, other}}
+    end
+  end
+
+  defp emit_start_failures(start_failures, context, new_messages, results, stream) do
+    Enum.reduce(start_failures, {context, new_messages, results}, fn {tool_call, result},
+                                                                     {acc_context,
+                                                                      acc_new_messages,
+                                                                      acc_results} ->
+      emit_tool_result(
+        tool_call,
+        result,
+        true,
+        acc_context,
+        acc_new_messages,
+        acc_results,
+        stream
+      )
+    end)
   end
 
   defp drop_pending_task(pending_by_ref, pending_by_mon, ref) do
@@ -510,6 +586,15 @@ defmodule AgentCore.Loop.ToolCalls do
     %AgentToolResult{
       content: [%TextContent{type: :text, text: inspect(reason)}],
       details: nil
+    }
+  end
+
+  defp tool_start_failure_result(reason) do
+    %AgentToolResult{
+      content: [
+        %TextContent{type: :text, text: "Tool task failed to start: #{inspect(reason)}"}
+      ],
+      details: %{error_type: :tool_task_start_failed, reason: inspect(reason)}
     }
   end
 

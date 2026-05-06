@@ -442,6 +442,58 @@ defmodule AgentCore.LoopTest do
       assert length(tool_ends) == 2
     end
 
+    test "passes exactly one tool_result per tool call into the next model turn" do
+      parent = self()
+      add_tool = Mocks.add_tool()
+      echo_tool = Mocks.echo_tool()
+      context = simple_context(tools: [add_tool, echo_tool])
+
+      tool_call1 = Mocks.tool_call("add", %{"a" => 1, "b" => 2}, id: "call_add")
+      tool_call2 = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_echo")
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2])
+      final_response = Mocks.assistant_message("I saw both tool results")
+      canned_stream = Mocks.mock_stream_fn([tool_response, final_response])
+
+      stream_fn = fn model, llm_context, options ->
+        send(parent, {:model_turn_messages, llm_context.messages})
+        canned_stream.(model, llm_context, options)
+      end
+
+      config = simple_config(stream_fn: stream_fn)
+      stream = Loop.agent_loop([user_message("Run both tools")], context, config, nil, nil)
+
+      {:ok, messages} = EventStream.result(stream)
+
+      assert_receive {:model_turn_messages, first_turn_messages}
+      assert_receive {:model_turn_messages, second_turn_messages}
+
+      assert Enum.filter(first_turn_messages, &match?(%ToolResultMessage{}, &1)) == []
+
+      second_turn_tool_results =
+        Enum.filter(second_turn_messages, &match?(%ToolResultMessage{}, &1))
+
+      assert Enum.map(second_turn_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
+      assert Enum.all?(second_turn_tool_results, &(&1.is_error == false))
+
+      final_tool_results = Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
+      assert Enum.map(final_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
+
+      final_answer_index =
+        Enum.find_index(messages, fn
+          %{role: :assistant, stop_reason: :stop} -> true
+          _ -> false
+        end)
+
+      tool_result_indices =
+        messages
+        |> Enum.with_index()
+        |> Enum.filter(fn {message, _index} -> match?(%ToolResultMessage{}, message) end)
+        |> Enum.map(fn {_message, index} -> index end)
+
+      assert final_answer_index != nil
+      assert Enum.all?(tool_result_indices, &(&1 < final_answer_index))
+    end
+
     test "emits tool_execution_update for streaming tools" do
       streaming_tool = Mocks.streaming_tool()
       context = simple_context(tools: [streaming_tool])

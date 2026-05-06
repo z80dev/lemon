@@ -202,6 +202,7 @@ defmodule AgentCore.Types do
     - `get_steering_messages` - Returns messages to inject mid-run for steering
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
     - `max_tool_concurrency` - Max number of concurrent tool calls (`nil`/`:infinity` = unbounded)
+    - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `AgentCore.ToolTaskSupervisor`)
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to Ai.stream_simple/3)
     """
@@ -228,6 +229,7 @@ defmodule AgentCore.Types do
             get_steering_messages: get_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
             max_tool_concurrency: pos_integer() | :infinity | nil,
+            tool_task_supervisor: Supervisor.supervisor() | nil,
             stream_options: Ai.Types.StreamOptions.t(),
             stream_fn: stream_fn() | nil
           }
@@ -238,6 +240,7 @@ defmodule AgentCore.Types do
               get_steering_messages: nil,
               get_follow_up_messages: nil,
               max_tool_concurrency: nil,
+              tool_task_supervisor: nil,
               stream_options: %StreamOptions{},
               stream_fn: nil
   end
