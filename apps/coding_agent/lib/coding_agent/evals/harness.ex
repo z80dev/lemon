@@ -12,6 +12,7 @@ defmodule CodingAgent.Evals.Harness do
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolRegistry}
   alias CodingAgent.Tools.{MemoryTopic, ReadSkill, SearchMemory, SkillManage}
+  alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonSkills.Curator
 
   alias Ai.Types.{
@@ -54,7 +55,8 @@ defmodule CodingAgent.Evals.Harness do
       learning_tool_trace_contract_eval(cwd),
       tool_use_claim_contract_eval(cwd),
       agent_loop_learning_trace_contract_eval(cwd),
-      agent_loop_memory_trace_contract_eval(cwd)
+      agent_loop_memory_trace_contract_eval(cwd),
+      agent_loop_async_join_trace_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -797,6 +799,73 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("agent_loop_memory_trace_contract", Exception.message(e), %{})
   end
 
+  @spec agent_loop_async_join_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_async_join_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        clear_task_state()
+
+        task_tool =
+          TaskTool.tool(tmp_dir,
+            run_override: fn _on_update, _signal ->
+              %AgentToolResult{
+                content: [%TextContent{text: "child task output"}],
+                details: %{status: "completed"}
+              }
+            end,
+            session_key: "agent:async-join-trace-eval:main",
+            agent_id: "async-join-trace-eval",
+            parent_run_id: "parent-run-async-join-trace"
+          )
+
+        context =
+          AgentContext.new(
+            system_prompt: "Use async task delegation, then join before finalizing.",
+            tools: [task_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: async_join_stream_fn()
+        }
+
+        stream =
+          Loop.agent_loop(
+            [trace_user_message("Delegate the research, then include the child result.")],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_async_task_joined(messages),
+             :ok <- assert_final_after_join(messages) do
+          %{
+            name: "agent_loop_async_join_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_task_tool_result_actions(messages),
+              joined_before_final: true
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("agent_loop_async_join_trace_contract", format_reason(reason), %{})
+        end
+      after
+        clear_task_state()
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_async_join_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_async_join_trace_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -942,6 +1011,20 @@ defmodule CodingAgent.Evals.Harness do
          :ok <- File.write(skill_path, content) do
       LemonSkills.refresh(cwd: cwd)
       :ok
+    end
+  end
+
+  defp clear_task_state do
+    try do
+      CodingAgent.TaskStore.clear()
+    catch
+      _, _ -> :ok
+    end
+
+    try do
+      CodingAgent.RunGraph.clear()
+    catch
+      _, _ -> :ok
     end
   end
 
@@ -1226,6 +1309,87 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp assert_async_task_joined(messages) do
+    task_results =
+      Enum.filter(messages, &match?(%{role: :tool_result, tool_name: "task"}, &1))
+
+    queued? =
+      Enum.any?(task_results, fn message ->
+        match?(%{status: "queued", task_id: task_id} when is_binary(task_id), message.details)
+      end)
+
+    joined? =
+      Enum.any?(task_results, fn message ->
+        message.details[:mode] == "wait_all" and
+          stringify_content(message.content) |> String.contains?("child task output")
+      end)
+
+    cond do
+      length(task_results) != 2 ->
+        {:error, "expected queued and join task results, got #{inspect(task_results)}"}
+
+      not queued? ->
+        {:error, "expected async queued task result before join"}
+
+      not joined? ->
+        {:error, "expected join task result containing child output"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_final_after_join(messages) do
+    final_index =
+      Enum.find_index(messages, fn
+        %AssistantMessage{stop_reason: :stop} -> true
+        _ -> false
+      end)
+
+    join_index =
+      Enum.find_index(messages, fn
+        %{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}} -> true
+        _ -> false
+      end)
+
+    final_text =
+      messages
+      |> Enum.reverse()
+      |> Enum.find_value("", fn
+        %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
+        _ -> nil
+      end)
+
+    cond do
+      is_nil(join_index) ->
+        {:error, "join result missing"}
+
+      is_nil(final_index) ->
+        {:error, "final answer missing"}
+
+      join_index > final_index ->
+        {:error, "final answer appeared before join result"}
+
+      not String.contains?(final_text, "child task output") ->
+        {:error, "final answer did not include joined task output"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp trace_task_tool_result_actions(messages) do
+    messages
+    |> Enum.filter(&match?(%{role: :tool_result, tool_name: "task"}, &1))
+    |> Enum.map(fn message ->
+      cond do
+        message.details[:status] == "queued" -> "run"
+        message.details[:mode] == "wait_all" -> "join"
+        true -> "unknown"
+      end
+    end)
+  end
+
   defp trace_tool_result_names(messages) do
     messages
     |> Enum.filter(&match?(%{role: :tool_result}, &1))
@@ -1243,6 +1407,63 @@ defmodule CodingAgent.Evals.Harness do
         response -> {:ok, response_stream(response)}
       end
     end
+  end
+
+  defp async_join_stream_fn do
+    fn _model, context, _options ->
+      cond do
+        task_joined?(context.messages) ->
+          {:ok, response_stream(trace_final_response("Joined result: child task output"))}
+
+        task_id = queued_task_id(context.messages) ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{"action" => "join", "task_ids" => [task_id], "mode" => "wait_all"},
+                 id: "call-task-join"
+               )
+             ])
+           )}
+
+        true ->
+          {:ok,
+           response_stream(
+             trace_tool_response([
+               trace_tool_call(
+                 "task",
+                 %{
+                   "action" => "run",
+                   "description" => "Child research",
+                   "prompt" => "Return child task output.",
+                   "async" => true,
+                   "auto_followup" => false
+                 },
+                 id: "call-task-run"
+               )
+             ])
+           )}
+      end
+    end
+  end
+
+  defp queued_task_id(messages) do
+    Enum.find_value(messages, fn
+      %{role: :tool_result, tool_name: "task", details: %{status: "queued", task_id: task_id}}
+      when is_binary(task_id) ->
+        task_id
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp task_joined?(messages) do
+    Enum.any?(messages, fn
+      %{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}} -> true
+      _ -> false
+    end)
   end
 
   defp response_stream(%AssistantMessage{} = response) do

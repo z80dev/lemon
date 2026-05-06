@@ -18,6 +18,7 @@ defmodule CodingAgent.Evals.HarnessContractTest do
       assert "tool_use_claim_contract" in names
       assert "agent_loop_learning_trace_contract" in names
       assert "agent_loop_memory_trace_contract" in names
+      assert "agent_loop_async_join_trace_contract" in names
     end
   end
 end
