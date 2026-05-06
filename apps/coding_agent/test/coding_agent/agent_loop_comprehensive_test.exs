@@ -477,7 +477,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       :ok = Session.prompt(session, "Hello")
       events = subscribe_and_collect(session)
 
-      assert Enum.any?(events, &match?({:agent_end, _}, &1))
+      assert {:error, {:assistant_error, "empty_assistant_response"}} in events
     end
 
     test "handles malformed tool arguments" do

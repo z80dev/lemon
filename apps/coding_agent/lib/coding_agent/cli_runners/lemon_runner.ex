@@ -512,7 +512,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         # Tool wasn't tracked, create standalone completed action
         kind = tool_kind(name)
         title = tool_title(name, %{})
-        detail = %{name: name, result: truncate_result(result)}
+        detail = %{name: name, result: truncate_result(result)} |> maybe_put_result_meta(result)
 
         {event, factory} =
           EventFactory.action_completed(state.factory, action_id, kind, title, not is_error,

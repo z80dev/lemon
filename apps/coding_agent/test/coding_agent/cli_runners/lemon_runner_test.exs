@@ -6,6 +6,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias CodingAgent.Session
 
   alias AgentCore.Test.Mocks
+  alias AgentCore.Types.AgentToolResult
 
   alias AgentCore.CliRunners.Types.{
     Action,
@@ -257,6 +258,77 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
       assert result_meta.error_type == :unknown_tool
       assert result_meta.tool_name == "missing_tool_for_runner"
+    end
+
+    @tag :tmp_dir
+    test "preserves structured tool error metadata for untracked completion events", %{
+      tmp_dir: tmp_dir
+    } do
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "slow tool",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: mock_stream_fn_single_delayed(assistant_message("ack"), 5_000)
+        )
+
+      stream = LemonRunner.stream(runner)
+
+      wait_until(fn ->
+        try do
+          session = :sys.get_state(runner).session
+          is_pid(session) and Process.alive?(session)
+        catch
+          :exit, _ -> false
+        end
+      end)
+
+      result = %AgentToolResult{
+        content: [%TextContent{type: :text, text: "Tool task timed out after 123ms"}],
+        details: %{error_type: :tool_task_timeout, timeout_ms: 123}
+      }
+
+      send(
+        runner,
+        {:session_event, "manual-session",
+         {:tool_execution_end, "orphan_timeout", "slow_tool", result, true}}
+      )
+
+      :sys.get_state(runner)
+      queue_size = EventStream.stats(stream).queue_size
+
+      events =
+        if queue_size > 0 do
+          for _ <- 1..queue_size, reduce: [] do
+            acc ->
+              case GenServer.call(stream, :take, 1_000) do
+                {:event, event} -> [event | acc]
+                _ -> acc
+              end
+          end
+          |> Enum.reverse()
+        else
+          []
+        end
+
+      GenServer.stop(runner)
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :completed,
+                ok: false,
+                action: %Action{detail: %{result_meta: result_meta}}
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :completed, action: %Action{id: id}}} ->
+                   id == "tool_orphan_timeout"
+
+                 _ ->
+                   false
+               end)
+
+      assert result_meta.error_type == :tool_task_timeout
+      assert result_meta.timeout_ms == 123
     end
   end
 
