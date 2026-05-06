@@ -211,7 +211,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     has_text = text_result != ""
 
     # Extract call_id from tool_call_id (format: "call_id|item_id")
-    [call_id | _] = String.split(msg.tool_call_id, "|")
+    {call_id, _item_id} = split_tool_call_id(msg.tool_call_id)
 
     # Build function call output
     output_text = if has_text, do: text_result, else: "(see attached image)"
@@ -224,7 +224,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     result = [
       %{
         "type" => "function_call_output",
-        "call_id" => call_id,
+        "call_id" => sanitize_surrogates(call_id),
         "output" => output_text
       }
     ]
@@ -396,11 +396,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   end
 
   defp convert_assistant_block(%ToolCall{} = block, _msg_index, is_different_model) do
-    [call_id, item_id_raw] =
-      case String.split(block.id, "|") do
-        [c, i] -> [c, i]
-        [c] -> [c, nil]
-      end
+    {call_id, item_id_raw} = split_tool_call_id(block.id)
 
     # For different-model messages, set id to nil to avoid pairing validation
     item_id =
@@ -412,15 +408,24 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
     base = %{
       "type" => "function_call",
-      "call_id" => call_id,
-      "name" => block.name,
+      "call_id" => sanitize_surrogates(call_id),
+      "name" => sanitize_surrogates(block.name),
       "arguments" => block.arguments |> sanitize_json_value() |> Jason.encode!()
     }
 
-    if item_id, do: Map.put(base, "id", item_id), else: base
+    if item_id, do: Map.put(base, "id", sanitize_surrogates(item_id)), else: base
   end
 
   defp convert_assistant_block(_block, _msg_index, _is_different_model), do: nil
+
+  defp split_tool_call_id(id) when is_binary(id) do
+    case :binary.split(id, "|") do
+      [call_id, item_id] -> {call_id, item_id}
+      [call_id] -> {call_id, nil}
+    end
+  end
+
+  defp split_tool_call_id(id), do: {sanitize_surrogates(id), nil}
 
   defp sanitize_json_value(value) when is_binary(value), do: sanitize_surrogates(value)
 

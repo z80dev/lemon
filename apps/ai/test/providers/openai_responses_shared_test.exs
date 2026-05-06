@@ -229,6 +229,51 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert String.valid?(sanitized_text)
   end
 
+  test "convert_messages sanitizes invalid utf8 in assistant tool call identity fields" do
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      cost: %ModelCost{}
+    }
+
+    invalid_utf8 = <<0xED, 0xA0, 0x80>>
+
+    tool_call = %ToolCall{
+      id: "call_#{invalid_utf8}|fc_#{invalid_utf8}",
+      name: "echo_#{invalid_utf8}",
+      arguments: %{}
+    }
+
+    assistant = %AssistantMessage{
+      role: :assistant,
+      content: [tool_call],
+      api: :openai_responses,
+      provider: :openai,
+      model: "gpt-4o",
+      usage: %Usage{cost: %Cost{}},
+      stop_reason: :tool_use,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    [converted, synthetic_output] =
+      OpenAIResponsesShared.convert_messages(
+        model,
+        %Ai.Types.Context{system_prompt: nil, messages: [assistant]},
+        MapSet.new([:openai])
+      )
+
+    assert String.starts_with?(converted["call_id"], "call_")
+    assert String.starts_with?(converted["id"], "fc_")
+    assert String.starts_with?(converted["name"], "echo_")
+    assert String.valid?(converted["call_id"])
+    assert String.valid?(converted["id"])
+    assert String.valid?(converted["name"])
+    assert String.valid?(synthetic_output["call_id"])
+  end
+
   test "convert_messages uses developer role for reasoning models" do
     model = %Model{
       id: "gpt-5",
