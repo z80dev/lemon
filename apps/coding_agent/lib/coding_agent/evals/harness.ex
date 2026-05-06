@@ -1096,6 +1096,7 @@ defmodule CodingAgent.Evals.Harness do
     if Keyword.get(opts, :live_model, false) do
       [
         live_model_memory_trace_contract_eval(cwd, opts),
+        live_model_memory_topic_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
         live_model_skill_curator_contract_eval(cwd, opts),
         live_model_cron_block_contract_eval(cwd, opts),
@@ -1204,6 +1205,120 @@ defmodule CodingAgent.Evals.Harness do
     end
   rescue
     e -> contract_fail("live_model_memory_trace_contract", Exception.message(e), %{})
+  end
+
+  @spec live_model_memory_topic_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_memory_topic_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        template_path = Path.join(project_dir, "memory/topics/TEMPLATE.md")
+        topic_path = Path.join(project_dir, "memory/topics/deployment-incident-handoff.md")
+
+        File.mkdir_p!(Path.dirname(template_path))
+        File.mkdir_p!(home_dir)
+        File.write!(template_path, "# Topic: <topic-slug>\n\nlive-topic-template")
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+          []
+        end
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: fn _docs -> "No matching memory documents found." end
+          )
+
+        tool_opts = [
+          run_id: "eval-live-model-memory-topic",
+          session_key: "agent:live-model-memory-topic-eval:main",
+          session_id: "agent:live-model-memory-topic-eval:main",
+          agent_id: "live-model-memory-topic-eval"
+        ]
+
+        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+        skill_tool = SkillManage.tool(project_dir, tool_opts)
+
+        context =
+          AgentContext.new(
+            system_prompt: live_memory_topic_eval_prompt(),
+            tools: [search_tool, memory_tool, skill_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: stream_options,
+          max_tool_turns: 2
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "Record that this project uses deployment incident handoff notes as durable context."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "memory_topic", topic_path),
+             :ok <-
+               assert_loop_tool_result_details(messages, "memory_topic", fn details ->
+                 details[:slug] == "deployment-incident-handoff" and
+                   details[:path] == topic_path and details[:created] == true
+               end),
+             :ok <- assert_tool_not_used(messages, "search_memory"),
+             :ok <- assert_tool_not_used(messages, "skill_manage"),
+             true <- File.exists?(topic_path),
+             :ok <- assert_final_contains(messages, ["MEMORY_TOPIC_CAPTURED_LIVE_MODEL"]) do
+          %{
+            name: "live_model_memory_topic_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              path: topic_path,
+              search_calls: length(Agent.get(search_calls, & &1))
+            }
+          }
+        else
+          false ->
+            contract_fail("live_model_memory_topic_contract", "topic file missing", %{
+              provider: model.provider,
+              model: model.id,
+              path: topic_path
+            })
+
+          {:error, reason} ->
+            contract_fail("live_model_memory_topic_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id,
+              search_calls: length(Agent.get(search_calls, & &1))
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_memory_topic_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_memory_topic_contract", Exception.message(e), %{})
   end
 
   @spec live_model_skill_learning_contract_eval(String.t(), keyword()) :: eval_result()
@@ -1814,6 +1929,16 @@ defmodule CodingAgent.Evals.Harness do
     The user describes a reusable workflow. Before answering, you must first call `read_skill` with key `release-checklist` and view `summary`. Then call `skill_manage` to create a project skill named `live-release-retro-capture`. Use action `create`, scope `project`, and content that includes YAML front matter with name `live-release-retro-capture`, description `Capture repeated release retrospective handoff steps`, and steps for reviewing changed files, running focused tests, and recording follow-up memory.
 
     After the skill tool result arrives, answer with the exact marker SKILL_CAPTURED_LIVE_MODEL and summarize only that the skill was captured.
+    """
+  end
+
+  defp live_memory_topic_eval_prompt do
+    """
+    You are running a live-model Lemon durable-topic memory eval.
+
+    The user is giving durable project context. This is not a prior-work lookup and not a reusable procedural workflow. Before answering, call `memory_topic` with topic `Deployment Incident Handoff`. Do not call `search_memory` or `skill_manage`.
+
+    After the memory_topic result arrives, answer with the exact marker MEMORY_TOPIC_CAPTURED_LIVE_MODEL and summarize only that the durable topic memory file was created.
     """
   end
 

@@ -29,6 +29,7 @@ defmodule CodingAgent.Evals.HarnessContractTest do
       default_names = Enum.map(default_report.results, & &1.name)
 
       refute "live_model_memory_trace_contract" in default_names
+      refute "live_model_memory_topic_contract" in default_names
       refute "live_model_skill_learning_contract" in default_names
       refute "live_model_skill_curator_contract" in default_names
       refute "live_model_cron_block_contract" in default_names
@@ -40,6 +41,7 @@ defmodule CodingAgent.Evals.HarnessContractTest do
       live_names = Enum.map(live_report.results, & &1.name)
 
       assert "live_model_memory_trace_contract" in live_names
+      assert "live_model_memory_topic_contract" in live_names
       assert "live_model_skill_learning_contract" in live_names
       assert "live_model_skill_curator_contract" in live_names
       assert "live_model_cron_block_contract" in live_names
@@ -54,6 +56,16 @@ defmodule CodingAgent.Evals.HarnessContractTest do
       result = Harness.live_model_memory_trace_contract_eval(tmp_dir, live_api_key: "")
 
       assert result.name == "live_model_memory_trace_contract"
+      assert result.status == :fail
+      assert result.details.reason =~ "LEMON_EVAL_API_KEY"
+    end
+
+    test "live-model memory topic eval reports missing credentials without provider access", %{
+      tmp_dir: tmp_dir
+    } do
+      result = Harness.live_model_memory_topic_contract_eval(tmp_dir, live_api_key: "")
+
+      assert result.name == "live_model_memory_topic_contract"
       assert result.status == :fail
       assert result.details.reason =~ "LEMON_EVAL_API_KEY"
     end
