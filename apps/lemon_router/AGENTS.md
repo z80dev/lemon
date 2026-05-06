@@ -97,6 +97,9 @@ Router output is semantic:
 - `:file_batch`
 - `:watchdog_prompt`
 
+Tool-status intents include rendered `body.text` and may include
+`body.tool_failures` when completed tool actions carry structured failure metadata.
+
 `lemon_channels` owns:
 
 - send vs edit

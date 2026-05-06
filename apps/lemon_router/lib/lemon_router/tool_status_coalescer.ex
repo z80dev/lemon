@@ -591,6 +591,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp build_intent(state, kind, text) do
     with {:ok, route} <-
            DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      body =
+        %{text: text, seq: state.seq}
+        |> maybe_put_tool_failures(state)
+
       {:ok,
        %DeliveryIntent{
          intent_id:
@@ -599,7 +603,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
          session_key: state.session_key,
          route: route,
          kind: kind,
-         body: %{text: text, seq: state.seq},
+         body: body,
          controls: %{allow_cancel?: state.finalized != true},
          meta: Map.put(state.meta || %{}, :surface, state.surface)
        }}
@@ -607,6 +611,63 @@ defmodule LemonRouter.ToolStatusCoalescer do
       _ -> :error
     end
   end
+
+  defp maybe_put_tool_failures(body, state) do
+    case tool_failures(state.actions, state.order) do
+      [] -> body
+      failures -> Map.put(body, :tool_failures, failures)
+    end
+  end
+
+  defp tool_failures(actions, order) when is_map(actions) and is_list(order) do
+    order
+    |> Enum.map(&Map.get(actions, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.flat_map(fn action ->
+      case tool_failure(action) do
+        nil -> []
+        failure -> [failure]
+      end
+    end)
+  end
+
+  defp tool_failures(_actions, _order), do: []
+
+  defp tool_failure(action) when is_map(action) do
+    detail = map_value(action, :detail) || %{}
+    result_meta = map_value(detail, :result_meta) || %{}
+    error_type = map_value(result_meta, :error_type)
+
+    if is_nil(error_type) do
+      nil
+    else
+      %{}
+      |> maybe_put(:id, map_value(action, :id))
+      |> maybe_put(:title, map_value(action, :title))
+      |> maybe_put(:kind, map_value(action, :kind))
+      |> maybe_put(:ok, map_value(action, :ok))
+      |> maybe_put(:error_type, error_type)
+      |> maybe_put(:tool_name, map_value(result_meta, :tool_name))
+      |> maybe_put(:reason, map_value(result_meta, :reason))
+      |> maybe_put(:errors, map_value(result_meta, :errors))
+      |> maybe_put(:timeout_ms, map_value(result_meta, :timeout_ms))
+      |> maybe_put(:message, map_value(result_meta, :message))
+      |> maybe_put(:status, map_value(result_meta, :status))
+    end
+  end
+
+  defp tool_failure(_action), do: nil
+
+  defp map_value(map, key) when is_map(map) and is_atom(key) do
+    cond do
+      Map.has_key?(map, key) -> Map.get(map, key)
+      Map.has_key?(map, Atom.to_string(key)) -> Map.get(map, Atom.to_string(key))
+      true -> nil
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp maybe_prefix_running(text, %__MODULE__{} = state) when is_binary(text) do
     show_running_prefix? =
