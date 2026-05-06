@@ -2,6 +2,18 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
   use Mix.Task
 
   @shortdoc "Check for duplicate test module names"
+  @ignored_dirs MapSet.new([
+                  ".elixir_ls",
+                  ".expert",
+                  ".git",
+                  ".worktrees",
+                  "_build",
+                  "cover",
+                  "deps",
+                  "node_modules",
+                  "tmp"
+                ])
+
   @moduledoc """
   Scans test files for duplicate `defmodule` names.
 
@@ -22,8 +34,7 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
 
     duplicates =
       root
-      |> Path.join("apps/**/*_test.exs")
-      |> Path.wildcard()
+      |> test_files()
       |> Enum.flat_map(&module_occurrences(root, &1))
       |> Enum.group_by(fn {module_name, _path} -> module_name end, fn {_module_name, path} ->
         path
@@ -62,4 +73,53 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
       _ -> []
     end
   end
+
+  defp test_files(root) do
+    root
+    |> Path.join("apps")
+    |> walk_test_files(root)
+    |> Enum.uniq()
+  end
+
+  defp walk_test_files(dir, root) do
+    if ignored_path?(root, dir) do
+      []
+    else
+      case File.ls(dir) do
+        {:ok, entries} ->
+          Enum.flat_map(entries, fn entry ->
+            path = Path.join(dir, entry)
+
+            cond do
+              ignored_path?(root, path) ->
+                []
+
+              symlink?(path) ->
+                []
+
+              File.dir?(path) ->
+                walk_test_files(path, root)
+
+              String.ends_with?(path, "_test.exs") ->
+                [path]
+
+              true ->
+                []
+            end
+          end)
+
+        {:error, _} ->
+          []
+      end
+    end
+  end
+
+  defp ignored_path?(root, path) do
+    path
+    |> Path.relative_to(root)
+    |> Path.split()
+    |> Enum.any?(&MapSet.member?(@ignored_dirs, &1))
+  end
+
+  defp symlink?(path), do: match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path))
 end

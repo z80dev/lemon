@@ -19,7 +19,17 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   @router_session_registry "LemonRouter." <> "SessionRegistry"
   @router_session_read_model "LemonRouter." <> "SessionReadModel"
   @router_registry_lookup "Registry.lookup(" <> @router_session_registry
-  @ignored_source_dirs MapSet.new(["_build", "cover", "deps", "node_modules", "tmp"])
+  @ignored_source_dirs MapSet.new([
+                         ".elixir_ls",
+                         ".expert",
+                         ".git",
+                         ".worktrees",
+                         "_build",
+                         "cover",
+                         "deps",
+                         "node_modules",
+                         "tmp"
+                       ])
 
   @rules [
     %{
@@ -527,9 +537,66 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
 
   defp source_files(root, globs) do
     globs
-    |> Enum.flat_map(fn glob -> Path.wildcard(Path.join(root, glob)) end)
+    |> Enum.flat_map(&source_files_for_glob(root, &1))
     |> Enum.reject(&ignored_source_path?(root, &1))
     |> Enum.uniq()
+  end
+
+  defp source_files_for_glob(root, glob) do
+    if String.contains?(glob, "**") do
+      {base_glob, suffix} = split_recursive_glob(glob)
+      extension = Path.extname(suffix)
+
+      root
+      |> Path.join(base_glob)
+      |> Path.wildcard()
+      |> Enum.filter(&File.dir?/1)
+      |> Enum.flat_map(&walk_source_files(root, &1, extension))
+    else
+      Path.wildcard(Path.join(root, glob))
+    end
+  end
+
+  defp split_recursive_glob(glob) do
+    [base, suffix] = String.split(glob, "**", parts: 2)
+    {String.trim_trailing(base, "/"), suffix}
+  end
+
+  defp walk_source_files(root, dir, extension) do
+    if ignored_source_path?(root, dir) do
+      []
+    else
+      case File.ls(dir) do
+        {:ok, entries} ->
+          Enum.flat_map(entries, fn entry ->
+            path = Path.join(dir, entry)
+
+            cond do
+              ignored_source_path?(root, path) ->
+                []
+
+              symlink?(path) ->
+                []
+
+              File.dir?(path) ->
+                walk_source_files(root, path, extension)
+
+              extension == "" or String.ends_with?(path, extension) ->
+                [path]
+
+              true ->
+                []
+            end
+          end)
+
+        {:error, _} ->
+          []
+      end
+    end
+  end
+
+  defp symlink?(path) do
+    match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path))
   end
 
   defp ignored_source_path?(root, file) do
@@ -542,11 +609,25 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   defp reject_excluded(files, _root, []), do: files
 
   defp reject_excluded(files, root, globs) do
-    excluded =
-      globs
-      |> Enum.flat_map(fn glob -> Path.wildcard(Path.join(root, glob)) end)
-      |> MapSet.new()
+    Enum.reject(files, fn file ->
+      relative = Path.relative_to(file, root)
+      Enum.any?(globs, &glob_match?(&1, relative))
+    end)
+  end
 
-    Enum.reject(files, &MapSet.member?(excluded, &1))
+  defp glob_match?(glob, relative) do
+    cond do
+      String.ends_with?(glob, "/**") ->
+        prefix = String.trim_trailing(glob, "/**")
+        relative == prefix or String.starts_with?(relative, prefix <> "/")
+
+      String.contains?(glob, "**") ->
+        {base, suffix} = split_recursive_glob(glob)
+        extension = Path.extname(suffix)
+        String.starts_with?(relative, base <> "/") and String.ends_with?(relative, extension)
+
+      true ->
+        relative == glob
+    end
   end
 end
