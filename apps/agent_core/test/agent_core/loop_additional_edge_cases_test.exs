@@ -22,6 +22,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
   alias Ai.Types.{
     AssistantMessage,
+    ThinkingContent,
     TextContent,
     ToolResultMessage,
     UserMessage,
@@ -112,6 +113,46 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       result = EventStream.result(stream)
       # The important thing is it doesn't crash
       assert match?({:error, _, _}, result) or match?({:ok, _}, result)
+    end
+
+    test "turns terminal empty stop response into assistant error" do
+      context = simple_context()
+      %AssistantMessage{} = response = Mocks.assistant_message("")
+      response = %{response | content: [], stop_reason: :stop}
+      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+
+      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
+
+      assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
+               EventStream.result(stream)
+
+      assistant = Enum.find(messages, &match?(%AssistantMessage{role: :assistant}, &1))
+      assert assistant.stop_reason == :error
+      assert assistant.error_message == "empty_assistant_response"
+
+      assert [%TextContent{text: "The provider returned an empty assistant response."}] =
+               assistant.content
+    end
+
+    test "turns terminal thinking-only stop response into assistant error" do
+      context = simple_context()
+
+      response = %{
+        Mocks.assistant_message("")
+        | content: [%ThinkingContent{type: :thinking, thinking: "internal reasoning"}],
+          stop_reason: :stop
+      }
+
+      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+
+      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
+
+      assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
+               EventStream.result(stream)
+
+      assistant = Enum.find(messages, &match?(%AssistantMessage{role: :assistant}, &1))
+      assert assistant.stop_reason == :error
+      assert assistant.error_message == "empty_assistant_response"
     end
 
     test "handles stream that only emits start but never done" do

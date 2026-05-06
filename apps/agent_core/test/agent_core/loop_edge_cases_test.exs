@@ -14,6 +14,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
   alias AgentCore.Test.Mocks
 
   alias Ai.Types.{
+    AssistantMessage,
     TextContent,
     UserMessage,
     StreamOptions
@@ -264,7 +265,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
   # ============================================================================
 
   describe "edge case inputs" do
-    test "handles empty message content" do
+    test "turns empty assistant response into structured error" do
       context = simple_context()
       response = Mocks.assistant_message("")
 
@@ -273,7 +274,11 @@ defmodule AgentCore.LoopEdgeCasesTest do
 
       events = Loop.stream([user_message("")], context, config) |> Enum.to_list()
 
-      assert {:agent_end, _} = List.last(events)
+      assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
+               List.last(events)
+
+      assert %AssistantMessage{stop_reason: :error, error_message: "empty_assistant_response"} =
+               List.last(messages)
     end
 
     test "handles very long message content" do

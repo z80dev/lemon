@@ -12,6 +12,7 @@ defmodule AgentCore.Loop.Streaming do
     Cost,
     TextContent,
     Tool,
+    ToolCall,
     Usage
   }
 
@@ -140,6 +141,7 @@ defmodule AgentCore.Loop.Streaming do
 
       {partial, ctx, added} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
+        partial = normalize_terminal_message(partial)
         {final_message, final_ctx} = finalize_message(partial, ctx, added, stream)
 
         _ =
@@ -194,6 +196,7 @@ defmodule AgentCore.Loop.Streaming do
          _config
        ) do
     final_message = reconcile_final_message(final_message, partial)
+    final_message = normalize_terminal_message(final_message)
     {final_message, context} = finalize_message(final_message, context, added, stream)
     {:done, final_message, context}
   end
@@ -300,6 +303,42 @@ defmodule AgentCore.Loop.Streaming do
   defp empty_content?(nil), do: true
   defp empty_content?([]), do: true
   defp empty_content?(_content), do: false
+
+  defp normalize_terminal_message(%AssistantMessage{stop_reason: stop_reason} = message)
+       when stop_reason in [:stop, nil] do
+    if not has_tool_call?(message) and not has_visible_text?(message) do
+      %{
+        message
+        | content: [
+            %TextContent{
+              type: :text,
+              text: "The provider returned an empty assistant response."
+            }
+          ],
+          stop_reason: :error,
+          error_message: "empty_assistant_response"
+      }
+    else
+      message
+    end
+  end
+
+  defp normalize_terminal_message(message), do: message
+
+  defp has_tool_call?(%AssistantMessage{content: content}) when is_list(content) do
+    Enum.any?(content, &match?(%ToolCall{}, &1))
+  end
+
+  defp has_tool_call?(_message), do: false
+
+  defp has_visible_text?(%AssistantMessage{content: content}) when is_list(content) do
+    Enum.any?(content, fn
+      %TextContent{text: text} when is_binary(text) -> String.trim(text) != ""
+      _ -> false
+    end)
+  end
+
+  defp has_visible_text?(_message), do: false
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 
