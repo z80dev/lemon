@@ -354,6 +354,16 @@ Usage and curation metadata lives outside `SKILL.md`:
 
 The sidecar tracks load/write counters, last-use fields, agent-authored creation provenance, and `lifecycle_state` (`active`, `stale`, `archived`, or `pinned`). Agents can use `skill_manage` actions `report`, `pin`, `unpin`, `archive`, and `restore` for curation. `report` returns usage rows plus stale/archive candidate flags for agent-authored skills; pinned skills are protected from delete/archive operations; archived skills are disabled through the normal `skills.json` mechanism.
 
+`LemonSkills.Curator` runs the conservative maintenance pass over that sidecar:
+
+- active agent-authored stale candidates become `stale`
+- archive candidates become `archived` and are disabled in `skills.json`
+- stale skills with recent activity are reactivated
+- pinned and non-agent-authored skills are skipped
+- no curator path deletes skills
+
+The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`.
+
 ## Project vs Global Skills
 
 | Aspect | Project Skills | Global Skills |

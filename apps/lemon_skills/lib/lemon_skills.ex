@@ -35,7 +35,7 @@ defmodule LemonSkills do
   - `LemonSkills.Config` - Configuration paths and settings
   """
 
-  alias LemonSkills.{Registry, Entry, Status, Installer, Config, Usage}
+  alias LemonSkills.{Registry, Entry, Status, Installer, Config, Usage, Curator}
 
   # ============================================================================
   # Registry Operations
@@ -271,4 +271,10 @@ defmodule LemonSkills do
   """
   @spec usage_report(keyword()) :: [map()]
   defdelegate usage_report(opts \\ []), to: Usage, as: :report
+
+  @doc """
+  Run a skill curator pass for a scope.
+  """
+  @spec curate_skills(keyword()) :: {:ok, map()} | {:error, term()}
+  defdelegate curate_skills(opts \\ []), to: Curator, as: :run
 end

@@ -27,6 +27,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed audit reviewer for suspicious/malicious skill content | Changing LLM audit prompts, model resolution, or parsing |
 | `lib/lemon_skills/audit/state.ex` | Reads/writes persisted bundle audit state per scope | Changing audit cache storage or state schema |
 | `lib/lemon_skills/usage.ex` | Persists skill usage counters, agent-authored provenance, and curation state (`active`/`stale`/`archived`/`pinned`) | Changing skill curation, pin/archive behavior, or usage analytics |
+| `lib/lemon_skills/curator.ex` | Applies conservative stale/archive lifecycle transitions and renders curator review prompts | Changing automated skill curation or curator scheduler state |
 | `lib/lemon_skills/builtin_seeder.ex` | Copies `priv/builtin_skills/` to `~/.lemon/agent/skill/` on startup (idempotent) | Adding/modifying bundled skills |
 | `lib/lemon_skills/discovery.ex` | GitHub topic search + registry URL probing for online skill discovery | Changing online discovery sources |
 

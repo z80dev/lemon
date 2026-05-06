@@ -220,6 +220,25 @@ mix lemon.skill draft delete <draft-key>
 
 See [`docs/user-guide/adaptive.md`](adaptive.md) for the full synthesis pipeline.
 
+## Skill Curation
+
+Lemon tracks load/write counts and lifecycle state outside `SKILL.md` in
+`skills.usage.json`. Agent-authored skills can be reported, pinned, archived,
+or restored with `skill_manage`.
+
+For a maintenance pass:
+
+```bash
+mix lemon.skill curator status
+mix lemon.skill curator run --prompt
+```
+
+The run marks idle agent-authored skills `stale`, archives long-idle candidates
+by disabling them, and reactivates stale skills that were used again. It never
+deletes skills and skips pinned or non-agent-authored entries. `--prompt` prints
+a curator prompt for an agent to consolidate narrow learned skills into broader
+umbrella skills with `read_skill` and `skill_manage`.
+
 ---
 
 ## Skill Locations

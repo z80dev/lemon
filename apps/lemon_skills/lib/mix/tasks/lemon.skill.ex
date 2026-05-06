@@ -18,6 +18,8 @@ defmodule Mix.Tasks.Lemon.Skill do
       mix lemon.skill inspect <key>     # Deep-inspect a skill (provenance, deps, hashes)
       mix lemon.skill check <key>       # Check skill readiness and detect drift
       mix lemon.skill info <key>        # Show skill details (alias for inspect)
+      mix lemon.skill curator status    # Show learned-skill curation candidates
+      mix lemon.skill curator run       # Apply conservative lifecycle transitions
 
   ## Examples
 
@@ -58,7 +60,7 @@ defmodule Mix.Tasks.Lemon.Skill do
 
   use Mix.Task
 
-  alias LemonSkills.{Registry, Installer, Entry, Manifest, SkillView}
+  alias LemonSkills.{Registry, Installer, Entry, Manifest, SkillView, Curator}
   alias LemonSkills.Synthesis.{DraftStore, Pipeline}
 
   @impl true
@@ -99,6 +101,9 @@ defmodule Mix.Tasks.Lemon.Skill do
 
       ["draft" | draft_args] ->
         manage_drafts(draft_args)
+
+      ["curator" | curator_args] ->
+        manage_curator(curator_args)
 
       _ ->
         print_usage()
@@ -811,6 +816,83 @@ defmodule Mix.Tasks.Lemon.Skill do
     """)
   end
 
+  # ============================================================================
+  # Curator Commands
+  # ============================================================================
+
+  defp manage_curator(["status" | opts]) do
+    curator_opts = curator_opts(opts)
+    state = Curator.load_state(curator_opts)
+    rows = Curator.candidate_rows(curator_opts)
+    status = if state["paused"], do: "paused", else: "enabled"
+
+    Mix.shell().info("curator: #{status}")
+    Mix.shell().info("  runs:          #{state["run_count"]}")
+    Mix.shell().info("  last run:      #{state["last_run_at"] || "never"}")
+    Mix.shell().info("  last summary:  #{state["last_run_summary"] || "(none)"}")
+    Mix.shell().info("  candidates:    #{length(rows)}")
+
+    if rows != [] do
+      Mix.shell().info("\nAgent-authored skills:")
+
+      Enum.each(rows, fn row ->
+        Mix.shell().info(
+          "  #{row.name} state=#{row.lifecycle_state} loads=#{row.load_count} writes=#{row.write_count} idle_days=#{row.idle_days || "unknown"}"
+        )
+      end)
+    end
+  end
+
+  defp manage_curator(["run" | opts]) do
+    curator_opts = curator_opts(opts)
+
+    case Curator.run(curator_opts) do
+      {:ok, result} ->
+        Mix.shell().info("curator: #{result.summary}")
+        Mix.shell().info("  candidates: #{length(result.candidates)}")
+
+        if "--prompt" in opts do
+          Mix.shell().info("\n--- Curator review prompt ---\n")
+          Mix.shell().info(result.review_prompt)
+        else
+          Mix.shell().info("\nPass --prompt to print the agent review prompt.")
+        end
+
+      {:error, reason} ->
+        Mix.shell().error("curator failed: #{inspect(reason)}")
+        Mix.raise("Curator failed")
+    end
+  end
+
+  defp manage_curator(["pause" | opts]) do
+    :ok = Curator.set_paused(true, curator_opts(opts))
+    Mix.shell().info("curator: paused")
+  end
+
+  defp manage_curator(["resume" | opts]) do
+    :ok = Curator.set_paused(false, curator_opts(opts))
+    Mix.shell().info("curator: resumed")
+  end
+
+  defp manage_curator(_) do
+    Mix.shell().info("""
+    Manage skill curation.
+
+    Usage:
+      mix lemon.skill curator status          # Show curator state and candidates
+      mix lemon.skill curator run             # Apply lifecycle transitions
+      mix lemon.skill curator run --prompt    # Also print the agent review prompt
+      mix lemon.skill curator pause           # Pause scheduled curator checks
+      mix lemon.skill curator resume          # Resume scheduled curator checks
+
+    Options:
+      --local                    Work with project-local skill usage (default: global)
+      --cwd=<path>               Project directory for --local
+      --stale-after-days=<n>     Mark agent-authored skills stale after n idle days
+      --archive-after-days=<n>   Archive agent-authored skills after n idle days
+    """)
+  end
+
   defp get_opt(opts, flag, default) do
     case Enum.find(opts, &String.starts_with?(&1, "#{flag}=")) do
       nil -> default
@@ -897,5 +979,16 @@ defmodule Mix.Tasks.Lemon.Skill do
         |> String.replace_prefix("#{flag}=", "")
         |> String.to_integer()
     end
+  end
+
+  defp curator_opts(opts) do
+    global = "--local" not in opts
+
+    [
+      scope: if(global, do: :global, else: :project),
+      cwd: unless(global, do: get_cwd(opts)),
+      stale_after_days: get_int_opt(opts, "--stale-after-days", 30),
+      archive_after_days: get_int_opt(opts, "--archive-after-days", 90)
+    ]
   end
 end

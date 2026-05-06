@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, fourth slice adds an audited agent-facing skill authoring tool, fifth slice adds redacted skill load/write telemetry, sixth slice adds usage counters plus pin/archive curation state, seventh slice audits missed relevant-skill loads, and eighth slice exposes usage/curation reports to agents.
+Status: working scorecard; first parity slice merged, second slice adds executable harness contract evals for memory and skills, third slice wires relevant-skill preselection into the native session prompt path, fourth slice adds an audited agent-facing skill authoring tool, fifth slice adds redacted skill load/write telemetry, sixth slice adds usage counters plus pin/archive curation state, seventh slice audits missed relevant-skill loads, eighth slice exposes usage/curation reports to agents, and ninth slice adds conservative curator lifecycle transitions plus review prompts.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills. The ninth slice adds `LemonSkills.Curator` and `mix lemon.skill curator` commands for stale/archive/reactivation transitions plus an agent review prompt for umbrella-style consolidation.
 
 ## Capability scorecard
 
@@ -62,7 +62,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
   - Session end audits record `:missed_skill_observed` when `<relevant-skills>` hints were not loaded with `read_skill`.
   - Install/update audit gates exist.
 - Gaps:
-  - Skill curation and reporting exist, but there is no automated stale-skill review or curator loop yet.
+  - Curator lifecycle transitions and prompts exist, but the prompt is not yet submitted automatically by an idle background agent.
   - Missed-skill detection is observable, but there is not yet a behavioral eval that drives a real model trace through the contract.
 - Priority: high.
 - Acceptance tests:
@@ -248,10 +248,16 @@ The first code slice from this scorecard made `read_skill` available in the defa
 2. Added `skill_manage` action `report` so agents can inspect curation candidates before pinning, archiving, restoring, or deleting skills.
 3. Documented the report action in skill docs and user guidance.
 
+### Slice 9: Conservative skill curator loop
+
+1. Added `LemonSkills.Curator` for persisted curator state, interval/pause checks, automatic stale/archive/reactivation transitions, and an agent review prompt.
+2. Added `mix lemon.skill curator status|run|pause|resume`; `run --prompt` prints the review prompt after applying conservative lifecycle transitions.
+3. Documented curator behavior and invariants: only agent-authored skills are considered, pinned/non-agent-authored skills are skipped, archived skills are disabled, and no curator path deletes skills.
+
 ## Follow-up backlog
 
 1. Thread native Lemon run identifiers into tool options so persisted skill introspection can be queried by run as well as session.
-2. Add automated stale-skill review/curator prompts using `LemonSkills.Usage.report/1` lifecycle state.
+2. Wire the curator prompt into an idle background agent submission path rather than only exposing it via `mix lemon.skill curator run --prompt`.
 3. Clarify memory/session-search/skills/todos in docs and prompt text.
 4. Add cron parity scorecard and scheduled job prompt validation.
 5. Add behavioral evals that observe actual agent traces: relevant skill → `read_skill`, prior-work prompt → `search_memory`, reusable workflow → `skill_manage`, async task receipt → `join` before final answer.
