@@ -604,15 +604,23 @@ defmodule Ai.ErrorProviderTest do
       headers = [
         {"x-ratelimit-remaining-requests", "100"},
         {"x-ratelimit-remaining-tokens", "50000"},
-        # Azure uses ms suffix sometimes
         {"retry-after-ms", "1000"}
       ]
 
       info = Error.extract_rate_limit_info(headers)
 
       assert info.remaining == 100
-      # retry-after-ms not directly supported, only retry-after
-      assert info.retry_after == nil
+      assert info.retry_after == 1000
+    end
+
+    test "extracts Azure x-ms retry-after header" do
+      headers = [
+        {"x-ms-retry-after-ms", "2500"}
+      ]
+
+      info = Error.extract_rate_limit_info(headers)
+
+      assert info.retry_after == 2500
     end
 
     test "extracts Azure retry-after header" do

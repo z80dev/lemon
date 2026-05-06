@@ -82,6 +82,7 @@ defmodule Ai.Error do
   - `x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` - Remaining
   - `x-ratelimit-reset-requests`, `x-ratelimit-reset-tokens` - Reset timestamp
   - `retry-after` - Seconds until retry is allowed
+  - `retry-after-ms`, `x-ms-retry-after-ms` - Milliseconds until retry is allowed
   """
   @spec extract_rate_limit_info(map() | [{term(), term()}]) :: rate_limit_info()
   def extract_rate_limit_info(headers) do
@@ -469,10 +470,12 @@ defmodule Ai.Error do
   end
 
   defp get_retry_after(headers_map) do
-    case Map.get(headers_map, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after(value)
-    end
+    Enum.find_value(["retry-after", "retry-after-ms", "x-ms-retry-after-ms"], fn key ->
+      case Map.get(headers_map, key) do
+        nil -> nil
+        value -> parse_retry_after(key, value)
+      end
+    end)
   end
 
   defp parse_integer(value) when is_binary(value) do
@@ -505,7 +508,7 @@ defmodule Ai.Error do
 
   defp parse_reset_time(_), do: nil
 
-  defp parse_retry_after(value) when is_binary(value) do
+  defp parse_retry_after("retry-after", value) when is_binary(value) do
     # Retry-After can be seconds or an HTTP date
     case Integer.parse(value) do
       {seconds, _} ->
@@ -518,8 +521,21 @@ defmodule Ai.Error do
     end
   end
 
-  defp parse_retry_after(value) when is_integer(value), do: value * 1000
-  defp parse_retry_after(_), do: nil
+  defp parse_retry_after("retry-after", value) when is_integer(value), do: value * 1000
+
+  defp parse_retry_after(key, value)
+       when key in ["retry-after-ms", "x-ms-retry-after-ms"] and is_binary(value) do
+    case Integer.parse(value) do
+      {milliseconds, _} -> milliseconds
+      :error -> nil
+    end
+  end
+
+  defp parse_retry_after(key, value)
+       when key in ["retry-after-ms", "x-ms-retry-after-ms"] and is_integer(value),
+       do: value
+
+  defp parse_retry_after(_, _), do: nil
 
   # ============================================================================
   # Context Length Error Helpers

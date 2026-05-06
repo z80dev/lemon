@@ -8,6 +8,14 @@ defmodule Ai.Providers.RetryHelperTest do
       assert RetryHelper.extract_retry_delay_ms("some error", %{"retry-after" => "5.0"}) == 6000
     end
 
+    test "extracts millisecond retry-after headers" do
+      assert RetryHelper.extract_retry_delay_ms("some error", %{"retry-after-ms" => "1500"}) ==
+               2500
+
+      assert RetryHelper.extract_retry_delay_ms("some error", %{"x-ms-retry-after-ms" => "2000"}) ==
+               3000
+    end
+
     test "extracts x-ratelimit-reset-after headers case-insensitively" do
       delay =
         RetryHelper.extract_retry_delay_ms("some error", [

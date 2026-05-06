@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI Responses tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses tool-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: workspace memory-file inspection now has a deterministic AgentCore loop contract over real `grep` and `read` tools.
+Latest slice: provider retry-delay extraction now recognizes `retry-after-ms` and `x-ms-retry-after-ms`.
 
 ### Tool ergonomics and enforcement
 
@@ -615,6 +615,12 @@ Latest slice: workspace memory-file inspection now has a deterministic AgentCore
 1. Added `agent_loop_workspace_memory_file_contract` to the eval harness.
 2. Seeded a workspace `memory/topics/*.md` note and drove `AgentCore.Loop` through real `grep` and `read` tool results before finalizing.
 3. Added harness regressions so the workspace memory-file lane stays distinct from prior-run `search_memory` and durable `memory_topic` coverage.
+
+### Slice 64: Millisecond retry-after header normalization
+
+1. Taught shared parsed provider errors to extract `retry-after-ms` and `x-ms-retry-after-ms` as millisecond retry delays.
+2. Taught provider retry backoff extraction to honor the same millisecond headers before falling back to reset-after or body hints.
+3. Added Azure-style and retry-helper regressions so millisecond retry delays remain distinct from seconds-based `retry-after`.
 
 ## Follow-up backlog
 

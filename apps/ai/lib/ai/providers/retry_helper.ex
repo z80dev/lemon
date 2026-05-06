@@ -114,6 +114,12 @@ defmodule Ai.Providers.RetryHelper do
         retry_after = Map.get(headers, "retry-after") ->
           parse_seconds_delay(retry_after)
 
+        retry_after_ms = Map.get(headers, "retry-after-ms") ->
+          parse_milliseconds_delay(retry_after_ms)
+
+        retry_after_ms = Map.get(headers, "x-ms-retry-after-ms") ->
+          parse_milliseconds_delay(retry_after_ms)
+
         reset_after = Map.get(headers, "x-ratelimit-reset-after") ->
           parse_seconds_delay(reset_after)
 
@@ -146,6 +152,13 @@ defmodule Ai.Providers.RetryHelper do
   defp parse_seconds_delay(value) do
     case Float.parse(value) do
       {seconds, ""} when seconds > 0 -> normalize_delay_ms(seconds * 1000)
+      _ -> nil
+    end
+  end
+
+  defp parse_milliseconds_delay(value) do
+    case Float.parse(value) do
+      {milliseconds, ""} when milliseconds > 0 -> normalize_delay_ms(milliseconds)
       _ -> nil
     end
   end
