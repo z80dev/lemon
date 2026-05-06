@@ -8,10 +8,22 @@ defmodule CodingAgent.Evals.Harness do
   - workflow scenario checks
   """
 
-  alias AgentCore.Types.AgentToolResult
+  alias AgentCore.{EventStream, Loop}
+  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolRegistry}
   alias CodingAgent.Tools.{MemoryTopic, ReadSkill, SearchMemory, SkillManage}
   alias LemonSkills.Curator
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Cost,
+    Model,
+    ModelCost,
+    TextContent,
+    ToolCall,
+    Usage,
+    UserMessage
+  }
 
   @required_builtin_tools ~w(read read_skill skill_manage memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
 
@@ -40,7 +52,8 @@ defmodule CodingAgent.Evals.Harness do
       auto_skill_prompt_contract_eval(cwd),
       skill_curator_behavior_contract_eval(cwd),
       learning_tool_trace_contract_eval(cwd),
-      tool_use_claim_contract_eval(cwd)
+      tool_use_claim_contract_eval(cwd),
+      agent_loop_learning_trace_contract_eval(cwd)
     ]
 
     passed = Enum.count(results, &(&1.status == :pass))
@@ -573,6 +586,104 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("tool_use_claim_contract", Exception.message(e), %{})
   end
 
+  @spec agent_loop_learning_trace_contract_eval(String.t()) :: eval_result()
+  def agent_loop_learning_trace_contract_eval(_cwd) do
+    with {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        :ok = write_project_skill(tmp_dir, "release-checklist", release_checklist_skill())
+
+        tool_opts = [
+          run_id: "eval-agent-loop-learning-trace",
+          session_key: "agent:agent-loop-learning-trace-eval:main",
+          session_id: "agent:agent-loop-learning-trace-eval:main",
+          agent_id: "agent-loop-learning-trace-eval"
+        ]
+
+        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+
+        prompt =
+          PromptBuilder.build(tmp_dir, %{
+            base_prompt: "Base.",
+            context: "release checklist reusable hotfix workflow",
+            include_skills: true,
+            include_commands: false,
+            include_mentions: false
+          })
+
+        responses = [
+          trace_tool_response([
+            trace_tool_call("read_skill", %{"key" => "release-checklist", "view" => "summary"},
+              id: "call-read-skill"
+            )
+          ]),
+          trace_tool_response([
+            trace_tool_call(
+              "skill_manage",
+              %{
+                "action" => "create",
+                "name" => "release-hotfix-checklist",
+                "scope" => "project",
+                "content" => release_hotfix_checklist_skill()
+              },
+              id: "call-skill-manage"
+            )
+          ]),
+          trace_final_response("Done.")
+        ]
+
+        context =
+          AgentContext.new(
+            system_prompt: prompt,
+            tools: [read_tool, skill_tool]
+          )
+
+        config = %AgentLoopConfig{
+          model: trace_model(),
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_fn: scripted_stream_fn(responses)
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "Use the release checklist and save the reusable hotfix workflow."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        with {:ok, messages} <- EventStream.result(stream, 5_000),
+             :ok <- assert_loop_tool_result(messages, "read_skill", "release-checklist"),
+             :ok <- assert_loop_tool_result(messages, "skill_manage", "release-hotfix-checklist"),
+             :ok <- assert_active_agent_skill(tmp_dir, "release-hotfix-checklist") do
+          %{
+            name: "agent_loop_learning_trace_contract",
+            status: :pass,
+            details: %{
+              tool_results: trace_tool_result_names(messages),
+              created: "release-hotfix-checklist"
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("agent_loop_learning_trace_contract", format_reason(reason), %{})
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("agent_loop_learning_trace_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("agent_loop_learning_trace_contract", Exception.message(e), %{})
+  end
+
   defp contract_fail(name, reason, details) do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
@@ -710,6 +821,17 @@ defmodule CodingAgent.Evals.Harness do
     end
   end
 
+  defp write_project_skill(cwd, key, content) do
+    skill_dir = Path.join([cwd, ".lemon", "skill", key])
+    skill_path = Path.join(skill_dir, "SKILL.md")
+
+    with :ok <- File.mkdir_p(skill_dir),
+         :ok <- File.write(skill_path, content) do
+      LemonSkills.refresh(cwd: cwd)
+      :ok
+    end
+  end
+
   defp narrow_skill_content(name, mode) do
     command =
       case mode do
@@ -785,6 +907,52 @@ defmodule CodingAgent.Evals.Harness do
     1. Search prior run memory for the last related deployment incident.
     2. Create or update a topic memory with durable decisions and command paths.
     3. Save the reusable handoff as a skill once the workflow is repeatable.
+    """
+  end
+
+  defp release_checklist_skill do
+    """
+    ---
+    name: Release Checklist
+    description: Verify releases before final handoff
+    keywords:
+      - release
+      - checklist
+      - hotfix
+    ---
+
+    ## Usage
+
+    Use this when release or hotfix work needs final verification.
+
+    ## Steps
+
+    1. Inspect changed files.
+    2. Run focused tests.
+    3. Record the release decision.
+    """
+  end
+
+  defp release_hotfix_checklist_skill do
+    """
+    ---
+    name: Release Hotfix Checklist
+    description: Verify and document release hotfixes
+    keywords:
+      - release
+      - hotfix
+      - checklist
+    ---
+
+    ## Usage
+
+    Use this when a release hotfix needs verification.
+
+    ## Steps
+
+    1. Inspect the changed files.
+    2. Run the focused test command.
+    3. Record the result and rollback note.
     """
   end
 
@@ -894,6 +1062,143 @@ defmodule CodingAgent.Evals.Harness do
       true ->
         :ok
     end
+  end
+
+  defp assert_loop_tool_result(messages, tool_name, expected_text) do
+    found? =
+      Enum.any?(messages, fn
+        %{role: :tool_result, tool_name: ^tool_name} = message ->
+          stringify_content(message.content) |> String.contains?(expected_text)
+
+        _ ->
+          false
+      end)
+
+    if found? do
+      :ok
+    else
+      {:error, "expected agent loop tool result for #{tool_name} containing #{expected_text}"}
+    end
+  end
+
+  defp trace_tool_result_names(messages) do
+    messages
+    |> Enum.filter(&match?(%{role: :tool_result}, &1))
+    |> Enum.map(& &1.tool_name)
+  end
+
+  defp scripted_stream_fn(responses) do
+    {:ok, responses_agent} = Agent.start_link(fn -> responses end)
+
+    fn _model, _context, _options ->
+      case Agent.get_and_update(responses_agent, fn
+             [] -> {trace_final_response(""), []}
+             [head | tail] -> {head, tail}
+           end) do
+        response -> {:ok, response_stream(response)}
+      end
+    end
+  end
+
+  defp response_stream(%AssistantMessage{} = response) do
+    {:ok, stream} = Ai.EventStream.start_link()
+
+    Task.start(fn ->
+      Ai.EventStream.push(stream, {:start, response})
+
+      response.content
+      |> Enum.with_index()
+      |> Enum.each(fn {content, index} ->
+        case content do
+          %TextContent{text: text} ->
+            Ai.EventStream.push(stream, {:text_start, index, response})
+            Ai.EventStream.push(stream, {:text_delta, index, text, response})
+            Ai.EventStream.push(stream, {:text_end, index, response})
+
+          %ToolCall{} = tool_call ->
+            Ai.EventStream.push(stream, {:tool_call_start, index, tool_call, response})
+            Ai.EventStream.push(stream, {:tool_call_end, index, tool_call, response})
+
+          _ ->
+            :ok
+        end
+      end)
+
+      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
+      Ai.EventStream.complete(stream, response)
+    end)
+
+    stream
+  end
+
+  defp trace_user_message(text) do
+    %UserMessage{role: :user, content: text, timestamp: System.system_time(:millisecond)}
+  end
+
+  defp trace_tool_response(tool_calls) do
+    %AssistantMessage{
+      role: :assistant,
+      content: tool_calls,
+      api: :mock,
+      provider: :mock_provider,
+      model: "mock-eval-model",
+      usage: trace_usage(),
+      stop_reason: :tool_use,
+      timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  defp trace_final_response(text) do
+    %AssistantMessage{
+      role: :assistant,
+      content: [%TextContent{type: :text, text: text}],
+      api: :mock,
+      provider: :mock_provider,
+      model: "mock-eval-model",
+      usage: trace_usage(),
+      stop_reason: :stop,
+      timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  defp trace_tool_call(name, arguments, opts) do
+    %ToolCall{
+      type: :tool_call,
+      id: Keyword.fetch!(opts, :id),
+      name: name,
+      arguments: arguments
+    }
+  end
+
+  defp trace_model do
+    %Model{
+      id: "mock-eval-model",
+      name: "Mock Eval Model",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://api.mock.test",
+      input: [:text],
+      cost: %ModelCost{input: 0.0, output: 0.0},
+      context_window: 128_000,
+      max_tokens: 4096,
+      headers: %{}
+    }
+  end
+
+  defp trace_usage do
+    %Usage{
+      input: 10,
+      output: 5,
+      total_tokens: 15,
+      cost: %Cost{input: 0.0, output: 0.0, total: 0.0}
+    }
+  end
+
+  defp trace_convert_to_llm(messages) do
+    Enum.filter(messages, fn
+      %{role: role} when role in [:user, :assistant, :tool_result] -> true
+      _ -> false
+    end)
   end
 
   defp format_reason(reason) when is_binary(reason), do: reason

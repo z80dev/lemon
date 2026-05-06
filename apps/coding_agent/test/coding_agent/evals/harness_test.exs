@@ -17,7 +17,8 @@ defmodule CodingAgent.Evals.HarnessTest do
              "auto_skill_prompt_contract",
              "skill_curator_behavior_contract",
              "learning_tool_trace_contract",
-             "tool_use_claim_contract"
+             "tool_use_claim_contract",
+             "agent_loop_learning_trace_contract"
            ]
   end
 end

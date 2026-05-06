@@ -16,6 +16,7 @@ defmodule CodingAgent.Evals.HarnessContractTest do
       assert "skill_curator_behavior_contract" in names
       assert "learning_tool_trace_contract" in names
       assert "tool_use_claim_contract" in names
+      assert "agent_loop_learning_trace_contract" in names
     end
   end
 end
