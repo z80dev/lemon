@@ -23,6 +23,29 @@ done
 
 printf '%s\n' "$HELP" | grep -q "Usage: scripts/test" || fail "help output must include usage"
 printf '%s\n' "$HELP" | grep -q "MIX_ENV=test" || fail "help output must document test env"
+printf '%s\n' "$HELP" | grep -q "Scrubs ambient provider/platform credentials" || fail "help output must document credential scrubbing"
+grep -q "LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1" "$DOC" || fail "docs/testing.md must document live credential opt-in"
+grep -q "LemonCore.Testing.HermeticEnv" "$DOC" || fail "docs/testing.md must mention shared hermetic env helper"
+grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider credentials"
+grep -q "TELEGRAM_BOT_TOKEN" "$RUNNER" || fail "runner must scrub common platform credentials"
+python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" <<'PY' || fail "runner and HermeticEnv scrub lists must match"
+import re
+import sys
+
+runner = open(sys.argv[1], encoding="utf-8").read()
+elixir = open(sys.argv[2], encoding="utf-8").read()
+
+runner_match = re.search(r"SCRUB_CREDENTIAL_ENV_VARS=\((.*?)\n\)", runner, re.S)
+elixir_match = re.search(r"@credential_env_vars ~w\((.*?)\n  \)", elixir, re.S)
+if not runner_match or not elixir_match:
+    raise SystemExit(1)
+
+def vars(block):
+    return sorted(line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#"))
+
+if vars(runner_match.group(1)) != vars(elixir_match.group(1)):
+    raise SystemExit(1)
+PY
 
 contract_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-root.XXXXXX")"
 TMPDIR="$contract_tmp_root" "$RUNNER" path >/tmp/lemon-test-contract-path.out 2>&1 &&
