@@ -702,9 +702,9 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     Enum.map(tools, fn tool ->
       base = %{
         "type" => "function",
-        "name" => tool.name,
-        "description" => tool.description,
-        "parameters" => tool.parameters
+        "name" => sanitize_surrogates(tool.name),
+        "description" => sanitize_surrogates(tool.description),
+        "parameters" => sanitize_json_value(tool.parameters)
       }
 
       case strict do

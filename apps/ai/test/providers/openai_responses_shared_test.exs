@@ -327,6 +327,31 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert tool_false["strict"] == false
   end
 
+  test "convert_tools sanitizes invalid utf8 in schema fields" do
+    invalid_utf8 = <<0xED, 0xA0, 0x80>>
+
+    tools = [
+      %Ai.Types.Tool{
+        name: "tool_#{invalid_utf8}",
+        description: "desc_#{invalid_utf8}",
+        parameters: %{
+          "type" => "object",
+          "properties" => %{
+            "field_#{invalid_utf8}" => %{"description" => "value_#{invalid_utf8}"}
+          }
+        }
+      }
+    ]
+
+    [tool] = OpenAIResponsesShared.convert_tools(tools)
+
+    assert String.starts_with?(tool["name"], "tool_")
+    assert String.starts_with?(tool["description"], "desc_")
+    assert String.valid?(tool["name"])
+    assert String.valid?(tool["description"])
+    assert Jason.encode!(tool["parameters"])
+  end
+
   test "normalizes tool call ids across different models" do
     model = %Model{
       id: "gpt-4o",
