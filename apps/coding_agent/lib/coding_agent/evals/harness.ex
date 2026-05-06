@@ -9,8 +9,8 @@ defmodule CodingAgent.Evals.Harness do
   """
 
   alias AgentCore.{EventStream, Loop}
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
-  alias CodingAgent.{PromptBuilder, ToolRegistry}
+  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+  alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Tools.{MemoryTopic, ReadSkill, SearchMemory, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonSkills.Curator
@@ -953,7 +953,8 @@ defmodule CodingAgent.Evals.Harness do
       [
         live_model_memory_trace_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
-        live_model_skill_curator_contract_eval(cwd, opts)
+        live_model_skill_curator_contract_eval(cwd, opts),
+        live_model_cron_block_contract_eval(cwd, opts)
       ]
     else
       []
@@ -1246,6 +1247,122 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_skill_curator_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_cron_block_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_cron_block_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "project")
+        home_dir = Path.join(tmp_dir, "home")
+        File.mkdir_p!(project_dir)
+        File.mkdir_p!(home_dir)
+
+        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+
+        search_fn = fn query, opts ->
+          Agent.update(search_calls, &[{query, opts} | &1])
+
+          [
+            %{
+              doc_id: "cron-rollup-prior-run",
+              title: "Cron rollup prior run",
+              content:
+                "Previous scheduled run found queue depth stable and no schedule changes needed.",
+              scope_key: Keyword.fetch!(opts, :scope_key),
+              query: query
+            }
+          ]
+        end
+
+        format_results_fn = fn docs ->
+          docs
+          |> Enum.map(fn doc ->
+            "#{doc.title}: #{doc.doc_id}: #{doc.content}"
+          end)
+          |> Enum.join("\n")
+        end
+
+        search_tool =
+          SearchMemory.tool(project_dir,
+            workspace_dir: home_dir,
+            search_fn: search_fn,
+            format_results_fn: format_results_fn
+          )
+
+        policy = %{blocked_tools: ["cron"]}
+
+        tools =
+          [search_tool, blocked_cron_tool()]
+          |> Enum.filter(&ToolPolicy.allowed?(policy, &1.name))
+
+        with :ok <- assert_tool_filtered(tools, "cron"),
+             :ok <- assert_tool_available(tools, "search_memory") do
+          context =
+            AgentContext.new(
+              system_prompt: live_cron_block_eval_prompt(),
+              tools: tools
+            )
+
+          config = %AgentLoopConfig{
+            model: model,
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_options: stream_options,
+            max_tool_turns: 2
+          }
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("Run the scheduled status rollup.")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
+
+          with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+               :ok <- assert_loop_tool_result(messages, "search_memory", "cron-rollup-prior-run"),
+               :ok <- assert_tool_not_used(messages, "cron"),
+               :ok <- assert_learning_search_calls(search_calls, 1),
+               :ok <- assert_final_contains(messages, ["CRON_BLOCKED_LIVE_MODEL_DONE"]) do
+            %{
+              name: "live_model_cron_block_contract",
+              status: :pass,
+              details: %{
+                provider: model.provider,
+                model: model.id,
+                tool_results: trace_tool_result_names(messages),
+                filtered_tools: ["cron"],
+                search_calls: length(Agent.get(search_calls, & &1))
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("live_model_cron_block_contract", format_reason(reason), %{
+                provider: model.provider,
+                model: model.id,
+                search_calls: length(Agent.get(search_calls, & &1))
+              })
+          end
+        else
+          {:error, reason} ->
+            contract_fail("live_model_cron_block_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_cron_block_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_cron_block_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -1274,6 +1391,41 @@ defmodule CodingAgent.Evals.Harness do
 
     After the archive tool results arrive, answer with the exact marker SKILL_CURATOR_LIVE_MODEL_DONE and summarize only that the umbrella skill was created and the absorbed skills were archived.
     """
+  end
+
+  defp live_cron_block_eval_prompt do
+    """
+    You are running a live-model Lemon scheduled cron eval.
+
+    This is already a scheduled cron task running in an isolated forked session. The scheduler forwards your concise completion summary back to the originating session.
+
+    Use prior run memory for continuity. Before answering, call `search_memory` with scope `current` for the prior scheduled rollup. Do not create, update, remove, or recursively schedule cron jobs from this run. The cron management tool is intentionally blocked for scheduled runs.
+
+    After the memory result arrives, answer with the exact marker CRON_BLOCKED_LIVE_MODEL_DONE and summarize only the prior run finding.
+    """
+  end
+
+  defp blocked_cron_tool do
+    %AgentTool{
+      name: "cron",
+      label: "Cron",
+      description: "Manage Lemon internal cron jobs.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{"type" => "string"}
+        },
+        "required" => ["action"]
+      },
+      execute: fn _tool_call_id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [
+            %TextContent{type: :text, text: "CRON_TOOL_SHOULD_BE_BLOCKED"}
+          ],
+          details: %{blocked_eval: true}
+        }
+      end
+    }
   end
 
   defp live_curator_stream_options(stream_options, opts) do
@@ -1764,6 +1916,36 @@ defmodule CodingAgent.Evals.Harness do
       :ok
     else
       {:error, "expected agent loop tool result for #{tool_name} containing #{expected_text}"}
+    end
+  end
+
+  defp assert_tool_filtered(tools, tool_name) do
+    if Enum.any?(tools, &(&1.name == tool_name)) do
+      {:error, "expected #{tool_name} to be filtered from live eval tools"}
+    else
+      :ok
+    end
+  end
+
+  defp assert_tool_available(tools, tool_name) do
+    if Enum.any?(tools, &(&1.name == tool_name)) do
+      :ok
+    else
+      {:error, "expected #{tool_name} to remain available in live eval tools"}
+    end
+  end
+
+  defp assert_tool_not_used(messages, tool_name) do
+    used? =
+      Enum.any?(messages, fn
+        %{role: :tool_result, tool_name: ^tool_name} -> true
+        _ -> false
+      end)
+
+    if used? do
+      {:error, "expected #{tool_name} not to be used"}
+    else
+      :ok
     end
   end
 
