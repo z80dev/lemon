@@ -100,6 +100,96 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert Enum.any?(events, &match?({:tool_execution_end, "call_abort_test", _, _, true}, &1))
   end
 
+  test "abort during a tool batch returns one aborted result for pending and queued calls" do
+    parent = self()
+
+    slow_tool = %AgentTool{
+      name: "slow_tool",
+      description: "Sleeps until the batch is aborted",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Slow",
+      execute: fn id, _params, _signal, _on_update ->
+        send(parent, {:slow_tool_started, id})
+        Process.sleep(5_000)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "unexpected"}],
+          details: nil
+        }
+      end
+    }
+
+    queued_tool = %AgentTool{
+      name: "queued_tool",
+      description: "Must not start after abort",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Queued",
+      execute: fn id, _params, _signal, _on_update ->
+        send(parent, {:queued_tool_started, id})
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "unexpected"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [slow_tool, queued_tool])
+    config = simple_config(max_tool_concurrency: 1)
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_calls = [
+      Mocks.tool_call("slow_tool", %{}, id: "call_abort_pending"),
+      Mocks.tool_call("queued_tool", %{}, id: "call_abort_queued")
+    ]
+
+    Task.start(fn ->
+      Process.sleep(30)
+      AbortSignal.abort(signal)
+    end)
+
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+
+    assert_receive {:slow_tool_started, "call_abort_pending"}, 1_000
+    refute_received {:queued_tool_started, "call_abort_queued"}
+
+    assert Enum.map(results, & &1.tool_call_id) == [
+             "call_abort_pending",
+             "call_abort_queued"
+           ]
+
+    assert Enum.all?(results, &(&1.is_error == true))
+    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+
+    assert Enum.map(updated_context.messages, & &1.tool_call_id) == [
+             "call_abort_pending",
+             "call_abort_queued"
+           ]
+
+    assert Enum.map(updated_new_messages, & &1.tool_call_id) == [
+             "call_abort_pending",
+             "call_abort_queued"
+           ]
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+
+    assert Enum.any?(events, &match?({:tool_execution_start, "call_abort_pending", _, _}, &1))
+    refute Enum.any?(events, &match?({:tool_execution_start, "call_abort_queued", _, _}, &1))
+
+    assert Enum.any?(
+             events,
+             &match?({:tool_execution_end, "call_abort_pending", _, _, true}, &1)
+           )
+
+    assert Enum.any?(
+             events,
+             &match?({:tool_execution_end, "call_abort_queued", _, _, true}, &1)
+           )
+  end
+
   test "emits error tool_result for tool execution errors" do
     error_tool = %AgentTool{
       name: "failing_tool",
