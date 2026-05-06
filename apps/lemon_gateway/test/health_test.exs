@@ -18,6 +18,10 @@ defmodule LemonGateway.HealthTest do
     end
   end
 
+  defmodule XmtpCrashingStub do
+    def status, do: raise("xmtp status crashed")
+  end
+
   setup do
     Application.stop(:lemon_gateway)
 
@@ -126,6 +130,15 @@ defmodule LemonGateway.HealthTest do
     check = xmtp_health_check()
     assert check.ok == false
     assert check.error =~ ":xmtp_unhealthy"
+  end
+
+  test "xmtp readiness check reports status callback crashes without raising" do
+    restart_gateway_with_xmtp(XmtpCrashingStub)
+
+    check = xmtp_health_check()
+
+    assert check.ok == false
+    assert check.error =~ "xmtp status crashed"
   end
 
   defp restart_gateway_with_xmtp(transport_module) do

@@ -9,6 +9,8 @@ defmodule LemonSkills.Usage do
   alias LemonSkills.Config
 
   @states ~w(active stale archived pinned)
+  @lock_retries 50
+  @lock_sleep_ms 10
 
   @type scope :: :global | :project
 
@@ -17,11 +19,16 @@ defmodule LemonSkills.Usage do
   """
   @spec get(String.t(), keyword()) :: map()
   def get(key, opts \\ []) when is_binary(key) do
-    opts
-    |> usage_file()
-    |> read_usage()
-    |> get_in(["skills", key])
-    |> normalize_record()
+    case resolve_usage_file(opts) do
+      {:ok, path} ->
+        path
+        |> read_usage()
+        |> get_in(["skills", key])
+        |> normalize_record()
+
+      :skip ->
+        normalize_record(nil)
+    end
   end
 
   @doc """
@@ -31,7 +38,7 @@ defmodule LemonSkills.Usage do
   def record_load(metadata) when is_map(metadata) do
     key = Map.get(metadata, :key)
 
-    if present?(key) do
+    if present?(key) and ok_result?(Map.get(metadata, :result)) do
       update_skill(key, usage_opts(metadata), fn record ->
         now = now_iso8601()
 
@@ -123,24 +130,45 @@ defmodule LemonSkills.Usage do
   @doc """
   Return the sidecar path used for the given options.
   """
-  @spec usage_file(keyword() | map()) :: String.t()
+  @spec usage_file(keyword() | map()) :: String.t() | nil
   def usage_file(opts) when is_map(opts), do: usage_file(Map.to_list(opts))
 
   def usage_file(opts) when is_list(opts) do
+    case resolve_usage_file(opts) do
+      {:ok, path} -> path
+      :skip -> nil
+    end
+  end
+
+  defp resolve_usage_file(opts) when is_map(opts), do: resolve_usage_file(Map.to_list(opts))
+
+  defp resolve_usage_file(opts) when is_list(opts) do
     case Keyword.get(opts, :scope, :global) do
-      :project -> Config.project_usage_file(Keyword.fetch!(opts, :cwd))
-      "project" -> Config.project_usage_file(Keyword.fetch!(opts, :cwd))
-      _ -> Config.global_usage_file()
+      scope when scope in [:project, "project"] ->
+        case Keyword.get(opts, :cwd) do
+          cwd when is_binary(cwd) and cwd != "" -> {:ok, Config.project_usage_file(cwd)}
+          _ -> :skip
+        end
+
+      _ ->
+        {:ok, Config.global_usage_file()}
     end
   end
 
   defp update_skill(key, opts, fun) do
-    path = usage_file(opts)
-    usage = read_usage(path)
-    skills = Map.get(usage, "skills", %{})
-    record = skills |> Map.get(key, %{}) |> normalize_record() |> fun.()
-    updated = Map.put(usage, "skills", Map.put(skills, key, record))
-    write_usage(path, updated)
+    case resolve_usage_file(opts) do
+      {:ok, path} ->
+        with_file_lock(path, fn ->
+          usage = read_usage(path)
+          skills = Map.get(usage, "skills", %{})
+          record = skills |> Map.get(key, %{}) |> normalize_record() |> fun.()
+          updated = Map.put(usage, "skills", Map.put(skills, key, record))
+          write_usage(path, updated)
+        end)
+
+      :skip ->
+        :ok
+    end
   end
 
   defp usage_opts(metadata) do
@@ -169,8 +197,61 @@ defmodule LemonSkills.Usage do
 
   defp write_usage(path, data) do
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, content} <- Jason.encode(data, pretty: true) do
-      File.write(path, content)
+         {:ok, content} <- Jason.encode(data, pretty: true),
+         :ok <- atomic_write(path, content) do
+      :ok
+    end
+  end
+
+  defp with_file_lock(path, fun) do
+    lock_path = path <> ".lock"
+
+    with :ok <- File.mkdir_p(Path.dirname(lock_path)) do
+      acquire_lock(to_charlist(lock_path), fun, @lock_retries)
+    end
+  end
+
+  defp acquire_lock(_lock_path, _fun, 0), do: {:error, :lock_timeout}
+
+  defp acquire_lock(lock_path, fun, retries) do
+    case :file.open(lock_path, [:write, :exclusive]) do
+      {:ok, fd} ->
+        try do
+          fun.()
+        after
+          :file.close(fd)
+          :file.delete(lock_path)
+        end
+
+      {:error, :eexist} ->
+        Process.sleep(@lock_sleep_ms)
+        acquire_lock(lock_path, fun, retries - 1)
+
+      {:error, reason} ->
+        {:error, {:lock_failed, reason}}
+    end
+  end
+
+  defp atomic_write(path, content) do
+    tmp =
+      Path.join(
+        Path.dirname(path),
+        ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}"
+      )
+
+    result =
+      with :ok <- File.write(tmp, content),
+           :ok <- File.rename(tmp, path) do
+        :ok
+      end
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        File.rm(tmp)
+        {:error, reason}
     end
   end
 
@@ -198,14 +279,27 @@ defmodule LemonSkills.Usage do
   defp maybe_increment_error(record, :error), do: increment(record, "write_error_count")
   defp maybe_increment_error(record, _), do: record
 
+  defp maybe_put_created(record, action, %{result: result} = metadata, now)
+       when action in ["create", :create] do
+    if ok_result?(result) do
+      put_created(record, metadata, now)
+    else
+      record
+    end
+  end
+
   defp maybe_put_created(record, action, metadata, now) when action in ["create", :create] do
+    put_created(record, metadata, now)
+  end
+
+  defp maybe_put_created(record, _action, _metadata, _now), do: record
+
+  defp put_created(record, metadata, now) do
     record
     |> Map.put_new("created_at", now)
     |> Map.put_new("created_by", "agent")
     |> maybe_put_new("created_by_agent_id", Map.get(metadata, :agent_id))
   end
-
-  defp maybe_put_created(record, _action, _metadata, _now), do: record
 
   defp maybe_put(record, _key, nil), do: record
   defp maybe_put(record, _key, ""), do: record
@@ -216,5 +310,6 @@ defmodule LemonSkills.Usage do
   defp maybe_put_new(record, key, value), do: Map.put_new(record, key, value)
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
+  defp ok_result?(value), do: value in [:ok, "ok"]
   defp now_iso8601, do: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 end

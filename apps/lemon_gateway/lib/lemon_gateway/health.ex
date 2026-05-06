@@ -152,7 +152,7 @@ defmodule LemonGateway.Health do
     with {:module_loaded, true} <- {:module_loaded, Code.ensure_loaded?(xmtp_transport_mod)},
          {:status_exported, true} <-
            {:status_exported, function_exported?(xmtp_transport_mod, :status, 0)},
-         {:status, {:ok, status}} <- {:status, apply(xmtp_transport_mod, :status, [])},
+         {:status, {:ok, status}} <- {:status, safe_xmtp_status(xmtp_transport_mod)},
          {:connected, true} <- {:connected, status[:connected?] == true},
          {:healthy, true} <- {:healthy, status[:healthy?] == true} do
       {:ok,
@@ -186,6 +186,14 @@ defmodule LemonGateway.Health do
   rescue
     error ->
       {:error, error}
+  end
+
+  defp safe_xmtp_status(module) do
+    apply(module, :status, [])
+  rescue
+    exception -> {:error, {:raised, Exception.message(exception)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp xmtp_transport_module do
