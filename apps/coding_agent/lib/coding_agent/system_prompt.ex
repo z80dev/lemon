@@ -122,17 +122,17 @@ defmodule CodingAgent.SystemPrompt do
   defp build_memory_workflow_section(:main) do
     """
     ## Memory Workflow
-    Before answering about prior decisions, preferences, people, dates, or todos, inspect memory files first.
-    - Use `read` to check `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
-    - Use `grep` with `path: "memory"` to quickly find relevant notes before opening files.
-    - Use `write` to create missing topic files (`memory/topics/<topic-slug>.md`) and daily files (`memory/YYYY-MM-DD.md`).
-    - Use `memory_topic` to scaffold new topic notes from `memory/topics/TEMPLATE.md`.
-    - When creating a new topic file, follow the structure in `memory/topics/TEMPLATE.md`.
-    - Use `skill_manage` to create or update a skill when you learn a reusable workflow.
-    - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
-    - Use `search_memory` to recall prior run history (e.g. past bug fixes, commands run, earlier answers).
+    Before answering about prior decisions, preferences, people, dates, or todos, inspect the right memory surface first.
+    - Use `search_memory` to recall completed run history (past bug fixes, commands run, earlier answers, "last time" context).
       Prefer `scope: "current"` to search both the project root and assistant home.
       Use `scope: "project"` for repo-specific history, `scope: "home"` for assistant-home history, and `scope: "agent"` for longer-term patterns.
+    - Use `read` to inspect user-editable workspace notes such as `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
+    - Use `grep` with `path: "memory"` to quickly find relevant workspace notes before opening files.
+    - Use `memory_topic` to scaffold durable topic notes from `memory/topics/TEMPLATE.md` for facts, preferences, decisions, people, dates, or project context.
+    - Use `write` only when creating missing workspace memory files directly (`memory/topics/<topic-slug>.md` or `memory/YYYY-MM-DD.md`); prefer `memory_topic` for new topic notes.
+    - Use `skill_manage` to create or update a skill when you learn a reusable procedure, command sequence, integration, debugging playbook, or verification checklist.
+    - Use `todo` only for the active run's work queue and progress tracking; todos are not durable memory.
+    - Use `edit` to keep `MEMORY.md` concise as an index of key facts and topic files.
     - If confidence is still low after checking memory files, say so explicitly.
     """
     |> String.trim()

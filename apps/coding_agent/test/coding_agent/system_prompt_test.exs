@@ -36,13 +36,15 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     assert String.contains?(prompt, "## Memory Workflow")
-    assert String.contains?(prompt, "Use `read` to check `MEMORY.md`")
+    assert String.contains?(prompt, "Use `search_memory` to recall completed run history")
+    assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes")
     assert String.contains?(prompt, "memory/topics/*.md")
     assert String.contains?(prompt, "Use `grep` with `path: \"memory\"`")
     assert String.contains?(prompt, "memory/topics/<topic-slug>.md")
-    assert String.contains?(prompt, "Use `memory_topic` to scaffold new topic notes")
+    assert String.contains?(prompt, "Use `memory_topic` to scaffold durable topic notes")
     assert String.contains?(prompt, "memory/topics/TEMPLATE.md")
     assert String.contains?(prompt, "Use `skill_manage` to create or update a skill")
+    assert String.contains?(prompt, "Use `todo` only for the active run")
     assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
   end
 
@@ -59,12 +61,14 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     assert String.contains?(prompt, "<learning-workflow>")
-    assert String.contains?(prompt, "When to capture learned context")
+    assert String.contains?(prompt, "Choose the right persistence surface")
+    assert String.contains?(prompt, "Use `read_skill`")
     assert String.contains?(prompt, "reusable workflow, recurring command sequence")
     assert String.contains?(prompt, "project convention")
     assert String.contains?(prompt, "Use `skill_manage`")
     assert String.contains?(prompt, "Use `memory_topic`")
     assert String.contains?(prompt, "Use `search_memory`")
+    assert String.contains?(prompt, "Use `todo`")
     assert String.contains?(prompt, "At the end of substantial work")
   end
 
@@ -270,7 +274,7 @@ defmodule CodingAgent.SystemPromptTest do
              "Expected scope: main for invalid input #{inspect(invalid_scope)}"
 
       # Main sessions get the full memory workflow, not the subagent restriction
-      assert String.contains?(prompt, "Use `read` to check `MEMORY.md`"),
+      assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes"),
              "Expected main memory workflow for invalid input #{inspect(invalid_scope)}"
 
       refute String.contains?(prompt, "This is a subagent session."),

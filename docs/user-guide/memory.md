@@ -58,6 +58,22 @@ Once enabled, your agent can answer questions like:
 
 The agent automatically searches memory when it detects that a question is about past work.
 
+### Which persistence surface should agents use?
+
+Lemon has several memory-adjacent tools. They are intentionally separate:
+
+| Need | Use | Why |
+|---|---|---|
+| Recall what happened in previous runs | `search_memory` | Searches completed run summaries and tool traces |
+| Store a durable fact, preference, decision, person, date, or project context | `memory_topic` | Creates structured topic notes under `memory/topics/` |
+| Capture a repeatable procedure, command sequence, integration, debugging playbook, or checklist | `skill_manage` | Creates or updates an audited reusable skill |
+| Track the current run's work queue | `todo` | Keeps transient progress for this session only |
+| Inspect user-editable workspace notes | `read` / `grep` | Opens `MEMORY.md`, `memory/topics/*.md`, or daily notes directly |
+
+Use `memory_topic` for durable context that should be remembered, not for
+step-by-step procedures. Use `skill_manage` for procedures the agent should be
+able to repeat. Use `todo` for active work only; todos are not long-term memory.
+
 ### Manual search (CLI)
 
 ```bash

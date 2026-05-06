@@ -89,6 +89,13 @@ before the registry is refreshed. Use `action="report"` to inspect usage and
 stale/archive candidates before pinning, archiving, restoring, or deleting
 agent-authored skills.
 
+Use skills for procedures, not for every remembered fact. A good skill captures
+repeatable steps: commands, preconditions, checks, rollback paths, API quirks, or
+project conventions that should guide future runs. Use `memory_topic` instead
+for durable facts, preferences, decisions, people, dates, or project context.
+Use `search_memory` to recall previous run history before answering "last time"
+questions, and use `todo` only for the active run's work queue.
+
 ---
 
 ## Installing Skills
