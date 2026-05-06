@@ -5,6 +5,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
 
+  alias AgentCore.Test.Mocks
+
   alias AgentCore.CliRunners.Types.{
     Action,
     ActionEvent,
@@ -214,6 +216,47 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert session_state.run_id == "run-lemon-runner"
       assert session_state.session_key == "session-lemon-runner"
       assert session_state.agent_id == "agent-lemon-runner"
+    end
+
+    @tag :tmp_dir
+    test "preserves structured tool error metadata in action completion events", %{
+      tmp_dir: tmp_dir
+    } do
+      tool_response =
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("missing_tool_for_runner", %{}, id: "call_missing_tool")
+        ])
+
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "use the missing tool",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: Mocks.mock_stream_fn([tool_response, assistant_message("done")])
+        )
+
+      events =
+        runner
+        |> LemonRunner.stream()
+        |> EventStream.events()
+        |> Enum.to_list()
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :completed,
+                ok: false,
+                action: %Action{detail: %{result_meta: result_meta}}
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :completed, action: %Action{id: id}}} ->
+                   id == "tool_call_missing_tool"
+
+                 _ ->
+                   false
+               end)
+
+      assert result_meta.error_type == :unknown_tool
+      assert result_meta.tool_name == "missing_tool_for_runner"
     end
   end
 

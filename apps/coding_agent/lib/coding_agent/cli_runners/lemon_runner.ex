@@ -27,6 +27,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   | `{:agent_end, ...}`           | `CompletedEvent`                    |
   | `{:error, ...}`               | `CompletedEvent` (ok: false)        |
 
+  Completed tool actions preserve structured `AgentToolResult.details` failure metadata
+  under `action.detail.result_meta`, including `:error_type` for unknown tools,
+  invalid arguments, task crashes, timeouts, and aborted tool calls.
+
   ## Example
 
       {:ok, pid} = LemonRunner.start_link(
@@ -943,17 +947,46 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   defp extract_tool_result_meta(details) when is_map(details) do
     auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")
     task_meta = extract_task_tool_result_meta(details)
+    error_meta = extract_error_tool_result_meta(details)
 
     meta =
       case normalize_auto_send_files(auto_send_files) do
-        [] -> task_meta || %{}
-        files -> Map.put(task_meta || %{}, :auto_send_files, files)
+        [] ->
+          Map.merge(task_meta || %{}, error_meta || %{})
+
+        files ->
+          (task_meta || %{})
+          |> Map.merge(error_meta || %{})
+          |> Map.put(:auto_send_files, files)
       end
 
     if map_size(meta) == 0, do: nil, else: meta
   end
 
   defp extract_tool_result_meta(_), do: nil
+
+  defp extract_error_tool_result_meta(details) when is_map(details) do
+    error_type = Map.get(details, :error_type) || Map.get(details, "error_type")
+
+    if is_nil(error_type) do
+      nil
+    else
+      %{}
+      |> maybe_put_meta(:error_type, error_type)
+      |> maybe_put_meta(:reason, Map.get(details, :reason) || Map.get(details, "reason"))
+      |> maybe_put_meta(:errors, Map.get(details, :errors) || Map.get(details, "errors"))
+      |> maybe_put_meta(:tool_name, Map.get(details, :tool_name) || Map.get(details, "tool_name"))
+      |> maybe_put_meta(
+        :timeout_ms,
+        Map.get(details, :timeout_ms) || Map.get(details, "timeout_ms")
+      )
+      |> maybe_put_meta(:exception, Map.get(details, :exception) || Map.get(details, "exception"))
+      |> maybe_put_meta(:message, Map.get(details, :message) || Map.get(details, "message"))
+      |> maybe_put_meta(:status, Map.get(details, :status) || Map.get(details, "status"))
+    end
+  end
+
+  defp extract_error_tool_result_meta(_), do: nil
 
   defp extract_task_tool_result_meta(details) when is_map(details) do
     meta =
