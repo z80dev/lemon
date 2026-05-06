@@ -34,6 +34,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | File | Tool name | Purpose |
 |------|-----------|---------|
 | `lib/lemon_skills/tools/read_skill.ex` | `read_skill` | Fetches skill content/metadata by key |
+| `lib/lemon_skills/tools/skill_manage.ex` | `skill_manage` | Creates, edits, patches, deletes, and audits local skills |
 | `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
 | `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |
 
@@ -88,7 +89,7 @@ Instructions for agents...
 4. Wire the tool into the agent tool registry (in `agent_core` or `coding_agent`, not in this app).
 5. Add tests at `test/lemon_skills/tools/my_tool_test.exs`.
 
-Pattern to follow -- see `lib/lemon_skills/tools/read_skill.ex` for the simplest example.
+Pattern to follow -- see `lib/lemon_skills/tools/read_skill.ex` for the simplest read-only example and `lib/lemon_skills/tools/skill_manage.ex` for audited write paths.
 
 ## Important Implementation Details
 
@@ -212,6 +213,7 @@ test/lemon_skills/
   config_test.exs                # Config load/save/merge, directory paths
   tools/
     read_skill_test.exs          # ReadSkill tool
+    skill_manage_test.exs        # SkillManage tool
     post_to_x_test.exs           # PostToX tool
     get_x_mentions_test.exs      # GetXMentions tool
 test/mix/tasks/
@@ -258,7 +260,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | Online discovery | `discovery_test.exs` |
 | Entry struct | `entry_test.exs` |
 | Status checking | `status_test.exs` |
-| Agent tools | `tools/read_skill_test.exs`, `tools/post_to_x_test.exs`, `tools/get_x_mentions_test.exs` |
+| Agent tools | `tools/read_skill_test.exs`, `tools/skill_manage_test.exs`, `tools/post_to_x_test.exs`, `tools/get_x_mentions_test.exs` |
 | Mix task | `mix/tasks/lemon.skill_test.exs` |
 
 ## Connections to Other Apps
@@ -276,8 +278,8 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
 | App | How it uses LemonSkills |
 |-----|------------------------|
-| `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; uses `LemonSkills.Tools.ReadSkill` as an agent tool; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
-| `agent_core` | Registers skill tools (`read_skill`, `post_to_x`, `get_x_mentions`) in the agent tool registry |
+| `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; wraps `LemonSkills.Tools.ReadSkill` and `LemonSkills.Tools.SkillManage` as agent tools; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
+| `agent_core` | Provides the common tool structs used by skill tools (`read_skill`, `skill_manage`, `post_to_x`, `get_x_mentions`) |
 
 ### Shared Configuration
 

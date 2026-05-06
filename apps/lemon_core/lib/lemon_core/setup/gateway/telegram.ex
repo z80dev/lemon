@@ -188,7 +188,7 @@ defmodule LemonCore.Setup.Gateway.Telegram do
     :ok = Application.ensure_started(:inets)
     :ok = Application.ensure_started(:ssl)
 
-    ssl_opts = [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
+    ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()
 
     case :httpc.request(:get, {url, []}, [{:ssl, ssl_opts}, {:timeout, 5_000}], []) do
       {:ok, {{_vsn, 200, _}, _headers, body}} ->
@@ -202,6 +202,20 @@ defmodule LemonCore.Setup.Gateway.Telegram do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp maybe_put_cacerts(ssl_opts) do
+    if function_exported?(:public_key, :cacerts_get, 0) do
+      case apply(:public_key, :cacerts_get, []) do
+        cacerts when is_list(cacerts) and cacerts != [] ->
+          Keyword.put(ssl_opts, :cacerts, cacerts)
+
+        _ ->
+          ssl_opts
+      end
+    else
+      ssl_opts
     end
   end
 

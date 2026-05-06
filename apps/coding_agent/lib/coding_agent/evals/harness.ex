@@ -12,7 +12,7 @@ defmodule CodingAgent.Evals.Harness do
   alias CodingAgent.{PromptBuilder, ToolRegistry}
   alias CodingAgent.Tools.{MemoryTopic, SearchMemory}
 
-  @required_builtin_tools ~w(read read_skill memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
+  @required_builtin_tools ~w(read read_skill skill_manage memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
 
   @type eval_result :: %{
           name: String.t(),

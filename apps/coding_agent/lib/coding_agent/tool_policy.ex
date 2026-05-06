@@ -32,6 +32,7 @@ defmodule CodingAgent.ToolPolicy do
     "read",
     "read_skill",
     "search_memory",
+    "skill_manage",
     "memory_topic",
     "write",
     "edit",
@@ -50,7 +51,7 @@ defmodule CodingAgent.ToolPolicy do
 
   @external_tools ["webfetch", "websearch"]
 
-  @dangerous_tools ["write", "edit", "patch", "bash", "exec", "process", "agent"]
+  @dangerous_tools ["write", "edit", "patch", "skill_manage", "bash", "exec", "process", "agent"]
 
   # ============================================================================
   # Profile Creation

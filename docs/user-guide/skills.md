@@ -81,6 +81,12 @@ system prompt lists installed skills by key and tells the agent to call
 `read_skill` before following any clearly relevant skill, so skill instructions
 can be loaded on demand without injecting every full `SKILL.md` body up front.
 
+Agents can also maintain procedural memory with `skill_manage`. Use project
+scope for repository-specific workflows and global scope for reusable workflows.
+The tool can create, edit, patch, delete, and maintain supporting files under
+`references/`, `templates/`, `scripts/`, and `assets/`; each write is audited
+before the registry is refreshed.
+
 ---
 
 ## Installing Skills

@@ -52,7 +52,8 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   defp configured_transports(false), do: []
 
   defp configured_transports(true) do
-    LemonGateway.TransportRegistry.list_transports()
+    registry_module()
+    |> apply(:list_transports, [])
     |> Enum.map(fn id -> {id, safe_get_transport(id)} end)
   rescue
     _ -> []
@@ -63,7 +64,8 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   defp enabled_transport_ids(false), do: MapSet.new()
 
   defp enabled_transport_ids(true) do
-    LemonGateway.TransportRegistry.enabled_transports()
+    registry_module()
+    |> apply(:enabled_transports, [])
     |> Enum.map(fn {id, _mod} -> id end)
     |> MapSet.new()
   rescue
@@ -73,12 +75,15 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   end
 
   defp safe_get_transport(id) do
-    LemonGateway.TransportRegistry.get_transport(id)
+    registry_module()
+    |> apply(:get_transport, [id])
   rescue
     _ -> nil
   catch
     :exit, _ -> nil
   end
+
+  defp registry_module, do: LemonGateway.TransportRegistry
 
   defp module_name(mod) when is_atom(mod), do: Atom.to_string(mod)
   defp module_name(_), do: nil

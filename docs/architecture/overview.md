@@ -55,7 +55,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
          │           └─────────────────────-┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
-│  · 22 built-in tools                        │
+│  · 23 built-in tools                        │
 │  · context compaction                       │
 │  · extension system                         │
 └────────┬───────────────────────────────────┘
@@ -219,4 +219,3 @@ Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
 | `apps/*/README.md` | Per-application documentation |
 
 *Last reviewed: 2026-03-16*
-

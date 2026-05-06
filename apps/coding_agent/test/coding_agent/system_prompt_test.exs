@@ -42,6 +42,7 @@ defmodule CodingAgent.SystemPromptTest do
     assert String.contains?(prompt, "memory/topics/<topic-slug>.md")
     assert String.contains?(prompt, "Use `memory_topic` to scaffold new topic notes")
     assert String.contains?(prompt, "memory/topics/TEMPLATE.md")
+    assert String.contains?(prompt, "Use `skill_manage` to create or update a skill")
     assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
   end
 
@@ -64,6 +65,7 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert "read_skill" in referenced_tools
     assert "search_memory" in referenced_tools
+    assert "skill_manage" in referenced_tools
 
     missing_tools = Enum.reject(referenced_tools, &MapSet.member?(default_tool_names, &1))
 

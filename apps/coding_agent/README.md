@@ -101,7 +101,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (22 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (23 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
@@ -112,7 +112,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills | `read`, `read_skill`, `memory_topic`, `search_memory`, `write`, `edit`, `hashline_edit`, `patch`, `ls` |
+| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `search_memory`, `write`, `edit`, `hashline_edit`, `patch`, `ls` |
 | Search | `grep`, `find` |
 | Execution | `bash` |
 | Web | `websearch`, `webfetch` |
@@ -130,6 +130,7 @@ CodingAgent.Supervisor (one_for_one)
 | `await` | `Tools.Await` | Block until background jobs complete |
 | `webdownload` | `Tools.WebDownload` | Download binary content to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
+| `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
 | `todoread` / `todowrite` | `Tools.TodoRead` / `Tools.TodoWrite` | Low-level todo primitives |
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
 | `memory_topic` | `Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
@@ -214,7 +215,7 @@ For coordination workflows that must produce one final same-turn answer, queued 
 | `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
 | `CodingAgent.Evals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
 
-The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, `search_memory` current-scope resolution, `memory_topic` scaffold behavior, and relevant-skill prompt guidance that points agents to `read_skill` without inlining full skill bodies.
+The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, `search_memory` current-scope resolution, `memory_topic` scaffold behavior, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
 
 ### Security
 
@@ -466,4 +467,3 @@ mix test --include integration apps/coding_agent
 ```
 
 The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories, direct `start_link` (not supervised), and mock UIs via `CodingAgent.UI.Context`.
-

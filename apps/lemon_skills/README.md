@@ -79,6 +79,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.HttpClient` | `lib/lemon_skills/http_client.ex` | HTTP client behaviour for dependency injection |
 | `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
+| `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
 | `LemonSkills.Tools.PostToX` | `lib/lemon_skills/tools/post_to_x.ex` | Agent tool for posting tweets to X (Twitter) |
 | `LemonSkills.Tools.GetXMentions` | `lib/lemon_skills/tools/get_x_mentions.ex` | Agent tool for fetching recent X mentions |
 | `Mix.Tasks.Lemon.Skill` | `lib/mix/tasks/lemon.skill.ex` | CLI interface for skill management |
@@ -199,6 +200,8 @@ Project skills always rank above equivalently-scored global skills. Skills that 
 ## Audit
 
 Every install/update for a non-builtin skill runs through the audit path before the skill is registered.
+
+Agent-authored skill writes use the same bundle audit path through `skill_manage`. The tool writes only to the configured project or global skill directories, restricts supporting files to `references/`, `templates/`, `scripts/`, and `assets/`, and rolls back blocked audit verdicts before refreshing the registry.
 
 1. `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
 2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.

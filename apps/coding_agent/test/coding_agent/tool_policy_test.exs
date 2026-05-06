@@ -32,6 +32,7 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "read")
       assert ToolPolicy.allowed?(policy, "read_skill")
       assert ToolPolicy.allowed?(policy, "search_memory")
+      assert ToolPolicy.allowed?(policy, "skill_manage")
       assert ToolPolicy.allowed?(policy, "memory_topic")
       assert ToolPolicy.allowed?(policy, "write")
       assert ToolPolicy.allowed?(policy, "patch")
@@ -54,6 +55,7 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "grep")
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "edit")
+      refute ToolPolicy.allowed?(policy, "skill_manage")
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "exec")
     end
@@ -62,6 +64,7 @@ defmodule CodingAgent.ToolPolicyTest do
       policy = ToolPolicy.from_profile(:subagent_restricted)
 
       refute ToolPolicy.allowed?(policy, "write")
+      refute ToolPolicy.allowed?(policy, "skill_manage")
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "agent")
       assert ToolPolicy.requires_approval?(policy, "write")

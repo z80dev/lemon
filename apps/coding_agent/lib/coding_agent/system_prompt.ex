@@ -127,6 +127,7 @@ defmodule CodingAgent.SystemPrompt do
     - Use `write` to create missing topic files (`memory/topics/<topic-slug>.md`) and daily files (`memory/YYYY-MM-DD.md`).
     - Use `memory_topic` to scaffold new topic notes from `memory/topics/TEMPLATE.md`.
     - When creating a new topic file, follow the structure in `memory/topics/TEMPLATE.md`.
+    - Use `skill_manage` to create or update a skill when you learn a reusable workflow.
     - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
     - Use `search_memory` to recall prior run history (e.g. past bug fixes, commands run, earlier answers).
       Prefer `scope: "current"` to search both the project root and assistant home.
