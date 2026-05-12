@@ -391,6 +391,43 @@ else
   fail "J27: final readiness audit does not report remote launch preflight evidence"
 fi
 
+if grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'discord_user_inbound_prompt_round_trip' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'discord_markdown_code_rendering' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'discord_long_output_chunking' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'discord_tool_success_failure_rendering' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'discord_file_delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
+   grep -q 'scripts/live_discord_matrix.py --channel-id 1475727417372049419' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
+  pass "J27: final readiness audit requires Discord non-bot live proof"
+else
+  fail "J27: final readiness audit does not require documented Discord non-bot live proof"
+fi
+
+if grep -q 'verify_public_support_boundaries' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'OpenAI-compatible API server behavior' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'ACP editor integration' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'automatic filesystem checkpointing or rollback' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'first-class browser automation' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'production support for third-party plugins' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'stable Discord support until the non-bot live matrix passes' "$ROOT/docs/compare.md" 2>/dev/null &&
+   grep -q 'preview Discord/gateway adapters' "$ROOT/docs/compare.md" 2>/dev/null; then
+  pass "J27: final readiness audit enforces public Hermes-gap support boundaries"
+else
+  fail "J27: public support docs do not consistently bound unresolved Hermes-only surfaces"
+fi
+
+if grep -q 'verify_channel_command_matrix' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
+   grep -q 'docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md' "$ROOT/docs/README.md" 2>/dev/null &&
+   grep -q 'lemon-channel-command-parity-matrix-2026-05-12' "$ROOT/docs/.vitepress/config.js" 2>/dev/null &&
+   grep -q 'Stable Telegram text-first command boundary' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
+   grep -q 'Preview Discord command boundary' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
+   grep -q 'Hermes drop-in command parity is not a Lemon 1.0 claim' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null; then
+  pass "J27: final readiness audit requires bounded channel command parity matrix"
+else
+  fail "J27: channel command parity matrix is missing, unlinked, or not bounded"
+fi
+
 if grep -q 'Do not use both paths' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q 'Do not run both paths' "$ROOT/docs/plans/lemon-1.0-completion-audit-2026-05-12.md" 2>/dev/null &&
    grep -q -- '-f channel=stable' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&

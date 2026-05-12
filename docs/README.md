@@ -72,6 +72,8 @@
 - [`docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md`](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) - Interface supportability audit for Web, TUI, Telegram, Discord, and the control plane
 - [`docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`](plans/lemon-1.0-interface-proof-pack-2026-05-11.md) - Release-candidate proof pack for automated TUI, Web, and Telegram-adjacent interface coverage
 - [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and remaining external launch blockers
+- [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Source-grounded Lemon-vs-Hermes feature parity matrix and launch gap ledger
+- [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
 - [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](plans/lemon-hermes-agent-harness-parity-scorecard.md) - Hermes-class agent harness parity scorecard
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/skills_v2.md`](skills_v2.md) - Skill manifest v2 and newer skill-system direction

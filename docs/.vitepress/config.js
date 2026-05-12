@@ -37,6 +37,8 @@ export default {
           { text: "Release Artifact Proof", link: "/plans/lemon-1.0-release-artifact-proof-2026-05-11" },
           { text: "Interface Supportability Audit", link: "/plans/lemon-1.0-interface-supportability-audit-2026-05-11" },
           { text: "Interface Proof Pack", link: "/plans/lemon-1.0-interface-proof-pack-2026-05-11" },
+          { text: "Hermes Feature Matrix", link: "/plans/lemon-hermes-feature-parity-matrix-2026-05-12" },
+          { text: "Channel Command Matrix", link: "/plans/lemon-channel-command-parity-matrix-2026-05-12" },
           { text: "Hermes Parity Scorecard", link: "/plans/lemon-hermes-agent-harness-parity-scorecard" },
         ],
       },

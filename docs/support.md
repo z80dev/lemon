@@ -39,6 +39,11 @@ automation, visual page interaction, generated media, image analysis, and voice
 or TTS behavior are preview or out of scope unless a release note explicitly
 promotes a narrower path.
 
+Lemon 1.0 does not claim OpenAI-compatible Chat Completions/Responses API
+support, ACP editor integration, or third-party frontend compatibility unless a
+release note explicitly promotes a narrower path. The stable API surface is the
+documented Lemon control plane and first-party Web/TUI interfaces.
+
 For web-tool bugs, include the prompt, tool name, target URL when shareable,
 interface, runtime mode, and whether the issue is plain text fetch/search or
 browser/media behavior.
@@ -102,6 +107,9 @@ These are outside the initial stable support boundary:
 - production-grade scheduling guarantees for cron or scheduled automation
 - first-class browser automation, generated media, image analysis, or TTS/voice
   behavior unless explicitly promoted in release notes
+- OpenAI-compatible API server behavior, ACP editor integration, or drop-in
+  support for third-party OpenAI-compatible frontends
+- automatic filesystem checkpointing or rollback for agent file mutations
 - production support for third-party plugins or unofficial MCP servers
 - arbitrary local shell, provider, or OS customization issues
 - old commits that are not the current stable release, preview build, or a

@@ -1,8 +1,8 @@
 # Lemon 1.0 Interface Proof Pack
 
-Status: release-candidate proof pack, complete for initial 1.0 interface scope
+Status: release-candidate proof pack, superseded for Hermes-parity channel scope
 
-Last reviewed: 2026-05-11
+Last reviewed: 2026-05-12
 
 ## Summary
 
@@ -26,6 +26,15 @@ command handling, progress messages, bare `/cancel`, and approval-button
 resolution. A live invalid session-model proof now also verifies that common
 configuration failures return a concise Telegram failure instead of a BEAM stack
 trace.
+
+For the stricter Hermes-parity launch goal, this proof pack is not complete:
+Telegram now has fresh live DM, forum-topic, topic-isolation, topic-cancel,
+tool-rendering, markdown/code, group-topic approval, long-output chunking,
+document delivery, and restart/dedupe evidence for the text-first plus document
+delivery 1.0 boundary. The Discord matrix still needs to be run before Discord
+is marketed as stable at Hermes-class reliability. Discord bot-token discovery
+and API smoke are now recorded as diagnostics, but they are not live inbound
+proof because Lemon ignores bot-authored Discord messages and webhooks.
 
 Post-1.0 unless launch positioning expands:
 
@@ -322,9 +331,277 @@ Current launch classification:
 - Telegram has credible adapter/router coverage for formatting, state,
   progress, cancellation, and approval plumbing.
 - Telegram has source-runtime live bot proof for the core remote path,
-  approval resolution, cancellation, and concise config-error rendering.
+  approval resolution, cancellation, concise config-error rendering, DM
+  recovery from an interrupted persisted tool call, forum-topic routing,
+  topic isolation, and topic-scoped cancellation.
 - Telegram markdown/media behavior is now documented as a text-first 1.0
   support boundary in `docs/support.md`.
+
+Fresh Hermes-parity live probe on 2026-05-12:
+
+```bash
+LEMON_LOG_LEVEL=info ./bin/lemon --no-distribution \
+  --port 45340 --web-port 45380 --sim-port 45390
+```
+
+Evidence:
+
+- Runtime loaded established Telegram credentials from Lemon secrets and
+  resolved bot `zeebot_lemon_bot`.
+- DM prompt `lemon-live-1778597244` initially failed with
+  `invalid_tool_transcript` because a prior cancelled tool call had persisted
+  without a result in session `e177e5f2-7bb6-4874-910d-37e6c5344dbe`.
+- The restore path now repairs missing persisted tool results with an explicit
+  interrupted error result instead of allowing the transcript to poison the next
+  channel run or rerunning the old request.
+- Regression coverage:
+  `mix test apps/coding_agent/test/coding_agent/session/persistence_test.exs`
+  passed with 9 tests, including repairable dangling tool calls and
+  unrepairable orphan tool results.
+- DM retry `lemon-live-1778597764` returned exactly
+  `OK lemon-live-1778597764`, message id `516864`, replying to user message
+  `516863`.
+- Telegram group `-1003842984060` (`Lemonade Stand`) forum topic `35`
+  (`Lemon Dev`) returned exactly `OK lemon-topic-1778597830`, message id
+  `16558`, replying to user message `16557` with `reply_to_top_id=35`.
+
+Repeatable runner added and executed:
+
+```bash
+scripts/live_telegram_matrix.py --timeout 90
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- DM check `lemon-dm-1778598406` returned exactly
+  `OK lemon-dm-1778598406`, message id `516871`, replying to message `516870`.
+- Forum-topic check `lemon-topic-35-1778598412` returned exactly
+  `OK lemon-topic-35-1778598412`, message id `16564`, replying to message
+  `16563` with `reply_to_top_id=35`.
+
+Topic-isolation extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+  --topic-isolation \
+  --isolation-topic-id 35 \
+  --isolation-topic-id 16456 \
+  --timeout 180
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Baseline topic check `lemon-topic-35-1778598922` returned exactly
+  `OK lemon-topic-35-1778598922`, message id `16582`, replying to message
+  `16581` with `reply_to_top_id=35`.
+- Overlapping topic-isolation check in topic `35` returned exactly
+  `OK lemon-isolate-35-1778598928`, message id `16586`, replying to message
+  `16583` with `reply_to_top_id=35`.
+- Overlapping topic-isolation check in topic `16456` returned exactly
+  `OK lemon-isolate-16456-1778598928`, message id `16588`, replying to message
+  `16584` with `reply_to_top_id=16456`.
+
+Topic-cancel extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+  --topic-cancel \
+  --cancel-topic-id 35 \
+  --timeout 95
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Baseline topic check `lemon-topic-35-1778599572` returned exactly
+  `OK lemon-topic-35-1778599572`, message id `16611`, replying to message
+  `16610` with `reply_to_top_id=35`.
+- Topic-cancel check `lemon-cancel-35-1778599587` started a real
+  `sleep 60 && echo OK lemon-cancel-35-1778599587` tool call in topic `35`.
+- Bare `/cancel`, message id `16614`, received `Cancelling current run...`,
+  message id `16615`, replying with `reply_to_top_id=35`.
+- The run returned `Run failed: user_requested`, message id `16616`, and the
+  tool status rendered `✗ sleep 60 && echo OK lemon-cancel-35-1778599587`.
+- The runner observed no late successful completion.
+
+Topic tool-rendering and markdown extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+  --topic-tool-rendering \
+  --topic-markdown \
+  --timeout 160
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Baseline topic check `lemon-topic-35-1778601160` returned exactly
+  `OK lemon-topic-35-1778601160`, message id `16628`, replying to message
+  `16627` with `reply_to_top_id=35`.
+- Tool-success check `lemon-tool-ok-35-1778601169` returned exactly
+  `OK lemon-tool-ok-35-1778601169`, message id `16631`, and observed tool
+  status message `16630` rendering `✓ echo OK ...`.
+- Tool-failure check `lemon-tool-fail-35-1778601177` returned exactly
+  `FAILED lemon-tool-fail-35-1778601177`, message id `16634`, and observed
+  tool status message `16633` rendering
+  `✗ sh -c 'echo FAIL ... >&2; exit 7' -> ... Command exited with code 7`.
+- Markdown/code check `lemon-markdown-35-1778601186` returned message id
+  `16636` with `MessageEntityBold` and `MessageEntityPre`.
+- This run initially exposed that nonzero bash exits were exported as successful
+  Lemon action events. The bridge now marks bash actions failed when structured
+  result details contain a nonzero `exit_code`; regression coverage is in
+  `apps/coding_agent/test/coding_agent/cli_runners/lemon_runner_test.exs`.
+
+Topic approval extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+  --topic-approval \
+  --approval-topic-id 35 \
+  --timeout 180
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Baseline topic check `lemon-topic-35-1778603212` returned exactly
+  `OK lemon-topic-35-1778603212`, message id `16665`.
+- Approval check `lemon-approval-35-1778603221` rendered approval message
+  `16668`, accepted a real Telegram `Approve once` button click, edited that
+  message to `Approval: approve once`, and finalized with
+  `APPROVED lemon-approval-35-1778603221`, message id `16669`, in forum topic
+  `35`.
+- Tool status message `16667` rendered `✓ echo APPROVED ...`.
+- This run exposed that Telegram approval rendering used the wrong adapter
+  `send_message` arity. The approval request renderer now uses `send_message/5`,
+  keeps the approval request in the same topic through `message_thread_id`, and
+  has deterministic coverage in
+  `apps/lemon_channels/test/lemon_channels/adapters/telegram/approval_request_test.exs`.
+
+Topic long-output extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+  --topic-long-output \
+  --long-output-topic-id 35 \
+  --timeout 120
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Baseline topic check `lemon-topic-35-1778603849` returned exactly
+  `OK lemon-topic-35-1778603849`, message id `16671`.
+- Long-output check `lemon-long-35-1778603857` sent three fast `/echo` parts
+  into topic `35`, forcing a combined answer above Telegram's single-message
+  limit.
+- The bot delivered chunks `16675`, `16676`, and `16677` with lengths `3267`,
+  `3204`, and `2936`, combined length `9409`, the expected
+  `END lemon-long-35-1778603857` marker, and topic context preserved for all
+  chunks.
+
+Topic file-get extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --skip-topic \
+  --topic-file-get \
+  --file-get-topic-id 35 \
+  --timeout 90
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- The runner created `tmp/telegram-proof-lemon-file-35-1778604213.txt`, sent
+  `/file get tmp/telegram-proof-lemon-file-35-1778604213.txt` in topic `35`,
+  and verified Telegram returned a document.
+- User command message `16682` received document reply `16683` with filename
+  `telegram-proof-lemon-file-35-1778604213.txt`, `has_document=true`, and
+  `reply_to_top_id=35`.
+
+Topic restart/dedupe extension:
+
+```bash
+scripts/live_telegram_matrix.py --skip-dm --skip-topic \
+  --topic-restart-seed \
+  --restart-topic-id 35 \
+  --timeout 60
+
+# restart ./bin/lemon
+
+scripts/live_telegram_matrix.py --skip-dm --skip-topic \
+  --topic-restart-verify \
+  --restart-topic-id 35 \
+  --restart-nonce lemon-restart-seed-35-1778604398 \
+  --restart-reply-id 16685 \
+  --timeout 35
+```
+
+Result on 2026-05-12:
+
+- `ok: true`
+- Seed `lemon-restart-seed-35-1778604398` sent message `16684` and received
+  reply `16685` in topic `35`.
+- After a runtime restart, the verifier observed no duplicate bot message for
+  the seed nonce.
+- Fresh post-restart prompt `lemon-restart-after-35-1778604488` sent message
+  `16686` and received reply `16687` in topic `35`.
+
+## Discord Evidence
+
+Fresh Discord diagnostic on 2026-05-12:
+
+```bash
+scripts/live_discord_matrix.py --list-channels
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-api-smoke
+```
+
+Result:
+
+- `scripts/live_discord_matrix.py --list-channels` resolved bot
+  `Zeebot-Debug`, guild `1475727416549969980`, and text channel `general`
+  `1475727417372049419`.
+- `scripts/live_discord_matrix.py --channel-id 1475727417372049419
+  --bot-api-smoke` returned `ok: true`, nonce
+  `lemon-discord-bot-api-1778605086`, and message id
+  `1503803470493257890`, with `DISCORD_BOT_TOKEN` unset and credentials loaded
+  from the established credentials file.
+- `mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs`
+  now proves the Discord transport ignores bot-authored and webhook messages
+  before routing, with no warning logs.
+- This is only a Discord credential/channel diagnostic. It does not create a
+  Lemon run because the Discord adapter filters out bot-authored messages and
+  webhooks.
+
+Required Discord live proof command:
+
+```bash
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+  --wait-user-inbound \
+  --timeout 120
+```
+
+This command prints a nonce prompt that must be sent by a non-bot Discord user,
+then waits for the Lemon bot to reply with the exact expected text. Passing this
+check is the minimum Discord prompt/reply proof before Discord can move out of
+preview.
+
+Broader manual Discord matrix command:
+
+```bash
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+  --manual-matrix \
+  --timeout 180
+```
+
+This prints sequential non-bot prompts and verifies exact prompt/reply,
+markdown/code rendering, long-output chunking, tool success/failure markers, and
+Discord attachment delivery from the Lemon bot. It still requires a real
+user-authored Discord message for each prompt; bot-authored and webhook messages
+intentionally do not count.
 
 ## Remaining Proof Required
 
@@ -473,10 +750,11 @@ Evidence captured on 2026-05-11:
   `Run failed: unknown model "definitely-missing-model-..."` with no stack
   frames in the Telegram message.
 
-Still missing for deeper Telegram proof:
+Still missing for broader Telegram proof:
 
-- broader live media proof if Telegram is later marketed as a rich-media
-  interface instead of a text-first remote chat interface
+- broader live media upload/image proof if Telegram is later marketed as a
+  rich-media interface instead of a text-first remote chat plus document
+  delivery interface
 
 ## Launch Checklist Impact
 
@@ -494,6 +772,16 @@ Done enough for release candidate:
 - Telegram source-runtime live proof passes for `/cwd`, progress rendering, a
   prompt round trip, bare `/cancel` on a real active run, and approval-button
   resolution.
+- Telegram source-runtime live proof passes for DM recovery, forum-topic
+  routing, topic isolation, topic-scoped cancellation, tool success/failure
+  rendering, markdown/code rendering, and forum-topic approval-button
+  resolution.
+- Telegram source-runtime live proof passes for long-output chunking inside a
+  real forum topic.
+- Telegram source-runtime live proof passes for document delivery through
+  `/file get` inside a real forum topic.
+- Telegram source-runtime live proof passes for restart/dedupe behavior in a
+  real forum topic.
 - Telegram source-runtime live proof passes for a session-scoped invalid-model
   config error, with concise failure text and no stack-frame leak.
 - Telegram markdown/media support boundaries are documented for 1.0 as

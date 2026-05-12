@@ -14,9 +14,9 @@ defmodule Mix.Tasks.Lemon.Eval do
     mix lemon.eval --live-model
 
   `--live-model` adds opt-in model-backed checks. Configure them with
-  `LEMON_EVAL_API_KEY`, `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`,
-  `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; the matching
-  `INTEGRATION_*` variables are also accepted.
+  `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `LEMON_EVAL_PROVIDER`,
+  `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; the
+  matching `INTEGRATION_*` variables are also accepted.
   """
 
   @impl true

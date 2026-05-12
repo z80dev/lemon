@@ -2,13 +2,13 @@
   %{
     path: "docs/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
     path: "docs/index.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -20,7 +20,7 @@
   %{
     path: "docs/compare.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -32,7 +32,7 @@
   %{
     path: "docs/support.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -98,7 +98,7 @@
   %{
     path: "docs/architecture_boundaries.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -254,7 +254,7 @@
   %{
     path: "docs/release/release_checklist_and_support_policy.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -308,7 +308,7 @@
   %{
     path: "docs/plans/lemon-1.0-mainstream-readiness.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
@@ -332,11 +332,23 @@
   %{
     path: "docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-12],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-completion-audit-2026-05-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-12],
+    max_age_days: 30
+  },
+  %{
+    path: "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-12],
+    max_age_days: 30
+  },
+  %{
+    path: "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
     owner: "@z80",
     last_reviewed: ~D[2026-05-12],
     max_age_days: 30

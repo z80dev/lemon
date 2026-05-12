@@ -41,6 +41,7 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   GROQ_API_KEY
   KIMI_API_KEY
   LEMON_EVAL_API_KEY
+  LEMON_EVAL_API_KEY_SECRET
   LEMON_SECRETS_MASTER_KEY
   MINIMAX_API_KEY
   MISTRAL_API_KEY
@@ -51,6 +52,7 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   OPENCODE_API_KEY
   OPENROUTER_API_KEY
   INTEGRATION_API_KEY
+  INTEGRATION_API_KEY_SECRET
   SLACK_APP_TOKEN
   SLACK_BOT_TOKEN
   TELEGRAM_BOT_TOKEN
@@ -105,6 +107,47 @@ setup_test_env() {
 setup_live_eval_env() {
   export MIX_ENV="${MIX_ENV:-test}"
   setup_tmp_env
+}
+
+resolve_live_eval_secret_ref() {
+  local target_env="$1"
+  local secret_env="$2"
+
+  if [ -n "${!target_env:-}" ] || [ -z "${!secret_env:-}" ]; then
+    return 0
+  fi
+
+  local resolved
+  local secret_file
+  secret_file="$(mktemp "${TMPDIR:-/tmp}/lemon-live-eval-secret.XXXXXX")"
+
+  if ! LEMON_SECRET_NAME="${!secret_env}" LEMON_SECRET_OUTPUT="$secret_file" MIX_ENV=dev mix run --no-start -e '
+      Logger.configure(level: :emergency)
+      Logger.remove_backend(:console)
+
+      {:ok, _} = Application.ensure_all_started(:lemon_core)
+      name = System.fetch_env!("LEMON_SECRET_NAME")
+      output = System.fetch_env!("LEMON_SECRET_OUTPUT")
+
+      case LemonCore.Secrets.fetch_value(name) do
+        value when is_binary(value) and value != "" ->
+          File.write!(output, value)
+
+        _ ->
+          System.halt(66)
+      end
+    ' >/dev/null 2>&1; then
+    rm -f "$secret_file"
+    cat >&2 <<EOF
+scripts/test live-eval could not resolve $secret_env from Lemon secrets.
+EOF
+    exit 66
+  fi
+
+  resolved="$(cat "$secret_file")"
+  rm -f "$secret_file"
+
+  export "$target_env=$resolved"
 }
 
 setup_tmp_env() {
@@ -173,15 +216,23 @@ run_eval_fast() {
 
 run_live_eval() {
   ensure_repo_root
+  resolve_live_eval_secret_ref LEMON_EVAL_API_KEY LEMON_EVAL_API_KEY_SECRET
+  resolve_live_eval_secret_ref INTEGRATION_API_KEY INTEGRATION_API_KEY_SECRET
   setup_live_eval_env
 
-  if [ -z "${LEMON_EVAL_API_KEY:-}" ] && [ -z "${INTEGRATION_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  if [ -z "${LEMON_EVAL_API_KEY:-}" ] &&
+     [ -z "${LEMON_EVAL_API_KEY_SECRET:-}" ] &&
+     [ -z "${INTEGRATION_API_KEY:-}" ] &&
+     [ -z "${INTEGRATION_API_KEY_SECRET:-}" ] &&
+     [ -z "${ANTHROPIC_API_KEY:-}" ]; then
     cat >&2 <<'EOF'
 scripts/test live-eval requires a live model credential.
 
 Set one of:
   LEMON_EVAL_API_KEY
+  LEMON_EVAL_API_KEY_SECRET
   INTEGRATION_API_KEY
+  INTEGRATION_API_KEY_SECRET
   ANTHROPIC_API_KEY
 
 Optional live eval configuration:

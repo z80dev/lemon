@@ -3,6 +3,7 @@ defmodule CodingAgent.Session.Persistence do
 
   require Logger
 
+  alias AgentCore.Loop.TranscriptValidator
   alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.Session
@@ -46,6 +47,7 @@ defmodule CodingAgent.Session.Persistence do
     context.messages
     |> Enum.map(&MessageSerialization.deserialize_message/1)
     |> Enum.reject(&is_nil/1)
+    |> restore_valid_tool_transcript(session)
   end
 
   @spec maybe_register_session(Session.t(), String.t(), boolean(), atom()) :: :ok
@@ -129,5 +131,126 @@ defmodule CodingAgent.Session.Persistence do
       _ ->
         false
     end)
+  end
+
+  defp restore_valid_tool_transcript(messages, session) do
+    case TranscriptValidator.validate(messages) do
+      :ok ->
+        messages
+
+      {:error, {:invalid_tool_transcript, violations}} ->
+        if repairable_missing_results?(violations) do
+          repair_missing_tool_results(messages, violations, session)
+        else
+          truncate_invalid_tool_transcript(messages, violations, session)
+        end
+    end
+  end
+
+  defp repair_missing_tool_results(messages, violations, session) do
+    repaired =
+      messages
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {message, index} ->
+        [
+          message
+          | synthetic_results_for(
+              message,
+              Map.get(missing_results_by_index(violations), index, [])
+            )
+        ]
+      end)
+
+    case TranscriptValidator.validate(repaired) do
+      :ok ->
+        Logger.warning(
+          "Repaired restored session transcript by inserting interrupted tool results",
+          session_id: session.header.id,
+          original_message_count: length(messages),
+          restored_message_count: length(repaired),
+          violations: inspect(violations)
+        )
+
+        repaired
+
+      {:error, {:invalid_tool_transcript, next_violations}} ->
+        truncate_invalid_tool_transcript(messages, next_violations, session)
+    end
+  end
+
+  defp truncate_invalid_tool_transcript(messages, violations, session) do
+    case first_indexed_violation(violations) do
+      nil ->
+        Logger.warning(
+          "Dropping restored session transcript with unrepairable tool transcript violation",
+          session_id: session.header.id,
+          violations: inspect(violations)
+        )
+
+        []
+
+      index ->
+        restored = Enum.take(messages, index)
+
+        Logger.warning(
+          "Truncated restored session transcript at invalid tool transcript segment",
+          session_id: session.header.id,
+          original_message_count: length(messages),
+          restored_message_count: length(restored),
+          violations: inspect(violations)
+        )
+
+        restored
+    end
+  end
+
+  defp repairable_missing_results?(violations) do
+    Enum.all?(violations, &(&1.type == :missing_tool_result and is_integer(&1.index)))
+  end
+
+  defp missing_results_by_index(violations) do
+    Map.new(violations, fn violation -> {violation.index, violation.tool_call_ids || []} end)
+  end
+
+  defp synthetic_results_for(message, tool_call_ids) do
+    Enum.map(tool_call_ids, fn tool_call_id ->
+      %Ai.Types.ToolResultMessage{
+        role: :tool_result,
+        tool_call_id: tool_call_id,
+        tool_name: tool_name_for_call(message, tool_call_id),
+        content: [
+          %Ai.Types.TextContent{
+            type: :text,
+            text: "Tool call was interrupted before Lemon recorded a result."
+          }
+        ],
+        details: %{"restored_session_repair" => true, "reason" => "interrupted_tool_call"},
+        trust: :trusted,
+        is_error: true,
+        timestamp: message_timestamp(message)
+      }
+    end)
+  end
+
+  defp tool_name_for_call(%Ai.Types.AssistantMessage{content: content}, tool_call_id) do
+    content
+    |> Enum.find_value("", fn
+      %Ai.Types.ToolCall{id: ^tool_call_id, name: name} -> name
+      %{id: ^tool_call_id, name: name} -> name
+      %{"id" => ^tool_call_id, "name" => name} -> name
+      _ -> false
+    end)
+  end
+
+  defp tool_name_for_call(_message, _tool_call_id), do: ""
+
+  defp message_timestamp(%{timestamp: timestamp}) when is_integer(timestamp), do: timestamp
+  defp message_timestamp(_message), do: 0
+
+  defp first_indexed_violation(violations) do
+    violations
+    |> Enum.map(&Map.get(&1, :index))
+    |> Enum.filter(&is_integer/1)
+    |> Enum.min(fn -> nil end)
   end
 end

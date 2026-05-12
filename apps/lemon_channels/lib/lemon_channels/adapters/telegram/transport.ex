@@ -1199,12 +1199,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp maybe_subscribe_exec_approvals do
     if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      _ = LemonCore.Bus.subscribe("exec_approvals")
+      case LemonCore.Bus.subscribe("exec_approvals") do
+        :ok -> :ok
+        other -> Logger.warning("Telegram exec approvals subscription returned #{inspect(other)}")
+      end
     end
 
     :ok
   rescue
-    _ -> :ok
+    error ->
+      Logger.warning("Telegram exec approvals subscription failed: #{Exception.message(error)}")
+      :ok
   end
 
   defp send_approval_request(state, payload) when is_map(state) and is_map(payload) do

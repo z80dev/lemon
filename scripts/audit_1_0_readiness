@@ -17,6 +17,10 @@ The audit checks:
   - remote publication preflight reports tag, workflow, and eval secret state
   - public GitHub Release artifacts can be downloaded, verified, and booted
   - provider-backed live eval runs when release eval credentials are present
+  - Discord non-bot manual live proof is present when promoting Hermes-channel parity
+  - public support and comparison docs keep unresolved Hermes-only surfaces
+    outside the stable 1.0 support boundary
+  - channel command parity is inventoried and bounded before launch
 
 Exit codes:
   0   all audited gates passed
@@ -91,9 +95,14 @@ Next commands after maintainer approval and required credentials:
   gh run list --workflow live-eval.yml --limit 5
   gh run watch {run-id} --exit-status
 
-Then rerun:
+  # Required before claiming stable Discord/Hermes channel parity.
+  scripts/live_discord_matrix.py --channel-id 1475727417372049419 \\
+    --manual-matrix \\
+    --timeout 180 \\
+    --result-path tmp/discord-live-proof.json
 
-  scripts/audit_1_0_readiness $VERSION {downloaded-or-local-artifact-directory}
+  LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json \\
+    scripts/audit_1_0_readiness $VERSION {downloaded-or-local-artifact-directory}
 EOF
 }
 
@@ -153,16 +162,145 @@ remote_preflight() {
 
   : >"$output"
   if gh secret list --json name --jq '.[].name' >"$output" 2>&1; then
-    if grep -qE '^(LEMON_EVAL_API_KEY|INTEGRATION_API_KEY|ANTHROPIC_API_KEY)$' "$output"; then
+    if grep -qE '^(LEMON_EVAL_API_KEY|LEMON_EVAL_API_KEY_SECRET|INTEGRATION_API_KEY|INTEGRATION_API_KEY_SECRET|ANTHROPIC_API_KEY)$' "$output"; then
       pass "release-eval repository secret is configured"
     else
-      info "no release-eval repository secret found under LEMON_EVAL_API_KEY, INTEGRATION_API_KEY, or ANTHROPIC_API_KEY"
+      info "no release-eval repository secret found under LEMON_EVAL_API_KEY, LEMON_EVAL_API_KEY_SECRET, INTEGRATION_API_KEY, INTEGRATION_API_KEY_SECRET, or ANTHROPIC_API_KEY"
     fi
   else
     info "release-eval repository secret lookup failed: $(tr '\n' ' ' <"$output")"
   fi
 
   rm -f "$output"
+}
+
+verify_public_support_boundaries() {
+  if python3 - <<'PY'
+from pathlib import Path
+import sys
+
+requirements = {
+    "docs/support.md": [
+        "Discord, X/Twitter, XMTP, SMS, voice, and other channel adapters are preview",
+        "OpenAI-compatible API server behavior",
+        "ACP editor integration",
+        "automatic filesystem checkpointing or rollback",
+        "first-class browser automation",
+        "generated media, image analysis, or TTS/voice",
+        "production support for third-party plugins",
+    ],
+    "docs/compare.md": [
+        "preview Discord/gateway adapters",
+        "ACP editor integration or OpenAI-compatible Chat Completions/Responses API",
+        "automatic filesystem checkpointing or rollback",
+        "first-class browser automation, media generation, image analysis, or voice/TTS",
+        "stable Discord support until the non-bot live matrix passes",
+        "production support for third-party plugins",
+    ],
+}
+
+missing = []
+
+for path, needles in requirements.items():
+    text = Path(path).read_text(encoding="utf-8")
+    for needle in needles:
+        if needle not in text:
+            missing.append(f"{path}: {needle}")
+
+if missing:
+    print("missing public support-boundary text:", file=sys.stderr)
+    for item in missing:
+        print(f"  - {item}", file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    pass "public support boundary docs classify unresolved Hermes-only surfaces"
+  else
+    fail "public support boundary docs are missing unresolved Hermes-surface classifications"
+  fi
+}
+
+verify_channel_command_matrix() {
+  if python3 - <<'PY'
+from pathlib import Path
+import sys
+
+path = Path("docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md")
+
+if not path.exists():
+    print(f"missing {path}", file=sys.stderr)
+    sys.exit(1)
+
+text = path.read_text(encoding="utf-8")
+needles = [
+    "Stable Telegram text-first command boundary",
+    "Preview Discord command boundary",
+    "Hermes Messaging Command Comparison",
+    "Telegram command support is sufficient for the text-first plus document-delivery",
+    "Discord command support is implementation-present but preview",
+    "Hermes drop-in command parity is not a Lemon 1.0 claim",
+    "scripts/live_discord_matrix.py --manual-matrix",
+]
+missing = [needle for needle in needles if needle not in text]
+
+if missing:
+    print("missing command-matrix launch boundary text:", file=sys.stderr)
+    for item in missing:
+        print(f"  - {item}", file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    pass "channel command parity matrix is present and bounded"
+  else
+    fail "channel command parity matrix is missing required launch-boundary text"
+  fi
+}
+
+verify_discord_live_proof() {
+  local proof_path="${LEMON_DISCORD_LIVE_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord non-bot manual matrix not verified; set LEMON_DISCORD_LIVE_PROOF_JSON to a passing result JSON"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord non-bot manual matrix result file is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+required = {
+    "discord_user_inbound_prompt_round_trip",
+    "discord_markdown_code_rendering",
+    "discord_long_output_chunking",
+    "discord_tool_success_failure_rendering",
+    "discord_file_delivery",
+}
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("ok") is True}
+missing = sorted(required - passed)
+
+if data.get("ok") is not True or missing:
+    print(f"missing Discord live checks: {', '.join(missing) if missing else 'overall ok=false'}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord non-bot manual live matrix proof is present"
+  else
+    case "$?" in
+      66) block "Discord non-bot manual matrix result does not prove required checks" ;;
+      *) fail "Discord non-bot manual matrix result is unreadable" ;;
+    esac
+  fi
 }
 
 cd "$ROOT"
@@ -209,6 +347,9 @@ run_or_fail "client test lane passes" \
 run_or_fail "docs site verifies" \
   scripts/verify_docs_site
 
+verify_public_support_boundaries
+verify_channel_command_matrix
+
 if [ -n "$LOCAL_ARTIFACT_DIR" ]; then
   run_or_fail "local artifacts verify and boot at $LOCAL_ARTIFACT_DIR" \
     scripts/verify_release_runtime_boot "$LOCAL_ARTIFACT_DIR"
@@ -236,13 +377,17 @@ else
 fi
 
 if [ -n "${LEMON_EVAL_API_KEY:-}" ] ||
+   [ -n "${LEMON_EVAL_API_KEY_SECRET:-}" ] ||
    [ -n "${INTEGRATION_API_KEY:-}" ] ||
+   [ -n "${INTEGRATION_API_KEY_SECRET:-}" ] ||
    [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   run_or_fail "provider-backed live eval passes" \
     scripts/test live-eval
 else
-  block "provider-backed live eval not run; set LEMON_EVAL_API_KEY, INTEGRATION_API_KEY, or ANTHROPIC_API_KEY"
+  block "provider-backed live eval not run; set LEMON_EVAL_API_KEY, LEMON_EVAL_API_KEY_SECRET, INTEGRATION_API_KEY, INTEGRATION_API_KEY_SECRET, or ANTHROPIC_API_KEY"
 fi
+
+verify_discord_live_proof
 
 echo ""
 

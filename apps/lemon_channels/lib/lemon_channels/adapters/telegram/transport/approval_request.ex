@@ -7,6 +7,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
   """
 
   alias LemonCore.SessionKey
+  require Logger
 
   def send(state, payload) when is_map(state) and is_map(payload) do
     approval_id = payload[:approval_id] || payload["approval_id"]
@@ -52,19 +53,39 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
         %{"reply_markup" => reply_markup}
         |> maybe_put("message_thread_id", topic_id)
 
-      _ = state.api_mod.send_message(state.token, chat_id, text, opts)
-      :ok
+      case state.api_mod.send_message(state.token, chat_id, text, opts, nil) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Telegram approval request send failed: #{inspect(reason)}")
+          :ok
+
+        other ->
+          Logger.warning(
+            "Telegram approval request returned unexpected result: #{inspect(other)}"
+          )
+
+          :ok
+      end
     else
-      _ -> :ok
+      reason ->
+        Logger.warning("Telegram approval request skipped: #{inspect(reason)}")
+
+        :ok
     end
   rescue
-    _ -> :ok
+    error ->
+      Logger.warning("Telegram approval request crashed: #{Exception.message(error)}")
+      :ok
   end
 
   def send(_state, _payload), do: :ok
 
   defp format_action(action) when is_map(action) do
     cond do
+      is_binary(action["command"]) -> action["command"]
+      is_binary(action[:command]) -> action[:command]
       is_binary(action["cmd"]) -> action["cmd"]
       is_binary(action[:cmd]) -> action[:cmd]
       true -> inspect(action)

@@ -261,6 +261,46 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     @tag :tmp_dir
+    test "marks bash actions failed when command exits nonzero", %{tmp_dir: tmp_dir} do
+      tool_response =
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("bash", %{"command" => "sh -c 'printf FAIL >&2; exit 7'"},
+            id: "call_fail_command"
+          )
+        ])
+
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "run failing command",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: Mocks.mock_stream_fn([tool_response, assistant_message("done")])
+        )
+
+      events =
+        runner
+        |> LemonRunner.stream()
+        |> EventStream.events()
+        |> Enum.to_list()
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :completed,
+                ok: false,
+                action: %Action{detail: detail}
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :completed, action: %Action{id: id}}} ->
+                   id == "tool_call_fail_command"
+
+                 _ ->
+                   false
+               end)
+
+      assert detail.result =~ "Command exited with code 7"
+    end
+
+    @tag :tmp_dir
     test "preserves structured tool error metadata for untracked completion events", %{
       tmp_dir: tmp_dir
     } do

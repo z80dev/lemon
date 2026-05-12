@@ -1,6 +1,6 @@
 # Compare Lemon
 
-Last reviewed: 2026-05-11
+Last reviewed: 2026-05-12
 
 Lemon is a local-first AI agent runtime. It is not trying to be only a chat UI,
 only a coding CLI, or only an eval harness. The 1.0 goal is to make the whole
@@ -24,9 +24,9 @@ knowing the repository.
 | --- | --- | --- |
 | Runtime model | Supervised local-first runtime with explicit control-plane APIs | [Architecture Overview](architecture/overview.md), [BEAM Agents](beam_agents.md) |
 | Engine model | Multi-engine architecture rather than one model-provider path | [Model Selection](model-selection-decoupling.md), [Configuration](config.md) |
-| Harness behavior | Tool execution, approval, transcript, eval, and long-running run support | [Hermes Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md), [Testing](testing.md) |
+| Harness behavior | Tool execution, approval, transcript, eval, and long-running run support | [Hermes Feature Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md), [Hermes Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md), [Testing](testing.md) |
 | Memory and skills | Durable context plus reusable task packs | [Memory Guide](user-guide/memory.md), [Skills Overview](skills.md) |
-| Interfaces | Terminal, Web, control plane, Telegram, Discord, and gateway/channel adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
+| Interfaces | Terminal, Web, control plane, stable Telegram text-first support, and preview Discord/gateway adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
 | Operations | Doctor checks, support bundles, release profiles, smoke tests, and quality gates | [Release Checklist](release/release_checklist_and_support_policy.md), [Safety](security/safety.md) |
 
 ## 1.0 Reality Check
@@ -54,6 +54,9 @@ What is not yet a stable public promise:
 - final launch screenshots and videos
 - a claim of drop-in Hermes compatibility beyond the published scorecard and
   supported 1.0 feature boundary
+- ACP editor integration or OpenAI-compatible Chat Completions/Responses API
+  parity
+- automatic filesystem checkpointing or rollback for agent file mutations
 - production-grade cron scheduling guarantees or unrestricted model-facing cron
   management
 - first-class browser automation, media generation, image analysis, or voice/TTS
@@ -62,6 +65,8 @@ What is not yet a stable public promise:
 - broad clean-container or clean-VM install matrix
 - hosted service support
 - Windows-native support outside WSL experimentation
+- stable Discord support until the non-bot live matrix passes
+- production support for third-party plugins or unofficial MCP servers
 
 ## When Lemon Is the Right Fit
 

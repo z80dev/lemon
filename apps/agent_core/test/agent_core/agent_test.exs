@@ -26,6 +26,25 @@ defmodule AgentCore.AgentTest do
     Agent.start_link(merged_opts)
   end
 
+  defp wait_until(fun, timeout_ms \\ 500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("condition was not met before timeout")
+
+      true ->
+        Process.sleep(5)
+        do_wait_until(fun, deadline)
+    end
+  end
+
   # ============================================================================
   # Starting an Agent
   # ============================================================================
@@ -933,16 +952,19 @@ defmodule AgentCore.AgentTest do
           ref -> ref
         end
 
-      # Spawn a task that will add a follow-up after 20ms (within the 50ms window)
       message = Mocks.user_message("Late follow-up")
 
-      Task.start(fn ->
-        Process.sleep(20)
-        Agent.follow_up(agent, message)
+      caller =
+        Task.async(fn ->
+          GenServer.call(agent, {:get_follow_up_messages, abort_ref})
+        end)
+
+      wait_until(fn ->
+        :sys.get_state(agent).follow_up_poll != nil
       end)
 
-      # Call get_follow_up_messages - should long-poll and return the message
-      result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
+      Agent.follow_up(agent, message)
+      result = Task.await(caller, 1_000)
 
       assert length(result) == 1
       assert hd(result).content == "Late follow-up"

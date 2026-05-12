@@ -513,9 +513,15 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         kind = tool_kind(name)
         title = tool_title(name, %{})
         detail = %{name: name, result: truncate_result(result)} |> maybe_put_result_meta(result)
+        ok? = action_ok?(name, result, is_error)
 
         {event, factory} =
-          EventFactory.action_completed(state.factory, action_id, kind, title, not is_error,
+          EventFactory.action_completed(
+            state.factory,
+            action_id,
+            kind,
+            title,
+            ok?,
             detail: detail
           )
 
@@ -528,13 +534,15 @@ defmodule CodingAgent.CliRunners.LemonRunner do
           |> Map.merge(%{result: truncate_result(result)})
           |> maybe_put_result_meta(result)
 
+        ok? = action_ok?(name, result, is_error)
+
         {event, factory} =
           EventFactory.action_completed(
             state.factory,
             action_id,
             action.kind,
             action.title,
-            not is_error,
+            ok?,
             detail: detail
           )
 
@@ -943,6 +951,24 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp maybe_put_result_meta(detail, _), do: detail
+
+  defp action_ok?(_name, _result, true), do: false
+
+  defp action_ok?(name, %AgentCore.Types.AgentToolResult{details: details}, false) do
+    not command_exit_failed?(name, details)
+  end
+
+  defp action_ok?(_name, _result, false), do: true
+
+  defp command_exit_failed?(name, details) when is_map(details) do
+    String.downcase(to_string(name || "")) == "bash" and
+      case Map.get(details, :exit_code) || Map.get(details, "exit_code") do
+        exit_code when is_integer(exit_code) -> exit_code != 0
+        _ -> false
+      end
+  end
+
+  defp command_exit_failed?(_name, _details), do: false
 
   defp extract_tool_result_meta(details) when is_map(details) do
     auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")

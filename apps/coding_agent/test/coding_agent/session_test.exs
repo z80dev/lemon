@@ -493,6 +493,25 @@ defmodule CodingAgent.SessionTest do
       session_manager =
         SessionManager.new(tmp_dir)
         |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "call_untrusted",
+              "name" => "webfetch",
+              "arguments" => %{"url" => "https://example.test"}
+            },
+            %{
+              "type" => "tool_call",
+              "id" => "call_legacy",
+              "name" => "legacy_tool",
+              "arguments" => %{}
+            }
+          ],
+          "stop_reason" => "tool_use",
+          "timestamp" => 0
+        })
+        |> SessionManager.append_message(%{
           "role" => "tool_result",
           "tool_call_id" => "call_untrusted",
           "tool_name" => "webfetch",

@@ -2,6 +2,7 @@ defmodule CodingAgent.Session.PersistenceTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.Test.Mocks
+  alias AgentCore.Loop.TranscriptValidator
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
@@ -60,6 +61,64 @@ defmodule CodingAgent.Session.PersistenceTest do
 
     [message] = Persistence.restore_messages_from_session(session_manager)
     assert %Ai.Types.UserMessage{content: "hello", timestamp: 1} = message
+  end
+
+  test "restore_messages_from_session repairs dangling tool calls from interrupted sessions" do
+    session_manager =
+      SessionManager.new("/tmp")
+      |> SessionManager.append_message(%{
+        "role" => "user",
+        "content" => "run the command",
+        "timestamp" => 1
+      })
+      |> SessionManager.append_message(%{
+        "role" => "assistant",
+        "content" => [
+          %{
+            "type" => "tool_call",
+            "id" => "call_interrupted",
+            "name" => "bash",
+            "arguments" => %{"command" => "sleep 60"}
+          }
+        ],
+        "timestamp" => 2
+      })
+
+    assert [
+             %Ai.Types.UserMessage{content: "run the command"},
+             %Ai.Types.AssistantMessage{},
+             %Ai.Types.ToolResultMessage{
+               tool_call_id: "call_interrupted",
+               tool_name: "bash",
+               is_error: true,
+               content: [%Ai.Types.TextContent{text: repair_text}]
+             }
+           ] = restored = Persistence.restore_messages_from_session(session_manager)
+
+    assert repair_text =~ "interrupted"
+    assert TranscriptValidator.validate(restored) == :ok
+  end
+
+  test "restore_messages_from_session truncates unrepairable invalid tool transcripts" do
+    session_manager =
+      SessionManager.new("/tmp")
+      |> SessionManager.append_message(%{
+        "role" => "user",
+        "content" => "run the command",
+        "timestamp" => 1
+      })
+      |> SessionManager.append_message(%{
+        "role" => "tool_result",
+        "tool_call_id" => "orphaned",
+        "tool_name" => "bash",
+        "content" => [%{"type" => "text", "text" => "ok"}],
+        "timestamp" => 2
+      })
+
+    assert [%Ai.Types.UserMessage{content: "run the command"}] =
+             restored = Persistence.restore_messages_from_session(session_manager)
+
+    assert TranscriptValidator.validate(restored) == :ok
   end
 
   test "persist_message stores and restores async followups as custom messages" do

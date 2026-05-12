@@ -38,10 +38,15 @@ Before cutting a stable release:
 - [ ] Run `scripts/test eval-fast`.
 - [ ] Run `scripts/test live-eval` with release-candidate eval credentials, or
       dispatch `.github/workflows/live-eval.yml` with `LEMON_EVAL_API_KEY`
-      configured as a repository secret.
+      configured as a repository secret. Local runs may use
+      `LEMON_EVAL_API_KEY_SECRET` or `INTEGRATION_API_KEY_SECRET` to point at a
+      Lemon secret.
 
       ```bash
       gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon
+
+      mix lemon.secrets.set release_eval_api_key <token>
+      LEMON_EVAL_API_KEY_SECRET=release_eval_api_key scripts/test live-eval
 
       gh workflow run live-eval.yml \
         --ref v2026.05.0 \
@@ -56,6 +61,56 @@ Before cutting a stable release:
       release candidate. It covers prior-work memory search, skill capture,
       skill curation, blocked cron tooling for scheduled runs, and parallel
       child delegation before answering.
+- [ ] Rerun the Telegram live matrix for the stable text-first plus
+      document-delivery boundary using the established Telethon credentials and
+      Lemonade Stand group/topics.
+
+      ```bash
+      scripts/live_telegram_matrix.py --timeout 90
+      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+        --topic-isolation \
+        --isolation-topic-id 35 \
+        --isolation-topic-id 16456 \
+        --timeout 180
+      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+        --topic-cancel \
+        --cancel-topic-id 35 \
+        --timeout 95
+      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+        --topic-tool-rendering \
+        --topic-markdown \
+        --timeout 160
+      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+        --topic-approval \
+        --approval-topic-id 35 \
+        --timeout 180
+      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
+        --topic-long-output \
+        --long-output-topic-id 35 \
+        --timeout 120
+      scripts/live_telegram_matrix.py --skip-dm --skip-topic \
+        --topic-file-get \
+        --file-get-topic-id 35 \
+        --timeout 90
+      ```
+
+      Also run the two-step topic restart/dedupe proof after restarting
+      `./bin/lemon`. The proof must cover DM, group forum-topic routing, topic
+      isolation, cancellation, approval buttons, tool success/failure status,
+      markdown/code rendering, long output, document delivery, and duplicate
+      avoidance after restart.
+- [ ] For Hermes-parity readiness, run the non-bot manual Discord matrix and
+      keep the result JSON for the final audit.
+
+      ```bash
+      scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+        --manual-matrix \
+        --timeout 180 \
+        --result-path tmp/discord-live-proof.json
+      ```
+
+      The prompts must be sent by a real non-bot Discord user. Bot API smoke,
+      bot-authored messages, and webhooks do not count as Lemon inbound proof.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
@@ -75,11 +130,12 @@ Before cutting a stable release:
 - [ ] Confirm docs generated artifacts are not left in the repository.
 - [ ] Confirm issue templates and support-bundle docs reference the current artifact names.
 - [ ] Confirm known dependency audit findings are recorded and accepted or fixed.
-- [ ] Run `scripts/audit_1_0_readiness {version} {artifact-directory}` and
-      treat any failure or blocker as release-blocking. The audit also prints
-      remote preflight evidence for the release tag, release workflow,
-      live-eval workflow, and release-eval repository secret state so the
-      final handoff does not depend on manual GitHub inspection.
+- [ ] Run `LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json
+      scripts/audit_1_0_readiness {version} {artifact-directory}` and treat any
+      failure or blocker as release-blocking. The audit also prints
+      remote preflight evidence for the release tag, release workflow, live-eval
+      workflow, and release-eval repository secret state so the final handoff
+      does not depend on manual GitHub inspection.
 
 ## Dependency Audit Policy
 

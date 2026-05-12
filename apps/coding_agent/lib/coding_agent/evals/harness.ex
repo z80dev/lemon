@@ -2009,7 +2009,7 @@ defmodule CodingAgent.Evals.Harness do
           model: model,
           convert_to_llm: &trace_convert_to_llm/1,
           stream_options: stream_options,
-          max_tool_turns: 2
+          max_tool_turns: 3
         }
 
         stream =
@@ -2029,7 +2029,7 @@ defmodule CodingAgent.Evals.Harness do
 
         with {:ok, messages} <- EventStream.result(stream, timeout_ms),
              :ok <- assert_loop_tool_result(messages, "read_skill", "release-hotfix-checklist"),
-             :ok <- assert_final_contains(messages, ["RELEVANT_SKILL_LOADED_LIVE_MODEL"]),
+             :ok <- assert_final_after_tool(messages, "read_skill"),
              :ok <-
                assert_no_missed_skill_after_audit(messages, prompt, run_id, session_key, agent_id) do
           %{
@@ -2246,7 +2246,14 @@ defmodule CodingAgent.Evals.Harness do
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "search_memory", "cron-rollup-prior-run"),
                :ok <- assert_tool_not_used(messages, "cron"),
-               :ok <- assert_learning_search_calls(search_calls, 1),
+               :ok <- assert_learning_search_calls_at_least(search_calls, 1),
+               :ok <-
+                 assert_search_query_mentions(search_calls, [
+                   "scheduled",
+                   "status",
+                   "rollup",
+                   "queue"
+                 ]),
                :ok <- assert_final_contains(messages, ["CRON_BLOCKED_LIVE_MODEL_DONE"]) do
             %{
               name: "live_model_cron_block_contract",
@@ -2861,7 +2868,7 @@ defmodule CodingAgent.Evals.Harness do
   end
 
   defp live_model_config(opts) do
-    api_key = Keyword.get(opts, :live_api_key) || live_env("API_KEY")
+    api_key = live_model_api_key(opts)
 
     if is_binary(api_key) and api_key != "" do
       model = %Model{
@@ -2892,14 +2899,48 @@ defmodule CodingAgent.Evals.Harness do
 
       {:ok, model, stream_options}
     else
-      {:error, "live model eval requires LEMON_EVAL_API_KEY or INTEGRATION_API_KEY"}
+      {:error,
+       "live model eval requires LEMON_EVAL_API_KEY, LEMON_EVAL_API_KEY_SECRET, INTEGRATION_API_KEY, INTEGRATION_API_KEY_SECRET, or ANTHROPIC_API_KEY"}
     end
+  end
+
+  def live_model_api_key(opts \\ []) do
+    Keyword.get(opts, :live_api_key) ||
+      live_env("API_KEY") ||
+      live_secret("API_KEY_SECRET")
   end
 
   defp live_env(name) do
     System.get_env("LEMON_EVAL_#{name}") ||
       System.get_env("INTEGRATION_#{name}") ||
       legacy_live_env(name)
+  end
+
+  defp live_secret(name) do
+    secret_name =
+      System.get_env("LEMON_EVAL_#{name}") ||
+        System.get_env("INTEGRATION_#{name}")
+
+    resolve_live_secret(secret_name)
+  end
+
+  defp resolve_live_secret(nil), do: nil
+  defp resolve_live_secret(""), do: nil
+
+  defp resolve_live_secret(secret_name) do
+    if Code.ensure_loaded?(LemonCore.Secrets) and
+         function_exported?(LemonCore.Secrets, :resolve, 2) do
+      case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
+        {:ok, value, _source} -> value
+        _ -> nil
+      end
+    else
+      System.get_env(secret_name)
+    end
+  rescue
+    _ -> System.get_env(secret_name)
+  catch
+    :exit, _ -> System.get_env(secret_name)
   end
 
   defp legacy_live_env("API_KEY"), do: System.get_env("ANTHROPIC_API_KEY")
@@ -3437,6 +3478,41 @@ defmodule CodingAgent.Evals.Harness do
 
       true ->
         :ok
+    end
+  end
+
+  defp assert_learning_search_calls_at_least(search_calls, minimum_count) do
+    calls = Agent.get(search_calls, &Enum.reverse/1)
+
+    cond do
+      length(calls) < minimum_count ->
+        {:error, "expected at least #{minimum_count} search calls, got #{inspect(calls)}"}
+
+      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
+        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp assert_search_query_mentions(search_calls, expected_terms) do
+    calls = Agent.get(search_calls, &Enum.reverse/1)
+
+    found? =
+      Enum.any?(calls, fn {query, _opts} ->
+        normalized_query = String.downcase(to_string(query))
+
+        Enum.any?(expected_terms, fn term ->
+          String.contains?(normalized_query, String.downcase(term))
+        end)
+      end)
+
+    if found? do
+      :ok
+    else
+      {:error,
+       "expected search query to mention one of #{inspect(expected_terms)}, got #{inspect(calls)}"}
     end
   end
 

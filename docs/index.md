@@ -51,7 +51,9 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Configure providers, secrets, and Telegram | [Setup Guide](user-guide/setup.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
 | Track the 1.0 launch goal | [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
-| Check Hermes-class agent parity | [Harness Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
+| Check Hermes feature parity | [Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
+| Check channel command parity | [Command Parity Matrix](plans/lemon-channel-command-parity-matrix-2026-05-12.md) |
+| Check harness contract parity | [Harness Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
 | Debug a local install | [Support](support.md) |
 
 ## Current Launch Stage

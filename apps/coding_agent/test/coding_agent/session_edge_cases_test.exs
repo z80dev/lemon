@@ -18,6 +18,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
     AssistantMessage,
     TextContent,
     ToolCall,
+    ToolResultMessage,
     Usage,
     Cost,
     Model,
@@ -477,6 +478,19 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       session_manager =
         SessionManager.new(tmp_dir)
         |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "legacy_id_123",
+              "name" => "read",
+              "arguments" => %{"path" => "file.txt"}
+            }
+          ],
+          "stop_reason" => "tool_use",
+          "timestamp" => 0
+        })
+        |> SessionManager.append_message(%{
           "role" => "tool_result",
           "tool_use_id" => "legacy_id_123",
           "tool_name" => "read",
@@ -491,8 +505,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       session = start_session(session_file: session_file, cwd: tmp_dir)
       messages = Session.get_messages(session)
 
-      assert length(messages) == 1
-      assert hd(messages).tool_call_id == "legacy_id_123"
+      [tool_result] = Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
+      assert tool_result.tool_call_id == "legacy_id_123"
     end
   end
 
