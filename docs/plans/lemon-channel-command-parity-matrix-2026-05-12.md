@@ -12,8 +12,8 @@ current Lemon Telegram and Discord channel commands, then classifies what is
 stable, preview, explicitly out of 1.0 scope, or still launch-blocking.
 
 It does not claim full Hermes slash-command parity. It defines the supported
-Lemon 1.0 command boundary and the proof still required before Discord can move
-out of preview.
+Lemon 1.0 command boundary and the proof required before any broader Discord
+surface can move out of preview.
 
 ## Source Snapshot
 
@@ -58,7 +58,7 @@ Preview Discord command boundary:
 
 | Command | Lemon surface | Status | Evidence |
 | --- | --- | --- | --- |
-| `/lemon prompt [engine]` | Discord slash command | Preview until non-bot live proof passes | `@lemon_command`, `handle_lemon_interaction/2`; no non-bot inbound live proof yet |
+| `/lemon prompt [engine]` | Discord slash command | Preview until external-sender live proof passes | `@lemon_command`, `handle_lemon_interaction/2`; no external-sender inbound live proof yet |
 | `/session new [project]` | Discord slash command | Preview | `@session_command`, `handle_session_interaction/2` |
 | `/session info` | Discord slash command | Preview | `@session_command`, `handle_session_interaction/2` |
 | `/resume [selector]` | Discord slash command | Preview | `@resume_command`, `handle_resume_interaction/2` |
@@ -104,22 +104,23 @@ Telegram command support is sufficient for the text-first plus document-delivery
 1.0 boundary, because the launch-critical commands have deterministic coverage
 and live proof for DM/group/forum-topic use.
 
-Discord command support is implementation-present but preview. It cannot be
-claimed stable until `scripts/live_discord_matrix.py --manual-matrix` passes
-with a real non-bot sender and the resulting JSON is supplied to
+Discord command support is stable only for the live-proven text-first and
+file-delivery boundary. `scripts/live_discord_matrix.py --manual-matrix` passed
+with the second Lemonade Stand bot as sender, and the resulting
+`tmp/discord-live-proof.json` is the release-candidate proof consumed by
 `scripts/audit_1_0_readiness` through `LEMON_DISCORD_LIVE_PROOF_JSON`.
 
 Hermes drop-in command parity is not a Lemon 1.0 claim. The public support
 boundary must continue to say that ACP/API parity, rollback/checkpointing,
-browser/media/TTS, plugin ecosystem breadth, stable Discord, and dynamic skill
-slash commands are outside stable 1.0 unless a later release promotes and
-proves a narrower path.
+browser/media/TTS, plugin ecosystem breadth, Discord DM/thread/voice behavior,
+and dynamic skill slash commands are outside stable 1.0 unless a later release
+promotes and proves a narrower path.
 
 ## Launch Actions
 
 1. Keep Telegram command proofs green in the live Telegram matrix.
-2. Run the Discord non-bot manual matrix and attach its result JSON to the final
-   readiness audit.
+2. Keep the Discord external-sender manual matrix JSON attached to the final
+   readiness audit and rerun it for release candidates.
 3. Add deterministic Discord command tests for `/lemon`, `/session info`,
    `/cancel`, `/cwd`, `/trigger`, `/file get`, and `/topic` before promoting
    Discord from preview.

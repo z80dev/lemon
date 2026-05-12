@@ -12,6 +12,7 @@ interfaces named in the readiness plan:
 - TUI for local development
 - Web UI for observability and operations
 - Telegram for remote chat access
+- Discord for bounded text-first and file-delivery chat access
 
 The current result is stronger than a surface audit but not yet a full live
 product proof. TUI has a green client test lane, source-runtime transcripts for
@@ -27,14 +28,15 @@ resolution. A live invalid session-model proof now also verifies that common
 configuration failures return a concise Telegram failure instead of a BEAM stack
 trace.
 
-For the stricter Hermes-parity launch goal, this proof pack is not complete:
+For the stricter Hermes-parity launch goal, this proof pack is still bounded:
 Telegram now has fresh live DM, forum-topic, topic-isolation, topic-cancel,
 tool-rendering, markdown/code, group-topic approval, long-output chunking,
 document delivery, and restart/dedupe evidence for the text-first plus document
-delivery 1.0 boundary. The Discord matrix still needs to be run before Discord
-is marketed as stable at Hermes-class reliability. Discord bot-token discovery
-and API smoke are now recorded as diagnostics, but they are not live inbound
-proof because Lemon ignores bot-authored Discord messages and webhooks.
+delivery 1.0 boundary. Discord now has second-bot live proof for exact
+prompt/reply, markdown/code rendering, long-output chunking, tool
+success/failure rendering, and text-file attachment delivery. Discord DMs,
+threads, voice, richer media, and broad slash-command parity remain outside the
+stable support boundary unless separately proven.
 
 Post-1.0 unless launch positioning expands:
 
@@ -570,38 +572,29 @@ Result:
   `1503803470493257890`, with `DISCORD_BOT_TOKEN` unset and credentials loaded
   from the established credentials file.
 - `mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs`
-  now proves the Discord transport ignores bot-authored and webhook messages
+  now proves the Discord transport ignores self-authored and webhook messages
   before routing, with no warning logs.
 - This is only a Discord credential/channel diagnostic. It does not create a
-  Lemon run because the Discord adapter filters out bot-authored messages and
+  Lemon run because the Discord adapter filters out self-authored messages and
   webhooks.
 
-Required Discord live proof command:
+Passed Discord live proof command:
 
 ```bash
 scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
-  --wait-user-inbound \
-  --timeout 120
-```
-
-This command prints a nonce prompt that must be sent by a non-bot Discord user,
-then waits for the Lemon bot to reply with the exact expected text. Passing this
-check is the minimum Discord prompt/reply proof before Discord can move out of
-preview.
-
-Broader manual Discord matrix command:
-
-```bash
-scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+  --bot-token-index 0 \
+  --sender-bot-token-index 1 \
   --manual-matrix \
-  --timeout 180
+  --reset-session-between-checks \
+  --timeout 300 \
+  --result-path tmp/discord-live-proof.json
 ```
 
-This prints sequential non-bot prompts and verifies exact prompt/reply,
-markdown/code rendering, long-output chunking, tool success/failure markers, and
-Discord attachment delivery from the Lemon bot. It still requires a real
-user-authored Discord message for each prompt; bot-authored and webhook messages
-intentionally do not count.
+This used the second Lemonade Stand bot as the external sender, reset the
+Discord channel session between checks through the control plane, and verified
+exact prompt/reply, markdown/code rendering, long-output chunking, tool
+success/failure markers, and Discord attachment delivery from the Lemon bot.
+Self-authored responder messages and webhooks intentionally do not count.
 
 ## Remaining Proof Required
 
@@ -786,6 +779,9 @@ Done enough for release candidate:
   config error, with concise failure text and no stack-frame leak.
 - Telegram markdown/media support boundaries are documented for 1.0 as
   text-first rendering plus bounded file/image delivery.
+- Discord source-runtime live proof passes for the text-first plus file-delivery
+  boundary with second-bot inbound messages in the configured Lemonade Stand
+  channel.
 - Product smoke verifies packaged runtime and Web health.
 
 Still outside the stable 1.0 support boundary:
@@ -794,3 +790,5 @@ Still outside the stable 1.0 support boundary:
   skills, approvals, run inspection, runtime health, and support bundles
 - richer Telegram media generation, analysis, TTS, and GitHub-identical
   markdown rendering remain outside the stable 1.0 support boundary
+- Discord DMs, thread workflows, voice, richer media, and broad slash-command
+  parity remain outside the stable 1.0 support boundary

@@ -73,6 +73,29 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
     assert_receive {:create, 456, %{content: "hello"}}
   end
 
+  test "text delivery chunks long Discord content" do
+    long_text = String.duplicate("a", 4_100)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "discord",
+        account_id: "acct",
+        peer: %{kind: :group, id: "123", thread_id: nil},
+        kind: :text,
+        content: long_text
+      }
+
+    assert {:ok, %{message_id: 4444, extra_message_ids: [4444, 4444]}} =
+             Outbound.deliver(payload)
+
+    assert_receive {:create, 123, %{content: first}}
+    assert_receive {:create, 123, %{content: second}}
+    assert_receive {:create, 123, %{content: third}}
+    assert String.length(first) == 1_900
+    assert String.length(second) == 1_900
+    assert String.length(third) == 300
+  end
+
   test "file delivery uploads the actual file instead of sending a path notice" do
     path =
       Path.join(System.tmp_dir!(), "discord-outbound-#{System.unique_integer([:positive])}.txt")
@@ -116,5 +139,28 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
                       content: "updated",
                       components: [%{type: 1, components: [%{type: 2, custom_id: "x"}]}]
                     }}
+  end
+
+  test "edit delivery chunks long Discord content" do
+    long_text = String.duplicate("b", 4_100)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "discord",
+        account_id: "acct",
+        peer: %{kind: :group, id: "123", thread_id: nil},
+        kind: :edit,
+        content: %{message_id: "777", text: long_text}
+      }
+
+    assert {:ok, %{message_id: 777, extra_message_ids: [4444, 4444]}} =
+             Outbound.deliver(payload)
+
+    assert_receive {:edit, 123, 777, %{content: first}}
+    assert_receive {:create, 123, %{content: second}}
+    assert_receive {:create, 123, %{content: third}}
+    assert String.length(first) == 1_900
+    assert String.length(second) == 1_900
+    assert String.length(third) == 300
   end
 end

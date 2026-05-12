@@ -1,22 +1,34 @@
 #!/usr/bin/env -S uv run
 # /// script
-# dependencies = []
+# dependencies = ["websockets>=12.0"]
 # ///
 
 import argparse
+import asyncio
 import json
 import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 
 DEFAULT_CREDENTIALS = Path.home() / ".zeebot/api_keys/discord.txt"
 DEFAULT_GUILD_ID = "1475727416549969980"
+DEFAULT_CONTROL_PLANE_WS_URL = "ws://127.0.0.1:4040/ws"
 API_BASE = "https://discord.com/api/v10"
 BOT_TOKEN_KEYS = {"bot_token", "discord_bot_token", "discord_bot", "bot", "token"}
+
+
+class Check:
+    def __init__(self, run, sender):
+        self.run = run
+        self.sender = sender
+
+    def __call__(self, channel_id):
+        return self.run(channel_id)
 
 
 def load_pairs(path):
@@ -135,6 +147,19 @@ def send_message(token, channel_id, content):
     return api(token, "POST", f"/channels/{channel_id}/messages", {"content": content})
 
 
+def create_thread(token, channel_id, name):
+    return api(
+        token,
+        "POST",
+        f"/channels/{channel_id}/threads",
+        {
+            "name": name[:100],
+            "type": 11,
+            "auto_archive_duration": 60,
+        },
+    )
+
+
 def find_message(messages, predicate):
     for message in messages:
         if predicate(message):
@@ -160,7 +185,7 @@ def run_bot_api_smoke(token, channel_id):
     }
 
 
-def run_user_inbound_wait(token, channel_id, bot_id, timeout_s):
+def run_user_inbound_wait(token, channel_id, bot_id, timeout_s, sender=None):
     nonce = f"lemon-discord-user-{int(time.time())}"
     prompt = f"{nonce} Discord matrix probe: reply with exactly OK {nonce}"
     expected = f"OK {nonce}"
@@ -174,10 +199,11 @@ def run_user_inbound_wait(token, channel_id, bot_id, timeout_s):
         prompt=prompt,
         expected_description=expected,
         validator=lambda messages, user_message: validate_exact_reply(messages, bot_id, user_message, expected),
+        sender=sender,
     )
 
 
-def run_markdown_wait(token, channel_id, bot_id, timeout_s):
+def run_markdown_wait(token, channel_id, bot_id, timeout_s, sender=None):
     nonce = f"lemon-discord-markdown-{int(time.time())}"
     prompt = (
         f"{nonce} Discord matrix probe: reply with a bold marker **BOLD {nonce}** "
@@ -200,10 +226,11 @@ def run_markdown_wait(token, channel_id, bot_id, timeout_s):
             nonce,
             required=[f"**BOLD {nonce}**", "```", f"CODE {nonce}"],
         ),
+        sender=sender,
     )
 
 
-def run_long_output_wait(token, channel_id, bot_id, timeout_s):
+def run_long_output_wait(token, channel_id, bot_id, timeout_s, sender=None):
     nonce = f"lemon-discord-long-{int(time.time())}"
     prompt = (
         f"{nonce} Discord matrix probe: reply with BEGIN {nonce}, then at least "
@@ -227,10 +254,11 @@ def run_long_output_wait(token, channel_id, bot_id, timeout_s):
             required=[f"BEGIN {nonce}", f"END {nonce}"],
             min_length=2300,
         ),
+        sender=sender,
     )
 
 
-def run_tool_rendering_wait(token, channel_id, bot_id, timeout_s):
+def run_tool_rendering_wait(token, channel_id, bot_id, timeout_s, sender=None):
     nonce = f"lemon-discord-tool-{int(time.time())}"
     prompt = (
         f"{nonce} Discord matrix probe: use shell tools. First run a command that prints "
@@ -254,10 +282,11 @@ def run_tool_rendering_wait(token, channel_id, bot_id, timeout_s):
             nonce,
             required=[f"TOOL_OK {nonce}", f"TOOL_FAIL {nonce}", f"TOOL_MATRIX {nonce}"],
         ),
+        sender=sender,
     )
 
 
-def run_file_delivery_wait(token, channel_id, bot_id, timeout_s):
+def run_file_delivery_wait(token, channel_id, bot_id, timeout_s, sender=None):
     nonce = f"lemon-discord-file-{int(time.time())}"
     filename = f"discord-proof-{nonce}.txt"
     prompt = (
@@ -282,6 +311,7 @@ def run_file_delivery_wait(token, channel_id, bot_id, timeout_s):
             nonce,
             filename,
         ),
+        sender=sender,
     )
 
 
@@ -296,24 +326,43 @@ def run_user_prompt_check(
     prompt,
     expected_description,
     validator,
+    sender=None,
 ):
     deadline = time.time() + timeout_s
     user_message = None
     bot_result = None
     recent = []
 
-    print(
-        json.dumps(
-            {
-                "action_required": "send_user_message",
-                "channel_id": channel_id,
-                "prompt": prompt,
-                "expected_bot_reply": expected_description,
-            },
-            indent=2,
-        ),
-        flush=True,
-    )
+    if sender:
+        prompt_to_send = sender_prompt(sender, bot_id, prompt)
+        sent = send_message(sender["token"], channel_id, prompt_to_send)
+        print(
+            json.dumps(
+                {
+                    "action": "sent_bot_message",
+                    "channel_id": channel_id,
+                    "sender": sender["identity"],
+                    "message_id": sent.get("id"),
+                    "prompt": prompt_to_send,
+                    "expected_bot_reply": expected_description,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+    else:
+        print(
+            json.dumps(
+                {
+                    "action_required": "send_user_message",
+                    "channel_id": channel_id,
+                    "prompt": prompt,
+                    "expected_bot_reply": expected_description,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
 
     while time.time() < deadline:
         recent = get_messages(token, channel_id, limit=50)
@@ -323,7 +372,7 @@ def run_user_prompt_check(
                 recent,
                 lambda message: nonce in (message.get("content") or "")
                 and message.get("author", {}).get("id") != bot_id
-                and not message.get("author", {}).get("bot", False)
+                and sender_matches(message, sender)
                 and message.get("webhook_id") is None,
             )
 
@@ -342,7 +391,106 @@ def run_user_prompt_check(
         "channel_id": channel_id,
         "user_message": summarize_message(user_message),
         "bot_reply": None if bot_result is None else bot_result.get("summary"),
+        "sender_proof": sender_proof(sender),
         "recent": [summarize_message(message) for message in recent[:10]],
+    }
+
+
+def sender_prompt(sender, bot_id, prompt):
+    if sender.get("mention_responder", True):
+        return f"<@{bot_id}> {prompt}"
+
+    return prompt
+
+
+def sender_matches(message, sender):
+    author = message.get("author", {})
+
+    if sender:
+        return author.get("id") == sender["identity"].get("id")
+
+    return not author.get("bot", False)
+
+
+def sender_proof(sender):
+    if not sender:
+        return {"kind": "non_bot_user"}
+
+    return {
+        "kind": "bot_to_bot",
+        "sender": sender["identity"],
+        "mention_responder": sender.get("mention_responder", True),
+    }
+
+
+def discord_session_key(args, channel_id, sender):
+    if not sender:
+        raise SystemExit("--reset-session-between-checks requires --sender-bot-token-index")
+
+    return (
+        f"agent:{args.agent_id}:discord:{args.account_id}:group:{channel_id}"
+        f":sub:{sender['identity']['id']}"
+    )
+
+
+async def reset_session_ws(ws_url, session_key):
+    import websockets
+
+    async with websockets.connect(ws_url) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "req",
+                    "id": str(uuid.uuid4()),
+                    "method": "connect",
+                    "params": {
+                        "role": "operator",
+                        "scopes": ["operator.admin"],
+                        "client": {"id": "lemon-discord-matrix"},
+                    },
+                }
+            )
+        )
+        hello = json.loads(await ws.recv())
+
+        if hello.get("type") != "hello-ok":
+            raise SystemExit(f"control-plane connect failed: {json.dumps(hello)}")
+
+        request_id = str(uuid.uuid4())
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "req",
+                    "id": request_id,
+                    "method": "sessions.reset",
+                    "params": {"sessionKey": session_key},
+                }
+            )
+        )
+
+        while True:
+            response = json.loads(await ws.recv())
+
+            if response.get("type") != "res" or response.get("id") != request_id:
+                continue
+
+            if response.get("ok") is not True:
+                raise SystemExit(f"control-plane sessions.reset failed: {json.dumps(response)}")
+
+            return response
+
+
+def maybe_reset_session(args, channel_id, sender):
+    if not args.reset_session_between_checks:
+        return None
+
+    session_key = discord_session_key(args, channel_id, sender)
+    response = asyncio.run(reset_session_ws(args.control_plane_ws_url, session_key))
+
+    return {
+        "session_key": session_key,
+        "control_plane_ws_url": args.control_plane_ws_url,
+        "response": response.get("payload"),
     }
 
 
@@ -454,6 +602,13 @@ def parser():
     root = argparse.ArgumentParser(description="Run Lemon live Discord channel checks.")
     root.add_argument("--credentials", type=Path, default=Path(os.environ.get("LEMON_DISCORD_CREDS_PATH", DEFAULT_CREDENTIALS)))
     root.add_argument("--bot-token-index", type=int, default=-1)
+    root.add_argument("--sender-bot-token-index", type=int)
+    root.add_argument("--no-mention-responder", action="store_true")
+    root.add_argument("--per-check-thread", action="store_true")
+    root.add_argument("--reset-session-between-checks", action="store_true")
+    root.add_argument("--control-plane-ws-url", default=os.environ.get("LEMON_CONTROL_PLANE_WS_URL", DEFAULT_CONTROL_PLANE_WS_URL))
+    root.add_argument("--account-id", default="default")
+    root.add_argument("--agent-id", default="default")
     root.add_argument("--guild-id", default=DEFAULT_GUILD_ID)
     root.add_argument("--channel-id")
     root.add_argument("--list-channels", action="store_true")
@@ -470,10 +625,64 @@ def parser():
     return root
 
 
+def resolve_sender(args, responder_identity):
+    if args.sender_bot_token_index is None:
+        return None
+
+    tokens = bot_tokens(args)
+
+    try:
+        sender_token = tokens[args.sender_bot_token_index]
+    except IndexError:
+        raise SystemExit(
+            f"sender bot token index {args.sender_bot_token_index} out of range; found {len(tokens)} token(s)"
+        )
+
+    sender_identity = bot_identity(sender_token)
+
+    if sender_identity.get("id") == responder_identity.get("id"):
+        raise SystemExit("sender bot token must identify a different bot than --bot-token-index")
+
+    return {
+        "token": sender_token,
+        "identity": sender_identity,
+        "mention_responder": not args.no_mention_responder,
+    }
+
+
+def run_in_check_channel(args, token, run_check, check_index):
+    if not args.per_check_thread:
+        reset = maybe_reset_session(args, args.channel_id, run_check.sender)
+        check = run_check(args.channel_id)
+
+        if reset:
+            check["session_reset"] = reset
+
+        return check
+
+    thread_name = f"lemon-discord-proof-{int(time.time())}-{check_index}"
+    thread = create_thread(token, args.channel_id, thread_name)
+    thread_id = thread.get("id")
+
+    if not thread_id:
+        raise SystemExit(f"Discord thread creation returned no id: {json.dumps(thread)}")
+
+    check = run_check(thread_id)
+    check["parent_channel_id"] = args.channel_id
+    check["thread"] = {
+        "id": thread.get("id"),
+        "name": thread.get("name"),
+        "type": thread.get("type"),
+        "parent_id": thread.get("parent_id"),
+    }
+    return check
+
+
 def main():
     args = parser().parse_args()
     token = select_token(args)
     identity = bot_identity(token)
+    sender = resolve_sender(args, identity)
 
     if args.list_channels:
         print(
@@ -495,22 +704,22 @@ def main():
     selected = []
 
     if args.bot_api_smoke:
-        selected.append(lambda: run_bot_api_smoke(token, args.channel_id))
+        selected.append(Check(lambda channel_id: run_bot_api_smoke(token, channel_id), None))
 
     if args.wait_user_inbound or args.manual_matrix:
-        selected.append(lambda: run_user_inbound_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(Check(lambda channel_id: run_user_inbound_wait(token, channel_id, identity["id"], args.timeout, sender=sender), sender))
 
     if args.wait_markdown or args.manual_matrix:
-        selected.append(lambda: run_markdown_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(Check(lambda channel_id: run_markdown_wait(token, channel_id, identity["id"], args.timeout, sender=sender), sender))
 
     if args.wait_long_output or args.manual_matrix:
-        selected.append(lambda: run_long_output_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(Check(lambda channel_id: run_long_output_wait(token, channel_id, identity["id"], args.timeout, sender=sender), sender))
 
     if args.wait_tool_rendering or args.manual_matrix:
-        selected.append(lambda: run_tool_rendering_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(Check(lambda channel_id: run_tool_rendering_wait(token, channel_id, identity["id"], args.timeout, sender=sender), sender))
 
     if args.wait_file_delivery or args.manual_matrix:
-        selected.append(lambda: run_file_delivery_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(Check(lambda channel_id: run_file_delivery_wait(token, channel_id, identity["id"], args.timeout, sender=sender), sender))
 
     if not selected:
         raise SystemExit(
@@ -519,8 +728,8 @@ def main():
 
     checks = []
 
-    for run_check in selected:
-        check = run_check()
+    for index, run_check in enumerate(selected, start=1):
+        check = run_in_check_channel(args, token, run_check, index)
         checks.append(check)
 
         if args.manual_matrix and not args.continue_on_failure and not check["ok"]:
@@ -529,6 +738,7 @@ def main():
     result = {
         "ok": all(check["ok"] for check in checks),
         "bot": identity,
+        "sender": sender_proof(sender),
         "channel_id": args.channel_id,
         "checks": checks,
     }

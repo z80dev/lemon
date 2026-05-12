@@ -22,14 +22,18 @@ Initial stable 1.0 support targets:
 
 ## Channel Support
 
-Telegram is the stable 1.0 remote chat channel for text-first agent runs. The
-TUI, Web UI, and control plane are stable first-party local interfaces.
+Telegram and Discord are stable 1.0 remote chat channels for text-first agent
+runs. The TUI, Web UI, and control plane are stable first-party local
+interfaces.
 
-Discord, X/Twitter, XMTP, SMS, voice, and other channel adapters are preview or
-experimental unless a release note explicitly promotes a narrower path. Bugs in
-preview channels can be filed with reproduction steps and support bundles, but
-they do not carry the same release-blocking support promise as Telegram, TUI,
-Web, and the control plane.
+Discord support is bounded to the live-proven path: mention-triggered text
+prompts in the configured Lemonade Stand channel, markdown/code rendering,
+long-output chunking, tool success/failure status rendering, and text-file
+attachment delivery. X/Twitter, XMTP, SMS, voice, and other channel adapters are
+preview or experimental unless a release note explicitly promotes a narrower
+path. Bugs in preview channels can be filed with reproduction steps and support
+bundles, but they do not carry the same release-blocking support promise as
+Telegram, Discord, TUI, Web, and the control plane.
 
 ## Web, Browser, and Media Tools
 
@@ -102,8 +106,10 @@ These are outside the initial stable support boundary:
 
 - native Windows installs outside WSL experimentation
 - hosted Lemon service operation
-- stable support guarantees for Discord, X/Twitter, XMTP, SMS, voice, or other
-  preview channel adapters unless explicitly promoted in release notes
+- Discord behavior outside the text-first and file-delivery boundary, including
+  voice, broad slash-command parity, and unproven DM/thread workflows
+- stable support guarantees for X/Twitter, XMTP, SMS, voice, or other preview
+  channel adapters unless explicitly promoted in release notes
 - production-grade scheduling guarantees for cron or scheduled automation
 - first-class browser automation, generated media, image analysis, or TTS/voice
   behavior unless explicitly promoted in release notes

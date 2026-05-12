@@ -9,15 +9,19 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   alias LemonChannels.OutboundPayload
   alias Nostrum.Api.Message, as: NostrumMessage
 
+  @max_content_chars 1_900
+
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
     channel_id = peer_channel_id(payload)
 
     with {:ok, channel_id} <- channel_id,
          content when is_binary(content) <- to_string(payload.content),
-         params <- text_params(content, payload),
-         {:ok, result} <- message_api().create(channel_id, params) do
-      {:ok, %{message_id: extract_message_id(result)}}
+         [first | rest] <- content_chunks(content),
+         params <- text_params(first, payload),
+         {:ok, result} <- message_api().create(channel_id, params),
+         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest) do
+      {:ok, %{message_id: extract_message_id(result), extra_message_ids: extra_ids}}
     else
       {:error, reason} -> {:error, reason}
       other -> {:error, {:discord_send_failed, other}}
@@ -32,15 +36,17 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
         %OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload
       ) do
     components = extract_components(payload)
+    [first | rest] = content_chunks(to_string(text))
 
     edit_params =
-      %{content: to_string(text)}
+      %{content: first}
       |> maybe_put_components(components)
 
     with {:ok, channel_id} <- peer_channel_id(payload),
          {:ok, msg_id} <- normalize_id(message_id),
-         {:ok, result} <- message_api().edit(channel_id, msg_id, edit_params) do
-      {:ok, %{message_id: extract_message_id(result) || msg_id}}
+         {:ok, result} <- message_api().edit(channel_id, msg_id, edit_params),
+         {:ok, extra_ids} <- send_extra_chunks(channel_id, rest) do
+      {:ok, %{message_id: extract_message_id(result) || msg_id, extra_message_ids: extra_ids}}
     else
       {:error, reason} -> {:error, reason}
       other -> {:error, {:discord_edit_failed, other}}
@@ -194,6 +200,35 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
 
     components = extract_components(payload)
     maybe_put_components(params, components)
+  end
+
+  defp send_extra_chunks(_channel_id, []), do: {:ok, []}
+
+  defp send_extra_chunks(channel_id, chunks) do
+    Enum.reduce_while(chunks, {:ok, []}, fn chunk, {:ok, ids} ->
+      case message_api().create(channel_id, %{content: chunk}) do
+        {:ok, result} ->
+          {:cont, {:ok, ids ++ [extract_message_id(result)]}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+
+        other ->
+          {:halt, {:error, {:discord_chunk_send_failed, other}}}
+      end
+    end)
+  end
+
+  defp content_chunks(content) when is_binary(content) do
+    do_content_chunks(content, [])
+  end
+
+  defp do_content_chunks("", []), do: [""]
+  defp do_content_chunks("", acc), do: Enum.reverse(acc)
+
+  defp do_content_chunks(content, acc) do
+    {chunk, rest} = String.split_at(content, @max_content_chars)
+    do_content_chunks(rest, [chunk | acc])
   end
 
   defp extract_components(%OutboundPayload{meta: %{components: components}})

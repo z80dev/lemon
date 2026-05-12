@@ -399,9 +399,9 @@ if grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2
    grep -q 'discord_file_delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
    grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q 'scripts/live_discord_matrix.py --channel-id 1475727417372049419' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires Discord non-bot live proof"
+  pass "J27: final readiness audit requires Discord external-sender live proof"
 else
-  fail "J27: final readiness audit does not require documented Discord non-bot live proof"
+  fail "J27: final readiness audit does not require documented Discord external-sender live proof"
 fi
 
 if grep -q 'verify_public_support_boundaries' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
@@ -410,8 +410,9 @@ if grep -q 'verify_public_support_boundaries' "$ROOT/scripts/audit_1_0_readiness
    grep -q 'automatic filesystem checkpointing or rollback' "$ROOT/docs/support.md" 2>/dev/null &&
    grep -q 'first-class browser automation' "$ROOT/docs/support.md" 2>/dev/null &&
    grep -q 'production support for third-party plugins' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'stable Discord support until the non-bot live matrix passes' "$ROOT/docs/compare.md" 2>/dev/null &&
-   grep -q 'preview Discord/gateway adapters' "$ROOT/docs/compare.md" 2>/dev/null; then
+   grep -q 'Discord support is bounded to the live-proven path' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'Discord behavior beyond the live-proven text-first and file-delivery boundary' "$ROOT/docs/compare.md" 2>/dev/null &&
+   grep -q 'stable Telegram and Discord text-first support' "$ROOT/docs/compare.md" 2>/dev/null; then
   pass "J27: final readiness audit enforces public Hermes-gap support boundaries"
 else
   fail "J27: public support docs do not consistently bound unresolved Hermes-only surfaces"

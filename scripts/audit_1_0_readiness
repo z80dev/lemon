@@ -17,7 +17,7 @@ The audit checks:
   - remote publication preflight reports tag, workflow, and eval secret state
   - public GitHub Release artifacts can be downloaded, verified, and booted
   - provider-backed live eval runs when release eval credentials are present
-  - Discord non-bot manual live proof is present when promoting Hermes-channel parity
+  - Discord external-sender manual live proof is present when promoting Hermes-channel parity
   - public support and comparison docs keep unresolved Hermes-only surfaces
     outside the stable 1.0 support boundary
   - channel command parity is inventoried and bounded before launch
@@ -97,8 +97,11 @@ Next commands after maintainer approval and required credentials:
 
   # Required before claiming stable Discord/Hermes channel parity.
   scripts/live_discord_matrix.py --channel-id 1475727417372049419 \\
+    --bot-token-index 0 \\
+    --sender-bot-token-index 1 \\
     --manual-matrix \\
-    --timeout 180 \\
+    --reset-session-between-checks \\
+    --timeout 300 \\
     --result-path tmp/discord-live-proof.json
 
   LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json \\
@@ -181,7 +184,7 @@ import sys
 
 requirements = {
     "docs/support.md": [
-        "Discord, X/Twitter, XMTP, SMS, voice, and other channel adapters are preview",
+        "Discord support is bounded to the live-proven path",
         "OpenAI-compatible API server behavior",
         "ACP editor integration",
         "automatic filesystem checkpointing or rollback",
@@ -190,11 +193,11 @@ requirements = {
         "production support for third-party plugins",
     ],
     "docs/compare.md": [
-        "preview Discord/gateway adapters",
+        "stable Telegram and Discord text-first support",
         "ACP editor integration or OpenAI-compatible Chat Completions/Responses API",
         "automatic filesystem checkpointing or rollback",
         "first-class browser automation, media generation, image analysis, or voice/TTS",
-        "stable Discord support until the non-bot live matrix passes",
+        "Discord behavior beyond the live-proven text-first and file-delivery boundary",
         "production support for third-party plugins",
     ],
 }
@@ -237,7 +240,7 @@ needles = [
     "Preview Discord command boundary",
     "Hermes Messaging Command Comparison",
     "Telegram command support is sufficient for the text-first plus document-delivery",
-    "Discord command support is implementation-present but preview",
+    "Discord command support is stable only for the live-proven text-first and",
     "Hermes drop-in command parity is not a Lemon 1.0 claim",
     "scripts/live_discord_matrix.py --manual-matrix",
 ]
@@ -260,12 +263,12 @@ verify_discord_live_proof() {
   local proof_path="${LEMON_DISCORD_LIVE_PROOF_JSON:-}"
 
   if [ -z "$proof_path" ]; then
-    block "Discord non-bot manual matrix not verified; set LEMON_DISCORD_LIVE_PROOF_JSON to a passing result JSON"
+    block "Discord external-sender manual matrix not verified; set LEMON_DISCORD_LIVE_PROOF_JSON to a passing result JSON"
     return
   fi
 
   if [ ! -f "$proof_path" ]; then
-    block "Discord non-bot manual matrix result file is missing: $proof_path"
+    block "Discord external-sender manual matrix result file is missing: $proof_path"
     return
   fi
 
@@ -294,11 +297,11 @@ if data.get("ok") is not True or missing:
 print("ok")
 PY
   then
-    pass "Discord non-bot manual live matrix proof is present"
+    pass "Discord external-sender manual live matrix proof is present"
   else
     case "$?" in
-      66) block "Discord non-bot manual matrix result does not prove required checks" ;;
-      *) fail "Discord non-bot manual matrix result is unreadable" ;;
+      66) block "Discord external-sender manual matrix result does not prove required checks" ;;
+      *) fail "Discord external-sender manual matrix result is unreadable" ;;
     esac
   fi
 }

@@ -102,17 +102,24 @@ guild `1475727416549969980`, and channel `1475727417372049419`:
 scripts/live_discord_matrix.py --list-channels
 scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-api-smoke
 scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+  --bot-token-index 0 \
+  --sender-bot-token-index 1 \
   --manual-matrix \
-  --timeout 180 \
+  --reset-session-between-checks \
+  --timeout 300 \
   --result-path tmp/discord-live-proof.json
 ```
 
-The Discord bot API smoke is diagnostic only. Stable Discord requires a non-bot
-user-authored inbound prompt that creates a Lemon run and receives the expected
-reply in the same supported channel or thread. The manual matrix prints one
+The Discord bot API smoke is diagnostic only. Stable Discord requires an
+external-sender inbound prompt that creates a Lemon run and receives the
+expected reply in the same supported channel or thread. The sender can be a
+human Discord user or the second Lemonade Stand bot token; self-authored
+responder messages and webhooks do not count. The manual matrix prints one
 prompt at a time and stops on the first failed check by default, so each next
 prompt means the previous prompt was observed and validated. Use
 `--continue-on-failure` only when collecting diagnostic failure output.
+When using the second bot sender, keep `--reset-session-between-checks` so each
+matrix prompt starts from a clean Discord channel session.
 
 The manual GitHub workflow is:
 

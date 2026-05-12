@@ -332,17 +332,19 @@ Discord live matrix:
 Discord evidence standard:
 
 - A Lemon runtime log showing the Discord adapter connected is not a pass.
-- A bot-token REST message is only a diagnostic for token/channel permissions;
-  it is not a Lemon inbound proof because Discord bot-authored messages and
-  webhooks are ignored by the adapter.
-- A pass requires a user-side message sent through the established Discord test
-  account/channel method, a Lemon run created from that inbound message, and a
-  Discord reply observed in the same DM, channel, or thread.
+- A bot-token REST message from the responder bot is only a diagnostic for
+  token/channel permissions; it is not a Lemon inbound proof because Discord
+  self-authored responder messages and webhooks are ignored by the adapter.
+- A pass requires an external-sender message through the established Discord
+  test method. The sender can be a human Discord user or the second Lemonade
+  Stand bot token, but it must be distinct from the responder bot. The proof
+  must show a Lemon run created from that inbound message and a Discord reply
+  observed in the same DM, channel, or thread.
 - Record target guild/channel/thread IDs and message IDs without exposing bot
   tokens or user credentials.
-- If no reliable user-side Discord send method is available in the current
-  environment, Discord stays preview until that method is added and the matrix
-  passes.
+- The current release-candidate proof uses the second Lemonade Stand bot as the
+  external sender. If future environments lose a reliable external-sender method,
+  Discord must return to preview until the matrix passes again.
 
 Evidence requirements:
 
@@ -493,8 +495,8 @@ Current Discord live runner:
 ```bash
 scripts/live_discord_matrix.py --list-channels
 scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-api-smoke
-scripts/live_discord_matrix.py --channel-id 1475727417372049419 --wait-user-inbound --timeout 120
-scripts/live_discord_matrix.py --channel-id 1475727417372049419 --manual-matrix --timeout 180
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-token-index 0 --sender-bot-token-index 1 --wait-user-inbound --reset-session-between-checks --timeout 120
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-token-index 0 --sender-bot-token-index 1 --manual-matrix --reset-session-between-checks --timeout 300 --result-path tmp/discord-live-proof.json
 LEMON_EVAL_API_KEY_SECRET={local-zai-secret} LEMON_EVAL_PROVIDER=zai LEMON_EVAL_MODEL=glm-5-turbo LEMON_EVAL_API_TYPE=openai_completions LEMON_EVAL_BASE_URL=https://api.z.ai/api/coding/paas/v4 scripts/test live-eval
 ```
 
@@ -504,18 +506,21 @@ values. The runner accepts labeled bot-token lines, common bot-token aliases,
 optional `Bot ` prefixes, and bare-token lines. The first command discovers the
 allowed test guild/channel shape. The second command verifies bot API
 reachability only and is not a Lemon inbound proof. The third command is the
-required live proof path: it prints a nonce prompt that must be sent by a
-non-bot Discord user, then waits for the Lemon bot to reply with the exact
-expected text in the same channel. The manual matrix extends that path with
-non-bot prompts for markdown/code rendering, long-output chunking, tool
-success/failure markers, and Discord attachment delivery. Discord remains
-preview unless the non-bot inbound path passes, because the adapter correctly
-ignores bot-authored messages and webhooks. The manual matrix stops on the
-first failed check by default so later prompts are printed only after earlier
-checks pass; `--continue-on-failure` is diagnostic-only and does not produce
-release evidence.
+required live proof path: it sends or prints a nonce prompt from an external
+sender, then waits for the Lemon bot to reply with the exact expected text in
+the same channel. The sender can be a human Discord user or the second Lemonade
+Stand bot token. With the second bot sender, `--reset-session-between-checks`
+uses the local control-plane `sessions.reset` method so each matrix prompt has a
+fresh Discord channel session. The manual matrix extends that path with
+external-sender prompts for markdown/code rendering, long-output chunking, tool
+success/failure markers, and Discord attachment delivery. The adapter correctly
+ignores self-authored responder messages and webhooks, so this live matrix is
+the support-boundary proof for Discord's text-first path. The manual
+matrix stops on the first failed check by default so later prompts are printed
+only after earlier checks pass; `--continue-on-failure` is diagnostic-only and
+does not produce release evidence.
 
-Discord diagnostic result on 2026-05-12:
+Discord live result on 2026-05-12:
 
 - `scripts/live_discord_matrix.py --list-channels` resolved bot
   `Zeebot-Debug`, guild `1475727416549969980`, and text channel `general`
@@ -524,9 +529,15 @@ Discord diagnostic result on 2026-05-12:
   --bot-api-smoke` passed with message id `1503803470493257890` after verifying
   credential-file loading with `DISCORD_BOT_TOKEN` unset.
 - `mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs`
-  passed, proving bot-authored and webhook messages are ignored before routing.
-- This diagnostic does not close Discord live reliability because it did not
-  create a Lemon run from a non-bot Discord user message.
+  passed, proving self-authored and webhook messages are ignored before routing.
+- `scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-token-index 0 --sender-bot-token-index 1 --manual-matrix --reset-session-between-checks --timeout 300 --result-path tmp/discord-live-proof.json`
+  passed. It used Zeebot-Debug as the external sender and Zeebot as the Lemon
+  responder, and covered exact prompt/reply, markdown/code rendering,
+  long-output chunking, tool success/failure rendering, and text-file attachment
+  delivery.
+- The live run found and fixed a Discord outbound chunking bug: normal Discord
+  messages are capped at 2000 characters, so long text is now split into
+  1900-character chunks before delivery.
 
 Exit criteria:
 
@@ -542,8 +553,8 @@ Exit criteria:
   real credentials, including topic isolation, cancellation, approvals, tool
   status, markdown/code rendering, long output, document delivery, and
   restart/dedupe.
-- Discord live matrices pass under established real credentials with a non-bot
-  user-authored inbound prompt, including the supported channel/thread/session
+- Discord live matrices pass under established real credentials with an
+  external-sender inbound prompt, including the supported channel/thread/session
   boundary. Bot API reachability alone is not sufficient.
 
 ### Workstream 3: Installation and Setup
@@ -670,7 +681,7 @@ Discord launch criteria:
 
 - bot credential and target guild/channel discovery works without exposing
   secrets
-- non-bot user-authored inbound prompt creates a Lemon run
+- external sender-authored inbound prompt creates a Lemon run
 - Lemon replies in the same supported channel or thread
 - mention/free-response behavior matches the documented support boundary
 - session isolation is proven for the supported channel/thread shape
@@ -683,7 +694,7 @@ Exit criteria:
 - Each surface has at least one smoke or integration check.
 - Failure states are visible and actionable.
 - Telegram launch claims are backed by live DM, group, and forum-topic proof.
-- Discord launch claims are blocked until live non-bot inbound proof passes.
+- Discord launch claims are blocked until live external-sender inbound proof passes.
 
 ### Workstream 6: Website and Public Docs
 
@@ -937,13 +948,13 @@ Status:
 | G7 | Issue triage | Support | P1 | Done | `.github/ISSUE_TEMPLATE/bug_report.md` distinguishes source-dev vs release-runtime installs and asks for the appropriate redacted support-bundle command in each path. | Users still need to review bundles before attaching them. | Revisit once public release artifact naming is final. |
 | G8 | Website scaffold | Product / Docs | P0 | Partial | `docs/index.md` now provides a VitePress homepage with positioning, launch-stage status, and entry points; `docs/install.md` provides a short install landing page with source install, provider setup, doctor, and release-artifact status; `docs/compare.md`, `docs/demo.md`, and `docs/support.md` add public-facing comparison, deterministic demo, and support-boundary pages; navigation links the full product-doc set. `docs/assets/launch/web-session-proof-2026-05-11.png` and `docs/assets/launch/web-ops-proof-2026-05-11.png` provide initial launch screenshots for the Web interface. | The site still needs final public release-asset copy and broader launch media after downloaded artifact proof. | Add final release artifact language after public artifact verification and capture TUI/Telegram launch visuals when those live proofs pass. |
 | G9 | Docs site link gate | Docs | P1 | Done | VitePress navigation links to existing launch, user guide, architecture, testing, release, and contributor docs. The docs markdown link baseline passes locally with `markdown-link-check`, and `.github/workflows/docs-site.yml` now fails when the link check reports broken links. `scripts/verify_docs_site` now installs docs dependencies in a temp copy, runs high-severity docs-tooling audit, builds the VitePress site, and runs the markdown link check without leaving `docs/node_modules`, `docs/package-lock.json`, or `docs/.vitepress/dist` in the repo. | External links can still drift after a green CI run. | Keep `.mlc.json` focused on intentional localhost/internal exceptions and fix broken external docs links when they appear. |
-| G10 | Hermes parity | Harness | P0 | Partial | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md` is the source-grounded Hermes-vs-Lemon feature matrix, refreshed against `/home/z80/dev/hermes-agent` `origin/main` at `dd0923bb8`. `docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md` maps Lemon Telegram and Discord commands against Hermes messaging slash commands. `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` tracks substantial harness work, including tool lifecycle, memory, skills, delegation, safety, and live-model slices. Provider-backed live eval now passes against Z.ai `glm-5-turbo`. The matrix explicitly keeps ACP/API server parity, automatic rollback, multi-backend terminal execution, browser/multimodal tools, plugin ecosystem breadth, and external memory-provider parity outside stable 1.0 claims unless promoted later. | The remaining P0 Hermes-parity proof is live Discord non-bot reliability if Discord is to be promoted beyond preview. Public release artifact proof is tracked separately under release readiness. Telegram command support is sufficient for the stable text-first boundary; Lemon does not claim Hermes drop-in command parity for 1.0. | Keep bounded support language intact, keep deterministic plus live-model evals green, and run the Discord non-bot manual matrix before claiming stable Discord/Hermes channel parity. |
-| G11 | UI and live-channel reliability | Interfaces / Support | P0 | Partial | `docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md` records broad TUI, Web, control-plane, and supportability APIs. `docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md` records TUI/Web source-runtime proofs and Telegram live proof for `/cwd`, progress rendering, prompt round trip, bare `/cancel`, approval-button resolution, invalid-model errors, 2026-05-12 DM recovery from an interrupted persisted tool call, Telegram forum-topic routing in Lemonade Stand topic `35`, overlapping forum-topic isolation for topics `35` and `16456`, topic-scoped cancellation, successful and failing tool-status rendering, markdown/code rendering, group-topic approval-button resolution in topic `35`, long-output chunking inside topic `35`, `/file get` document delivery in topic `35`, and restart/dedupe behavior in topic `35`. `scripts/live_telegram_matrix.py --timeout 90` now provides a repeatable credential-backed DM/topic runner and passed on 2026-05-12. The topic-isolation, topic-cancel, topic-tool-rendering/markdown, topic-approval, topic-long-output, topic-file-get, and topic-restart/dedupe runner variants also passed on 2026-05-12. `scripts/live_discord_matrix.py --list-channels` and `--bot-api-smoke` verify Discord bot credential/channel reachability only. | Telegram is now live-proven for the text-first plus document-delivery 1.0 boundary. Discord still needs a non-bot user inbound proof before it can be treated as stable; bot API smoke does not count because the adapter ignores bot-authored messages and webhooks. | Run the Discord credential-backed live matrix, record reproducible evidence without secrets, and promote discovered bugs into deterministic tests. |
+| G10 | Hermes parity | Harness | P0 | Partial | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md` is the source-grounded Hermes-vs-Lemon feature matrix, refreshed against `/home/z80/dev/hermes-agent` `origin/main` at `dd0923bb8`. `docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md` maps Lemon Telegram and Discord commands against Hermes messaging slash commands. `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` tracks substantial harness work, including tool lifecycle, memory, skills, delegation, safety, and live-model slices. Provider-backed live eval now passes against Z.ai `glm-5-turbo`. Discord bot-to-bot live proof now passes for exact prompt/reply, markdown/code, long-output chunking, tool success/failure rendering, and text-file attachment delivery. The matrix explicitly keeps ACP/API server parity, automatic rollback, multi-backend terminal execution, browser/multimodal tools, plugin ecosystem breadth, and external memory-provider parity outside stable 1.0 claims unless promoted later. | Public release artifact proof is tracked separately under release readiness. Telegram and Discord text-first support are live-proven for the stated boundary; Lemon still does not claim Hermes drop-in command parity for 1.0. | Keep bounded support language intact, keep deterministic plus live-model evals green, and do not expand Hermes/Discord channel claims beyond the live-proven support boundary. |
+| G11 | UI and live-channel reliability | Interfaces / Support | P0 | Partial | `docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md` records broad TUI, Web, control-plane, and supportability APIs. `docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md` records TUI/Web source-runtime proofs and Telegram live proof for `/cwd`, progress rendering, prompt round trip, bare `/cancel`, approval-button resolution, invalid-model errors, 2026-05-12 DM recovery from an interrupted persisted tool call, Telegram forum-topic routing in Lemonade Stand topic `35`, overlapping forum-topic isolation for topics `35` and `16456`, topic-scoped cancellation, successful and failing tool-status rendering, markdown/code rendering, group-topic approval-button resolution in topic `35`, long-output chunking inside topic `35`, `/file get` document delivery in topic `35`, and restart/dedupe behavior in topic `35`. `scripts/live_telegram_matrix.py --timeout 90` now provides a repeatable credential-backed DM/topic runner and passed on 2026-05-12. The topic-isolation, topic-cancel, topic-tool-rendering/markdown, topic-approval, topic-long-output, topic-file-get, and topic-restart/dedupe runner variants also passed on 2026-05-12. `scripts/live_discord_matrix.py --manual-matrix --sender-bot-token-index 1 --reset-session-between-checks` passed on 2026-05-12 and produced `tmp/discord-live-proof.json`. | Telegram is live-proven for the text-first plus document-delivery 1.0 boundary. Discord is live-proven for the text-first plus file-delivery support boundary through second-bot inbound messages; DM/thread workflows, slash-command breadth, voice, and richer media remain outside stable claims. | Keep the live proof scripts and deterministic regressions current, and promote any newly discovered live-channel bugs into focused tests. |
 | G12 | Fresh install proof | Runtime / Docs | P0 | Partial | `docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md` records a clean source-copy install proof with isolated `HOME`, `MIX_HOME`, and `HEX_HOME`; `mix deps.get`, `mix compile`, and `mix lemon.doctor --bundle` completed with no doctor failures. It also records a clean Docker source-install proof on the current supported toolchain, Elixir 1.19.5 / Erlang/OTP 28, using `elixir:1.19.5-otp-28`; `mix deps.get`, `mix compile`, and `mix lemon.doctor --bundle` completed with no doctor failures. The simulator UI Dockerfile now builds on the current Hex.pm Elixir/OTP image, `hexpm/elixir:1.19.5-erlang-28.5-debian-bookworm-20260505`, and `docker manifest inspect` confirmed that image tag exists. The same proof file now records isolated `mix lemon.setup --non-interactive`, `mix lemon.setup runtime --profile runtime_min`, and fake-token `mix lemon.setup provider` checks for Anthropic and OpenAI; the runtime check found and fixed a stale release command, now covered by setup task tests. `docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md` records refreshed `2026.05.0` local tarball proofs for `lemon_runtime_min` and `lemon_runtime_full`: checksum verified, extracted runtime booted, `/healthz` returned ok, and release `eval` generated a support bundle. Setup docs now include `mix local.hex --force`, real `mix lemon.setup` / `mix lemon.secrets.*` commands, an OpenAI-compatible endpoint example, and prerequisites updated to Elixir 1.19.5, Erlang/OTP 28.5, and Node.js 24 LTS. `gh release list --limit 10` returned no public releases on 2026-05-11 and again on 2026-05-12, so downloaded artifact proof is not yet possible. | Public GitHub Release artifact download proof is still missing. | Publish a release, then rerun artifact proof against downloaded public release artifacts before stable 1.0. |
 | G13 | Security posture | Security / Docs | P0 | Done for initial 1.0 scope | `SECURITY.md`, `docs/security/agent-safety-contract.md`, and `docs/security/safety.md` exist. The public safety page explains Lemon's local-first safety model, recommended approval defaults, secrets handling, high-risk operations, support-bundle redaction, and vulnerability reporting. The parity scorecard tracks tool policies, approvals, memory screening, skill audit, and untrusted boundaries. Deterministic prompt-injection coverage now spans web fetch output, inbound email prompts, skill prompt rendering, and generic untrusted extension-style tool results. | Broader adversarial prompt-injection variant depth remains post-1.0 hardening work. | Keep the launch-focused safety tests green and add deeper adversarial variants after 1.0. |
-| G14 | Release channel support | Release / Support | P1 | Partial | `docs/release/versioning_and_channels.md` defines stable, preview, and nightly channels. `docs/release/release_checklist_and_support_policy.md` now defines the release-candidate checklist, tag/publish checklist, rollback checklist, initial support matrix, and support boundaries. `.github/workflows/release.yml` publishes `manifest.json` with artifact sizes and SHA-256 checksums, verifies the assembled artifact directory before publishing, requires matched release files, and the `verify-published-artifacts` job downloads the published GitHub Release assets and runs `scripts/verify_github_release_artifacts`. `scripts/verify_release_artifacts` verifies manifest entries against downloaded files. `scripts/verify_release_runtime_boot` verifies manifest/checksums, extracts both runtime profiles, boots them without Mix, checks health, and generates support bundles. `scripts/verify_github_release_artifacts` downloads a GitHub Release's Linux `x86_64` artifacts and manifest, then runs the runtime boot verifier. `.github/workflows/live-eval.yml` provides a manual release-candidate live-model eval lane on Elixir 1.19.5 / Erlang/OTP 28.5. `scripts/audit_1_0_readiness` wraps the final release-candidate audit for version metadata, release notes, CI/docs policy, canonical local test lanes, docs-site verification, local artifact manifest/runtime boot verification, public GitHub Release artifact verification/runtime boot, provider-backed live eval, and Discord non-bot manual live proof JSON. `scripts/prepare_release_notes` now blocks publishing unless the target version has a useful Keep a Changelog-style section for the GitHub Release body. `scripts/lint_ci_docs.sh` now fails if first-party version metadata drifts from `mix.exs`, published-artifact verification is removed from release automation, first-party BEAM toolchain pins drift from Elixir 1.19.5 / OTP 28.5, docs-site verification or canonical local test lanes fall out of the final readiness audit, the manual live-eval workflow is missing, not manual-only, disconnected from `scripts/test live-eval`, or undocumented, or the final audit stops requiring documented Discord non-bot live proof. `CHANGELOG.md` has a `## [2026.05.0]` release section, `scripts/prepare_release_notes 2026.05.0` passes, and the release workflow uses that version-specific section for the GitHub Release body. `gh release list --limit 10` returned no public releases on 2026-05-11 and again on 2026-05-12. | Release automation still needs a downloaded-public-artifact proof before stable 1.0. Remote binary update remains out of 1.0 scope. | Publish a GitHub Release and confirm the `verify-published-artifacts` job plus `scripts/verify_github_release_artifacts {tag-or-version}` pass before stable 1.0. Keep release notes versioned before tagging. |
+| G14 | Release channel support | Release / Support | P1 | Partial | `docs/release/versioning_and_channels.md` defines stable, preview, and nightly channels. `docs/release/release_checklist_and_support_policy.md` now defines the release-candidate checklist, tag/publish checklist, rollback checklist, initial support matrix, and support boundaries. `.github/workflows/release.yml` publishes `manifest.json` with artifact sizes and SHA-256 checksums, verifies the assembled artifact directory before publishing, requires matched release files, and the `verify-published-artifacts` job downloads the published GitHub Release assets and runs `scripts/verify_github_release_artifacts`. `scripts/verify_release_artifacts` verifies manifest entries against downloaded files. `scripts/verify_release_runtime_boot` verifies manifest/checksums, extracts both runtime profiles, boots them without Mix, checks health, and generates support bundles. `scripts/verify_github_release_artifacts` downloads a GitHub Release's Linux `x86_64` artifacts and manifest, then runs the runtime boot verifier. `.github/workflows/live-eval.yml` provides a manual release-candidate live-model eval lane on Elixir 1.19.5 / Erlang/OTP 28.5. `scripts/audit_1_0_readiness` wraps the final release-candidate audit for version metadata, release notes, CI/docs policy, canonical local test lanes, docs-site verification, local artifact manifest/runtime boot verification, public GitHub Release artifact verification/runtime boot, provider-backed live eval, and Discord external-sender manual live proof JSON. `scripts/prepare_release_notes` now blocks publishing unless the target version has a useful Keep a Changelog-style section for the GitHub Release body. `scripts/lint_ci_docs.sh` now fails if first-party version metadata drifts from `mix.exs`, published-artifact verification is removed from release automation, first-party BEAM toolchain pins drift from Elixir 1.19.5 / OTP 28.5, docs-site verification or canonical local test lanes fall out of the final readiness audit, the manual live-eval workflow is missing, not manual-only, disconnected from `scripts/test live-eval`, or undocumented, or the final audit stops requiring documented Discord external-sender live proof. `CHANGELOG.md` has a `## [2026.05.0]` release section, `scripts/prepare_release_notes 2026.05.0` passes, and the release workflow uses that version-specific section for the GitHub Release body. `gh release list --limit 10` returned no public releases on 2026-05-11 and again on 2026-05-12. | Release automation still needs a downloaded-public-artifact proof before stable 1.0. Remote binary update remains out of 1.0 scope. | Publish a GitHub Release and confirm the `verify-published-artifacts` job plus `scripts/verify_github_release_artifacts {tag-or-version}` pass before stable 1.0. Keep release notes versioned before tagging. |
 | G15 | Dependency audit | Docs / Security | P1 | Done for initial 1.0 scope | `npm audit --json` in `docs/` reports three moderate advisories in `vitepress -> vite -> esbuild`, no high or critical advisories, and `fixAvailable: false`. `docs/release/release_checklist_and_support_policy.md` now defines the dependency audit policy: high/critical runtime or docs-tooling advisories block release candidates; moderate docs-build tooling advisories are accepted only when they do not ship in runtime tarballs, static docs build succeeds, link checking succeeds, there is no safe available fix, and the finding is recorded in the launch ledger. `.github/workflows/docs-site.yml` runs `npm audit --audit-level=high` after installing docs dependencies. | The accepted advisories can still be fixed later when VitePress publishes a safe dependency chain. | Revisit before public docs launch or when a safe VitePress/Vite/esbuild fix becomes available. |
-| G16 | Live channel launch proof | Harness / Channels | P0 | Partial | Telegram and Discord adapters, delivery modules, and support docs exist. Telegram delivery supports topic/thread IDs. Fresh 2026-05-12 live proof covers DM recovery from an interrupted persisted tool call, a Lemonade Stand forum-topic prompt/reply in topic `35`, overlapping topic isolation across topics `35` and `16456`, topic-scoped cancellation of a long-running tool call in topic `35`, successful and failing tool-status rendering, markdown/code rendering, approval-button resolution in forum topic `35`, long-output chunking in forum topic `35`, `/file get` document delivery in forum topic `35`, and restart/dedupe behavior in forum topic `35`. `scripts/live_telegram_matrix.py --timeout 90` passed the repeatable DM/topic runner on 2026-05-12; the topic-isolation, topic-cancel, topic-tool-rendering/markdown, topic-approval, topic-long-output, topic-file-get, and topic-restart/dedupe variants also passed on 2026-05-12. `scripts/live_discord_matrix.py` discovers the established Discord guild/channel and can wait for a non-bot user inbound proof; the bot API smoke passed for `general` `1475727417372049419` but is only diagnostic. | Stable launch needs broader real-world channel proof, not just deterministic adapter tests or a narrow happy path. Telegram's text-first plus document-delivery boundary is live-proven. Broader rich-media upload/image proof remains required only if launch claims go beyond that boundary. Discord still needs the non-bot inbound prompt/reply check to pass. | Execute the Discord live-channel suite under established credentials before claiming stable Discord support. |
+| G16 | Live channel launch proof | Harness / Channels | P0 | Partial | Telegram and Discord adapters, delivery modules, and support docs exist. Telegram delivery supports topic/thread IDs. Fresh 2026-05-12 live proof covers DM recovery from an interrupted persisted tool call, a Lemonade Stand forum-topic prompt/reply in topic `35`, overlapping topic isolation across topics `35` and `16456`, topic-scoped cancellation of a long-running tool call in topic `35`, successful and failing tool-status rendering, markdown/code rendering, approval-button resolution in forum topic `35`, long-output chunking in forum topic `35`, `/file get` document delivery in forum topic `35`, and restart/dedupe behavior in forum topic `35`. `scripts/live_telegram_matrix.py --timeout 90` passed the repeatable DM/topic runner on 2026-05-12; the topic-isolation, topic-cancel, topic-tool-rendering/markdown, topic-approval, topic-long-output, topic-file-get, and topic-restart/dedupe variants also passed on 2026-05-12. Discord bot-to-bot proof passed in Lemonade Stand `general` `1475727417372049419` with `scripts/live_discord_matrix.py --manual-matrix --sender-bot-token-index 1 --reset-session-between-checks --result-path tmp/discord-live-proof.json`. | Stable launch still needs broader real-world proof only if claims expand beyond the current text-first plus file/document-delivery boundary. Telegram and Discord are live-proven for that stated boundary; richer media, voice, broad slash-command parity, Discord DMs, and Discord thread workflows remain outside stable claims. | Keep channel claims bounded and rerun both live matrices for release candidates. |
 
 ## Hermes Parity Launch Classification
 
@@ -967,7 +978,7 @@ channel reliability are proven directly, especially over Telegram and Discord.
 | Memory and session recall | Green for Lemon 1.0 boundary | Hermes `USER.md` and external memory-provider semantics differ; Lemon run memory, durable topics, and workspace memory-file lookup are covered by deterministic and provider-backed live evals. | P1 for Hermes external-provider/user-profile semantics. | Keep memory selection and session recall evals in release-candidate validation. |
 | Delegation and orchestration | Green for Lemon 1.0 boundary | Broader Hermes background-session breadth remains future parity work. | P1 for broader long-running orchestration breadth. | Keep deterministic and live-model delegation evals in release-candidate validation. |
 | Cron and durable background jobs | Partial; medium-high priority | Recursive model-facing scheduling is structurally blocked, but non-tool API entrypoints remain operator-controlled. | P1 accepted-preview only if Hermes matrix confirms this is not launch-critical and docs are explicit. | Keep documented support boundary current and blocked-tool evals green. |
-| Messaging and native delivery | Partial / strong foundation; medium priority | Telegram now has direct DM, forum-topic, topic isolation, cancellation, approval, markdown, tool-status, long-output, document delivery, and restart/dedupe evidence for the text-first 1.0 boundary. Discord lacks stable live proof. | P0 for Discord. Telegram can be marketed only for the proven text-first plus document-delivery boundary. | Execute the Discord live-channel suite under established credentials. |
+| Messaging and native delivery | Partial / strong foundation; medium priority | Telegram now has direct DM, forum-topic, topic isolation, cancellation, approval, markdown, tool-status, long-output, document delivery, and restart/dedupe evidence for the text-first 1.0 boundary. Discord now has bot-to-bot evidence for exact prompt/reply, markdown/code, long-output chunking, tool success/failure rendering, and text-file attachment delivery in the configured Lemonade Stand channel. | Green for bounded text-first/file delivery; P1 for broader Hermes messaging breadth. | Keep both live matrices green and keep richer media, voice, DM/thread, and broad slash-command claims out of stable 1.0 unless separately proven. |
 | Browser/web/media tools | Bounded for stable 1.0 | First-party text web search/fetch is supported; first-class browser automation, generated media, image analysis, and TTS/voice are preview or out of scope unless promoted by release notes. | P1/post-1.0 unless public claims expand. | Keep public support language explicit and do not market browser/multimodal parity for 1.0. |
 | Safety, approvals, and untrusted content | Done for initial safety slices; broader hardening remains | Telegram approval and tool-failure rendering now have direct live topic proof. Discord approval behavior and broader untrusted-content boundaries across real channel surfaces still need parity confirmation. | P0 for remaining channel safety flows; P1 for broader adversarial depth. | Keep launch-focused safety tests green and add live Discord approval/failure proof if Discord is promoted to stable. |
 | Observability and dogfood loop | Strong initial support scope; richer metrics remain post-1.0 | `/ops` and `/ops/runs/:run_id` cover many support needs, but live channel failures must be diagnosable from captured evidence and support bundles. | P1 unless the Hermes matrix or live testing exposes a P0 supportability gap. | Keep browser proof/supportability tests green and add channel-run evidence to the proof pack. |
@@ -979,9 +990,11 @@ Current parity decision:
 - Direct Telegram and Discord reliability proof is part of the harness goal, not
   a later support nicety. Telegram group chats and forum topics are explicitly
   in scope for the launch gate.
-- Stable 1.0 should not claim first-class browser automation, media generation,
-  rich media channel delivery, Discord support, or Telegram group/topic support
-  until those surfaces are implemented, tested, and proven live.
+- Stable 1.0 can claim only the live-proven Telegram and Discord text-first
+  support boundaries. It should not claim first-class browser automation, media
+  generation, rich media channel delivery, Discord DMs/threads, or Hermes-style
+  slash-command breadth until those surfaces are implemented, tested, and
+  proven live.
 - Public release artifacts, website copy, and release notes are downstream once
   parity and reliability evidence is green.
 - Werewolf and Vending Bench 2.0 are now explicit product missions. Do not claim
@@ -1106,7 +1119,7 @@ Deliverables:
 - credential-backed Telegram live matrix for DM, group chat, forum topics,
   topic isolation, cancellation, approvals, tool rendering, long output,
   document delivery, and restart/dedupe
-- credential-backed Discord live matrix for non-bot inbound prompt/reply,
+- credential-backed Discord live matrix for external-sender inbound prompt/reply,
   markdown/code rendering, long-output chunking, tool success/failure markers,
   file delivery, and the stable channel/thread boundary
 
@@ -1126,7 +1139,7 @@ Deliverables:
 - web observability panels
 - Telegram command/error polish
 - Telegram DM/group/forum-topic polish from live evidence
-- Discord channel/thread polish from non-bot inbound evidence
+- Discord channel/thread polish from external-sender inbound evidence
 - media/channel rendering docs and tests
 - browser tool product decision
 
@@ -1237,7 +1250,7 @@ Exit criteria:
 - [x] Telegram direct-message live reliability matrix passes for the text-first 1.0 boundary.
 - [x] Telegram group-chat live reliability matrix passes through the Lemonade Stand forum-topic group boundary.
 - [x] Telegram forum-topic live reliability matrix passes for the text-first plus document-delivery 1.0 boundary, including topic isolation, cancellation, approval, markdown/code, tool success/failure, long-output, document delivery, and restart/dedupe.
-- [ ] Discord live reliability matrix passes for the supported stable boundary. Bot API discovery/smoke is recorded; non-bot user inbound prompt/reply remains open.
+- [x] Discord live reliability matrix passes for the supported text-first plus file-delivery boundary with second-bot inbound messages in Lemonade Stand `general`.
 - [x] Web UI shows tool failures.
 - [x] Web UI shows subagent tree.
 - [x] Web UI shows approvals.
@@ -1303,7 +1316,7 @@ Exit criteria:
   docs-site verification, local artifact manifest and runtime boot
   verification, public GitHub Release artifact verification and boot, and
   provider-backed live eval. It now also requires
-  `LEMON_DISCORD_LIVE_PROOF_JSON` to point at a passing Discord non-bot manual
+  `LEMON_DISCORD_LIVE_PROOF_JSON` to point at a passing Discord external-sender manual
   matrix result JSON before claiming Hermes-channel readiness.
 - `.github/workflows/release.yml` now has a `verify-published-artifacts` job
   that depends on publication, downloads the GitHub Release assets, and runs
@@ -1377,9 +1390,9 @@ Exit criteria:
 - 1.0 install support is scoped to source install plus verified Linux `x86_64`
   tarballs. A one-line remote install script is not part of the initial support
   promise.
-- Telegram is the stable remote channel for text-first agent runs. Discord,
-  X/Twitter, XMTP, SMS, voice, and other channel adapters remain preview unless
-  promoted by release notes.
+- Telegram and Discord are stable remote channels for the live-proven text-first
+  plus file/document-delivery boundary. X/Twitter, XMTP, SMS, voice, and other
+  channel adapters remain preview unless promoted by release notes.
 - Hermes comparison is public as a scorecard/readiness reference, not as a
   blanket drop-in compatibility claim beyond the supported 1.0 feature boundary.
 - `mix lemon.update` remains stage-1 only for 1.0: version reporting, config
@@ -1400,15 +1413,12 @@ Exit criteria:
 These should block a 1.0 stable release:
 
 - There is no public GitHub Release yet, so `scripts/verify_github_release_artifacts {tag-or-version}` cannot complete the downloaded artifact proof.
-- Discord still lacks a passing non-bot live inbound proof JSON. Bot-token
-  channel discovery and bot API smoke prove token/channel reachability only;
-  Discord remains preview until a user-side message creates a Lemon run and
-  receives a same-channel reply through the established Discord test method.
 - Any future regression in these already-closed gates should reopen the launch
   blocker: fresh install first run, packaged release boot, product smoke,
   setup/doctor clarity, README/website truth, approval defaults, support-bundle
-  redaction, primary-interface happy paths, support path coverage, and release
-  artifact checksum/runtime boot verification.
+  redaction, primary-interface happy paths, support path coverage, Telegram and
+  Discord live matrix proof, and release artifact checksum/runtime boot
+  verification.
 
 ## Acceptable 1.0 Gaps
 
@@ -1528,14 +1538,12 @@ Qualitative:
 ## Open Decisions
 
 No local launch-positioning decisions are currently open. The remaining launch
-work is evidence collection: Discord non-bot proof and public release artifact
-proof.
+work is evidence collection for public release artifact proof.
 
 ## Recommended Next Step
 
-Run the Discord non-bot manual matrix with a real user sender and save
-`tmp/discord-live-proof.json`, publish the `v2026.05.0` GitHub Release after
-maintainer approval, watch the specific release workflow run with
+Publish the `v2026.05.0` GitHub Release after maintainer approval, watch the
+specific release workflow run with
 `gh run watch {run-id} --exit-status`, run
 `scripts/verify_github_release_artifacts 2026.05.0`, rerun live eval only if
 code, prompts, tools, or provider configuration change, then rerun

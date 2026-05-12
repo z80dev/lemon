@@ -23,7 +23,7 @@ completing:
 - installability and setup
 - Hermes-class feature and reliability parity for the accepted stable scope
 - packaging and release artifacts
-- TUI, Web, and Telegram interface readiness
+- TUI, Web, Telegram, and bounded Discord interface readiness
 - public website and docs
 - deterministic and live-model testing
 - supportability, diagnostics, and support policy
@@ -51,22 +51,22 @@ external release evidence:
    success/failure rendering, long-output chunking, and `/file get` document
    delivery, and restart/dedupe behavior. Telegram's text-first plus document
    delivery boundary is now live-proven.
-3. Direct Discord live testing must pass for the supported stable boundary, or
-   Discord must remain preview in all launch claims. Bot credential/channel
-   discovery and bot API smoke now pass through the established credentials file
-   with `DISCORD_BOT_TOKEN` unset, but the required non-bot user inbound
-   prompt/reply proof is still open.
+3. Direct Discord live testing now passes for the supported text-first and
+   file-delivery boundary. Bot credential/channel discovery, bot API smoke, and
+   the second-bot manual matrix all pass through the established credentials
+   file with `DISCORD_BOT_TOKEN` unset.
 4. Browser/media/TTS/vision and multi-backend terminal parity must be either
    implemented and proven or explicitly kept out of stable launch claims.
 5. A public GitHub Release `v2026.05.0` must exist with published Linux
    `x86_64` artifacts and `manifest.json`, then
    `scripts/verify_github_release_artifacts 2026.05.0` must pass, including
    downloaded-artifact boot and support-bundle verification.
-6. Discord must have a passing non-bot live inbound proof JSON before Discord
-   can be promoted beyond preview.
+6. Discord behavior outside the proven text-first and file-delivery boundary
+   remains outside stable launch claims unless separately implemented and
+   proven.
 
-These cannot be completed from the local checkout without publishing a GitHub
-Release and completing the established user-side Discord proof method.
+The remaining launch blocker cannot be completed from the local checkout
+without publishing a GitHub Release.
 
 Toolchain status as of this audit:
 
@@ -87,12 +87,12 @@ Toolchain status as of this audit:
 | --- | --- | --- | --- |
 | Truth audit and gap ledger first | `docs/plans/lemon-1.0-mainstream-readiness.md` | Linked from README, docs index, VitePress navigation, and registered in `docs/catalog.exs` | Done |
 | Product claims are honest | `README.md`, `docs/index.md`, `docs/compare.md`, `docs/demo.md`, readiness ledger | `scripts/lint_ci_docs.sh`, `scripts/verify_docs_site` | Done |
-| Stable 1.0 support boundaries are explicit | `docs/support.md`, `docs/release/release_checklist_and_support_policy.md`, `docs/compare.md`, readiness ledger | Source install plus Linux tarballs; Telegram stable; preview channels, cron, browser/media, install script, hosted service, and remote update boundaries documented | Done |
+| Stable 1.0 support boundaries are explicit | `docs/support.md`, `docs/release/release_checklist_and_support_policy.md`, `docs/compare.md`, readiness ledger | Source install plus Linux tarballs; Telegram and Discord text-first/file boundaries stable; preview channels, cron, browser/media, install script, hosted service, and remote update boundaries documented | Done |
 | Fresh source install works | `docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md` | Isolated `mix deps.get`, `mix compile`, `mix lemon.doctor --bundle` proof | Done |
 | Setup path works | `mix lemon.setup`, `docs/user-guide/setup.md`, setup tests | Fresh setup proof and `scripts/test fast` | Done |
 | Provider setup documented and tested | setup docs, config docs, fake-token Anthropic/OpenAI setup proof | Fresh install proof and setup task tests | Done |
 | Supported toolchain is current | README, install docs, workflows, Dockerfile, lint script | Official sources checked on 2026-05-12; `scripts/lint_ci_docs.sh` enforces Elixir 1.19.5 / OTP 28.5 pins; clean container proof uses that pair | Done |
-| Hermes-class parity is credible for 1.0 | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`, `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` | The matrix is refreshed against Hermes `origin/main` at `dd0923bb8`; direct Telegram proof now covers the text-first plus document-delivery boundary, Discord has only bot API diagnostics, and browser/media, terminal-backend, ACP/API server, rollback, plugin, and supply-chain scope decisions remain open | Partial / launch-blocking |
+| Hermes-class parity is credible for 1.0 | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`, `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` | The matrix is refreshed against Hermes `origin/main` at `dd0923bb8`; direct Telegram proof covers the text-first plus document-delivery boundary, Discord proof covers the text-first plus file-delivery boundary, and browser/media, terminal-backend, ACP/API server, rollback, plugin, and supply-chain scope decisions remain outside stable claims unless promoted later | Partial / bounded for launch |
 | Packaging builds local artifacts | `docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md` | Local `mix release` min/full, extracted boot, `/healthz`, support bundle | Done locally |
 | Manifest verifies checksums | `scripts/verify_release_artifacts`, local artifact manifest | `scripts/verify_release_artifacts /tmp/lemon-release-artifact-proof-2026-05-0/artifacts` | Done locally |
 | Release artifacts boot from tarballs | `scripts/verify_release_runtime_boot`, local artifact manifest | Extracts min/full tarballs, boots daemons, checks health, generates support bundles | Done locally |
@@ -133,7 +133,7 @@ scripts/live_telegram_matrix.py --skip-dm --skip-topic --topic-restart-seed --re
 scripts/live_telegram_matrix.py --skip-dm --skip-topic --topic-restart-verify --restart-topic-id 35 --restart-nonce lemon-restart-seed-35-1778604398 --restart-reply-id 16685 --timeout 35
 scripts/live_discord_matrix.py --list-channels
 scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-api-smoke
-scripts/live_discord_matrix.py --channel-id 1475727417372049419 --manual-matrix --timeout 180
+scripts/live_discord_matrix.py --channel-id 1475727417372049419 --bot-token-index 0 --sender-bot-token-index 1 --manual-matrix --reset-session-between-checks --timeout 300
 LEMON_EVAL_API_KEY_SECRET={local-zai-secret} LEMON_EVAL_PROVIDER=zai LEMON_EVAL_MODEL=glm-5-turbo LEMON_EVAL_API_TYPE=openai_completions LEMON_EVAL_BASE_URL=https://api.z.ai/api/coding/paas/v4 scripts/test live-eval
 ```
 
@@ -171,8 +171,8 @@ Current result:
   reported 31 checks passing and 0 failing against Z.ai `glm-5-turbo`
 - latest readiness audit rerun with `LEMON_EVAL_API_KEY_SECRET=llm_zai_api_key`:
   exit `66`, with `fast`, `quality`, `eval-fast`, `clients`, docs, local
-  artifact boot, and provider-backed live eval passing; only public GitHub
-  Release artifact proof and Discord non-bot manual proof remain launch blockers
+  artifact boot, provider-backed live eval, and Discord external-sender manual
+  proof passing; only public GitHub Release artifact proof remains launch-blocking
 - release-readiness changes still need a final commit and push after the
   remaining evidence blockers are closed
 - the final `HEAD` must be pushed to `main` before the release tag is created
@@ -187,13 +187,13 @@ The readiness audit confirmed:
 - fast, quality, eval-fast, and client lanes pass
 - docs site verifies
 - local artifacts verify and boot
+- provider-backed live eval passes
+- Discord external-sender manual live proof is present
 - remote preflight evidence is printed directly by the audit script
 
 The readiness audit remains blocked by:
 
 - missing public GitHub Release `v2026.05.0`
-- missing Discord non-bot manual live proof JSON
-- absent `LEMON_EVAL_API_KEY`, `INTEGRATION_API_KEY`, or `ANTHROPIC_API_KEY`
 
 ## Remote Publish Preflight
 
@@ -281,8 +281,8 @@ gh run list --workflow live-eval.yml --limit 5
 gh run watch {run-id} --exit-status
 ```
 
-Final stable readiness should be accepted only after the release artifact proof,
-Discord non-bot proof, and final readiness audit all pass.
+Final stable readiness should be accepted only after public release artifact
+proof and the final readiness audit pass.
 
 ## Goal Completion Gate
 
@@ -297,7 +297,7 @@ requires all of:
 - `scripts/test live-eval` passes locally with a real credential, or
   `.github/workflows/live-eval.yml` passes on GitHub with the intended release
   candidate ref
-- Discord non-bot manual live proof JSON passes and is supplied to the final
+- Discord external-sender manual live proof JSON passes and is supplied to the final
   readiness audit
 - `scripts/audit_1_0_readiness 2026.05.0 {downloaded-or-local-artifact-dir}`
   exits `0`

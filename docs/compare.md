@@ -26,7 +26,7 @@ knowing the repository.
 | Engine model | Multi-engine architecture rather than one model-provider path | [Model Selection](model-selection-decoupling.md), [Configuration](config.md) |
 | Harness behavior | Tool execution, approval, transcript, eval, and long-running run support | [Hermes Feature Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md), [Hermes Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md), [Testing](testing.md) |
 | Memory and skills | Durable context plus reusable task packs | [Memory Guide](user-guide/memory.md), [Skills Overview](skills.md) |
-| Interfaces | Terminal, Web, control plane, stable Telegram text-first support, and preview Discord/gateway adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
+| Interfaces | Terminal, Web, control plane, stable Telegram and Discord text-first support, and preview gateway adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
 | Operations | Doctor checks, support bundles, release profiles, smoke tests, and quality gates | [Release Checklist](release/release_checklist_and_support_policy.md), [Safety](security/safety.md) |
 
 ## 1.0 Reality Check
@@ -65,7 +65,7 @@ What is not yet a stable public promise:
 - broad clean-container or clean-VM install matrix
 - hosted service support
 - Windows-native support outside WSL experimentation
-- stable Discord support until the non-bot live matrix passes
+- Discord behavior beyond the live-proven text-first and file-delivery boundary
 - production support for third-party plugins or unofficial MCP servers
 
 ## When Lemon Is the Right Fit

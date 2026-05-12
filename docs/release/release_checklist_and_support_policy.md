@@ -99,18 +99,24 @@ Before cutting a stable release:
       isolation, cancellation, approval buttons, tool success/failure status,
       markdown/code rendering, long output, document delivery, and duplicate
       avoidance after restart.
-- [ ] For Hermes-parity readiness, run the non-bot manual Discord matrix and
+- [ ] For Hermes-parity readiness, run the external-sender manual Discord matrix and
       keep the result JSON for the final audit.
 
       ```bash
       scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
+        --bot-token-index 0 \
+        --sender-bot-token-index 1 \
         --manual-matrix \
-        --timeout 180 \
+        --reset-session-between-checks \
+        --timeout 300 \
         --result-path tmp/discord-live-proof.json
       ```
 
-      The prompts must be sent by a real non-bot Discord user. Bot API smoke,
-      bot-authored messages, and webhooks do not count as Lemon inbound proof.
+      The prompts must be sent by a human Discord user or the second Lemonade
+      Stand bot. Bot API smoke, self-authored responder messages, and webhooks
+      do not count as Lemon inbound proof.
+      Use `--reset-session-between-checks` with the second bot sender so each
+      check starts from a clean Discord session.
       The runner stops on the first failed manual check by default; do not use
       `--continue-on-failure` for release evidence.
 - [ ] Run `scripts/test clients`.
@@ -257,9 +263,9 @@ Supported for stable 1.0:
 - Installation from source on machines with supported Elixir/Erlang versions.
 - Linux `x86_64` release tarballs for `lemon_runtime_min` and `lemon_runtime_full`.
 - Provider configuration through documented secrets and setup paths.
-- TUI, web, Telegram, and control-plane issues that can be reproduced on a
+- TUI, web, Telegram, Discord, and control-plane issues that can be reproduced on a
   supported source install or Linux release artifact.
-- Discord, X/Twitter, XMTP, SMS, voice, and other channel adapters only as
+- X/Twitter, XMTP, SMS, voice, and other channel adapters only as
   preview surfaces unless promoted by release notes.
 - First-party text web search/fetch issues that can be reproduced in a
   supported agent run.
