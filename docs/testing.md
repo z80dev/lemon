@@ -109,7 +109,10 @@ scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
 
 The Discord bot API smoke is diagnostic only. Stable Discord requires a non-bot
 user-authored inbound prompt that creates a Lemon run and receives the expected
-reply in the same supported channel or thread.
+reply in the same supported channel or thread. The manual matrix prints one
+prompt at a time and stops on the first failed check by default, so each next
+prompt means the previous prompt was observed and validated. Use
+`--continue-on-failure` only when collecting diagnostic failure output.
 
 The manual GitHub workflow is:
 

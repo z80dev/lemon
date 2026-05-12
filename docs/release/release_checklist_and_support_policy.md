@@ -111,6 +111,8 @@ Before cutting a stable release:
 
       The prompts must be sent by a real non-bot Discord user. Bot API smoke,
       bot-authored messages, and webhooks do not count as Lemon inbound proof.
+      The runner stops on the first failed manual check by default; do not use
+      `--continue-on-failure` for release evidence.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.

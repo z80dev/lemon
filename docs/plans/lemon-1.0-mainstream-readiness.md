@@ -489,7 +489,10 @@ expected text in the same channel. The manual matrix extends that path with
 non-bot prompts for markdown/code rendering, long-output chunking, tool
 success/failure markers, and Discord attachment delivery. Discord remains
 preview unless the non-bot inbound path passes, because the adapter correctly
-ignores bot-authored messages and webhooks.
+ignores bot-authored messages and webhooks. The manual matrix stops on the
+first failed check by default so later prompts are printed only after earlier
+checks pass; `--continue-on-failure` is diagnostic-only and does not produce
+release evidence.
 
 Discord diagnostic result on 2026-05-12:
 

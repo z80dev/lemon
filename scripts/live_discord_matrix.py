@@ -464,6 +464,7 @@ def parser():
     root.add_argument("--wait-tool-rendering", action="store_true")
     root.add_argument("--wait-file-delivery", action="store_true")
     root.add_argument("--manual-matrix", action="store_true")
+    root.add_argument("--continue-on-failure", action="store_true")
     root.add_argument("--result-path", type=Path)
     root.add_argument("--timeout", type=int, default=120)
     return root
@@ -491,30 +492,39 @@ def main():
     if not args.channel_id:
         raise SystemExit("--channel-id is required unless --list-channels is used")
 
-    checks = []
+    selected = []
 
     if args.bot_api_smoke:
-        checks.append(run_bot_api_smoke(token, args.channel_id))
+        selected.append(lambda: run_bot_api_smoke(token, args.channel_id))
 
     if args.wait_user_inbound or args.manual_matrix:
-        checks.append(run_user_inbound_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(lambda: run_user_inbound_wait(token, args.channel_id, identity["id"], args.timeout))
 
     if args.wait_markdown or args.manual_matrix:
-        checks.append(run_markdown_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(lambda: run_markdown_wait(token, args.channel_id, identity["id"], args.timeout))
 
     if args.wait_long_output or args.manual_matrix:
-        checks.append(run_long_output_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(lambda: run_long_output_wait(token, args.channel_id, identity["id"], args.timeout))
 
     if args.wait_tool_rendering or args.manual_matrix:
-        checks.append(run_tool_rendering_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(lambda: run_tool_rendering_wait(token, args.channel_id, identity["id"], args.timeout))
 
     if args.wait_file_delivery or args.manual_matrix:
-        checks.append(run_file_delivery_wait(token, args.channel_id, identity["id"], args.timeout))
+        selected.append(lambda: run_file_delivery_wait(token, args.channel_id, identity["id"], args.timeout))
 
-    if not checks:
+    if not selected:
         raise SystemExit(
             "Select at least one check: --bot-api-smoke, --wait-user-inbound, --wait-markdown, --wait-long-output, --wait-tool-rendering, --wait-file-delivery, or --manual-matrix"
         )
+
+    checks = []
+
+    for run_check in selected:
+        check = run_check()
+        checks.append(check)
+
+        if args.manual_matrix and not args.continue_on_failure and not check["ok"]:
+            break
 
     result = {
         "ok": all(check["ok"] for check in checks),
