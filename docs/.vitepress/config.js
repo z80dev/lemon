@@ -39,6 +39,7 @@ export default {
           { text: "Interface Proof Pack", link: "/plans/lemon-1.0-interface-proof-pack-2026-05-11" },
           { text: "Hermes Feature Matrix", link: "/plans/lemon-hermes-feature-parity-matrix-2026-05-12" },
           { text: "Channel Command Matrix", link: "/plans/lemon-channel-command-parity-matrix-2026-05-12" },
+          { text: "LemonSim Platform Mission", link: "/plans/lemon-sim-platform-mission-2026-05-12" },
           { text: "Hermes Parity Scorecard", link: "/plans/lemon-hermes-agent-harness-parity-scorecard" },
         ],
       },

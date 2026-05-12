@@ -187,7 +187,10 @@ MIX_ENV=prod mix release lemon_runtime_full
 See [`docs/plans/lemon-1.0-mainstream-readiness.md`](docs/plans/lemon-1.0-mainstream-readiness.md)
 for the launch readiness goal, [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md)
 for the source-grounded Hermes feature comparison, and [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](docs/plans/lemon-hermes-agent-harness-parity-scorecard.md)
-for the harness contract ledger.
+for the harness contract ledger. See
+[`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](docs/plans/lemon-sim-platform-mission-2026-05-12.md)
+for the LemonSim platform mission covering watchable Werewolf and Vending Bench
+2.0.
 
 ---
 

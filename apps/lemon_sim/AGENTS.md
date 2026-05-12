@@ -6,12 +6,26 @@ LemonSim is a reusable simulation harness core for tool-first LLM agents. It is 
 
 Use this app when you need a fresh-context-per-decision loop backed by structured world state and compact historical context.
 
+The product mission is broader than test harnessing: LemonSim should become the
+BEAM-native platform for simulations people can watch, replay, and benchmark.
+Werewolf is the flagship watchable social-deduction game, and Vending Bench 2.0
+is the flagship nested operator/physical-worker business simulation. Keep
+`docs/plans/lemon-sim-platform-mission-2026-05-12.md` current when these
+mission targets change.
+
 ## Current Dogfood Examples
 
 - `LemonSim.Examples.TicTacToe` is the smallest end-to-end example.
 - `LemonSim.Examples.Skirmish` is the preferred dogfood case for more complex sims. It adds deterministic combat resolution, derived events, AP-based turn continuation, and turn advancement without making the core harness domain-specific.
 - `LemonSim.Examples.Poker` is a multi-hand no-limit hold'em example built around a pure table engine. It is the current reference for wrapping an existing deterministic game engine with LemonSim action-space/updater glue, private per-seat notes, visibility-aware projections, and benchmark-oriented performance summaries.
 - `LemonSim.Examples.Poker` also supports optional per-hand blind schedules, so short tournament-style runs can raise pressure without changing the core harness.
+- `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
+  social-deduction game: readable phases, hidden-information discipline,
+  replay/storyboard artifacts, and objective role/model metrics.
+- `LemonSim.Examples.VendingBench` is the Vending Bench 2.0 target: a full
+  30-day nested-agent business simulation with operator strategy, physical
+  worker execution, suppliers, inventory, demand, incidents, UI, replay, and
+  scorecard evidence.
 
 ## Key Files
 

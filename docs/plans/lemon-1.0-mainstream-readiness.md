@@ -28,6 +28,14 @@ is feature and reliability parity with Hermes for real daily agent work. Release
 machinery, website polish, and support process are downstream of that proof, not
 substitutes for it.
 
+The broader mission is also larger than "Hermes on BEAM." Lemon should become a
+BEAM-native platform for running, watching, replaying, and benchmarking agent
+simulations through `lemon_sim` and `lemon_sim_ui`. Werewolf should become a
+proper social-deduction game that is fun to watch, and Vending Bench 2.0 should
+become the flagship nested operator/worker business simulation. The operational
+mission plan lives in
+`docs/plans/lemon-sim-platform-mission-2026-05-12.md`.
+
 ## Product Goal
 
 Launch Lemon 1.0 as a mainstream-ready, self-hosted AI agent platform for
@@ -78,9 +86,22 @@ Parity means Lemon should have comparable behavior for:
 - direct Telegram and Discord operation under real credentials, including group
   chats, Telegram forum topics, and channel/thread routing
 
+Beyond Hermes parity, Lemon should have a differentiated simulation platform:
+
+- `lemon_sim` provides reusable contracts for domain state, events, action
+  spaces, projectors, updaters, tool-loop decisions, memory, replay, and
+  benchmark scoring.
+- Werewolf is the watchable social-deduction showcase, with live spectator
+  pacing, readable hidden-information reveals, replays, and objective
+  role/model metrics.
+- Vending Bench 2.0 is the nested-agent operations benchmark, with an operator,
+  physical worker, suppliers, inventory, demand, pricing, maintenance,
+  incidents, and a full scorecard.
+
 The existing parity scorecard remains the detailed harness ledger:
 
 - `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`
+- `docs/plans/lemon-sim-platform-mission-2026-05-12.md`
 
 This plan is broader. It combines parity with product readiness, packaging,
 website, support, testing, and release discipline.
@@ -963,6 +984,9 @@ Current parity decision:
   until those surfaces are implemented, tested, and proven live.
 - Public release artifacts, website copy, and release notes are downstream once
   parity and reliability evidence is green.
+- Werewolf and Vending Bench 2.0 are now explicit product missions. Do not claim
+  either as launch-complete until the simulation mission plan's watch/replay,
+  full-run, UI, test, and benchmark evidence exists.
 
 ## Docs-Site Audit Classification
 

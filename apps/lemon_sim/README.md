@@ -2,6 +2,15 @@
 
 Reusable simulation harness primitives for tool-first LLM agents.
 
+## Mission
+
+LemonSim should become a mature BEAM-native platform for running, watching,
+replaying, and benchmarking agent simulations. The flagship product targets are
+Werewolf as a watchable social-deduction game and Vending Bench 2.0 as a nested
+operator/physical-worker business simulation. See
+`../../docs/plans/lemon-sim-platform-mission-2026-05-12.md` for the current
+mission plan and acceptance criteria.
+
 ## Scope (Phase 0)
 
 Phase 0 establishes the small reusable core:
@@ -31,6 +40,12 @@ Phase 1 adds:
   visibility-aware projections, private note journaling, per-street hand
   history, optional per-hand blind schedules for tournament-style runs, and
   multi-hand chip-stack victory with benchmark stats.
+- `LemonSim.Examples.Werewolf` is the social-deduction showcase target for
+  readable live watching, replay storyboards, hidden-information boundaries,
+  and role-aware metrics.
+- `LemonSim.Examples.VendingBench` is the nested-agent operations benchmark
+  target for Vending Bench 2.0: operator strategy, physical-worker execution,
+  suppliers, inventory, demand, pricing, incidents, and objective scoring.
 
 Run them with:
 

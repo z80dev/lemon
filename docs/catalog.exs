@@ -354,6 +354,12 @@
     max_age_days: 30
   },
   %{
+    path: "docs/plans/lemon-sim-platform-mission-2026-05-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-12],
+    max_age_days: 30
+  },
+  %{
     path: "docs/user-guide/rollout.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
