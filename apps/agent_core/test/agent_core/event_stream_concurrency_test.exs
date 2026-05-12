@@ -310,7 +310,7 @@ defmodule AgentCore.EventStreamConcurrencyTest do
         Process.sleep(5)
         send(owner, :die)
 
-        {:error, {:canceled, :owner_down}} = Task.await(task, 500)
+        {:error, {:canceled, :owner_down}} = Task.await(task, 5_000)
       end
     end
   end
@@ -1036,13 +1036,9 @@ defmodule AgentCore.EventStreamConcurrencyTest do
       EventStream.attach_task(stream, task_pid)
       task_ref = Process.monitor(task_pid)
 
-      # Wait for timeout
-      Process.sleep(200)
-
-      # Stream should be dead
+      wait_until_dead(stream, System.monotonic_time(:millisecond) + 1_000)
       refute Process.alive?(stream)
 
-      # Task should be killed
       assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 500
     end
 

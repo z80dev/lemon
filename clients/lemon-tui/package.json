@@ -1,6 +1,6 @@
 {
   "name": "lemon-tui",
-  "version": "0.1.0",
+  "version": "2026.05.0",
   "description": "TUI client for Lemon coding agent",
   "type": "module",
   "main": "dist/App.js",
@@ -41,6 +41,6 @@
     "vitest": "^4.0.18"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   }
 }

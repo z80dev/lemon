@@ -9,12 +9,37 @@ export default {
   base: "/lemon/",
   themeConfig: {
     nav: [
-      { text: "User Guide", link: "/user-guide/setup" },
+      { text: "Home", link: "/" },
+      { text: "Install", link: "/install" },
+      { text: "Compare", link: "/compare" },
+      { text: "Demo", link: "/demo" },
+      { text: "Launch Plan", link: "/plans/lemon-1.0-mainstream-readiness" },
+      { text: "Support", link: "/support" },
       { text: "Architecture", link: "/architecture/overview" },
-      { text: "Operations", link: "/quality_harness" },
     ],
 
     sidebar: [
+      {
+        text: "Product",
+        items: [
+          { text: "Home", link: "/" },
+          { text: "Install", link: "/install" },
+          { text: "Compare", link: "/compare" },
+          { text: "Demo", link: "/demo" },
+          { text: "Support", link: "/support" },
+        ],
+      },
+      {
+        text: "Launch",
+        items: [
+          { text: "Lemon 1.0 Readiness", link: "/plans/lemon-1.0-mainstream-readiness" },
+          { text: "Fresh Install Proof", link: "/plans/lemon-1.0-fresh-install-proof-2026-05-11" },
+          { text: "Release Artifact Proof", link: "/plans/lemon-1.0-release-artifact-proof-2026-05-11" },
+          { text: "Interface Supportability Audit", link: "/plans/lemon-1.0-interface-supportability-audit-2026-05-11" },
+          { text: "Interface Proof Pack", link: "/plans/lemon-1.0-interface-proof-pack-2026-05-11" },
+          { text: "Hermes Parity Scorecard", link: "/plans/lemon-hermes-agent-harness-parity-scorecard" },
+        ],
+      },
       {
         text: "User Guide",
         items: [
@@ -42,9 +67,10 @@ export default {
         text: "Operations",
         items: [
           { text: "Configuration", link: "/config" },
-          { text: "Quality Harness", link: "/quality_harness" },
+          { text: "Testing", link: "/testing" },
           { text: "Extensions", link: "/extensions" },
           { text: "Versioning & Channels", link: "/release/versioning_and_channels" },
+          { text: "Release Checklist", link: "/release/release_checklist_and_support_policy" },
         ],
       },
       {
@@ -79,14 +105,15 @@ export default {
       {
         text: "Contributing",
         items: [
+          { text: "Safety", link: "/security/safety" },
           { text: "Security", link: "/security/secrets-migration-guide" },
-          { text: "Games Platform", link: "/games-platform" },
+          { text: "Public Repo Basics", link: "/contributor/public_repo_basics" },
         ],
       },
     ],
 
     socialLinks: [
-      { icon: "github", link: "https://github.com/z80/lemon" },
+      { icon: "github", link: "https://github.com/z80dev/lemon" },
     ],
 
     footer: {
@@ -99,7 +126,7 @@ export default {
     },
 
     editLink: {
-      pattern: "https://github.com/z80/lemon/edit/main/docs/:path",
+      pattern: "https://github.com/z80dev/lemon/edit/main/docs/:path",
       text: "Edit this page on GitHub",
     },
   },

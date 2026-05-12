@@ -379,8 +379,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     MockAPI.set_updates([
       group_message_update(chat_id, "/trigger mentions"),
-      topic_message_update(chat_id, topic_id, "/trigger all", msg_id + 1),
-      topic_message_update(chat_id, topic_id, "/trigger clear", msg_id + 2)
+      topic_message_update(chat_id, topic_id, "/trigger all", msg_id + 1)
     ])
 
     assert {:ok, _pid} =
@@ -401,6 +400,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert_eventually(fn ->
       TriggerMode.resolve("default", chat_id, topic_id).mode == :all
     end)
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, "/trigger clear", msg_id + 2)
+    ])
 
     assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
     assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 400
@@ -423,6 +426,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     config =
       %{
+        account_id: "default",
         bot_token: token,
         api_mod: MockAPI,
         poll_interval_ms: 10,

@@ -597,7 +597,7 @@ defmodule AgentCore.AgentTest do
       {:ok, agent} = start_agent(stream_fn: Mocks.mock_stream_fn_single(response))
 
       :ok = Agent.prompt(agent, "Structured input please")
-      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = Agent.wait_for_idle(agent, timeout: 5000)
 
       state = Agent.get_state(agent)
       user_messages = Enum.filter(state.messages, &match?(%Ai.Types.UserMessage{}, &1))
@@ -641,6 +641,8 @@ defmodule AgentCore.AgentTest do
     end
 
     test "returns error when already streaming" do
+      test_pid = self()
+      release_ref = make_ref()
       response = Mocks.assistant_message("Delayed")
 
       stream_fn = fn _model, _context, _options ->
@@ -648,7 +650,15 @@ defmodule AgentCore.AgentTest do
 
         Task.start(fn ->
           Ai.EventStream.push(stream, {:start, response})
-          Process.sleep(200)
+
+          send(test_pid, {:stream_started, release_ref, self()})
+
+          receive do
+            {:release_stream, ^release_ref} -> :ok
+          after
+            5_000 -> :ok
+          end
+
           Ai.EventStream.push(stream, {:done, response.stop_reason, response})
           Ai.EventStream.complete(stream, response)
         end)
@@ -659,9 +669,11 @@ defmodule AgentCore.AgentTest do
       {:ok, agent} = start_agent(stream_fn: stream_fn)
 
       :ok = Agent.prompt(agent, "Hi")
+      assert_receive {:stream_started, ^release_ref, stream_pid}, 1000
       assert {:error, :already_streaming} = Agent.prompt(agent, "Again")
+      send(stream_pid, {:release_stream, release_ref})
 
-      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = Agent.wait_for_idle(agent, timeout: 5000)
     end
   end
 
@@ -698,6 +710,8 @@ defmodule AgentCore.AgentTest do
     end
 
     test "returns error when already streaming" do
+      test_pid = self()
+      release_ref = make_ref()
       response = Mocks.assistant_message("Delayed")
 
       stream_fn = fn _model, _context, _options ->
@@ -705,7 +719,15 @@ defmodule AgentCore.AgentTest do
 
         Task.start(fn ->
           Ai.EventStream.push(stream, {:start, response})
-          Process.sleep(200)
+
+          send(test_pid, {:stream_started, release_ref, self()})
+
+          receive do
+            {:release_stream, ^release_ref} -> :ok
+          after
+            5_000 -> :ok
+          end
+
           Ai.EventStream.push(stream, {:done, response.stop_reason, response})
           Ai.EventStream.complete(stream, response)
         end)
@@ -716,9 +738,11 @@ defmodule AgentCore.AgentTest do
       {:ok, agent} = start_agent(stream_fn: stream_fn)
 
       :ok = Agent.prompt(agent, "Hi")
+      assert_receive {:stream_started, ^release_ref, stream_pid}, 1000
       assert {:error, :already_streaming} = Agent.continue(agent)
+      send(stream_pid, {:release_stream, release_ref})
 
-      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = Agent.wait_for_idle(agent, timeout: 5000)
     end
   end
 
@@ -741,7 +765,7 @@ defmodule AgentCore.AgentTest do
 
       :ok = Agent.prompt(agent, "Hi")
 
-      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = Agent.wait_for_idle(agent, timeout: 5000)
 
       state = Agent.get_state(agent)
       assert state.is_streaming == false
@@ -992,8 +1016,6 @@ defmodule AgentCore.AgentTest do
   describe "follow-up queue mode consumption" do
     test "one_at_a_time mode returns one message per call" do
       {:ok, agent} = start_agent(follow_up_mode: :one_at_a_time)
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
 
       state = :sys.get_state(agent)
 
@@ -1007,7 +1029,7 @@ defmodule AgentCore.AgentTest do
       Agent.follow_up(agent, Mocks.user_message("Follow 1"))
       Agent.follow_up(agent, Mocks.user_message("Follow 2"))
       Agent.follow_up(agent, Mocks.user_message("Follow 3"))
-      Process.sleep(10)
+      Agent.get_state(agent)
 
       # First call should return only 1 message
       result1 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
@@ -1027,8 +1049,6 @@ defmodule AgentCore.AgentTest do
 
     test "all mode returns all messages in single call" do
       {:ok, agent} = start_agent(follow_up_mode: :all)
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
 
       state = :sys.get_state(agent)
 
@@ -1042,7 +1062,7 @@ defmodule AgentCore.AgentTest do
       Agent.follow_up(agent, Mocks.user_message("Follow A"))
       Agent.follow_up(agent, Mocks.user_message("Follow B"))
       Agent.follow_up(agent, Mocks.user_message("Follow C"))
-      Process.sleep(10)
+      Agent.get_state(agent)
 
       # Should return all 3 messages at once
       result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
@@ -1053,8 +1073,6 @@ defmodule AgentCore.AgentTest do
 
     test "mode change takes effect on next consumption" do
       {:ok, agent} = start_agent(follow_up_mode: :one_at_a_time)
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
 
       state = :sys.get_state(agent)
 
@@ -1068,7 +1086,7 @@ defmodule AgentCore.AgentTest do
       Agent.follow_up(agent, Mocks.user_message("Msg 1"))
       Agent.follow_up(agent, Mocks.user_message("Msg 2"))
       Agent.follow_up(agent, Mocks.user_message("Msg 3"))
-      Process.sleep(10)
+      Agent.get_state(agent)
 
       # Consume one
       result1 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})

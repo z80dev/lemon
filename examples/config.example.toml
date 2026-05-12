@@ -9,6 +9,7 @@ api_key_secret = "anthropic_api_key"
 [providers.openai]
 api_key_secret = "openai_api_key"
 # api_key = "sk-..."  # plaintext fallback — discouraged
+# base_url = "http://127.0.0.1:11434/v1"  # optional OpenAI-compatible endpoint
 
 [providers.opencode]
 api_key_secret = "opencode_api_key"

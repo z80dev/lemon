@@ -383,29 +383,30 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {chat_id, thread_id} = extract_chat_ids(inbound)
     reply_to_id = inbound.message.reply_to_id || inbound.meta[:reply_to_id]
 
-    if is_integer(chat_id) and reply_to_id do
-      case Integer.parse(to_string(reply_to_id)) do
-        {progress_msg_id, _} ->
-          scope = %LemonCore.ChatScope{
-            transport: :telegram,
-            chat_id: chat_id,
-            topic_id: thread_id
-          }
+    if is_integer(chat_id) do
+      scope = %LemonCore.ChatScope{
+        transport: :telegram,
+        chat_id: chat_id,
+        topic_id: thread_id
+      }
 
-          session_key =
+      session_key =
+        case reply_to_id && Integer.parse(to_string(reply_to_id)) do
+          {progress_msg_id, _} ->
             lookup_session_key_for_reply(state, scope, progress_msg_id) ||
               build_session_key(state, inbound, scope)
 
-          if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
-            LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
-          end
+          _ ->
+            build_session_key(state, inbound, scope)
+        end
 
-          :ok
-
-        _ ->
-          :ok
+      if Code.ensure_loaded?(LemonChannels.Runtime) and
+           function_exported?(LemonChannels.Runtime, :cancel_session, 2) do
+        LemonChannels.Runtime.cancel_session(session_key, :user_requested)
       end
+
+      user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cancelling current run...")
     end
 
     state

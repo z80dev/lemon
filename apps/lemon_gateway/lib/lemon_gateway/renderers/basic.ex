@@ -164,7 +164,32 @@ defmodule LemonGateway.Renderers.Basic do
   end
 
   defp format_error(nil), do: ""
+
+  defp format_error({:gateway_run_down, {%module{} = exception, _stack}}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  defp format_error({:gateway_run_down, %module{} = exception}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  defp format_error({:gateway_run_down, reason}),
+    do: "gateway run exited: #{format_error(reason)}"
+
+  defp format_error({%module{} = exception, _stack}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  defp format_error(%module{} = exception) when is_atom(module),
+    do: format_exception_message(exception)
+
   defp format_error(error) when is_binary(error), do: error
   defp format_error(error) when is_atom(error), do: Atom.to_string(error)
   defp format_error(error), do: inspect(error)
+
+  defp format_exception_message(exception) do
+    case Exception.message(exception) do
+      message when is_binary(message) and message != "" -> message
+      _ -> inspect(exception)
+    end
+  rescue
+    _ -> inspect(exception)
+  end
 end

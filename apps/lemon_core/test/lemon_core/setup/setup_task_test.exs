@@ -53,6 +53,12 @@ defmodule LemonCore.Setup.SetupTaskTest do
       SetupTask.run_with_io(["runtime", "--profile", "runtime_min", "--non-interactive"], io)
       log = get_log.()
       assert Enum.any?(log, fn {_, msg} -> String.contains?(msg, "runtime_min") end)
+
+      assert Enum.any?(log, fn {_, msg} ->
+               String.contains?(msg, "mix release lemon_runtime_min")
+             end)
+
+      refute Enum.any?(log, fn {_, msg} -> String.contains?(msg, "mix release runtime_min") end)
     end
   end
 end

@@ -572,6 +572,7 @@ Default known engines: `lemon`, `echo`, `codex`, `claude`, `droid`, `opencode`, 
 `LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
 
 ```elixir
+LemonChannels.Runtime.cancel_session(session_key)
 LemonChannels.Runtime.cancel_by_run_id(run_id)
 LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
 LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
@@ -620,7 +621,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
 | `LemonChannels.EngineRegistry` | Compatibility resume-token parsing shim for custom gateway engines |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
-| `LemonChannels.Runtime` | Runtime bridge for cancel / keepalive / busy checks via `LemonCore.RouterBridge` |
+| `LemonChannels.Runtime` | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
 | `LemonChannels.Cwd` | Working directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
 

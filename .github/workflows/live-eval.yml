@@ -1,0 +1,78 @@
+name: Live Eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of live eval iterations"
+        required: false
+        default: "3"
+      live_timeout_ms:
+        description: "Per live-model eval timeout in milliseconds"
+        required: false
+        default: "90000"
+      provider:
+        description: "LEMON_EVAL_PROVIDER"
+        required: false
+        default: "kimi"
+      model:
+        description: "LEMON_EVAL_MODEL"
+        required: false
+        default: "kimi-for-coding"
+      base_url:
+        description: "LEMON_EVAL_BASE_URL"
+        required: false
+        default: "https://api.kimi.com/coding"
+      api_type:
+        description: "LEMON_EVAL_API_TYPE"
+        required: false
+        default: "anthropic_messages"
+
+permissions:
+  contents: read
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LEMON_EVAL_API_KEY: ${{ secrets.LEMON_EVAL_API_KEY }}
+      INTEGRATION_API_KEY: ${{ secrets.INTEGRATION_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LEMON_EVAL_ITERATIONS: ${{ inputs.iterations }}
+      LEMON_EVAL_PROVIDER: ${{ inputs.provider }}
+      LEMON_EVAL_MODEL: ${{ inputs.model }}
+      LEMON_EVAL_BASE_URL: ${{ inputs.base_url }}
+      LEMON_EVAL_API_TYPE: ${{ inputs.api_type }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-live-eval-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-live-eval-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run live eval
+        run: scripts/test live-eval --live-timeout-ms "${{ inputs.live_timeout_ms }}"

@@ -10,6 +10,7 @@ scripts/test fast
 scripts/test quality
 scripts/test clients
 scripts/test eval-fast
+scripts/test live-eval
 scripts/test smoke
 scripts/test all
 scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
@@ -21,8 +22,8 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `quality`: runs Lemon's lightweight policy/quality gates: `scripts/lint_ci_docs.sh`, `scripts/test_contract.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the focused quality/eval contract tests used by CI. `mix lemon.quality` already runs the duplicate test module guard internally.
 - `clients`: mirrors the client CI job for `clients/lemon-web`, `clients/lemon-tui`, and `clients/lemon-browser-node`: install dependencies when `node_modules` is absent, typecheck, lint, build, run coverage tests, and audit production dependencies.
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. The harness includes memory scope/topic contracts, relevant-skill prompt disclosure, scripted skill-curator behavior, async delegation joins, and child artifact verification contracts. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
-- Opt-in live model evals: run `mix lemon.eval --live-model` when you want provider-backed behavioral coverage outside CI. Configure with `LEMON_EVAL_API_KEY`, `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, and delegates parallel child work before answering.
-- `smoke`: documents the product-smoke lane and points at `.github/workflows/product-smoke.yml`. It exits successfully locally because the current product smoke builds and boots a release with CI assumptions.
+- `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `INTEGRATION_API_KEY`, or legacy `ANTHROPIC_API_KEY` is set. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, and delegates parallel child work before answering.
+- `smoke`: documents the product-smoke lane and points at `.github/workflows/product-smoke.yml`. It exits successfully locally because the current product smoke builds and boots a release with CI assumptions. The workflow builds a release, boots it, checks control-plane HTTP health, handshakes with the control-plane WebSocket protocol, calls `health`, submits a deterministic `echo` agent run, waits for it through `agent.wait`, checks the web health endpoint for the full runtime profile, verifies release support-bundle generation, lints built-in skills, and runs focused adaptive gate checks.
 - `all`: useful local aggregate for BEAM-centric pre-review confidence: `fast`, `quality`, `eval-fast`, then `smoke`. Run `clients` separately when client code or shared contracts changed.
 - `path`: pass-through to `mix test` for specific paths or ExUnit args, for example `scripts/test path apps/coding_agent/test --only some_tag`.
 
@@ -31,7 +32,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `fast` is the local counterpart for the CI umbrella test job's compile and `mix test --exclude integration` steps.
 - `quality` follows the repository quality job without the heavyweight WASM/integration loop. Use CI or targeted manual commands for `cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml` and WASM integration coverage.
 - `clients` follows the CI client job command order for each Node client.
-- `eval-fast` is intentionally smaller than CI's `mix lemon.eval --iterations 20` so developers can run it frequently. Live model evals are intentionally excluded from default local and CI lanes because they depend on external provider credentials and latency.
+- `eval-fast` is intentionally smaller than CI's `mix lemon.eval --iterations 20` so developers can run it frequently. `live-eval` is intentionally excluded from default local and push/PR CI lanes because it depends on external provider credentials and latency. Use `.github/workflows/live-eval.yml` for manual release-candidate live evals when repository secrets are configured.
 - `smoke` is CI-only until there is a stable local release-smoke wrapper; use the GitHub workflow for the full product smoke.
 
 ## Hermetic unit-test environment
@@ -40,7 +41,7 @@ The BEAM test lanes in `scripts/test` scrub ambient live credentials before runn
 
 Representative scrubbed variables include:
 
-- LLM/provider secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_GEMINI_CLI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `NOUS_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`.
+- LLM/provider secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_GEMINI_CLI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `NOUS_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`, `LEMON_EVAL_API_KEY`, `INTEGRATION_API_KEY`.
 - OAuth/CLI and secret-store material: `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `LEMON_SECRETS_MASTER_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
 - Platform/cloud credentials: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `TWILIO_AUTH_TOKEN`, X API credentials, XMTP wallet keys, Feishu/DingTalk tokens.
 
@@ -48,6 +49,31 @@ Live/integration runs that intentionally need real credentials must opt in expli
 
 ```bash
 LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/some_app/test --only integration
+scripts/test live-eval
+```
+
+The manual GitHub workflow is:
+
+```bash
+gh workflow run live-eval.yml \
+  --ref v2026.05.0 \
+  -f iterations=3 \
+  -f live_timeout_ms=90000
+gh run list --workflow live-eval.yml --limit 5
+gh run watch {run-id} --exit-status
+```
+
+Configure the workflow with the repository secret `LEMON_EVAL_API_KEY` or one of
+the accepted fallback secrets, `INTEGRATION_API_KEY` or `ANTHROPIC_API_KEY`.
+The workflow exposes provider/model/base URL/API type as dispatch inputs and
+runs the same `scripts/test live-eval` lane on Elixir 1.19.5 and Erlang/OTP
+28.5.
+
+To configure the preferred release-eval secret through GitHub CLI without
+printing the value in shell history:
+
+```bash
+gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon
 ```
 
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:

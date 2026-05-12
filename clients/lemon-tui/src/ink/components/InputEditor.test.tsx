@@ -125,6 +125,40 @@ describe('InputEditor', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('should abort on double Escape when busy', async () => {
+    const onAbort = vi.fn();
+    const store = createTestStore({ ready: true, cwd: '/test' });
+    store.handleEvent({ type: 'agent_start' }, 'session-1');
+    const { stdin } = renderWithContext(
+      <InputEditor onSubmit={vi.fn()} onAbort={onAbort} isFocused={true} />,
+      { store }
+    );
+    await delay();
+    stdin.write('\x1B');
+    await delay();
+    expect(onAbort).not.toHaveBeenCalled();
+    stdin.write('\x1B');
+    await delay();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it('should abort on double Ctrl+C when busy', async () => {
+    const onAbort = vi.fn();
+    const store = createTestStore({ ready: true, cwd: '/test' });
+    store.handleEvent({ type: 'agent_start' }, 'session-1');
+    const { stdin } = renderWithContext(
+      <InputEditor onSubmit={vi.fn()} onAbort={onAbort} isFocused={true} />,
+      { store }
+    );
+    await delay();
+    stdin.write('\x03');
+    await delay();
+    expect(onAbort).not.toHaveBeenCalled();
+    stdin.write('\x03');
+    await delay();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
+
   it('should handle backspace', async () => {
     const onSubmit = vi.fn();
     const store = createTestStore();

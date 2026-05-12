@@ -203,7 +203,9 @@ defmodule LemonCore.Runtime.Env do
     Application.put_env(
       :lemon_web,
       @lemon_web_endpoint,
-      Keyword.put(existing, :http, merged_http)
+      existing
+      |> Keyword.put(:server, true)
+      |> Keyword.put(:http, merged_http)
     )
   end
 

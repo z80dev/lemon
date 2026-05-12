@@ -24,6 +24,10 @@ api_key_secret = "llm_anthropic_api_key_raw"
 [providers.openai]
 api_key_secret = "OPENAI_API_KEY"
 
+# OpenAI-compatible local or hosted endpoint.
+# Store a placeholder secret such as "local" if the endpoint ignores API keys.
+# base_url = "http://127.0.0.1:11434/v1"
+
 [providers.opencode]
 api_key_secret = "OPENCODE_API_KEY"
 base_url = "https://opencode.ai/zen/v1"
@@ -284,6 +288,34 @@ The onboarding flow opens the OpenAI auth URL directly and stores the returned O
 To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
+
+## OpenAI-Compatible Endpoints
+
+For local or hosted services that expose an OpenAI-compatible API, configure the
+normal `openai` provider with a custom `base_url`:
+
+```toml
+[providers.openai]
+api_key_secret = "llm_local_openai_api_key"
+base_url = "http://127.0.0.1:11434/v1"
+
+[defaults]
+provider = "openai"
+model = "openai:local-model-name"
+engine = "lemon"
+```
+
+Then store the endpoint key:
+
+```bash
+mix lemon.secrets.set llm_local_openai_api_key "local"
+```
+
+The same provider config shape also works for hosted OpenAI-compatible provider
+ids handled by Lemon, including `opencode`, `openrouter`, `zai`, `minimax`,
+`kimi`, `xai`, `mistral`, `groq`, `deepseek`, `qwen`, and related compatible
+providers. Each provider gets its own `[providers.<id>]` table with
+`api_key_secret` and optional `base_url`.
 
 ## Provider Onboarding (CLI)
 

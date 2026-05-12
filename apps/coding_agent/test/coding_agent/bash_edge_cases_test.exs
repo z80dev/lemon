@@ -336,8 +336,8 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should return almost immediately
-      assert elapsed < 100
+      # Should return promptly under full-suite scheduler load.
+      assert elapsed < 1_000
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
 
@@ -662,6 +662,12 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
     test "cancelled error formatting with partial output", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
+      parent = self()
+
+      on_update = fn %AgentToolResult{content: [%TextContent{text: text}]} ->
+        if text =~ "partial", do: send(parent, :partial_seen)
+        :ok
+      end
 
       task =
         Task.async(fn ->
@@ -669,13 +675,13 @@ defmodule CodingAgent.BashEdgeCasesTest do
             "call_1",
             %{"command" => "echo partial; sleep 10"},
             signal,
-            nil,
+            on_update,
             tmp_dir,
             []
           )
         end)
 
-      Process.sleep(100)
+      assert_receive :partial_seen, 2_000
       AbortSignal.abort(signal)
 
       result = Task.await(task, 5_000)

@@ -1,5 +1,5 @@
-import {Socket} from "https://cdn.jsdelivr.net/npm/phoenix@1.8.1/priv/static/phoenix.esm.js"
-import {LiveSocket} from "https://cdn.jsdelivr.net/npm/phoenix_live_view@1.0.18/priv/static/phoenix_live_view.esm.js"
+import {Socket} from "/assets/vendor/phoenix.mjs"
+import {LiveSocket} from "/assets/vendor/phoenix_live_view.esm.js"
 
 const TAB_STORAGE_KEY = "lemon_web_tab_id"
 

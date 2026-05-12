@@ -84,16 +84,14 @@ defmodule CodingAgent.Mentions do
   """
   @spec extract_all(String.t()) :: [{String.t(), String.t()}]
   def extract_all(input) when is_binary(input) do
-    # Match @word patterns
     regex = ~r/@([a-zA-Z][a-zA-Z0-9_-]*)/
 
-    Regex.scan(regex, input)
-    |> Enum.map(fn [_full, name] ->
-      # Get everything after the mention
-      case String.split(input, "@#{name}", parts: 2) do
-        [_before, rest] -> {name, String.trim(rest)}
-        _ -> {name, ""}
-      end
+    Regex.scan(regex, input, return: :index)
+    |> Enum.map(fn [{match_start, match_length}, {name_start, name_length}] ->
+      name = binary_part(input, name_start, name_length)
+      rest_start = match_start + match_length
+      rest = binary_part(input, rest_start, byte_size(input) - rest_start)
+      {name, String.trim(rest)}
     end)
   end
 

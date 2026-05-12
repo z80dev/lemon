@@ -1,7 +1,9 @@
 name: Product Smoke
 
-# Validates the packaged runtime end-to-end: boots a release, runs lemon.doctor,
-# skill lint, memory-search probe, and adaptive-eval gate checks.
+# Validates the packaged runtime end-to-end: boots a release, checks HTTP/WebSocket
+# control-plane health, runs a deterministic echo agent through WebSocket,
+# checks the web endpoint for full profiles, runs skill lint, and exercises
+# adaptive-eval gate checks.
 # Complements release-smoke.yml (which focuses on assembly and boot only).
 
 on:
@@ -51,8 +53,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "27.2"
-          elixir-version: "1.19.0"
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4
@@ -121,9 +123,9 @@ jobs:
           echo "::error::Control-plane did not become healthy within 40 seconds."
           exit 1
 
-      # ── Doctor check ──────────────────────────────────────────────────────────
+      # ── Runtime health checks ─────────────────────────────────────────────────
 
-      - name: Run lemon.doctor (via HTTP)
+      - name: Check control-plane healthz
         run: |
           RESPONSE=$(curl -sS --max-time 5 \
             "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/healthz")
@@ -136,40 +138,156 @@ jobs:
               sys.exit(0)
           status = d.get('status', '')
           if status not in ('ok', 'degraded'):
-              print(f'::error::Doctor returned unexpected status: {status}')
+              print(f'::error::Healthz returned unexpected status: {status}')
               sys.exit(1)
-          print(f'Doctor status: {status}')
+          print(f'Healthz status: {status}')
           "
 
-      # ── Memory search probe ───────────────────────────────────────────────────
-
-      - name: Memory search probe
+      - name: Check control-plane WebSocket protocol
         run: |
-          # Calls the control-plane memory search endpoint.
-          # Expects a 200 response with a JSON body containing a `results` key.
-          RESPONSE=$(curl -sS --max-time 5 \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -d '{"query":"smoke test","limit":1}' \
-            "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT}/api/memory/search" 2>&1)
-          echo "Memory search response: $RESPONSE"
-          # Accept either a results array or a 404/501 if memory search is
-          # not enabled in this profile — we only fail on a 5xx or crash.
-          if echo "$RESPONSE" | grep -q '"error"'; then
-            ERR=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null || echo "")
-            if [ -n "$ERR" ] && ! echo "$ERR" | grep -qiE "not found|not enabled|disabled|unimplemented"; then
-              echo "::error::Memory search returned unexpected error: $ERR"
-              exit 1
-            fi
+          cat > /tmp/lemon_control_plane_ws_probe.exs <<'EOF'
+          defmodule LemonProductSmoke.WSProbe do
+            use WebSockex
+
+            def handle_frame({:text, frame}, parent) do
+              send(parent, {:ws_frame, frame})
+              {:ok, parent}
+            end
+
+            def handle_frame(_frame, parent), do: {:ok, parent}
+          end
+
+          url = System.fetch_env!("LEMON_CONTROL_PLANE_WS_URL")
+          parent = self()
+
+          {:ok, pid} = WebSockex.start_link(url, LemonProductSmoke.WSProbe, parent)
+
+          send_req = fn id, method, params ->
+            frame = Jason.encode!(%{
+              "type" => "req",
+              "id" => id,
+              "method" => method,
+              "params" => params
+            })
+
+            :ok = WebSockex.send_frame(pid, {:text, frame})
+          end
+
+          receive_matching = fn match, timeout_ms ->
+            deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+            receive_loop = fn receive_loop ->
+              remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+              receive do
+                {:ws_frame, frame} ->
+                  decoded = Jason.decode!(frame)
+
+                  if match.(decoded) do
+                    decoded
+                  else
+                    receive_loop.(receive_loop)
+                  end
+              after
+                remaining -> raise "timed out waiting for websocket response"
+              end
+            end
+
+            receive_loop.(receive_loop)
+          end
+
+          receive_response = fn id, timeout_ms ->
+            receive_matching.(fn frame -> frame["type"] == "res" and frame["id"] == id end, timeout_ms)
+          end
+
+          send_req.("connect-1", "connect", %{
+            "client" => %{
+              "id" => "product-smoke",
+              "name" => "Product Smoke"
+            }
+          })
+
+          hello =
+            receive_matching.(fn frame -> frame["type"] == "hello-ok" end, 5_000)
+
+          unless hello["type"] == "hello-ok" and is_list(hello["features"]["methods"]) and
+                   "health" in hello["features"]["methods"] do
+            raise "unexpected hello-ok frame: #{inspect(hello)}"
+          end
+
+          send_req.("health-1", "health", %{})
+          health = receive_response.("health-1", 5_000)
+
+          unless health["type"] == "res" and health["id"] == "health-1" and
+                   health["ok"] == true and health["payload"]["ok"] == true do
+            raise "unexpected health response: #{inspect(health)}"
+          end
+
+          prompt = "product-smoke-echo-#{System.unique_integer([:positive])}"
+
+          send_req.("agent-1", "agent", %{
+            "prompt" => prompt,
+            "engine_id" => "echo",
+            "session_key" => "agent:product-smoke:main",
+            "idempotency_key" => "product-smoke-#{System.system_time(:millisecond)}"
+          })
+
+          agent = receive_response.("agent-1", 5_000)
+
+          unless agent["ok"] == true and is_binary(agent["payload"]["run_id"]) do
+            raise "unexpected agent response: #{inspect(agent)}"
+          end
+
+          send_req.("agent-wait-1", "agent.wait", %{
+            "runId" => agent["payload"]["run_id"],
+            "timeoutMs" => 10_000
+          })
+
+          completed = receive_response.("agent-wait-1", 15_000)
+
+          unless completed["ok"] == true and completed["payload"]["ok"] == true and
+                   completed["payload"]["answer"] == "Echo: #{prompt}" do
+            raise "unexpected agent.wait response: #{inspect(completed)}"
+          end
+
+          IO.puts("control-plane websocket health and echo agent run ok")
+          EOF
+
+          MIX_ENV=prod mix run --no-start /tmp/lemon_control_plane_ws_probe.exs
+        env:
+          MIX_ENV: prod
+          LEMON_CONTROL_PLANE_WS_URL: ws://127.0.0.1:${{ env.LEMON_CONTROL_PLANE_PORT }}/ws
+
+      - name: Check web healthz for full profile
+        run: |
+          PROFILE="${{ matrix.profile }}"
+          if [ "$PROFILE" != "lemon_runtime_full" ]; then
+            echo "Skipping web health check for profile: $PROFILE"
+            exit 0
           fi
 
-      # ── Skill lint ────────────────────────────────────────────────────────────
+          RESPONSE=$(curl -sS --max-time 5 \
+            "http://127.0.0.1:${LEMON_WEB_PORT}/healthz")
+          echo "web healthz: $RESPONSE"
+          test "$RESPONSE" = "ok"
+
+      # ── Release supportability ────────────────────────────────────────────────
 
       - name: Stop release before Mix checks
         run: |
           if [ -n "$RELEASE_BIN" ] && [ -f "$RELEASE_BIN" ]; then
             "$RELEASE_BIN" stop || true
           fi
+
+      - name: Check release support bundle
+        run: |
+          BUNDLE_PATH="/tmp/lemon-release-support-bundle-${{ matrix.profile }}.zip"
+          rm -f "$BUNDLE_PATH"
+          "$RELEASE_BIN" eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$BUNDLE_PATH\")"
+          test -f "$BUNDLE_PATH"
+          rm -f "$BUNDLE_PATH"
+
+      # ── Skill lint ────────────────────────────────────────────────────────────
 
       - name: Lint built-in skills
         run: |

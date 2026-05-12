@@ -54,4 +54,25 @@ defmodule LemonGateway.Renderers.BasicTest do
     assert {:render, %{text: text, status: :error}} = result
     assert String.contains?(text, "{:session_mismatch")
   end
+
+  test "completed gateway exception errors render without stack traces" do
+    state = Basic.init(%{engine: __MODULE__.BasicTestEngine})
+    stack = [{CodingAgent.Session.ModelResolver, :resolve_session_model, 2, [line: 29]}]
+
+    {_, result} =
+      Basic.apply_event(
+        state,
+        Event.completed(%{
+          engine: "test",
+          ok: false,
+          error:
+            {:gateway_run_down,
+             {%ArgumentError{message: "unknown model \"definitely-missing-model\""}, stack}}
+        })
+      )
+
+    assert {:render, %{text: text, status: :error}} = result
+    assert String.contains?(text, "unknown model \"definitely-missing-model\"")
+    refute String.contains?(text, "CodingAgent.Session.ModelResolver")
+  end
 end

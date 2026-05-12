@@ -15,7 +15,7 @@ fail() {
 bash -n "$RUNNER"
 
 HELP="$($RUNNER help)"
-for lane in fast quality clients eval-fast smoke all path; do
+for lane in fast quality clients eval-fast live-eval smoke all path; do
   printf '%s\n' "$HELP" | grep -Eq "(^|[[:space:]])$lane([[:space:]]|$|:)" || fail "help output must mention lane: $lane"
   [ -f "$DOC" ] || fail "docs/testing.md must exist"
   grep -Eq "(^|[[:space:]])$lane([[:space:]]|$|:)" "$DOC" || fail "docs/testing.md must mention lane: $lane"
@@ -25,6 +25,7 @@ printf '%s\n' "$HELP" | grep -q "Usage: scripts/test" || fail "help output must 
 printf '%s\n' "$HELP" | grep -q "MIX_ENV=test" || fail "help output must document test env"
 printf '%s\n' "$HELP" | grep -q "BEAM test lanes scrub ambient provider/platform credentials" || fail "help output must document credential scrubbing"
 grep -q "LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1" "$DOC" || fail "docs/testing.md must document live credential opt-in"
+grep -q "scripts/test live-eval" "$DOC" || fail "docs/testing.md must document live-eval"
 grep -q "LemonCore.Testing.HermeticEnv" "$DOC" || fail "docs/testing.md must mention shared hermetic env helper"
 grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider credentials"
 grep -q "TELEGRAM_BOT_TOKEN" "$RUNNER" || fail "runner must scrub common platform credentials"
@@ -61,5 +62,80 @@ LEMON_TEST_TMPDIR="$provided_tmp" "$RUNNER" path >/tmp/lemon-test-contract-path-
 [ "$?" -eq 64 ] || fail "path lane without args with provided tmpdir should exit 64"
 [ -d "$provided_tmp" ] || fail "caller-provided LEMON_TEST_TMPDIR must not be removed"
 rm -rf "$provided_tmp"
+
+live_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-live-root.XXXXXX")"
+env -u LEMON_EVAL_API_KEY -u INTEGRATION_API_KEY -u ANTHROPIC_API_KEY \
+  TMPDIR="$live_tmp_root" "$RUNNER" live-eval >/tmp/lemon-test-contract-live-eval.out 2>&1 &&
+  fail "live-eval without credentials should fail"
+[ "$?" -eq 66 ] || fail "live-eval without credentials should exit 66"
+grep -q "requires a live model credential" /tmp/lemon-test-contract-live-eval.out ||
+  fail "live-eval without credentials should explain missing credential"
+[ -z "$(find "$live_tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'lemon-test.*' -print -quit)" ] ||
+  fail "runner-created live-eval LEMON_TEST_TMPDIR should be cleaned up on exit"
+rm -rf "$live_tmp_root"
+
+artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract.XXXXXX")"
+printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
+printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_full.tar.gz"
+python3 - "$artifact_tmp" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+artifacts = []
+
+for path in sorted(root.glob("*.tar.gz")):
+    artifacts.append(
+        {
+            "file": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": path.stat().st_size,
+        }
+    )
+
+(root / "manifest.json").write_text(
+    json.dumps({"version": "2026.05.0", "channel": "stable", "artifacts": artifacts}, indent=2),
+    encoding="utf-8",
+)
+PY
+"$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >/tmp/lemon-artifact-contract-valid.out 2>&1 ||
+  fail "release artifact verifier should accept complete min/full Linux manifest"
+
+incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
+cp "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
+python3 - "$incomplete_artifact_tmp" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
+(root / "manifest.json").write_text(
+    json.dumps(
+        {
+            "version": "2026.05.0",
+            "channel": "stable",
+            "artifacts": [
+                {
+                    "file": path.name,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "size": path.stat().st_size,
+                }
+            ],
+        },
+        indent=2,
+    ),
+    encoding="utf-8",
+)
+PY
+"$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >/tmp/lemon-artifact-contract-incomplete.out 2>&1 &&
+  fail "release artifact verifier should reject manifests missing lemon_runtime_full"
+grep -q "missing required release artifact profile" /tmp/lemon-artifact-contract-incomplete.out ||
+  fail "release artifact verifier should explain missing required profiles"
+
+rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
 
 echo "test runner contract ok"

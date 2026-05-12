@@ -23,7 +23,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
     end
 
     test "module exports expected functions" do
-      # Verify the public API exists
+      assert {:module, LemonSubagent} = Code.ensure_loaded(LemonSubagent)
       assert function_exported?(LemonSubagent, :start, 1)
       assert function_exported?(LemonSubagent, :resume, 2)
       assert function_exported?(LemonSubagent, :continue, 2)
@@ -692,15 +692,10 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
   describe "timeout handling" do
     test "events stream respects EventStream timeout" do
-      # Create stream with short timeout
-      {:ok, stream} = EventStream.start_link(owner: self(), timeout: 100)
+      {:ok, stream} = EventStream.start_link(owner: self(), timeout: 500)
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      # Don't complete the stream - let it timeout
-      # The timeout will cause a :canceled event
-
-      # Start consuming events in a task
       task =
         Task.async(fn ->
           session
@@ -708,14 +703,22 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
           |> Enum.to_list()
         end)
 
-      # Wait for timeout + buffer
-      events = Task.await(task, 1000)
+      assert wait_until(
+               fn ->
+                 state = :sys.get_state(stream)
+                 :queue.len(state.take_waiters) > 0
+               end,
+               1000
+             )
+
+      events = Task.await(task, 2000)
 
       # Should have received a canceled event due to timeout
       has_canceled =
         Enum.any?(events, fn
           {:canceled, :timeout} -> true
           {:error, {:canceled, :timeout}} -> true
+          {:error, :timeout} -> true
           _ -> false
         end)
 

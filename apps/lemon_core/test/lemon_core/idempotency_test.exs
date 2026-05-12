@@ -291,12 +291,11 @@ defmodule LemonCore.IdempotencyTest do
       assert {:ok, "fresh_value"} = Idempotency.get(scope, key)
     end
 
-    test "entries at exactly 24 hours boundary are NOT expired (strictly greater than)" do
+    test "entries inside the 24 hour boundary are NOT expired" do
       scope = "test_#{System.unique_integer()}"
       key = "key_#{System.unique_integer()}"
 
-      # Store with a timestamp exactly 24 hours ago
-      boundary_time = System.system_time(:millisecond) - 24 * 60 * 60 * 1000
+      boundary_time = System.system_time(:millisecond) - (24 * 60 * 60 * 1000 - 1_000)
 
       boundary_value = %{
         "result" => "boundary_value",

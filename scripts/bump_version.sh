@@ -11,11 +11,17 @@
 # Files updated:
 #   mix.exs                          (umbrella version)
 #   clients/lemon-tui/package.json
+#   clients/lemon-tui/package-lock.json
 #   clients/lemon-browser-node/package.json
+#   clients/lemon-browser-node/package-lock.json
 #   clients/lemon-web/package.json
+#   clients/lemon-web/package-lock.json
 #   clients/lemon-web/shared/package.json
 #   clients/lemon-web/server/package.json
 #   clients/lemon-web/web/package.json
+#   clients/lemon-cli/pyproject.toml
+#   clients/lemon-cli/uv.lock
+#   clients/lemon-cli/src/lemon_cli/tui/banner.py
 
 set -euo pipefail
 
@@ -101,6 +107,131 @@ print(f'  {path}: {old_ver} → {new_ver}')
 PYEOF
 }
 
+bump_package_lock_root() {
+  local new_ver="$1"
+  local file="$2"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  python3 - "$file" "$new_ver" <<'PYEOF'
+import json, sys
+path, new_ver = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = json.load(f)
+changed = False
+if "version" in d and d["version"] != new_ver:
+    d["version"] = new_ver
+    changed = True
+root = d.get("packages", {}).get("")
+if isinstance(root, dict) and "version" in root and root["version"] != new_ver:
+    root["version"] = new_ver
+    changed = True
+if changed:
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    print(f"  {path}: root version -> {new_ver}")
+else:
+    print(f"  {path}: root version already {new_ver} or not present")
+PYEOF
+}
+
+bump_lemon_web_workspace_lock() {
+  local new_ver="$1"
+  local file="$REPO_ROOT/clients/lemon-web/package-lock.json"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  python3 - "$file" "$new_ver" <<'PYEOF'
+import json, sys
+path, new_ver = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = json.load(f)
+packages = d.get("packages", {})
+changed = False
+for key in ("server", "shared", "web"):
+    entry = packages.get(key)
+    if isinstance(entry, dict) and entry.get("version") != new_ver:
+        entry["version"] = new_ver
+        changed = True
+if changed:
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    print(f"  {path}: workspace versions -> {new_ver}")
+else:
+    print(f"  {path}: workspace versions already {new_ver}")
+PYEOF
+}
+
+bump_toml_version() {
+  local new_ver="$1"
+  local file="$2"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  python3 - "$file" "$new_ver" <<'PYEOF'
+import re, sys
+path, new_ver = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+updated, count = re.subn(r'(?m)^version = "[^"]+"', f'version = "{new_ver}"', text, count=1)
+if count:
+    open(path, "w", encoding="utf-8").write(updated)
+    print(f"  {path}: version -> {new_ver}")
+else:
+    print(f"  {path}: no version field found")
+PYEOF
+}
+
+bump_uv_lock_package() {
+  local new_ver="$1"
+  local file="$2"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  python3 - "$file" "$new_ver" <<'PYEOF'
+import re, sys
+path, new_ver = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+pattern = re.compile(r'(?ms)(\[\[package\]\]\nname = "lemon-cli"\nversion = ")[^"]+(")')
+updated, count = pattern.subn(rf'\g<1>{new_ver}\2', text)
+if count:
+    open(path, "w", encoding="utf-8").write(updated)
+    print(f"  {path}: lemon-cli package version -> {new_ver}")
+else:
+    print(f"  {path}: no lemon-cli package block found")
+PYEOF
+}
+
+bump_banner_version() {
+  local new_ver="$1"
+  local file="$2"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  python3 - "$file" "$new_ver" <<'PYEOF'
+import re, sys
+path, new_ver = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+updated, count = re.subn(r'lemon-cli v[0-9]+\.[0-9]+\.[0-9]+', f'lemon-cli v{new_ver}', text)
+if count:
+    open(path, "w", encoding="utf-8").write(updated)
+    print(f"  {path}: banner version -> {new_ver}")
+else:
+    print(f"  {path}: no banner version found")
+PYEOF
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if [ $# -eq 0 ]; then
@@ -132,6 +263,21 @@ CLIENT_PACKAGES=(
 for rel_path in "${CLIENT_PACKAGES[@]}"; do
   bump_package_json "$NEW_VERSION" "$REPO_ROOT/$rel_path"
 done
+
+PACKAGE_LOCKS=(
+  "clients/lemon-tui/package-lock.json"
+  "clients/lemon-browser-node/package-lock.json"
+  "clients/lemon-web/package-lock.json"
+)
+
+for rel_path in "${PACKAGE_LOCKS[@]}"; do
+  bump_package_lock_root "$NEW_VERSION" "$REPO_ROOT/$rel_path"
+done
+
+bump_lemon_web_workspace_lock "$NEW_VERSION"
+bump_toml_version "$NEW_VERSION" "$REPO_ROOT/clients/lemon-cli/pyproject.toml"
+bump_uv_lock_package "$NEW_VERSION" "$REPO_ROOT/clients/lemon-cli/uv.lock"
+bump_banner_version "$NEW_VERSION" "$REPO_ROOT/clients/lemon-cli/src/lemon_cli/tui/banner.py"
 
 echo ""
 echo "Done. Next steps:"

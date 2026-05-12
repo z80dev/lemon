@@ -1,4 +1,5 @@
 Application.put_env(:lemon_gateway, :web_port, 0)
+Application.put_env(:lemon_gateway, :health_enabled, false)
 
 # Avoid poller lock collisions with any local `lemon` process that might be running while
 # developers execute tests, and prevent sticky locks between `Application.stop/1` restarts.

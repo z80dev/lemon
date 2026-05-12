@@ -580,4 +580,5 @@ Popular MCP servers you can integrate:
 - **SQLite**: `@modelcontextprotocol/server-sqlite` - Database operations
 - **Brave Search**: `@modelcontextprotocol/server-brave-search` - Web search
 
-For a comprehensive list, see the [MCP Server Registry](https://modelcontextprotocol.io/servers).
+For reference implementations and server examples, see the
+[Model Context Protocol servers repository](https://github.com/modelcontextprotocol/servers).

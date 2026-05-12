@@ -683,27 +683,29 @@ defmodule CodingAgent.SessionTest do
 
       # Subscribe from another process
       parent = self()
+      ref = make_ref()
 
       spawn(fn ->
         _unsub2 = Session.subscribe(session)
-        send(parent, :subscribed)
+        send(parent, {:subscribed, ref})
 
         receive do
           {:session_event, _session_id, event} ->
-            send(parent, {:other_received, event})
+            send(parent, {:other_received, ref, event})
         after
-          1000 -> send(parent, :timeout)
+          5_000 -> send(parent, {:other_timeout, ref})
         end
       end)
 
       # Wait for spawn to subscribe
-      assert_receive :subscribed, 500
+      assert_receive {:subscribed, ^ref}, 1_000
+      assert Session.diagnostics(session).subscriber_count == 2
 
       :ok = Session.prompt(session, "Hello!")
 
       # Both should receive events
-      assert_receive {:session_event, _session_id, _event}, 1000
-      assert_receive {:other_received, _event}, 1000
+      assert_receive {:session_event, _session_id, _event}, 5_000
+      assert_receive {:other_received, ^ref, _event}, 5_000
     end
   end
 

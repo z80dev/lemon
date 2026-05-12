@@ -6,6 +6,24 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.ModelPolicy
 
+  @provider_env_vars [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_CODEX_API_KEY",
+    "CHATGPT_TOKEN",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_GEMINI_CLI_API_KEY",
+    "OPENCODE_API_KEY",
+    "ZAI_API_KEY",
+    "MINIMAX_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_PROFILE",
+    "LEMON_SECRETS_MASTER_KEY"
+  ]
+
   defmodule CancelTestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
@@ -121,15 +139,35 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
-    old_openai_api_key = System.get_env("OPENAI_API_KEY")
+    old_home = System.get_env("HOME")
+    old_provider_env = snapshot_env(@provider_env_vars)
     old_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
+
+    tmp_home =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-telegram-model-test-#{System.unique_integer([:positive])}"
+      )
+
+    invalidate_config_cache()
+    File.mkdir_p!(Path.join(tmp_home, ".lemon"))
+
+    File.write!(Path.join(tmp_home, ".lemon/config.toml"), """
+    [defaults]
+    provider = "openai"
+    model = "gpt-5"
+    """)
+
+    System.put_env("HOME", tmp_home)
 
     :persistent_term.put({CancelTestRouter, :pid}, self())
     CancelMockAPI.register_test(self())
     LemonCore.RouterBridge.configure(router: CancelTestRouter, run_orchestrator: CancelTestRouter)
     set_bindings([])
+    clear_env(@provider_env_vars)
     System.put_env("OPENAI_API_KEY", "test-openai-key")
     System.put_env("LEMON_DEFAULT_PROVIDER", "openai")
+    invalidate_config_cache()
 
     on_exit(fn ->
       stop_transport()
@@ -138,8 +176,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       :persistent_term.erase({CancelTestRouter, :pid})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
-      restore_env_var("OPENAI_API_KEY", old_openai_api_key)
+      restore_env(old_provider_env)
       restore_env_var("LEMON_DEFAULT_PROVIDER", old_default_provider)
+      restore_env_var("HOME", old_home)
+      File.rm_rf(tmp_home)
+      invalidate_config_cache()
     end)
 
     :ok
@@ -210,6 +251,30 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert_receive {:abort_run, ^run_id, :user_requested}, 400
   end
 
+  test "bare /cancel cancels the current chat session" do
+    chat_id = 333_004
+    msg_id = 900
+
+    session_key =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: Integer.to_string(chat_id)
+      })
+
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/cancel")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:abort_session, ^session_key, :user_requested}, 400
+  end
+
   test "/model opens provider picker and does not route inbound" do
     chat_id = 333_004
     msg_id = 1_200
@@ -254,12 +319,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     assert is_binary(provider_choice)
     refute provider_choice in ["Close", "<< Prev", "Next >>"]
@@ -318,12 +378,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, provider_choice)
@@ -348,12 +403,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, provider_choice)
@@ -456,12 +506,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, provider_choice)
@@ -614,12 +659,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, provider_choice)
@@ -676,12 +716,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_choice = provider_choice(opts)
 
     CancelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, user_msg_id + 1, provider_choice)
@@ -750,12 +785,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert picker_text =~ "Model picker"
     assert_receive {:answer_callback, "cb-1", %{"text" => "Updated"}}, 500
 
-    provider_callback =
-      picker_opts
-      |> get_in(["reply_markup", "inline_keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("callback_data")
+    provider_callback = provider_callback(picker_opts)
 
     CancelMockAPI.set_updates([
       model_callback_update(chat_id, topic_id, "cb-2", message_id, provider_callback)
@@ -834,19 +864,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert_receive {:send_message, ^chat_id, _text_b, opts_b, _parse_mode}, 500
     assert get_in(opts_b, ["message_thread_id"]) == topic_b
 
-    provider_a =
-      opts_a
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
-
-    provider_b =
-      opts_b
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.first()
-      |> List.first()
-      |> Map.get("text")
+    provider_a = provider_choice(opts_a)
+    provider_b = provider_choice(opts_b)
 
     CancelMockAPI.set_updates([
       topic_message_update(chat_id, topic_a, msg_a + 1, provider_a),
@@ -877,6 +896,35 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       |> Map.merge(overrides)
 
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+  end
+
+  defp provider_choice(opts) do
+    choice =
+      opts
+      |> get_in(["reply_markup", "keyboard"])
+      |> List.flatten()
+      |> Enum.find_value(fn
+        %{"text" => text} -> if String.contains?(String.downcase(text), "openai"), do: text
+        _ -> nil
+      end)
+
+    choice || flunk("OpenAI provider option was not rendered")
+  end
+
+  defp provider_callback(opts) do
+    callback =
+      opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> List.flatten()
+      |> Enum.find_value(fn
+        %{"text" => text, "callback_data" => callback} ->
+          if String.contains?(String.downcase(text), "openai"), do: callback
+
+        _ ->
+          nil
+      end)
+
+    callback || flunk("OpenAI provider callback was not rendered")
   end
 
   defp message_update(chat_id, message_id, text) do
@@ -972,8 +1020,24 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)
 
+  defp snapshot_env(names), do: Map.new(names, &{&1, System.get_env(&1)})
+
+  defp clear_env(names), do: Enum.each(names, &System.delete_env/1)
+
+  defp restore_env(snapshot) do
+    Enum.each(snapshot, fn {name, value} -> restore_env_var(name, value) end)
+  end
+
   defp restore_env_var(name, nil), do: System.delete_env(name)
   defp restore_env_var(name, value), do: System.put_env(name, value)
+
+  defp invalidate_config_cache do
+    if Code.ensure_loaded?(LemonCore.ConfigCache) and
+         function_exported?(LemonCore.ConfigCache, :invalidate, 1) do
+      LemonCore.ConfigCache.invalidate(nil)
+      LemonCore.ConfigCache.invalidate(File.cwd!())
+    end
+  end
 
   defp stop_transport do
     if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do

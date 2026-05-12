@@ -12,9 +12,9 @@ Named after a very good cat.
 
 ### Prerequisites
 
-- Elixir 1.19+ and Erlang/OTP 27+
+- Elixir 1.19.5+ and Erlang/OTP 28.5+
 - A model provider API key (Anthropic, OpenAI, etc.)
-- Node.js 20+ (TUI/Web clients only)
+- Node.js 24 LTS+ (TUI/Web clients only)
 
 ### 1. Clone and build
 
@@ -31,7 +31,7 @@ Create `~/.lemon/config.toml`:
 
 ```toml
 [providers.anthropic]
-api_key_secret = "llm_anthropic_api_key"
+api_key_secret = "llm_anthropic_api_key_raw"
 
 [defaults]
 provider = "anthropic"
@@ -42,7 +42,7 @@ engine   = "lemon"
 Store your API key:
 
 ```bash
-mix lemon.setup secrets set llm_anthropic_api_key "sk-ant-..."
+mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
 ```
 
 ### 3. Run the automated setup (optional)
@@ -62,6 +62,13 @@ mix lemon.doctor       # verify everything is working
 **Telegram gateway:**
 ```bash
 ./bin/lemon-gateway
+```
+
+**Web UI / operations dashboard:**
+```bash
+./bin/lemon
+# open http://localhost:4080/ for the session console
+# open http://localhost:4080/ops for health, active runs, approvals, and support commands
 ```
 
 ### 5. Telegram quickstart
@@ -122,8 +129,9 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 - Automatic draft synthesis from successful runs (enable `skill_synthesis_drafts`)
 
 **Infrastructure:**
-- Telegram, Discord, X/Twitter channel adapters
-- Cron scheduling with heartbeats
+- Telegram channel adapter for stable text-first remote chat; Discord, X/Twitter,
+  XMTP, and other channel adapters are preview unless promoted by release notes
+- Preview cron scheduling with heartbeats
 - Event-driven architecture with pub/sub across all components
 - Encrypted secrets keychain
 
@@ -133,6 +141,8 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 
 | Audience | Start here |
 |---|---|
+| Public docs site | [`docs/index.md`](docs/index.md) — homepage and launch-stage entry points |
+| Install landing page | [`docs/install.md`](docs/install.md) — short source install path and release status |
 | New users | [`docs/user-guide/setup.md`](docs/user-guide/setup.md) — full setup walkthrough |
 | Skills | [`docs/user-guide/skills.md`](docs/user-guide/skills.md) — listing, installing, synthesizing |
 | Memory & search | [`docs/user-guide/memory.md`](docs/user-guide/memory.md) — session search, retention |
@@ -166,13 +176,17 @@ enabled. Keep it aligned with the versions and dependency bootstrap steps in
 
 | Profile | Use case |
 |---|---|
+| `lemon_runtime_min` | Headless/API runtime with gateway, router, channels, and control plane |
+| `lemon_runtime_full` | Full local runtime with automation, skills, web UI, and sim UI |
 | `sim_broadcast_platform` | Public sim broadcast and replay deployment (`lemon_sim_ui`) |
 
 ```bash
-MIX_ENV=prod mix release sim_broadcast_platform
+MIX_ENV=prod mix release lemon_runtime_full
 ```
 
-See [`ROADMAP.md`](ROADMAP.md) for what's planned.
+See [`docs/plans/lemon-1.0-mainstream-readiness.md`](docs/plans/lemon-1.0-mainstream-readiness.md)
+for the launch readiness goal and [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](docs/plans/lemon-hermes-agent-harness-parity-scorecard.md)
+for the Hermes-class agent harness parity ledger.
 
 ---
 

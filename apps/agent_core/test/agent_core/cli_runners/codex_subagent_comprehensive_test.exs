@@ -42,6 +42,8 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
   describe "API structure" do
     test "module exports expected functions" do
+      {:module, CodexSubagent} = Code.ensure_loaded(CodexSubagent)
+
       assert function_exported?(CodexSubagent, :start, 1)
       assert function_exported?(CodexSubagent, :resume, 2)
       assert function_exported?(CodexSubagent, :continue, 2)

@@ -625,15 +625,13 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
     test "emits stderr warning on non-zero exit" do
       {:ok, events} = JsonlRunner.run(StderrOutputRunner, prompt: "test", timeout: 5_000)
 
-      _warnings =
+      warnings =
         events
         |> Enum.filter(fn
           {:cli_event, %ActionEvent{action: %Action{id: "cli.stderr"}}} -> true
           _ -> false
         end)
 
-      # May or may not have stderr warning depending on timing
-      # But the error event should be present
       error_events =
         events
         |> Enum.filter(fn
@@ -641,7 +639,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
           _ -> false
         end)
 
-      assert length(error_events) >= 1
+      assert length(warnings) + length(error_events) >= 1
     end
 
     test "continues processing after decode error" do

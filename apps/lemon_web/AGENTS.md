@@ -4,13 +4,14 @@ Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashbo
 
 ## Quick Orientation
 
-This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. There are no traditional controllers -- every page is a LiveView. The frontend uses Tailwind from CDN and Phoenix/LiveView JS from CDN ESM bundles (no Node.js, no esbuild). The HTTP server is Bandit.
+This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. Most pages are LiveViews, with a small controller for support bundle downloads. The frontend uses Tailwind from CDN and vendored Phoenix/LiveView JS from umbrella dependencies (no Node.js, no esbuild). The HTTP server is Bandit.
 
 Key entry points:
 - **Router**: `lib/lemon_web/router.ex` -- all routes defined here
 - **Endpoint**: `lib/lemon_web/endpoint.ex` -- HTTP pipeline and socket config
 - **Main LiveView**: `lib/lemon_web/live/session_live.ex` -- the dashboard chat UI
-- **Games LiveViews**: `lib/lemon_web/live/games_lobby_live.ex`, `lib/lemon_web/live/game_match_live.ex`
+- **Ops LiveViews**: `lib/lemon_web/live/ops_dashboard_live.ex`, `lib/lemon_web/live/ops_run_live.ex` -- operations dashboard and run inspection
+- **Support bundle controller**: `lib/lemon_web/controllers/support_bundle_controller.ex` -- redacted support bundle download
 - **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional token gate
 
 ## Purpose and Responsibilities
@@ -38,7 +39,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show)
+- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show), `/ops`, `/ops/runs/:run_id`, `/ops/support-bundle`
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -52,6 +53,22 @@ Key entry points:
 live "/", SessionLive, :index        # Generates a new isolated session key per tab
 live "/sessions/:session_key", SessionLive, :show  # Uses the provided session key
 ```
+
+### OpsDashboardLive and OpsRunLive
+
+`LemonWeb.OpsDashboardLive` exposes `/ops` for runtime health, build/release
+metadata, default provider/model/thinking/engine editing, provider
+secret-reference editing, recent runs,
+approvals, cron create/edit/delete/run controls,
+skill provenance/status/install/update controls, channel transport
+enable/disable config controls, gateway default editing, Telegram
+token-secret/allowlist editing, channel binding create/edit/delete controls,
+adapter runtime status/disconnect/reconnect controls, and support bundle entry
+points.
+
+`LemonWeb.OpsRunLive` exposes `/ops/runs/:run_id` for timeline, tool events,
+failures, child-run graph, run-scoped approvals, and support bundle entry
+points.
 
 **Query params supported on `/`:**
 - `?agent_id=<id>` - Sets the agent for the isolated session (default: `"default"`)
@@ -407,12 +424,14 @@ apps/lemon_web/
 |-- lib/lemon_web/router.ex             # Routes + :browser pipeline
 |-- lib/lemon_web/telemetry.ex          # Telemetry supervisor
 |-- lib/lemon_web/gettext.ex            # i18n backend
+|-- lib/lemon_web/controllers/
+|   |-- support_bundle_controller.ex    # Redacted support bundle download
 |-- lib/lemon_web/plugs/
 |   |-- require_access_token.ex         # Auth plug (optional token gate)
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
-|   |-- games_lobby_live.ex             # Games lobby listing
-|   |-- game_match_live.ex              # Match spectator view
+|   |-- ops_dashboard_live.ex           # Operations dashboard
+|   |-- ops_run_live.ex                 # Run timeline/detail page
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
 |       |-- message_component.ex        # Chat message bubbles
@@ -421,7 +440,7 @@ apps/lemon_web/
 |   |-- core_components.ex              # button/1, input/1, flash_group/1
 |   |-- layouts.ex                      # embeds layouts/* templates
 |   |-- layouts/
-|       |-- root.html.heex             # HTML document shell (head, CDN links)
+|       |-- root.html.heex             # HTML document shell
 |       |-- app.html.heex             # App layout (passthrough)
 |-- lib/lemon_web/controllers/
 |   |-- error_html.ex                   # HTML error pages

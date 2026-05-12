@@ -2,7 +2,37 @@
   %{
     path: "docs/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/index.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/install.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/compare.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/demo.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/support.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
@@ -68,7 +98,7 @@
   %{
     path: "docs/architecture_boundaries.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
@@ -122,13 +152,13 @@
   %{
     path: "docs/skills.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 90
   },
   %{
     path: "docs/testing.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-05],
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
@@ -180,6 +210,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/security/safety.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
     path: "docs/contributor/ownership.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-16],
@@ -206,19 +242,25 @@
   %{
     path: "docs/release/versioning_and_channels.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
     path: "docs/release/deployment_flows.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/release/release_checklist_and_support_policy.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/setup.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-11],
     max_age_days: 60
   },
   %{
@@ -262,6 +304,42 @@
     owner: "@z80",
     last_reviewed: ~D[2026-04-12],
     max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-mainstream-readiness.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-1.0-completion-audit-2026-05-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-12],
+    max_age_days: 30
   },
   %{
     path: "docs/user-guide/rollout.md",

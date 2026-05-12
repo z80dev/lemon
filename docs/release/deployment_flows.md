@@ -47,6 +47,22 @@ MIX_ENV=prod mix release sim_broadcast_platform
 
 Releases are written to `_build/prod/rel/<profile>/`.
 
+Release automation packages the assembled release directory as a `.tar.gz`:
+
+```bash
+tar -czf lemon-<version>-<channel>-linux-x86_64-<profile>.tar.gz \
+  -C ./_build/prod/rel/<profile> .
+```
+
+Install an artifact by verifying its SHA-256 from `manifest.json`, extracting it
+into the target directory, setting the required runtime environment variables,
+and running `bin/<profile>` from the extracted directory.
+
+```bash
+scripts/verify_release_artifacts /path/to/downloaded-artifacts
+scripts/verify_release_runtime_boot /path/to/downloaded-artifacts
+```
+
 ### Run
 
 ```bash
@@ -80,7 +96,18 @@ curl -sS http://localhost:4040/healthz
 
 # Or use the doctor command from the source tree
 mix lemon.doctor --json
+
+# Generate a redacted support bundle from the source tree
+mix lemon.doctor --bundle
+
+# Generate a redacted support bundle from a release artifact
+./_build/prod/rel/lemon_runtime_full/bin/lemon_runtime_full eval \
+  'LemonCore.Doctor.CLI.bundle!()'
 ```
+
+For `lemon_runtime_full`, include `LEMON_WEB_SECRET_KEY_BASE` in release `eval`
+commands as well as daemon/start commands. The full profile configures the web
+endpoint during release boot before the eval expression is executed.
 
 ### Profiles
 
@@ -139,6 +166,7 @@ The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 ## See also
 
 - `docs/release/versioning_and_channels.md` — CalVer scheme and channel model
+- `docs/release/release_checklist_and_support_policy.md` — release-candidate checklist, rollback checklist, and public support boundaries
 - `apps/lemon_core/lib/lemon_core/runtime/` — Boot, Profile, Health, Env modules
-- `mix lemon.doctor` — diagnostic check suite
+- `mix lemon.doctor` / `LemonCore.Doctor.CLI.bundle!()` — diagnostic check suite and redacted support bundles
 - `mix lemon.setup` — first-time configuration wizard

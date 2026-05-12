@@ -2,7 +2,7 @@
  * SelectOverlay — select list overlay for choosing from options.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useTheme } from '../context/ThemeContext.js';
 import { OverlayContainer } from './OverlayContainer.js';
@@ -24,10 +24,18 @@ export function SelectOverlay({ title, options, onSelect, onCancel }: SelectOver
   const theme = useTheme();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filter, setFilter] = useState('');
+  const selectedIndexRef = useRef(0);
 
   const filtered = filter
     ? options.filter((o) => o.label.toLowerCase().includes(filter.toLowerCase()))
     : options;
+  const filteredRef = useRef(filtered);
+  filteredRef.current = filtered;
+
+  const updateSelectedIndex = (next: number) => {
+    selectedIndexRef.current = next;
+    setSelectedIndex(next);
+  };
 
   useInput((input, key) => {
     if (key.escape) {
@@ -35,27 +43,28 @@ export function SelectOverlay({ title, options, onSelect, onCancel }: SelectOver
       return;
     }
     if (key.return) {
-      if (filtered.length > 0) {
-        onSelect(filtered[selectedIndex].value);
+      const currentFiltered = filteredRef.current;
+      if (currentFiltered.length > 0) {
+        onSelect(currentFiltered[selectedIndexRef.current].value);
       }
       return;
     }
     if (key.upArrow) {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      updateSelectedIndex(Math.max(0, selectedIndexRef.current - 1));
       return;
     }
     if (key.downArrow) {
-      setSelectedIndex((i) => Math.min(filtered.length - 1, i + 1));
+      updateSelectedIndex(Math.min(filteredRef.current.length - 1, selectedIndexRef.current + 1));
       return;
     }
     if (key.backspace || key.delete) {
       setFilter((f) => f.slice(0, -1));
-      setSelectedIndex(0);
+      updateSelectedIndex(0);
       return;
     }
     if (input && !key.ctrl && !key.meta) {
       setFilter((f) => f + input);
-      setSelectedIndex(0);
+      updateSelectedIndex(0);
     }
   });
 

@@ -214,8 +214,8 @@ defmodule CodingAgent.CoordinatorTest do
       result = Coordinator.run_subagent(coordinator, prompt: "Hello", timeout: 50)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should complete quickly due to timeout or early error
-      assert elapsed < 5_000
+      # Should stay bounded under full-suite scheduler load.
+      assert elapsed < 15_000
       # Can be timeout or other error depending on environment
       assert {:error, _reason} = result
     end
@@ -313,7 +313,7 @@ defmodule CodingAgent.CoordinatorTest do
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Keep this bounded but allow scheduler noise in CI.
-      assert elapsed < 8_000
+      assert elapsed < 15_000
 
       assert [result] = results
       # Can be timeout or error depending on whether session started
@@ -331,8 +331,8 @@ defmodule CodingAgent.CoordinatorTest do
       results = Coordinator.run_subagents(coordinator, specs)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should use default timeout
-      assert elapsed < 8_000
+      # Should use default timeout while allowing cleanup under scheduler load.
+      assert elapsed < 15_000
       assert [result] = results
       # Can be timeout or error depending on whether session started
       assert result.status in [:timeout, :error]
@@ -411,13 +411,21 @@ defmodule CodingAgent.CoordinatorTest do
         Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
       end)
 
-      Process.sleep(50)
+      assert_eventually(
+        fn ->
+          Coordinator.list_active(coordinator) != []
+        end,
+        2_000
+      )
 
       :ok = Coordinator.abort_all(coordinator)
 
-      assert_eventually(fn ->
-        Coordinator.list_active(coordinator) == []
-      end)
+      assert_eventually(
+        fn ->
+          Coordinator.list_active(coordinator) == []
+        end,
+        5_000
+      )
     end
 
     @tag :tmp_dir
@@ -460,9 +468,9 @@ defmodule CodingAgent.CoordinatorTest do
 
       :ok = Coordinator.abort_all(coordinator)
 
-      assert_receive {:slow_session_terminate_started, ^slow_pid}, 1_000
+      assert_receive {:slow_session_terminate_started, ^slow_pid}, 5_000
       assert subagent_id in Coordinator.list_active(coordinator)
-      assert_receive {:slow_session_terminate_finished, ^slow_pid}, 1_000
+      assert_receive {:slow_session_terminate_finished, ^slow_pid}, 5_000
       send(coordinator, {:DOWN, monitor_ref, :process, slow_pid, :normal})
 
       assert_eventually(fn ->

@@ -13,6 +13,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
   alias LemonGateway.Transports.Email
   alias LemonCore.ChatScope
   alias LemonCore.{RouterBridge, RunRequest, Store}
+  alias CodingAgent.Security.ExternalContent
 
   @default_port 4045
   @default_path "/webhooks/email/inbound"
@@ -601,9 +602,17 @@ defmodule LemonGateway.Transports.Email.Inbound do
           value
       end
 
-    Enum.concat([header_lines, references_part, [""], attachment_lines, ["", "Body:", body]])
-    |> Enum.join("\n")
-    |> String.trim()
+    rendered_email =
+      Enum.concat([header_lines, references_part, [""], attachment_lines, ["", "Body:", body]])
+      |> Enum.join("\n")
+      |> String.trim()
+
+    ExternalContent.wrap_external_content(rendered_email,
+      source: :email,
+      sender: email.from,
+      subject: email.subject,
+      include_warning: true
+    )
   end
 
   defp attachment_context_line(%{} = attachment) do

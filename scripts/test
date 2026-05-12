@@ -40,6 +40,7 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   GOOGLE_GEMINI_CLI_API_KEY
   GROQ_API_KEY
   KIMI_API_KEY
+  LEMON_EVAL_API_KEY
   LEMON_SECRETS_MASTER_KEY
   MINIMAX_API_KEY
   MISTRAL_API_KEY
@@ -49,6 +50,7 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   OPENAI_CODEX_API_KEY
   OPENCODE_API_KEY
   OPENROUTER_API_KEY
+  INTEGRATION_API_KEY
   SLACK_APP_TOKEN
   SLACK_BOT_TOKEN
   TELEGRAM_BOT_TOKEN
@@ -76,6 +78,7 @@ Canonical test lanes:
   quality    Lemon quality gates: CI/docs lint, skill lint, architecture quality, duplicate tests, focused quality tests
   clients    Node client CI parity checks for lemon-web, lemon-tui, and lemon-browser-node
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
+  live-eval  Opt-in provider-backed eval run: mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}
   smoke      Local product-smoke pointer; CI-only release smoke is in .github/workflows/product-smoke.yml
   all        Useful local aggregate: fast, quality, eval-fast, smoke
   path       Pass-through to mix test for paths or ExUnit args: scripts/test path apps/foo/test --seed 1
@@ -96,7 +99,15 @@ ensure_repo_root() {
 setup_test_env() {
   export MIX_ENV="${MIX_ENV:-test}"
   scrub_live_credentials
+  setup_tmp_env
+}
 
+setup_live_eval_env() {
+  export MIX_ENV="${MIX_ENV:-test}"
+  setup_tmp_env
+}
+
+setup_tmp_env() {
   if [ -z "${LEMON_TEST_TMPDIR:-}" ]; then
     export LEMON_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-test.XXXXXX")"
     trap 'rm -rf "$LEMON_TEST_TMPDIR"' EXIT
@@ -160,6 +171,31 @@ run_eval_fast() {
   mix lemon.eval --iterations "${LEMON_EVAL_ITERATIONS:-3}" "$@"
 }
 
+run_live_eval() {
+  ensure_repo_root
+  setup_live_eval_env
+
+  if [ -z "${LEMON_EVAL_API_KEY:-}" ] && [ -z "${INTEGRATION_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    cat >&2 <<'EOF'
+scripts/test live-eval requires a live model credential.
+
+Set one of:
+  LEMON_EVAL_API_KEY
+  INTEGRATION_API_KEY
+  ANTHROPIC_API_KEY
+
+Optional live eval configuration:
+  LEMON_EVAL_PROVIDER
+  LEMON_EVAL_MODEL
+  LEMON_EVAL_BASE_URL
+  LEMON_EVAL_API_TYPE
+EOF
+    exit 66
+  fi
+
+  mix lemon.eval --live-model --iterations "${LEMON_EVAL_ITERATIONS:-3}" "$@"
+}
+
 run_smoke() {
   ensure_repo_root
   cat <<'EOF'
@@ -190,6 +226,7 @@ case "$LANE" in
   quality) run_quality "$@" ;;
   clients) run_clients "$@" ;;
   eval-fast) run_eval_fast "$@" ;;
+  live-eval) run_live_eval "$@" ;;
   smoke) run_smoke "$@" ;;
   all)
     run_fast

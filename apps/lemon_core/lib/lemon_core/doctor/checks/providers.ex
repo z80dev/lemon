@@ -55,13 +55,21 @@ defmodule LemonCore.Doctor.Checks.Providers do
           "Run `mix lemon.setup provider` to onboard a provider."
         )
       else
-        names = configured |> Enum.map(fn {name, _} -> name end) |> Enum.join(", ")
+        names = configured |> Enum.map(fn {name, _} -> to_string(name) end) |> Enum.join(", ")
         Check.pass("providers.credentials", "Providers with credentials: #{names}")
       end
     end
   end
 
-  defp provider_has_credential?(provider) do
-    not is_nil(provider.api_key) or not is_nil(provider.api_key_secret)
+  defp provider_has_credential?(provider) when is_map(provider) do
+    Enum.any?(
+      [:api_key, :api_key_secret, :oauth_secret, "api_key", "api_key_secret", "oauth_secret"],
+      fn key ->
+        value = Map.get(provider, key)
+        is_binary(value) and value != ""
+      end
+    )
   end
+
+  defp provider_has_credential?(_provider), do: false
 end

@@ -50,13 +50,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: docs/package.json
 
       - name: Install docs deps
         working-directory: docs
         run: npm install
+
+      - name: Audit docs tooling
+        working-directory: docs
+        run: npm audit --audit-level=high
 
       - name: Build site
         working-directory: docs
@@ -78,8 +82,6 @@ jobs:
             echo "::error::Broken links found. See output above."
             exit 1
           fi
-        continue-on-error: true   # link check is informational until baseline is established
-
       - name: Upload build artifact (for deployment)
         if: >
           vars.ENABLE_PAGES_DEPLOY == 'true' &&

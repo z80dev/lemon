@@ -10,7 +10,7 @@ import { AppLayout } from './AppLayout.js';
 import { useConnectionEvents } from './hooks/useConnectionEvents.js';
 import { AgentConnection, type AgentConnectionOptions } from '../agent-connection.js';
 import { StateStore } from '../state.js';
-import type { UIRequestMessage, RunningSessionInfo, SessionSummary } from '../types.js';
+import type { ReadyMessage, UIRequestMessage, RunningSessionInfo, SessionSummary } from '../types.js';
 
 interface AppProps {
   options: AgentConnectionOptions;
@@ -113,6 +113,17 @@ function AppInner({
   return <AppLayout onStop={onStop} />;
 }
 
+export function applyReadyMessage(store: StateStore, msg: ReadyMessage): void {
+  store.setReady(
+    msg.cwd,
+    msg.model,
+    msg.ui,
+    msg.debug,
+    msg.primary_session_id,
+    msg.active_session_id
+  );
+}
+
 /**
  * Start the Ink-based Lemon TUI.
  */
@@ -136,7 +147,8 @@ export function startApp(options: AgentConnectionOptions, themeName?: string): v
 
   process.stdout.write('Starting Lemon TUI...\n');
 
-  connection.start().then(() => {
+  connection.start().then((readyMsg) => {
+    applyReadyMessage(store, readyMsg);
     inkInstance = render(
       <AppProvider store={store} connection={connection}>
         <ThemeProvider initialTheme={themeName}>
@@ -147,7 +159,8 @@ export function startApp(options: AgentConnectionOptions, themeName?: string): v
             onStop={stop}
           />
         </ThemeProvider>
-      </AppProvider>
+      </AppProvider>,
+      { exitOnCtrlC: false }
     );
   }).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);

@@ -189,8 +189,8 @@ defmodule LemonChannels.OutboxTest do
 
       filled_queue =
         :queue.from_list([
-          %{payload: :placeholder_1},
-          %{payload: :placeholder_2}
+          full_queue_entry(:placeholder_1),
+          full_queue_entry(:placeholder_2)
         ])
 
       :sys.replace_state(outbox_pid, fn state ->
@@ -335,7 +335,7 @@ defmodule LemonChannels.OutboxTest do
 
       filled_queue =
         :queue.from_list([
-          %{payload: :placeholder_1}
+          full_queue_entry(:placeholder_1)
         ])
 
       :sys.replace_state(outbox_pid, fn state ->
@@ -369,5 +369,16 @@ defmodule LemonChannels.OutboxTest do
       assert is_map(stats)
       assert Map.has_key?(stats, :queue_length) or Map.has_key?(stats, :total_sent) or true
     end
+  end
+
+  defp full_queue_entry(payload) do
+    %{
+      ref: make_ref(),
+      payload: payload,
+      attempts: 0,
+      available_at_ms: System.monotonic_time(:millisecond) + 60_000,
+      chunk_index: 0,
+      group_key: {:test, payload}
+    }
   end
 end

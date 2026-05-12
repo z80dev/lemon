@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/audit_1_0_readiness <version> [local-artifact-directory]
+
+Runs the final Lemon 1.0 readiness audit for a CalVer release candidate.
+
+The audit checks:
+  - mix.exs version matches <version>
+  - CHANGELOG.md has validated release notes for <version>
+  - CI/docs policy lint passes
+  - canonical local release-candidate test lanes pass
+  - public docs site builds, has no high advisory, and has no broken markdown links
+  - optional local artifact directory passes manifest and runtime boot verification
+  - remote publication preflight reports tag, workflow, and eval secret state
+  - public GitHub Release artifacts can be downloaded, verified, and booted
+  - provider-backed live eval runs when release eval credentials are present
+
+Exit codes:
+  0   all audited gates passed
+  1   local readiness failure
+  2   usage or tool error
+  66  launch-blocking external evidence is missing
+EOF
+  exit 2
+}
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  usage
+fi
+
+VERSION="$1"
+LOCAL_ARTIFACT_DIR="${2:-}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+ERRORS=0
+BLOCKERS=0
+
+pass() {
+  echo "ok:      $*"
+}
+
+info() {
+  echo "info:    $*"
+}
+
+fail() {
+  echo "fail:    $*" >&2
+  ERRORS=$((ERRORS + 1))
+}
+
+block() {
+  echo "blocked: $*" >&2
+  BLOCKERS=$((BLOCKERS + 1))
+}
+
+print_blocker_next_steps() {
+  cat >&2 <<EOF
+
+Next commands after maintainer approval and required credentials:
+
+  # First publish the release-readiness changes to the default branch.
+  # The release and live-eval workflows must exist on GitHub before the tag
+  # is pushed or manually dispatched.
+  git status --short --branch
+  git rev-list --count origin/main..HEAD
+  git log --oneline origin/main..HEAD
+  test -z "\$(git status --short)" || { echo "refusing to publish with a dirty tree" >&2; exit 1; }
+  git log -1 --oneline
+  git push origin main
+
+  # Option A: push the tag and let the tag-push workflow create the release.
+  git tag v$VERSION
+  git push origin v$VERSION
+
+  # Option B: if the tag already exists or the tag-push workflow did not run,
+  # manually dispatch the release workflow. Do not run both paths unless
+  # intentionally rerunning the release workflow.
+  gh workflow run release.yml --ref v$VERSION -f tag=v$VERSION -f channel=stable
+
+  gh run list --workflow release.yml --limit 5
+  gh run watch {run-id} --exit-status
+  scripts/verify_github_release_artifacts $VERSION
+
+  scripts/test live-eval
+  # or:
+  gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon
+  gh workflow run live-eval.yml --ref v$VERSION -f iterations=3 -f live_timeout_ms=90000
+  gh run list --workflow live-eval.yml --limit 5
+  gh run watch {run-id} --exit-status
+
+Then rerun:
+
+  scripts/audit_1_0_readiness $VERSION {downloaded-or-local-artifact-directory}
+EOF
+}
+
+run_or_fail() {
+  local label="$1"
+  shift
+  local output
+  output="$(mktemp)"
+
+  if "$@" >"$output" 2>&1; then
+    pass "$label"
+  else
+    cat "$output" >&2
+    fail "$label"
+  fi
+
+  rm -f "$output"
+}
+
+remote_preflight() {
+  local tag="v$VERSION"
+  local output
+
+  if git ls-remote --tags origin "$tag*" | grep -q .; then
+    pass "remote tag exists for $tag"
+  else
+    info "remote tag $tag is not present on origin"
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    info "gh CLI is unavailable; skipping remote workflow and secret preflight"
+    return
+  fi
+
+  output="$(mktemp)"
+
+  if gh run list --workflow release.yml --limit 1 >"$output" 2>&1; then
+    if [ -s "$output" ]; then
+      info "release.yml has remote workflow run history"
+    else
+      info "release.yml has no remote workflow runs"
+    fi
+  else
+    info "release.yml remote workflow lookup failed: $(tr '\n' ' ' <"$output")"
+  fi
+
+  : >"$output"
+  if gh run list --workflow live-eval.yml --limit 1 >"$output" 2>&1; then
+    if [ -s "$output" ]; then
+      info "live-eval.yml has remote workflow run history"
+    else
+      info "live-eval.yml has no remote workflow runs"
+    fi
+  else
+    info "live-eval.yml remote workflow lookup failed: $(tr '\n' ' ' <"$output")"
+  fi
+
+  : >"$output"
+  if gh secret list --json name --jq '.[].name' >"$output" 2>&1; then
+    if grep -qE '^(LEMON_EVAL_API_KEY|INTEGRATION_API_KEY|ANTHROPIC_API_KEY)$' "$output"; then
+      pass "release-eval repository secret is configured"
+    else
+      info "no release-eval repository secret found under LEMON_EVAL_API_KEY, INTEGRATION_API_KEY, or ANTHROPIC_API_KEY"
+    fi
+  else
+    info "release-eval repository secret lookup failed: $(tr '\n' ' ' <"$output")"
+  fi
+
+  rm -f "$output"
+}
+
+cd "$ROOT"
+
+if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+  echo "invalid CalVer version: $VERSION" >&2
+  exit 2
+fi
+
+MIX_VERSION="$(
+  python3 - <<'PY'
+import re
+from pathlib import Path
+
+match = re.search(r'version:\s*"([^"]+)"', Path("mix.exs").read_text(encoding="utf-8"))
+print(match.group(1) if match else "")
+PY
+)"
+
+if [ "$MIX_VERSION" = "$VERSION" ]; then
+  pass "mix.exs version matches $VERSION"
+else
+  fail "mix.exs version is '$MIX_VERSION', expected '$VERSION'"
+fi
+
+run_or_fail "release notes are valid for $VERSION" \
+  scripts/prepare_release_notes "$VERSION"
+
+run_or_fail "CI/docs policy lint passes" \
+  scripts/lint_ci_docs.sh
+
+run_or_fail "fast test lane passes" \
+  scripts/test fast
+
+run_or_fail "quality test lane passes" \
+  scripts/test quality
+
+run_or_fail "eval-fast test lane passes" \
+  scripts/test eval-fast
+
+run_or_fail "client test lane passes" \
+  scripts/test clients
+
+run_or_fail "docs site verifies" \
+  scripts/verify_docs_site
+
+if [ -n "$LOCAL_ARTIFACT_DIR" ]; then
+  run_or_fail "local artifacts verify and boot at $LOCAL_ARTIFACT_DIR" \
+    scripts/verify_release_runtime_boot "$LOCAL_ARTIFACT_DIR"
+else
+  block "local artifact verification not run; pass the artifact directory as the second argument"
+fi
+
+remote_preflight
+
+if command -v gh >/dev/null 2>&1; then
+  github_output="$(mktemp)"
+  if scripts/verify_github_release_artifacts "$VERSION" >"$github_output" 2>&1; then
+    pass "public GitHub Release artifacts verify and boot for v$VERSION"
+  else
+    github_status="$?"
+    cat "$github_output" >&2
+    case "$github_status" in
+      66) block "public GitHub Release artifacts are not available for v$VERSION" ;;
+      *) fail "public GitHub Release artifact verification failed for v$VERSION" ;;
+    esac
+  fi
+  rm -f "$github_output"
+else
+  block "gh CLI is not available; public GitHub Release artifact verification not run"
+fi
+
+if [ -n "${LEMON_EVAL_API_KEY:-}" ] ||
+   [ -n "${INTEGRATION_API_KEY:-}" ] ||
+   [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  run_or_fail "provider-backed live eval passes" \
+    scripts/test live-eval
+else
+  block "provider-backed live eval not run; set LEMON_EVAL_API_KEY, INTEGRATION_API_KEY, or ANTHROPIC_API_KEY"
+fi
+
+echo ""
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo "FAILED: $ERRORS readiness failure(s), $BLOCKERS blocker(s)." >&2
+  exit 1
+fi
+
+if [ "$BLOCKERS" -gt 0 ]; then
+  echo "BLOCKED: $BLOCKERS launch-blocking evidence item(s) missing." >&2
+  print_blocker_next_steps
+  exit 66
+fi
+
+echo "Lemon $VERSION readiness audit passed."

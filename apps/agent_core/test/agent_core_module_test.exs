@@ -1240,11 +1240,11 @@ defmodule AgentCore.ModuleTest do
 
       :ok = AgentCore.prompt(agent, "Add numbers")
 
-      assert_receive {:agent_event, {:tool_execution_start, "call_add_1", "add", _}}, 1000
-      assert_receive {:agent_event, {:tool_execution_end, "call_add_1", "add", _, _}}, 1000
-      assert_receive {:agent_event, {:agent_end, _}}, 2000
+      assert_receive {:agent_event, {:tool_execution_start, "call_add_1", "add", _}}, 5000
+      assert_receive {:agent_event, {:tool_execution_end, "call_add_1", "add", _, _}}, 5000
+      assert_receive {:agent_event, {:agent_end, _}}, 5000
 
-      :ok = AgentCore.wait_for_idle(agent, timeout: 2000)
+      :ok = AgentCore.wait_for_idle(agent, timeout: 5000)
 
       state = AgentCore.get_state(agent)
       # Should have: user, assistant (with tool call), tool result, assistant (final)

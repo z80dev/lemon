@@ -150,7 +150,9 @@ defmodule LemonCore.Setup.Wizard do
     io.info.("")
 
     if non_interactive? do
-      io.info.("Skipping provider setup (non-interactive). Run `mix lemon.setup provider` to onboard a provider.")
+      io.info.(
+        "Skipping provider setup (non-interactive). Run `mix lemon.setup provider` to onboard a provider."
+      )
     else
       answer = prompt_yes_no?("Onboard an AI provider now?", true, io)
 
@@ -166,7 +168,9 @@ defmodule LemonCore.Setup.Wizard do
     io.info.("")
 
     if non_interactive? do
-      io.info.("Skipping runtime configuration (non-interactive). Run `mix lemon.setup runtime` to configure.")
+      io.info.(
+        "Skipping runtime configuration (non-interactive). Run `mix lemon.setup runtime` to configure."
+      )
     else
       answer = prompt_yes_no?("Configure runtime profile now?", false, io)
 
@@ -266,7 +270,9 @@ defmodule LemonCore.Setup.Wizard do
       io.info.("")
       io.info.("Press Enter to keep each value, or type a new port number.")
 
-      control = parse_port(io.prompt.("control-plane port [#{current.control}]: "), current.control)
+      control =
+        parse_port(io.prompt.("control-plane port [#{current.control}]: "), current.control)
+
       web = parse_port(io.prompt.("web port [#{current.web}]: "), current.web)
       sim = parse_port(io.prompt.("sim-ui port [#{current.sim}]: "), current.sim)
 
@@ -305,10 +311,13 @@ defmodule LemonCore.Setup.Wizard do
     io.info.("  export LEMON_SIM_UI_PORT=#{ports.sim}")
     io.info.("")
     io.info.("To launch this profile:")
-    io.info.("  MIX_ENV=prod mix release #{profile_name}")
+    io.info.("  MIX_ENV=prod mix release #{release_name(profile_name)}")
     io.info.("  # or in dev:")
     io.info.("  bin/lemon")
   end
+
+  defp release_name(:runtime_min), do: "lemon_runtime_min"
+  defp release_name(:runtime_full), do: "lemon_runtime_full"
 
   # ──────────────────────────────────────────────────────────────────────────
   # IO helpers

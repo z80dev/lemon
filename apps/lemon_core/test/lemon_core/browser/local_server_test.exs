@@ -17,7 +17,11 @@ defmodule LemonCore.Browser.LocalServerTest do
 
     on_exit(fn ->
       if Process.alive?(pid) do
-        GenServer.stop(pid, :normal, 1_000)
+        try do
+          GenServer.stop(pid, :normal, 1_000)
+        catch
+          :exit, _ -> :ok
+        end
       end
     end)
 

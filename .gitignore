@@ -49,6 +49,7 @@ __pycache__/
 
 # JavaScript/node artifacts
 node_modules/
+coverage/
 
 # Local generated SQLite/SQLite WAL artifacts
 *.db3

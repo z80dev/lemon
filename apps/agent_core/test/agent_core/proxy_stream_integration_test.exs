@@ -8,7 +8,7 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
   alias Ai.EventStream
   alias Ai.Types.{AssistantMessage, TextContent, ToolCall, ToolResultMessage}
 
-  @receive_timeout 2_000
+  @receive_timeout 5_000
 
   defp start_sse_server(chunks, opts \\ []) do
     capture_request = Keyword.get(opts, :capture_request, false)

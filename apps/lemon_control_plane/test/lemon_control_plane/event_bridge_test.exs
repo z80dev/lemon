@@ -22,19 +22,12 @@ defmodule LemonControlPlane.EventBridgeTest do
           {:started, pid}
 
         pid ->
-          for {conn_id, _} <- Presence.list() do
-            Presence.unregister(conn_id)
-          end
-
+          clear_presence()
           {:existing, pid}
       end
 
     on_exit(fn ->
-      if Process.whereis(Presence) do
-        for {conn_id, _} <- Presence.list() do
-          Presence.unregister(conn_id)
-        end
-      end
+      clear_presence()
 
       case presence do
         {:started, pid} -> stop_if_alive(pid)
@@ -48,6 +41,16 @@ defmodule LemonControlPlane.EventBridgeTest do
     end)
 
     {:ok, bridge_pid: elem(bridge, 1)}
+  end
+
+  defp clear_presence do
+    if Process.whereis(Presence) do
+      for {conn_id, _} <- Presence.list() do
+        Presence.unregister(conn_id)
+      end
+    end
+  catch
+    :exit, _ -> :ok
   end
 
   defp stop_if_alive(pid) do

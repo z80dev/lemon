@@ -284,12 +284,13 @@ defmodule CodingAgent.Tools.BashTest do
 
     test "abort signal during execution stops command", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
+      marker = Path.join(tmp_dir, "started.marker")
 
       task =
         Task.async(fn ->
           Bash.execute(
             "call_1",
-            %{"command" => "echo 'started'; sleep 10; echo 'finished'"},
+            %{"command" => "echo 'started'; touch started.marker; sleep 10; echo 'finished'"},
             signal,
             nil,
             tmp_dir,
@@ -297,8 +298,17 @@ defmodule CodingAgent.Tools.BashTest do
           )
         end)
 
-      # Give it time to start
-      Process.sleep(100)
+      started =
+        Enum.reduce_while(1..100, false, fn _, _ ->
+          if File.exists?(marker) do
+            {:halt, true}
+          else
+            Process.sleep(20)
+            {:cont, false}
+          end
+        end)
+
+      assert started
 
       # Abort the execution
       AbortSignal.abort(signal)

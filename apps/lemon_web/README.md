@@ -4,7 +4,7 @@ Phoenix web interface for the Lemon platform. Provides a real-time dashboard for
 
 ## Architecture Overview
 
-LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for all interactive pages (no traditional controller-rendered views), Bandit as the HTTP server, and Tailwind CSS (loaded from CDN) for styling. Phoenix and LiveView client libraries are loaded from CDN ESM bundles rather than a local Node.js build pipeline.
+LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, vendored Phoenix JavaScript from umbrella dependencies, and Tailwind CSS loaded from CDN for styling.
 
 ### OTP Supervision Tree
 
@@ -54,7 +54,13 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 | Path | LiveView | Action | Description |
 |------|----------|--------|-------------|
 | `/` | `SessionLive` | `:index` | Dashboard home; generates an isolated session key per browser tab |
+| `/ops` | `OpsDashboardLive` | `:index` | Operations dashboard for health, runs, approvals, cron, skills, channels, and support bundle access |
+| `/ops/runs/:run_id` | `OpsRunLive` | `:show` | Run detail page with timeline, tool events, failures, child-run graph, approvals, and support bundle access |
 | `/sessions/:session_key` | `SessionLive` | `:show` | Dashboard bound to a specific session key |
+
+| Path | Controller | Action | Description |
+|------|------------|--------|-------------|
+| `/ops/support-bundle` | `SupportBundleController` | `:download` | Downloads a redacted Lemon support bundle zip |
 
 ### Query Parameters
 
@@ -92,6 +98,31 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 3. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
 4. Response streams back through PubSub events
 
+### OpsDashboardLive (`/ops`)
+
+Operations dashboard for support and runtime inspection.
+
+**Features:**
+- Runtime, router, provider, and secrets status summary
+- Version, release, git, Elixir, and OTP runtime metadata
+- Default provider/model/thinking/engine editing and provider secret-reference editing
+- Active sessions, recent runs, and observed introspection activity
+- Pending execution approvals with resolution actions
+- Cron schedule list with create/edit/delete, run-now, and enable/disable controls
+- Skill health, provenance, required binaries, missing requirements, install/update controls, enable/disable controls, channel transport enable/disable config controls, gateway default editing, Telegram token-secret and allowlist editing, channel binding create/edit/delete controls, live adapter status, and disconnect/reconnect controls
+- Support bundle download plus source-dev and release-runtime troubleshooting commands
+
+### OpsRunLive (`/ops/runs/:run_id`)
+
+Run-level support page for inspecting one execution.
+
+**Features:**
+- Run status, event counts, failures, and pending approval summary
+- Timeline of introspection events
+- Tool event and failure lists
+- Nested child-run graph from recorded `parent_run_id` relationships
+- Support bundle download plus source-dev and release-runtime troubleshooting commands
+
 ## Components
 
 ### LiveView Components (under `lib/lemon_web/live/components/`)
@@ -119,11 +150,11 @@ Shared function components auto-imported into all LiveViews:
 
 ## Static Assets and Frontend
 
-LemonWeb uses a CDN-based frontend strategy with no local build tools (no esbuild, no Node.js):
+LemonWeb uses a small static frontend strategy with no local build tools (no esbuild, no Node.js):
 
 - **Tailwind CSS**: Loaded from `https://cdn.tailwindcss.com` in the root layout
-- **Phoenix JS**: Loaded from `https://cdn.jsdelivr.net/npm/phoenix@1.8.1` (ESM)
-- **Phoenix LiveView JS**: Loaded from `https://cdn.jsdelivr.net/npm/phoenix_live_view@1.0.18` (ESM)
+- **Phoenix JS**: Vendored from `deps/phoenix/priv/static/phoenix.mjs` into `priv/static/assets/vendor/phoenix.mjs`
+- **Phoenix LiveView JS**: Vendored from `deps/phoenix_live_view/priv/static/phoenix_live_view.esm.js` into `priv/static/assets/vendor/phoenix_live_view.esm.js`
 - **app.js** (`priv/static/assets/app.js`): Client-side entry point that initializes the LiveSocket, generates stable per-tab session keys via `sessionStorage`, normalizes agent IDs, and strips token params from the URL after authentication
 
 Static files are served by `Plug.Static` at `/` for paths matching `~w(assets favicon.ico robots.txt)`.
@@ -165,7 +196,7 @@ Configured in `SessionLive.mount/3`:
 | `LEMON_WEB_ACCESS_TOKEN` | Dashboard access token | `nil` (no auth) |
 | `LEMON_WEB_UPLOADS_DIR` | Directory for uploaded files | `System.tmp_dir!/0 <> "/lemon_web_uploads"` |
 | `LEMON_WEB_HOST` | Production hostname | `"localhost"` |
-| `LEMON_WEB_PORT` | Production HTTP port | `4080` |
+| `LEMON_WEB_PORT` | HTTP port for unified runtime and production | `4080` |
 | `LEMON_WEB_SECRET_KEY_BASE` | Production secret key (required in prod) | -- |
 | `PHX_SERVER` | Set to `"1"` or `"true"` to start the HTTP server in prod | -- |
 
@@ -187,7 +218,8 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 
 | Environment | Port | Server | Secret Key |
 |-------------|------|--------|------------|
-| dev | 4080 (127.0.0.1) | Inline (no `server: true`) | Hardcoded dev key |
+| dev (`mix phx.server`) | 4080 (127.0.0.1) | Phoenix server task | Hardcoded dev key |
+| dev (`bin/lemon`) | `LEMON_WEB_PORT` / `--web-port` (127.0.0.1) | Enabled by runtime boot | Hardcoded dev key |
 | test | 4082 (127.0.0.1) | `server: false` | Hardcoded test key |
 | prod | `LEMON_WEB_PORT` (0.0.0.0) | Enabled via `PHX_SERVER` | `LEMON_WEB_SECRET_KEY_BASE` |
 

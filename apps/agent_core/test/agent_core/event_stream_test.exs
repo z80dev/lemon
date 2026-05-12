@@ -970,14 +970,14 @@ defmodule AgentCore.EventStreamTest do
         end)
 
       EventStream.attach_task(stream, task_pid)
+      task_ref = Process.monitor(task_pid)
 
       Process.sleep(20)
       assert Process.alive?(task_pid)
 
       send(owner, :die)
 
-      Process.sleep(50)
-      refute Process.alive?(task_pid)
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _reason}, 1000
     end
 
     test "attached task abort signal is triggered before shutdown" do

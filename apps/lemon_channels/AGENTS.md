@@ -67,7 +67,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
 | `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Temporary parser-only compatibility shim for resume lines when gateway/custom engine modules expose custom syntax. Validation and formatting should use `LemonCore.EngineCatalog` / `LemonCore.ResumeToken`. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
 
 ### Outbox Pipeline
 
@@ -466,6 +466,7 @@ Default engines: `lemon echo codex claude droid opencode pi kimi`. Override via 
 Thin wrappers to interact with `LemonRouter` without compile-time dependency:
 
 ```elixir
+LemonChannels.Runtime.cancel_session(session_key)
 LemonChannels.Runtime.cancel_by_run_id(run_id)
 LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
 LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)

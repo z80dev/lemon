@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Extract and validate release notes for a CalVer version.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/prepare_release_notes <version> [--changelog CHANGELOG.md]
+
+Extracts the CHANGELOG.md section headed by:
+
+  ## [<version>]
+
+The section must include at least one Keep a Changelog-style subsection and one
+bullet item. Notes are written to stdout.
+EOF
+  exit 64
+}
+
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+
+VERSION="$1"
+shift
+
+CHANGELOG="CHANGELOG.md"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --changelog)
+      if [ "$#" -lt 2 ]; then
+        usage
+      fi
+      CHANGELOG="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      usage
+      ;;
+  esac
+done
+
+if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+  echo "ERROR: '$VERSION' is not a valid CalVer version (YYYY.MM.PATCH)." >&2
+  exit 64
+fi
+
+if [ ! -f "$CHANGELOG" ]; then
+  echo "ERROR: changelog not found: $CHANGELOG" >&2
+  exit 66
+fi
+
+python3 - "$VERSION" "$CHANGELOG" <<'PYEOF'
+import re
+import sys
+
+version, changelog = sys.argv[1], sys.argv[2]
+
+with open(changelog, encoding="utf-8") as f:
+    text = f.read()
+
+pattern = re.compile(
+    rf"^## \[{re.escape(version)}\]\s*$\n(?P<body>.*?)(?=^## \[|^## [^\[]|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+match = pattern.search(text)
+
+if not match:
+    print(
+        f"ERROR: CHANGELOG section '## [{version}]' is missing. "
+        "Move the intended release notes out of Unreleased before publishing.",
+        file=sys.stderr,
+    )
+    sys.exit(65)
+
+body = match.group("body").strip()
+
+if not body:
+    print(f"ERROR: CHANGELOG section '## [{version}]' is empty.", file=sys.stderr)
+    sys.exit(65)
+
+if not re.search(r"^### (Added|Changed|Deprecated|Removed|Fixed|Security)\s*$", body, re.MULTILINE):
+    print(
+        f"ERROR: CHANGELOG section '## [{version}]' must include a Keep a Changelog subsection.",
+        file=sys.stderr,
+    )
+    sys.exit(65)
+
+if not re.search(r"^- .+", body, re.MULTILINE):
+    print(
+        f"ERROR: CHANGELOG section '## [{version}]' must include at least one bullet item.",
+        file=sys.stderr,
+    )
+    sys.exit(65)
+
+print(body)
+PYEOF

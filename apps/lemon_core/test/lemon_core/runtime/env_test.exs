@@ -140,6 +140,7 @@ defmodule LemonCore.Runtime.EnvTest do
 
         assert http[:port] == 9090
         assert http[:ip] == {127, 0, 0, 1}
+        assert result[:server] == true
         # Extra options must survive the port apply
         assert http[:transport_options] == [num_acceptors: 10]
         assert http[:keyfile] == "priv/cert/key.pem"

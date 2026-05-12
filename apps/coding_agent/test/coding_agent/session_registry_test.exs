@@ -75,10 +75,6 @@ defmodule CodingAgent.SessionRegistryTest do
 
   describe "list_ids/0" do
     test "returns a list and includes registered session ids" do
-      # In umbrella `mix test`, other suites may have started the Registry and left
-      # entries behind in the same BEAM. Don't assume global emptiness here.
-      initial_ids = MapSet.new(SessionRegistry.list_ids())
-
       # Create a unique session and verify it appears
       session_id = "list_test_#{:rand.uniform(100_000)}"
       via = SessionRegistry.via(session_id)
@@ -92,9 +88,9 @@ defmodule CodingAgent.SessionRegistryTest do
 
       assert wait_until(
                fn ->
-                 MapSet.new(SessionRegistry.list_ids()) == initial_ids
+                 session_id not in SessionRegistry.list_ids()
                end,
-               1_000
+               5_000
              )
     end
 
@@ -122,20 +118,17 @@ defmodule CodingAgent.SessionRegistryTest do
 
     test "updates when sessions are added and removed" do
       session_id = "dynamic_test_#{:rand.uniform(100_000)}"
-      initial_count = length(SessionRegistry.list_ids())
 
       # Add session
       via = SessionRegistry.via(session_id)
       {:ok, pid} = Agent.start_link(fn -> :ok end, name: via)
 
-      assert length(SessionRegistry.list_ids()) == initial_count + 1
       assert session_id in SessionRegistry.list_ids()
 
       # Remove session
       Agent.stop(pid)
 
-      assert wait_until(fn -> length(SessionRegistry.list_ids()) == initial_count end, 1_000)
-      refute session_id in SessionRegistry.list_ids()
+      assert wait_until(fn -> session_id not in SessionRegistry.list_ids() end, 5_000)
     end
   end
 

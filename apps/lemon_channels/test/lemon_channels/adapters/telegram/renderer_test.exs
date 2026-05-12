@@ -207,15 +207,21 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :edit,
-                      content: %{message_id: "3101", text: first_chunk}
+                      content: %{message_id: "3101", text: first_chunk},
+                      peer: %{id: "887"},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
-    assert_receive {:edit_started, worker, _payload}, 1_000
+    assert_receive {:edit_started, worker,
+                    %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}},
+                   1_000
 
     refute_receive {:delivered,
                     %LemonChannels.OutboundPayload{
-                      kind: :text
+                      kind: :text,
+                      peer: %{id: "887"},
+                      meta: %{run_id: ^run_id}
                     }},
                    150
 
@@ -226,7 +232,9 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                     %LemonChannels.OutboundPayload{
                       kind: :text,
                       content: second_chunk,
-                      reply_to: "55"
+                      reply_to: "55",
+                      peer: %{id: "887"},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
@@ -454,13 +462,17 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :edit,
-                      content: %{message_id: "3101", text: delivered_first_chunk_a}
+                      content: %{message_id: "3101", text: delivered_first_chunk_a},
+                      peer: %{id: "892"},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
     assert String.starts_with?(delivered_first_chunk_a, "a")
 
-    assert_receive {:edit_started, first_worker, _payload}, 1_000
+    assert_receive {:edit_started, first_worker,
+                    %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}},
+                   1_000
 
     assert :ok =
              Renderer.dispatch(intent(run_id, route, :final_text, %{text: long_text_b, seq: 3}))
@@ -468,7 +480,9 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     refute_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :text,
-                      content: ^second_chunk_a
+                      content: ^second_chunk_a,
+                      peer: %{id: "892"},
+                      meta: %{run_id: ^run_id}
                     }},
                    150
 
@@ -477,18 +491,24 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :edit,
-                      content: %{message_id: "3101", text: delivered_first_chunk_b}
+                      content: %{message_id: "3101", text: delivered_first_chunk_b},
+                      peer: %{id: "892"},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 
     assert String.starts_with?(delivered_first_chunk_b, "c")
 
-    assert_receive {:edit_started, second_worker, _payload}, 1_000
+    assert_receive {:edit_started, second_worker,
+                    %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}},
+                   1_000
 
     refute_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :text,
-                      content: ^second_chunk_a
+                      content: ^second_chunk_a,
+                      peer: %{id: "892"},
+                      meta: %{run_id: ^run_id}
                     }},
                    150
 
@@ -498,7 +518,9 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       kind: :text,
-                      content: delivered_second_chunk_b
+                      content: delivered_second_chunk_b,
+                      peer: %{id: "892"},
+                      meta: %{run_id: ^run_id}
                     }},
                    1_000
 

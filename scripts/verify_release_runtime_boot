@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_release_runtime_boot <artifact-directory>
+
+Verifies Lemon Linux x86_64 release artifacts beyond checksums:
+  - validates manifest and artifact checksums
+  - extracts lemon_runtime_min and lemon_runtime_full into clean temp dirs
+  - starts each release daemon without Mix
+  - checks control-plane /healthz
+  - checks Web /healthz for lemon_runtime_full
+  - stops the daemon
+  - generates a release-runtime support bundle with release eval
+EOF
+  exit 2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+ARTIFACT_DIR="$1"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ ! -d "$ARTIFACT_DIR" ]; then
+  echo "artifact directory not found: $ARTIFACT_DIR" >&2
+  exit 2
+fi
+
+"$ROOT/scripts/verify_release_artifacts" "$ARTIFACT_DIR"
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release-boot.XXXXXX")"
+cleanup() {
+  for bin in "$work_dir"/*/extract/bin/*; do
+    if [ -x "$bin" ]; then
+      "$bin" stop >/dev/null 2>&1 || true
+    fi
+  done
+
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+free_port() {
+  python3 - <<'PY'
+import socket
+
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+}
+
+manifest_entries() {
+  ARTIFACT_DIR="$ARTIFACT_DIR" python3 - <<'PY'
+import json
+import os
+import re
+
+manifest_path = os.path.join(os.environ["ARTIFACT_DIR"], "manifest.json")
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+entries = []
+for artifact in manifest["artifacts"]:
+    filename = artifact["file"]
+    match = re.search(r"-(lemon_runtime_min|lemon_runtime_full)\.tar\.gz$", filename)
+    if match:
+        entries.append((match.group(1), filename))
+
+for profile, filename in sorted(entries):
+    print(f"{profile}\t{filename}")
+PY
+}
+
+write_fixture_config() {
+  local home="$1"
+
+  mkdir -p "$home/.lemon"
+  cat > "$home/.lemon/config.toml" <<'EOF'
+[defaults]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+
+[gateway]
+max_concurrent_runs = 1
+auto_resume = false
+enable_telegram = false
+
+[features]
+routing_feedback       = "opt-in"
+skill_synthesis_drafts = "opt-in"
+EOF
+}
+
+wait_for_health() {
+  local url="$1"
+  local label="$2"
+
+  for _attempt in $(seq 1 20); do
+    if response="$(curl -sS --max-time 2 "$url" 2>/dev/null)"; then
+      if [ "$response" = "ok" ]; then
+        echo "ok $label healthz: $response"
+        return 0
+      fi
+
+      if printf '%s' "$response" | python3 -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if data.get("ok") is True or data.get("status") in ("ok", "degraded") else 1)' 2>/dev/null; then
+        echo "ok $label healthz: $response"
+        return 0
+      fi
+    fi
+
+    sleep 2
+  done
+
+  echo "health check failed for $label at $url" >&2
+  return 1
+}
+
+verified_profiles=0
+
+while IFS=$'\t' read -r profile filename; do
+  [ -n "$profile" ] || continue
+
+  profile_dir="$work_dir/$profile"
+  extract_dir="$profile_dir/extract"
+  home_dir="$profile_dir/home"
+  store_dir="$profile_dir/store"
+  bundle_path="$profile_dir/support-bundle.zip"
+  control_port="$(free_port)"
+  web_port="$(free_port)"
+  sim_port="$(free_port)"
+
+  mkdir -p "$extract_dir" "$store_dir"
+  write_fixture_config "$home_dir"
+
+  tar -xzf "$ARTIFACT_DIR/$filename" -C "$extract_dir"
+
+  release_bin="$extract_dir/bin/$profile"
+  if [ ! -x "$release_bin" ]; then
+    echo "$profile: release bin missing or not executable: $release_bin" >&2
+    exit 1
+  fi
+
+  env_vars=(
+    "HOME=$home_dir"
+    "LEMON_STORE_PATH=$store_dir"
+    "LEMON_SECRETS_MASTER_KEY=runtime-boot-dummy-key-32-chars"
+    "LEMON_CONTROL_PLANE_PORT=$control_port"
+    "LEMON_WEB_PORT=$web_port"
+    "LEMON_SIM_UI_PORT=$sim_port"
+    "LEMON_WEB_SECRET_KEY_BASE=runtime_boot_secret_key_base_runtime_boot_secret_key_base_runtime_boot"
+    "LEMON_GATEWAY_NODE_COOKIE=runtime-boot-cookie-$profile"
+    "PHX_SERVER=true"
+  )
+
+  env "${env_vars[@]}" "$release_bin" daemon
+  wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
+
+  if [ "$profile" = "lemon_runtime_full" ]; then
+    wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+  fi
+
+  env "${env_vars[@]}" "$release_bin" stop
+  env "${env_vars[@]}" "$release_bin" eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
+
+  if [ ! -f "$bundle_path" ]; then
+    echo "$profile: support bundle was not created at $bundle_path" >&2
+    exit 1
+  fi
+
+  echo "ok $profile booted, health checked, and generated support bundle"
+  verified_profiles=$((verified_profiles + 1))
+done < <(manifest_entries)
+
+if [ "$verified_profiles" -ne 2 ]; then
+  echo "expected to boot 2 release profiles, verified $verified_profiles" >&2
+  exit 1
+fi
+
+echo "verified release runtime boot for $verified_profiles profile(s)"

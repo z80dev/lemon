@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "lemon-cli"
-version = "0.1.0"
+version = "2026.05.0"
 source = { editable = "." }
 dependencies = [
     { name = "prompt-toolkit" },

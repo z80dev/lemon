@@ -222,8 +222,8 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       Path.join(tmp_dir, "docs/catalog.exs"),
       """
       [
-        %{path: "docs/README.md", owner: "@test", last_reviewed: ~D[2026-03-10], max_age_days: 60},
-        %{path: "docs/architecture_boundaries.md", owner: "@test", last_reviewed: ~D[2026-03-10], max_age_days: 60}
+        %{path: "docs/README.md", owner: "@test", last_reviewed: ~D[2026-05-01], max_age_days: 60},
+        %{path: "docs/architecture_boundaries.md", owner: "@test", last_reviewed: ~D[2026-05-01], max_age_days: 60}
       ]
       """
     )

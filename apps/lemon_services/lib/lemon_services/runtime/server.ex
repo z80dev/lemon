@@ -27,13 +27,21 @@ defmodule LemonServices.Runtime.Server do
     GenServer.start_link(__MODULE__, definition, name: via_tuple(definition.id))
   end
 
+  defp safe_call(pid, message, wrap) when is_pid(pid) and is_function(wrap, 1) do
+    pid
+    |> GenServer.call(message)
+    |> wrap.()
+  catch
+    :exit, _ -> {:error, :not_running}
+  end
+
   @doc """
   Gets the current state of a service.
   """
   @spec get_state(atom()) :: {:ok, State.t()} | {:error, :not_running}
   def get_state(service_id) when is_atom(service_id) do
     case Registry.lookup(LemonServices.Registry, {:server, service_id}) do
-      [{pid, _}] -> {:ok, GenServer.call(pid, :get_state)}
+      [{pid, _}] -> safe_call(pid, :get_state, &{:ok, &1})
       [] -> {:error, :not_running}
     end
   end
@@ -44,7 +52,7 @@ defmodule LemonServices.Runtime.Server do
   @spec stop(atom(), non_neg_integer()) :: :ok | {:error, :not_running}
   def stop(service_id, timeout_ms \\ 5000) when is_atom(service_id) do
     case Registry.lookup(LemonServices.Registry, {:server, service_id}) do
-      [{pid, _}] -> GenServer.call(pid, {:stop, timeout_ms})
+      [{pid, _}] -> safe_call(pid, {:stop, timeout_ms}, & &1)
       [] -> {:error, :not_running}
     end
   end

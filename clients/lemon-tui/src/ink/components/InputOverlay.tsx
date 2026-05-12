@@ -2,7 +2,7 @@
  * InputOverlay — single-line text input dialog.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useTheme } from '../context/ThemeContext.js';
 import { OverlayContainer } from './OverlayContainer.js';
@@ -18,6 +18,8 @@ export function InputOverlay({ title, placeholder, onSubmit, onCancel }: InputOv
   const theme = useTheme();
   const [value, setValue] = useState('');
   const [cursorPos, setCursorPos] = useState(0);
+  const valueRef = useRef('');
+  const cursorPosRef = useRef(0);
 
   useInput((input, key) => {
     if (key.escape) {
@@ -25,27 +27,43 @@ export function InputOverlay({ title, placeholder, onSubmit, onCancel }: InputOv
       return;
     }
     if (key.return) {
-      onSubmit(value);
+      onSubmit(valueRef.current);
       return;
     }
     if (key.backspace || key.delete) {
-      if (cursorPos > 0) {
-        setValue((v) => v.slice(0, cursorPos - 1) + v.slice(cursorPos));
-        setCursorPos((p) => p - 1);
+      const currentCursor = cursorPosRef.current;
+      if (currentCursor > 0) {
+        const currentValue = valueRef.current;
+        const nextValue = currentValue.slice(0, currentCursor - 1) + currentValue.slice(currentCursor);
+        const nextCursor = currentCursor - 1;
+        valueRef.current = nextValue;
+        cursorPosRef.current = nextCursor;
+        setValue(nextValue);
+        setCursorPos(nextCursor);
       }
       return;
     }
     if (key.leftArrow) {
-      setCursorPos((p) => Math.max(0, p - 1));
+      const nextCursor = Math.max(0, cursorPosRef.current - 1);
+      cursorPosRef.current = nextCursor;
+      setCursorPos(nextCursor);
       return;
     }
     if (key.rightArrow) {
-      setCursorPos((p) => Math.min(value.length, p + 1));
+      const nextCursor = Math.min(valueRef.current.length, cursorPosRef.current + 1);
+      cursorPosRef.current = nextCursor;
+      setCursorPos(nextCursor);
       return;
     }
     if (input && !key.ctrl && !key.meta) {
-      setValue((v) => v.slice(0, cursorPos) + input + v.slice(cursorPos));
-      setCursorPos((p) => p + input.length);
+      const currentValue = valueRef.current;
+      const currentCursor = cursorPosRef.current;
+      const nextValue = currentValue.slice(0, currentCursor) + input + currentValue.slice(currentCursor);
+      const nextCursor = currentCursor + input.length;
+      valueRef.current = nextValue;
+      cursorPosRef.current = nextCursor;
+      setValue(nextValue);
+      setCursorPos(nextCursor);
     }
   });
 

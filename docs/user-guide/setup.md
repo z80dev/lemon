@@ -8,9 +8,9 @@ Full walkthrough for getting Lemon running on your machine.
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Elixir | 1.19+ | See below for install |
-| Erlang/OTP | 27+ | Bundled with asdf/Elixir install |
-| Node.js | 20+ | TUI and Web clients only |
+| Elixir | 1.19.5+ | See below for install |
+| Erlang/OTP | 28.5+ | Bundled with asdf/Elixir install |
+| Node.js | 24 LTS+ | TUI and Web clients only |
 | Python | 3.10+ | Debug CLI only (optional) |
 | Rust/Cargo | stable | WASM tool auto-build (optional) |
 
@@ -29,10 +29,10 @@ elixir -v
 # Install asdf, then:
 asdf plugin add erlang
 asdf plugin add elixir
-asdf install erlang 27.2
-asdf install elixir 1.19.0-otp-27
-asdf global erlang 27.2
-asdf global elixir 1.19.0-otp-27
+asdf install erlang 28.5
+asdf install elixir 1.19.5-otp-28
+asdf global erlang 28.5
+asdf global elixir 1.19.5-otp-28
 elixir -v
 ```
 
@@ -58,9 +58,9 @@ sudo dnf install -y elixir erlang
 **Node.js (TUI/Web clients only):**
 ```bash
 # macOS
-brew install node@20
+brew install node@24
 # Linux (nvm)
-nvm install 20
+nvm install 24
 ```
 
 ---
@@ -70,6 +70,7 @@ nvm install 20
 ```bash
 git clone https://github.com/z80dev/lemon.git
 cd lemon
+mix local.hex --force
 mix deps.get
 mix compile
 ```
@@ -97,16 +98,18 @@ Runs: dependency check → config scaffolding → secrets setup → gateway conf
 Individual sub-commands:
 
 ```bash
-mix lemon.setup config      # Scaffold ~/.lemon/config.toml
-mix lemon.setup secrets     # Configure encrypted secrets keychain
+mix lemon.setup provider    # Configure an AI provider
+mix lemon.setup runtime     # Configure runtime profile and port bindings
 mix lemon.setup gateway     # Configure Telegram/Discord gateway adapters
+mix lemon.setup doctor      # Run diagnostics
 ```
 
 ---
 
 ## Configuration
 
-Create `~/.lemon/config.toml` (or run `mix lemon.setup config`):
+Create `~/.lemon/config.toml` manually or run `mix lemon.setup` for the full
+interactive wizard:
 
 ```toml
 # Provider keys (pick one or more)
@@ -122,6 +125,15 @@ api_key_secret = "llm_anthropic_api_key_raw"
 
 [providers.openai]
 api_key_secret = "llm_openai_api_key"
+
+# OpenAI-compatible local or hosted endpoint:
+# [providers.openai]
+# api_key_secret = "llm_local_openai_api_key"
+# base_url = "http://127.0.0.1:11434/v1"
+#
+# [defaults]
+# provider = "openai"
+# model = "openai:local-model-name"
 
 # Other API-key onboarding targets include:
 # [providers.zai]
@@ -165,6 +177,32 @@ require_approval = ["bash", "write", "edit"]
 ```
 
 See [`docs/config.md`](../config.md) for the full configuration reference.
+
+### OpenAI-Compatible Endpoints
+
+Lemon can point the `openai` provider at any endpoint that implements the
+OpenAI-compatible chat/completions surface used by the configured model.
+
+```toml
+[providers.openai]
+api_key_secret = "llm_local_openai_api_key"
+base_url = "http://127.0.0.1:11434/v1"
+
+[defaults]
+provider = "openai"
+model = "openai:local-model-name"
+engine = "lemon"
+```
+
+Store the key expected by the endpoint. For local servers that ignore the key,
+store a harmless placeholder:
+
+```bash
+mix lemon.secrets.set llm_local_openai_api_key "local"
+```
+
+Provider-specific compatibility still matters: the endpoint must support the
+request and streaming shape Lemon sends for the selected model.
 
 ---
 
@@ -220,6 +258,24 @@ Prints the distributed node name on boot. Use it to attach a remote shell:
 ./bin/lemon-dev /path --model openai:llama3.1:8b --base-url http://localhost:11434/v1
 ```
 
+### Web UI
+
+The full runtime profile includes the Phoenix web interface. Start the runtime,
+then open the web port shown in the logs:
+
+```bash
+./bin/lemon
+```
+
+Default local routes:
+
+- `/` - session console
+- `/ops` - operations dashboard for runtime health, active sessions, recent
+  runs, pending approvals, and support-bundle commands
+- `/ops/runs/<run_id>` - run detail with timeline events, tool events,
+  failures, child runs, and support-bundle commands
+- `/healthz` - web health check
+
 ---
 
 ## Health Check
@@ -230,12 +286,20 @@ After setup, verify everything is working:
 mix lemon.doctor
 ```
 
-Checks: config file, secrets, provider connectivity, gateway adapter, runtime deps.
+Checks: config files, secrets, provider configuration, runtime dependencies, system tools, and skills storage.
 
-Fix individual issues:
+Generate a redacted support bundle when filing a bug or asking for help:
 
 ```bash
-mix lemon.doctor --fix
+mix lemon.doctor --bundle
+```
+
+The bundle is written under `tmp/lemon-support-bundles/` by default. It contains the doctor report, runtime metadata, selected environment shape, and redacted Lemon config files. Review it before sharing; it is designed to exclude provider keys, tokens, passwords, private prompts, memory contents, and tool outputs.
+
+For release-runtime installs, run the same bundle writer through the release `eval` command:
+
+```bash
+./bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
 ```
 
 ---
@@ -246,10 +310,10 @@ API keys are stored in an encrypted keychain, not in `config.toml` in plaintext.
 
 ```bash
 # Write a secret
-mix lemon.setup secrets set llm_anthropic_api_key_raw "sk-ant-..."
+mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
 
 # List stored secrets
-mix lemon.setup secrets list
+mix lemon.secrets.list
 ```
 
 Config references secrets by name via `api_key_secret = "key_name"`.

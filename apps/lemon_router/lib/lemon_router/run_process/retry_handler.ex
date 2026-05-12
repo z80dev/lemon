@@ -63,6 +63,22 @@ defmodule LemonRouter.RunProcess.RetryHandler do
     do: format_assistant_error(msg)
 
   def format_run_error({:assistant_error, reason}), do: "assistant error: #{inspect(reason)}"
+
+  def format_run_error({:gateway_run_down, {%module{} = exception, _stack}}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  def format_run_error({:gateway_run_down, %module{} = exception}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  def format_run_error({:gateway_run_down, reason}),
+    do: "gateway run exited: #{format_run_error(reason)}"
+
+  def format_run_error({%module{} = exception, _stack}) when is_atom(module),
+    do: format_exception_message(exception)
+
+  def format_run_error(%module{} = exception) when is_atom(module),
+    do: format_exception_message(exception)
+
   def format_run_error(e) when is_binary(e), do: e
   def format_run_error(e) when is_atom(e), do: Atom.to_string(e)
   def format_run_error(e), do: inspect(e)
@@ -120,6 +136,15 @@ defmodule LemonRouter.RunProcess.RetryHandler do
 
         {:retry, request, reason_text, attempt}
     end
+  end
+
+  defp format_exception_message(exception) do
+    case Exception.message(exception) do
+      message when is_binary(message) and message != "" -> message
+      _ -> inspect(exception)
+    end
+  rescue
+    _ -> inspect(exception)
   end
 
   defp submit_retry_request(run_orchestrator, %RunRequest{} = request) do

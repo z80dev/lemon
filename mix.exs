@@ -4,7 +4,7 @@ defmodule Lemon.MixProject do
   def project do
     [
       apps_path: "apps",
-      version: "0.1.0",
+      version: "2026.05.0",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 5]],
       deps: deps(),

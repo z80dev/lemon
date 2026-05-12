@@ -53,7 +53,12 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   end
 
   defp already_wrapped?(text) when is_binary(text) do
-    String.contains?(text, @external_start) and String.contains?(text, @external_end)
+    trimmed = String.trim(text)
+
+    String.starts_with?(
+      trimmed,
+      "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source."
+    ) and String.contains?(trimmed, @external_start) and String.ends_with?(trimmed, @external_end)
   end
 
   defp already_wrapped?(_), do: false

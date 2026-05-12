@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_github_release_artifacts <tag-or-version> [download-directory]
+
+Downloads a GitHub Release's Linux x86_64 Lemon artifacts plus manifest.json,
+then verifies file size, SHA-256, release boot, health, and support-bundle
+generation with scripts/verify_release_runtime_boot.
+The release lookup and asset download retry by default; override with
+LEMON_RELEASE_VERIFY_ATTEMPTS and LEMON_RELEASE_VERIFY_SLEEP_SECONDS.
+
+Examples:
+  scripts/verify_github_release_artifacts v2026.05.0
+  scripts/verify_github_release_artifacts 2026.05.0 /tmp/lemon-release-download
+EOF
+  exit 2
+}
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  usage
+fi
+
+TAG="$1"
+case "$TAG" in
+  v*) ;;
+  *) TAG="v$TAG" ;;
+esac
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DOWNLOAD_DIR="${2:-${TMPDIR:-/tmp}/lemon-release-download-${TAG#v}}"
+CALLER_PROVIDED_DIR=false
+if [ "$#" -eq 2 ]; then
+  CALLER_PROVIDED_DIR=true
+fi
+ATTEMPTS="${LEMON_RELEASE_VERIFY_ATTEMPTS:-10}"
+SLEEP_SECONDS="${LEMON_RELEASE_VERIFY_SLEEP_SECONDS:-6}"
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh CLI is required to download GitHub Release artifacts" >&2
+  exit 2
+fi
+
+case "$ATTEMPTS" in
+  ''|*[!0-9]*|0)
+    echo "LEMON_RELEASE_VERIFY_ATTEMPTS must be a positive integer" >&2
+    exit 2
+    ;;
+esac
+
+case "$SLEEP_SECONDS" in
+  ''|*[!0-9]*)
+    echo "LEMON_RELEASE_VERIFY_SLEEP_SECONDS must be a non-negative integer" >&2
+    exit 2
+    ;;
+esac
+
+release_found=false
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  if gh release view "$TAG" >/dev/null 2>&1; then
+    release_found=true
+    break
+  fi
+
+  if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    echo "GitHub Release not found yet: $TAG (attempt $attempt/$ATTEMPTS); retrying in ${SLEEP_SECONDS}s" >&2
+    sleep "$SLEEP_SECONDS"
+  fi
+done
+
+if ! $release_found; then
+  echo "GitHub Release not found: $TAG" >&2
+  exit 66
+fi
+
+if [ -z "$DOWNLOAD_DIR" ] || [ "$DOWNLOAD_DIR" = "/" ]; then
+  echo "invalid download directory: $DOWNLOAD_DIR" >&2
+  exit 2
+fi
+
+if $CALLER_PROVIDED_DIR; then
+  mkdir -p "$DOWNLOAD_DIR"
+  if [ -n "$(find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "download directory must be empty: $DOWNLOAD_DIR" >&2
+    exit 2
+  fi
+else
+  rm -rf "$DOWNLOAD_DIR"
+  mkdir -p "$DOWNLOAD_DIR"
+fi
+
+downloaded=false
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+  if gh release download "$TAG" \
+    --dir "$DOWNLOAD_DIR" \
+    --pattern "manifest.json" \
+    --pattern "lemon-*-linux-x86_64-lemon_runtime_min.tar.gz" \
+    --pattern "lemon-*-linux-x86_64-lemon_runtime_full.tar.gz"; then
+    downloaded=true
+    break
+  fi
+
+  if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    echo "GitHub Release assets not ready for $TAG (attempt $attempt/$ATTEMPTS); retrying in ${SLEEP_SECONDS}s" >&2
+    sleep "$SLEEP_SECONDS"
+  fi
+done
+
+if ! $downloaded; then
+  echo "failed to download GitHub Release artifacts for $TAG" >&2
+  exit 66
+fi
+
+"$ROOT/scripts/verify_release_runtime_boot" "$DOWNLOAD_DIR"
+
+echo "downloaded, verified, and booted GitHub Release artifacts for $TAG in $DOWNLOAD_DIR"

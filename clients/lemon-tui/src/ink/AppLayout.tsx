@@ -68,6 +68,11 @@ type OverlayState =
   | { kind: 'local-input'; title: string; placeholder?: string; onSubmit: (value: string) => void }
   | { kind: 'session-picker' };
 
+const abortKeyArmed: Record<'ctrl_c' | 'escape', boolean> = {
+  ctrl_c: false,
+  escape: false,
+};
+
 export function AppLayout({ onStop }: { onStop: () => void }) {
   const store = useStore();
   const connection = useConnection();
@@ -116,6 +121,27 @@ export function AppLayout({ onStop }: { onStop: () => void }) {
     }
     prevBusyRef.current = busy;
   }, [busy, bellEnabled]);
+
+  const requestAbort = useCallback((kind: 'ctrl_c' | 'escape') => {
+    if (!busy) return false;
+
+    const armed = abortKeyArmed[kind];
+
+    if (armed) {
+      abortKeyArmed[kind] = false;
+      connection.abort();
+      return true;
+    }
+
+    abortKeyArmed[kind] = true;
+    return true;
+  }, [busy, connection]);
+
+  useEffect(() => {
+    if (busy) return;
+    abortKeyArmed.ctrl_c = false;
+    abortKeyArmed.escape = false;
+  }, [busy]);
 
   // Git modeline
   useGitModeline();
@@ -271,6 +297,14 @@ export function AppLayout({ onStop }: { onStop: () => void }) {
   useInput(
     (input, key) => {
       if (overlay) return;
+
+      if ((key.ctrl && input === 'c') || input === '\x03') {
+        if (requestAbort('ctrl_c')) return;
+      }
+
+      if (key.escape || input === '\x1B') {
+        if (requestAbort('escape')) return;
+      }
 
       if (key.ctrl && input === 'n') {
         const defaultCwd = cwd ?? '';

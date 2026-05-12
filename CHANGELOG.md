@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.05.0]
+
 ### Added
 
 **M8 — Documentation and release**
@@ -16,11 +22,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Architecture overview doc (`docs/architecture/overview.md`)
 - CONTRIBUTING.md, SECURITY.md, LICENSE, CHANGELOG.md
 - GitHub issue/PR templates
-- `product-smoke.yml` CI: packaged runtime boot, `lemon.doctor`, skill lint, memory search, adaptive eval gates
+- `product-smoke.yml` CI: packaged runtime boot, control-plane HTTP/WebSocket health, full-profile web health, release support-bundle generation, skill lint, adaptive eval gates
 - `release.yml` CI: CalVer tag validation, multi-profile artifact build, manifest.json, GitHub Release publication
 - `scripts/bump_version.sh`: coordinated CalVer version bump across mix.exs and client package.json files
 - VitePress docs site (`docs/.vitepress/config.js`, `docs/package.json`): optional generated site from repo markdown
 - `docs-site.yml` CI: docs build, markdown link checking, and GitHub Pages deployment on push to main
+- Lemon 1.0 mainstream readiness ledger, launch website scaffold, install/demo/support pages, comparison page, interface proof pack, fresh-install proof, and release-artifact proof docs
+- Linux `x86_64` release support policy for `lemon_runtime_min` and `lemon_runtime_full`, including rollback and downloaded-artifact verification steps
+- `scripts/verify_release_artifacts`: verifies release `manifest.json` file names, sizes, and SHA-256 checksums against downloaded or assembled artifacts
+- Source and clean Docker install proof on Elixir 1.19.5 / Erlang/OTP 28 with `mix deps.get`, `mix compile`, and redacted doctor bundle generation
+- Web operations UI proof for `/ops`, run detail pages, support-bundle download, runtime health, sessions, approvals, cron, skills, channels, memory/log activity, and core config controls
+- Telegram source-runtime proof for `/cwd`, progress rendering, prompt round trip, bare `/cancel`, approval-button resolution, and concise invalid-model failures
+- TUI source-runtime proof for deterministic echo, rendered tool failure, and real-run cancellation
+- Launch-focused safety coverage for web fetch output, inbound email prompts, skill prompt rendering, and extension-style untrusted tool results
 
 **M7 — Adaptive routing and skill synthesis**
 - Skill synthesis draft pipeline: candidate selector, draft generator, draft store, orchestration pipeline
@@ -63,7 +77,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 **M1 — Runtime and tooling**
 - First-class OTP releases (`lemon_runtime_min`, `lemon_runtime_full`)
 - `mix lemon.setup` with interactive subcommands
-- `mix lemon.doctor` diagnostics framework
+- `mix lemon.doctor` diagnostics framework with redacted source-dev and release-runtime support bundles
 - Staged `mix lemon.update`
 - Gateway setup adapters (Telegram, Discord)
 - Release smoke tests and packaging docs
@@ -76,6 +90,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Changed
 
 - Root README condensed from 3127 lines to 184 lines (deep content moved to `docs/`)
+- CI and docs now target Elixir 1.19.5, Erlang/OTP 28.5, and Node.js 24 LTS.
+- Setup docs and config examples now include an OpenAI-compatible endpoint path.
+- Public docs now clearly distinguish source install, local release proof, and the still-blocked public GitHub Release artifact proof.
+
+### Fixed
+
+- Untrusted tool output can no longer bypass the external-content wrapper simply by including both boundary markers.
+- Inbound email prompts are wrapped as external untrusted content before router submission.
+- Telegram bare `/cancel` now aborts active runs even when the command is not a reply to a progress message.
+- Telegram invalid model/config errors now render concise failure text instead of exposing BEAM stack traces.
 
 ---
 

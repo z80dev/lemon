@@ -428,7 +428,8 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      assert_receive {:dispatched_intent, %DeliveryIntent{kind: :stream_finalize}}, 1_000
+      assert_receive {:dispatched_intent,
+                      %DeliveryIntent{run_id: ^run_id, kind: :stream_finalize}}, 1_000
 
       assert :ok =
                StreamCoalescer.ingest_delta(
@@ -439,7 +440,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                  " late"
                )
 
-      refute_receive {:dispatched_intent, _}, 100
+      refute_receive {:dispatched_intent, %DeliveryIntent{run_id: ^run_id}}, 100
 
       [{pid, _}] =
         Registry.lookup(

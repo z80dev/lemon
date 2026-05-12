@@ -14,7 +14,9 @@ The first code slice from this scorecard made `read_skill` available in the defa
 
 ## Capability scorecard
 
-Latest slice: AgentCore can read and patch an existing workspace memory topic as learned context refinement.
+Latest slice: launch-focused prompt-injection coverage spans web fetch output,
+inbound email prompts, skill prompt rendering, and generic untrusted
+extension-style tool results.
 
 ### Tool ergonomics and enforcement
 
@@ -220,8 +222,9 @@ Latest slice: AgentCore can read and patch an existing workspace memory topic as
   - The agent safety contract now ties tool exposure, approval scopes, durable-memory screening, skill audit enforcement, and redacted telemetry together.
   - The deterministic eval lane now checks that adversarial untrusted tool output stays inside the external-content boundary.
   - The opt-in live-model lane now checks that provider-backed models ignore untrusted external tool instructions and avoid `skill_manage` side effects.
+  - Launch-focused prompt-injection tests now cover web fetch output, inbound email prompts, skill prompt rendering, and generic untrusted extension-style tool results.
 - Gaps:
-  - Additional prompt-injection variants across web, email, and extension tools would broaden coverage.
+  - Broader adversarial prompt-injection variant depth remains useful post-1.0 hardening work.
 - Priority: medium-high.
 
 ### Observability and dogfood loop
@@ -840,6 +843,16 @@ Latest slice: AgentCore can read and patch an existing workspace memory topic as
 1. Added a deterministic eval where the loop reads an existing workspace topic memory file before changing it.
 2. Verified the update goes through the real `patch` tool rather than direct file mutation.
 3. Verified the persisted memory topic captures the newly learned follow-up-owner detail for later runs.
+
+### Slice 101: Launch-focused prompt-injection coverage
+
+1. Tightened the untrusted tool boundary so raw tool output cannot bypass the
+   wrapper merely by including both external-content markers.
+2. Added deterministic marker-smuggling coverage for web fetch output, inbound
+   email prompts, skill prompt rendering, and extension-style untrusted tool
+   results.
+3. Updated the 1.0 safety docs and launch ledger so broader adversarial variants
+   are tracked as post-1.0 hardening rather than an initial launch blocker.
 
 ## Follow-up backlog
 

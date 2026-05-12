@@ -2,7 +2,7 @@ defmodule LemonCore.Doctor.ChecksTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.Doctor.Check
-  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime, Skills}
+  alias LemonCore.Doctor.Checks.{Config, NodeTools, Providers, Runtime, Skills}
 
   describe "Config.run/1" do
     test "returns a list of Check structs" do
@@ -20,6 +20,14 @@ defmodule LemonCore.Doctor.ChecksTest do
   describe "Runtime.run/1" do
     test "returns a list of Check structs" do
       checks = Runtime.run()
+      assert is_list(checks)
+      assert Enum.all?(checks, &match?(%Check{}, &1))
+    end
+  end
+
+  describe "Providers.run/1" do
+    test "returns a list of Check structs" do
+      checks = Providers.run()
       assert is_list(checks)
       assert Enum.all?(checks, &match?(%Check{}, &1))
     end

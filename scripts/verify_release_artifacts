@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: scripts/verify_release_artifacts <artifact-directory>" >&2
+  exit 2
+fi
+
+ARTIFACT_DIR="$1"
+MANIFEST="$ARTIFACT_DIR/manifest.json"
+
+if [ ! -d "$ARTIFACT_DIR" ]; then
+  echo "artifact directory not found: $ARTIFACT_DIR" >&2
+  exit 2
+fi
+
+if [ ! -f "$MANIFEST" ]; then
+  echo "manifest not found: $MANIFEST" >&2
+  exit 2
+fi
+
+ARTIFACT_DIR="$ARTIFACT_DIR" python3 - <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+
+artifact_dir = os.environ["ARTIFACT_DIR"]
+manifest_path = os.path.join(artifact_dir, "manifest.json")
+required_profiles = {"lemon_runtime_min", "lemon_runtime_full"}
+platform_tag = "linux-x86_64"
+
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+errors = []
+artifacts = manifest.get("artifacts")
+version = manifest.get("version")
+channel = manifest.get("channel")
+seen_profiles = set()
+
+if not isinstance(version, str) or not version:
+    errors.append("manifest.version must be a non-empty string")
+elif not re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", version):
+    errors.append(f"manifest.version must be CalVer YYYY.MM.PATCH: {version!r}")
+
+if not isinstance(channel, str) or not channel:
+    errors.append("manifest.channel must be a non-empty string")
+elif not re.fullmatch(r"[A-Za-z0-9._-]+", channel):
+    errors.append(f"manifest.channel contains unsupported characters: {channel!r}")
+
+if not isinstance(artifacts, list) or not artifacts:
+    errors.append("manifest.artifacts must be a non-empty list")
+    artifacts = []
+
+for artifact in artifacts:
+    if not isinstance(artifact, dict):
+        errors.append(f"invalid artifact entry: {artifact!r}")
+        continue
+
+    filename = artifact.get("file")
+    expected_sha = artifact.get("sha256")
+    expected_size = artifact.get("size")
+
+    if not isinstance(filename, str) or not filename:
+        errors.append(f"artifact missing file: {artifact!r}")
+        continue
+
+    if os.path.isabs(filename) or os.path.basename(filename) != filename:
+        errors.append(f"artifact file must be a basename: {filename}")
+        continue
+
+    filename_match = re.fullmatch(
+        rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-{platform_tag}-(lemon_runtime_min|lemon_runtime_full)\.tar\.gz",
+        filename,
+    )
+    if not filename_match:
+        errors.append(
+            f"{filename}: artifact filename must match lemon-{version}-{channel}-{platform_tag}-<profile>.tar.gz"
+        )
+        continue
+
+    profile = filename_match.group(1)
+    if profile in seen_profiles:
+        errors.append(f"{filename}: duplicate artifact profile {profile}")
+        continue
+    seen_profiles.add(profile)
+
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+        errors.append(f"{filename}: sha256 must be a 64-character hex string")
+        continue
+
+    if not isinstance(expected_size, int) or expected_size < 0:
+        errors.append(f"{filename}: size must be a non-negative integer")
+        continue
+
+    artifact_path = os.path.join(artifact_dir, filename)
+
+    if not os.path.isfile(artifact_path):
+        errors.append(f"{filename}: artifact file missing")
+        continue
+
+    actual_size = os.path.getsize(artifact_path)
+    if actual_size != expected_size:
+        errors.append(f"{filename}: size mismatch expected {expected_size} got {actual_size}")
+
+    digest = hashlib.sha256()
+    with open(artifact_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    actual_sha = digest.hexdigest()
+    if actual_sha != expected_sha.lower():
+        errors.append(f"{filename}: sha256 mismatch expected {expected_sha} got {actual_sha}")
+
+    if actual_size == expected_size and actual_sha == expected_sha.lower():
+        print(f"ok {filename} sha256={actual_sha} size={actual_size}")
+
+missing_profiles = required_profiles - seen_profiles
+if missing_profiles:
+    errors.append(
+        "missing required release artifact profile(s): " + ", ".join(sorted(missing_profiles))
+    )
+
+if errors:
+    for error in errors:
+        print(f"error {error}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"verified {len(artifacts)} artifact(s) for Lemon {manifest['version']} ({manifest['channel']})")
+PY

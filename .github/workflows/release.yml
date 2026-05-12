@@ -1,15 +1,20 @@
 name: Release
 
-# Builds, tags, and publishes a versioned Lemon release.
+# Builds and publishes a versioned Lemon release from an existing CalVer tag.
 #
-# Trigger: push a tag matching `v*.*.*` (e.g. v2026.03.0).
+# Triggers:
+#   - push a tag matching `v*.*.*` (e.g. v2026.03.0)
+#   - manually dispatch with an existing tag input
 #
 # Steps:
 #   1. Verify the tag matches CalVer (YYYY.MM.PATCH).
 #   2. Confirm mix.exs version matches the tag.
 #   3. Build release tarballs for each profile × platform matrix.
 #   4. Generate a manifest.json with version, channel, and SHA-256 checksums.
-#   5. Create a GitHub Release and upload artifacts.
+#   5. Verify the assembled artifact directory before publishing.
+#   6. Create a GitHub Release and upload artifacts.
+#   7. Download the published GitHub Release artifacts, verify checksums, boot
+#      runtimes, check health, and generate support bundles.
 #
 # See docs/release/versioning_and_channels.md for the versioning model.
 
@@ -46,8 +51,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "27.2"
-          elixir-version: "1.19.0"
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
 
       - name: Install deps (minimal)
         run: mix deps.get --only prod
@@ -111,8 +116,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "27.2"
-          elixir-version: "1.19.0"
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4
@@ -216,15 +221,14 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
 
+      - name: Verify assembled release artifacts
+        run: scripts/verify_release_artifacts release-artifacts
+
       - name: Extract changelog section
         id: changelog
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
-          # Extract the section for this version from CHANGELOG.md if it exists
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null || true)
-          if [ -z "$NOTES" ]; then
-            NOTES="Release ${VERSION} — see CHANGELOG.md for details."
-          fi
+          NOTES="$(scripts/prepare_release_notes "$VERSION")"
           # GitHub Actions multiline output
           {
             echo "notes<<NOTES_EOF"
@@ -242,4 +246,23 @@ jobs:
           files: |
             release-artifacts/*.tar.gz
             release-artifacts/manifest.json
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
+
+  # ── Verify published GitHub Release artifacts ───────────────────────────────
+  verify-published-artifacts:
+    name: Verify published artifacts
+    runs-on: ubuntu-latest
+    needs: [validate, publish]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Verify downloaded GitHub Release artifacts
+        run: scripts/verify_github_release_artifacts "v${{ needs.validate.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

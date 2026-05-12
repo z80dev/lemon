@@ -17,6 +17,9 @@ defmodule LemonWeb.Router do
     pipe_through(:browser)
 
     live("/", SessionLive, :index)
+    live("/ops", OpsDashboardLive, :index)
+    get("/ops/support-bundle", SupportBundleController, :download)
+    live("/ops/runs/:run_id", OpsRunLive, :show)
     live("/sessions/:session_key", SessionLive, :show)
   end
 

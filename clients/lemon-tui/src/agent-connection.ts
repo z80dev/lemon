@@ -133,6 +133,29 @@ type ParsedOpenClawEventAction =
       sessionKey: string;
       runId: string;
       text: string;
+    }
+  | {
+      kind: 'tool_started';
+      sessionKey: string;
+      id: string;
+      name: string;
+      args: Record<string, unknown>;
+    }
+  | {
+      kind: 'tool_updated';
+      sessionKey: string;
+      id: string;
+      name: string;
+      args: Record<string, unknown>;
+      partialResult: unknown;
+    }
+  | {
+      kind: 'tool_ended';
+      sessionKey: string;
+      id: string;
+      name: string;
+      result: unknown;
+      isError: boolean;
     };
 
 function readNonEmptyString(value: unknown): string | null {
@@ -436,6 +459,52 @@ function mapOpenClawEventToActions(
         sessionKey,
         runId,
         answer: readNonEmptyString(payload.answer) || undefined,
+      }];
+    }
+
+    if (eventType === 'tool_use') {
+      const action = asRecord(payload.action);
+      const detail = asRecord(action.detail);
+      const id =
+        readNonEmptyString(action.id)
+        || readNonEmptyString(action.title)
+        || `tool-${Date.now()}`;
+      const name =
+        readNonEmptyString(detail.name)
+        || readNonEmptyString(action.title)
+        || 'tool';
+      const args = asRecord(detail.args);
+      const phase = String(payload.phase || '');
+      const result =
+        detail.result !== undefined
+          ? detail.result
+          : readNonEmptyString(payload.message) || payload.message || detail;
+
+      if (phase === 'started' || phase === 'start') {
+        return [{ kind: 'tool_started', sessionKey, id, name, args }];
+      }
+
+      if (phase === 'completed' || phase === 'complete' || phase === 'ended' || phase === 'end') {
+        return [
+          { kind: 'tool_started', sessionKey, id, name, args },
+          {
+            kind: 'tool_ended',
+            sessionKey,
+            id,
+            name,
+            result,
+            isError: payload.ok === false,
+          },
+        ];
+      }
+
+      return [{
+        kind: 'tool_updated',
+        sessionKey,
+        id,
+        name,
+        args,
+        partialResult: result,
       }];
     }
   }
@@ -1449,6 +1518,39 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
           type: 'event',
           session_id: action.sessionKey,
           event: { type: 'agent_end', data: [[]] },
+        });
+        continue;
+      }
+
+      if (action.kind === 'tool_started') {
+        this.emit('message', {
+          type: 'event',
+          session_id: action.sessionKey,
+          event: { type: 'tool_execution_start', data: [action.id, action.name, action.args] },
+        });
+        continue;
+      }
+
+      if (action.kind === 'tool_updated') {
+        this.emit('message', {
+          type: 'event',
+          session_id: action.sessionKey,
+          event: {
+            type: 'tool_execution_update',
+            data: [action.id, action.name, action.args, action.partialResult],
+          },
+        });
+        continue;
+      }
+
+      if (action.kind === 'tool_ended') {
+        this.emit('message', {
+          type: 'event',
+          session_id: action.sessionKey,
+          event: {
+            type: 'tool_execution_end',
+            data: [action.id, action.name, action.result, action.isError],
+          },
         });
         continue;
       }

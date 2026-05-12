@@ -3,6 +3,19 @@ defmodule LemonServicesTest do
 
   alias LemonServices.Service.Definition
 
+  @test_service_ids [
+    :test_service,
+    :test_shell_service,
+    :test_module_service,
+    :test_query_service,
+    :test_get_service,
+    :pubsub_test_service,
+    :tool_test_service,
+    :status_test_service,
+    :defined_test_service,
+    :log_test
+  ]
+
   setup do
     # Ensure the application is started
     Application.ensure_all_started(:lemon_services)
@@ -10,16 +23,14 @@ defmodule LemonServicesTest do
     # Clean up any test services
     on_exit(fn ->
       # Stop any running test services
-      for service <- LemonServices.list_services() do
-        if service.definition.id in [:test_service, :test_shell_service, :test_module_service] do
+      for service <- safe_list_services() do
+        if service.definition.id in @test_service_ids do
           LemonServices.stop_service(service.definition.id)
         end
       end
 
       # Clean up definitions
-      for id <- [:test_service, :test_shell_service, :test_module_service, :test_query_service,
-                 :test_get_service, :pubsub_test_service, :tool_test_service, :status_test_service,
-                 :defined_test_service, :log_test] do
+      for id <- @test_service_ids do
         try do
           LemonServices.unregister_definition(id)
         catch
@@ -31,15 +42,22 @@ defmodule LemonServicesTest do
     :ok
   end
 
+  defp safe_list_services do
+    LemonServices.list_services()
+  catch
+    :exit, _ -> []
+  end
+
   describe "service lifecycle" do
     test "define and start a shell service" do
       # Define a simple echo service
-      {:ok, definition} = Definition.new(
-        id: :test_shell_service,
-        name: "Test Shell Service",
-        command: {:shell, "echo 'hello' && sleep 10"},
-        restart_policy: :temporary
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :test_shell_service,
+          name: "Test Shell Service",
+          command: {:shell, "echo 'hello' && sleep 10"},
+          restart_policy: :temporary
+        )
 
       :ok = LemonServices.register_definition(definition)
 
@@ -60,12 +78,13 @@ defmodule LemonServicesTest do
     end
 
     test "restart service" do
-      {:ok, definition} = Definition.new(
-        id: :test_service,
-        name: "Test Service",
-        command: {:shell, "sleep 30"},
-        restart_policy: :temporary
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :test_service,
+          name: "Test Service",
+          command: {:shell, "sleep 30"},
+          restart_policy: :temporary
+        )
 
       :ok = LemonServices.register_definition(definition)
       {:ok, pid1} = LemonServices.start_service(:test_service)
@@ -87,12 +106,13 @@ defmodule LemonServicesTest do
 
   describe "service queries" do
     test "list definitions" do
-      {:ok, definition} = Definition.new(
-        id: :test_query_service,
-        name: "Test Query Service",
-        command: {:shell, "sleep 1"},
-        tags: [:test, :query]
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :test_query_service,
+          name: "Test Query Service",
+          command: {:shell, "sleep 1"},
+          tags: [:test, :query]
+        )
 
       :ok = LemonServices.register_definition(definition)
 
@@ -104,11 +124,12 @@ defmodule LemonServicesTest do
     end
 
     test "get definition" do
-      {:ok, definition} = Definition.new(
-        id: :test_get_service,
-        name: "Test Get Service",
-        command: {:shell, "sleep 1"}
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :test_get_service,
+          name: "Test Get Service",
+          command: {:shell, "sleep 1"}
+        )
 
       :ok = LemonServices.register_definition(definition)
 
@@ -129,36 +150,40 @@ defmodule LemonServicesTest do
     end
 
     test "accepts valid definition" do
-      assert {:ok, _} = Definition.new(
-        id: :valid_test,
-        name: "Valid Test",
-        command: {:shell, "echo hello"}
-      )
+      assert {:ok, _} =
+               Definition.new(
+                 id: :valid_test,
+                 name: "Valid Test",
+                 command: {:shell, "echo hello"}
+               )
     end
 
     test "validates restart policy" do
-      assert {:error, _} = Definition.new(
-        id: :invalid_policy,
-        name: "Invalid Policy",
-        command: {:shell, "echo hello"},
-        restart_policy: :invalid
-      )
+      assert {:error, _} =
+               Definition.new(
+                 id: :invalid_policy,
+                 name: "Invalid Policy",
+                 command: {:shell, "echo hello"},
+                 restart_policy: :invalid
+               )
     end
 
     test "validates health check" do
-      assert {:ok, _} = Definition.new(
-        id: :health_test,
-        name: "Health Test",
-        command: {:shell, "echo hello"},
-        health_check: {:http, "http://localhost:3000", 5000}
-      )
+      assert {:ok, _} =
+               Definition.new(
+                 id: :health_test,
+                 name: "Health Test",
+                 command: {:shell, "echo hello"},
+                 health_check: {:http, "http://localhost:3000", 5000}
+               )
 
-      assert {:error, _} = Definition.new(
-        id: :bad_health_test,
-        name: "Bad Health Test",
-        command: {:shell, "echo hello"},
-        health_check: {:invalid, "test"}
-      )
+      assert {:error, _} =
+               Definition.new(
+                 id: :bad_health_test,
+                 name: "Bad Health Test",
+                 command: {:shell, "echo hello"},
+                 health_check: {:invalid, "test"}
+               )
     end
   end
 
@@ -168,17 +193,19 @@ defmodule LemonServicesTest do
       {:ok, _pid} = LemonServices.Runtime.LogBuffer.start_link(service_id: :log_buffer_test)
 
       # Append some logs
-      :ok = LemonServices.Runtime.LogBuffer.append(:log_buffer_test, %{
-        timestamp: DateTime.utc_now(),
-        stream: :stdout,
-        data: "line 1"
-      })
+      :ok =
+        LemonServices.Runtime.LogBuffer.append(:log_buffer_test, %{
+          timestamp: DateTime.utc_now(),
+          stream: :stdout,
+          data: "line 1"
+        })
 
-      :ok = LemonServices.Runtime.LogBuffer.append(:log_buffer_test, %{
-        timestamp: DateTime.utc_now(),
-        stream: :stdout,
-        data: "line 2"
-      })
+      :ok =
+        LemonServices.Runtime.LogBuffer.append(:log_buffer_test, %{
+          timestamp: DateTime.utc_now(),
+          stream: :stdout,
+          data: "line 2"
+        })
 
       # Small delay for async operations
       Process.sleep(10)
@@ -191,12 +218,13 @@ defmodule LemonServicesTest do
 
   describe "pubsub events" do
     test "subscribe to service events" do
-      {:ok, definition} = Definition.new(
-        id: :pubsub_test_service,
-        name: "PubSub Test Service",
-        command: {:shell, "sleep 5"},
-        restart_policy: :temporary
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :pubsub_test_service,
+          name: "PubSub Test Service",
+          command: {:shell, "sleep 5"},
+          restart_policy: :temporary
+        )
 
       :ok = LemonServices.register_definition(definition)
 
@@ -225,12 +253,13 @@ defmodule LemonServicesTest do
   describe "agent tools" do
     test "service_list tool" do
       # Register a test service
-      {:ok, definition} = Definition.new(
-        id: :tool_test_service,
-        name: "Tool Test Service",
-        command: {:shell, "sleep 1"},
-        tags: [:test]
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :tool_test_service,
+          name: "Tool Test Service",
+          command: {:shell, "sleep 1"},
+          tags: [:test]
+        )
 
       :ok = LemonServices.register_definition(definition)
 
@@ -245,19 +274,21 @@ defmodule LemonServicesTest do
     end
 
     test "service_status tool" do
-      {:ok, definition} = Definition.new(
-        id: :status_test_service,
-        name: "Status Test Service",
-        command: {:shell, "sleep 1"}
-      )
+      {:ok, definition} =
+        Definition.new(
+          id: :status_test_service,
+          name: "Status Test Service",
+          command: {:shell, "sleep 1"}
+        )
 
       :ok = LemonServices.register_definition(definition)
 
       # Check status (not running)
-      {:ok, result} = LemonServices.Agent.Tools.service_status_execute(
-        %{"service_id" => "status_test_service"},
-        %{}
-      )
+      {:ok, result} =
+        LemonServices.Agent.Tools.service_status_execute(
+          %{"service_id" => "status_test_service"},
+          %{}
+        )
 
       assert result.service_id == :status_test_service
       assert result.status == :stopped

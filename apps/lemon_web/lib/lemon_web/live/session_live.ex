@@ -156,6 +156,10 @@ defmodule LemonWeb.SessionLive do
     {:noreply, socket}
   end
 
+  def handle_info(%{type: :coalesced_output}, socket) do
+    {:noreply, socket}
+  end
+
   def handle_info(%LemonCore.Event{}, socket) do
     {:noreply, socket}
   end

@@ -39,6 +39,7 @@ config :lemon_core, LemonCore.Store,
   backend_opts: []
 
 config :lemon_web, LemonWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],
   render_errors: [
     formats: [html: LemonWeb.ErrorHTML, json: LemonWeb.ErrorJSON],

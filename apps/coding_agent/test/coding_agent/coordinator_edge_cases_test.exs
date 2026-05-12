@@ -606,8 +606,8 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         end)
 
       # Both should complete without crashing
-      Task.await(aborter, 5_000)
-      Task.await(runner, 5_000)
+      Task.await(aborter, 15_000)
+      Task.await(runner, 15_000)
 
       assert Process.alive?(coordinator)
     end

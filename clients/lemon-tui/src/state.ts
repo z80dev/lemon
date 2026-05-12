@@ -932,7 +932,8 @@ export class StateStore {
     if (message.role === 'assistant') {
       const normalized = this.normalizeAssistantMessage(
         message as AssistantMessage,
-        true
+        true,
+        this.generateMessageId()
       );
 
       if (sessionId) {
@@ -962,7 +963,8 @@ export class StateStore {
     if (message.role === 'assistant') {
       const normalized = this.normalizeAssistantMessage(
         message as AssistantMessage,
-        true
+        true,
+        this.currentStreamingMessageId(sessionId)
       );
 
       if (sessionId) {
@@ -977,7 +979,8 @@ export class StateStore {
     if (message.role === 'assistant') {
       const normalized = this.normalizeAssistantMessage(
         message as AssistantMessage,
-        false
+        false,
+        this.currentStreamingMessageId(sessionId)
       );
 
       if (sessionId) {
@@ -1273,7 +1276,8 @@ export class StateStore {
 
   private normalizeAssistantMessage(
     message: AssistantMessage,
-    isStreaming: boolean
+    isStreaming: boolean,
+    id: string = this.generateMessageId()
   ): NormalizedAssistantMessage {
     const content = message.content || [];
     const textParts: string[] = [];
@@ -1304,7 +1308,7 @@ export class StateStore {
     }
 
     return {
-      id: `assistant_${message.timestamp}`,
+      id,
       type: 'assistant',
       textContent: textParts.join(''),
       thinkingContent: thinkingParts.join(''),
@@ -1402,6 +1406,14 @@ export class StateStore {
 
   private generateMessageId(): string {
     return `msg_${++this.messageIdCounter}`;
+  }
+
+  private currentStreamingMessageId(sessionId: string | null): string {
+    if (sessionId) {
+      return this.state.sessions.get(sessionId)?.streamingMessage?.id || this.generateMessageId();
+    }
+
+    return this.state.streamingMessage?.id || this.generateMessageId();
   }
 
   // ============================================================================

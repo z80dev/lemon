@@ -13,8 +13,11 @@
     "typecheck": "npm --workspace shared run typecheck && npm --workspace server run typecheck && npm --workspace web run typecheck",
     "test:coverage": "npm --workspace shared run test:coverage && npm --workspace server run test:coverage && npm --workspace web run test:coverage"
   },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "devDependencies": {
     "concurrently": "^9.1.2"
   },
-  "version": "2026.3.0"
+  "version": "2026.05.0"
 }

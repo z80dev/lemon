@@ -11,7 +11,7 @@ def print_banner(state, theme: ThemeColors | None = None):
     art = get_lemon_art(t)
     cprint(art)
 
-    version_line = f"{ansi256(t.primary)}lemon-cli v0.1.0\033[0m"
+    version_line = f"{ansi256(t.primary)}lemon-cli v2026.05.0\033[0m"
     cprint(f"  {version_line}")
 
     if state and state.model:

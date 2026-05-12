@@ -1,5 +1,5 @@
 defmodule Ai.Providers.GoogleTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Ai.Providers.Google
   alias Ai.EventStream
@@ -312,7 +312,7 @@ defmodule Ai.Providers.GoogleTest do
 
       assert_receive {:request, "override.google.test",
                       "/v1beta/models/gemini-2.5-flash:streamGenerateContent", headers},
-                     1000
+                     5_000
 
       assert Map.new(headers)["x-goog-api-key"] == "google-resolved-key"
       assert {:ok, _} = EventStream.result(stream, 5_000)

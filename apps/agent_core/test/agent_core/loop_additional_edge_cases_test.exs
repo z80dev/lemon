@@ -408,7 +408,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       stream = Loop.agent_loop([user_message("Run slow")], context, config, signal, nil)
 
-      assert_receive {:slow_tool_started, _id}, 1_000
+      assert_receive {:slow_tool_started, _id}, 5_000
       AbortSignal.abort(signal)
 
       start = System.monotonic_time(:millisecond)
@@ -653,22 +653,30 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
     test "emits loop start and end telemetry" do
       context = simple_context()
       response = Mocks.assistant_message("Hello")
+      model_id = "telemetry-test-#{System.unique_integer([:positive])}"
 
       config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+        simple_config(
+          model: Mocks.mock_model(id: model_id),
+          stream_fn: Mocks.mock_stream_fn_single(response)
+        )
 
       stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil)
       {:ok, _messages} = EventStream.result(stream)
 
       # Should have received start telemetry
-      assert_receive {:telemetry, [:agent_core, :loop, :start], %{system_time: _}, metadata}
+      assert_receive {:telemetry, [:agent_core, :loop, :start], %{system_time: _},
+                      %{model: ^model_id} = metadata},
+                     5_000
+
       assert metadata.prompt_count == 1
       assert metadata.message_count == 0
       assert metadata.tool_count == 0
 
       # Should have received end telemetry
       assert_receive {:telemetry, [:agent_core, :loop, :end],
-                      %{duration: duration, system_time: _}, end_metadata}
+                      %{duration: duration, system_time: _}, %{model: ^model_id} = end_metadata},
+                     5_000
 
       assert is_integer(duration) or is_nil(duration)
       assert end_metadata.status == :completed

@@ -96,7 +96,7 @@ defmodule AgentCore.AgentQueueTest do
       # Signal to continue
       send(agent, :continue)
 
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "switching follow-up mode from :one_at_a_time to :all during streaming" do
@@ -222,7 +222,7 @@ defmodule AgentCore.AgentQueueTest do
       :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow-up"))
 
       :ok = CoreAgent.prompt(agent, "Will fail")
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
 
       # Verify error state
       state = CoreAgent.get_state(agent)
@@ -281,7 +281,7 @@ defmodule AgentCore.AgentQueueTest do
       {:ok, agent} = start_agent(stream_fn: error_stream_fn)
 
       :ok = CoreAgent.prompt(agent, "Test special error")
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
 
       state = CoreAgent.get_state(agent)
       assert is_binary(state.error)
@@ -429,10 +429,10 @@ defmodule AgentCore.AgentQueueTest do
       :ok = CoreAgent.prompt(agent, "Request")
 
       # Wait for stream to start
-      assert_receive :stream_started, 1000
+      assert_receive :stream_started, 5000
 
       # Now add waiter just before completion
-      result = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      result = CoreAgent.wait_for_idle(agent, timeout: 5000)
       assert result == :ok
     end
   end

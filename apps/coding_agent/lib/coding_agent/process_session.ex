@@ -208,20 +208,12 @@ defmodule CodingAgent.ProcessSession do
       ProcessStore.append_log(state.process_id, line)
     end)
 
-    # Update local buffer
     new_buffer =
-      Enum.reduce(lines, state.log_buffer, fn line, buf ->
-        buf = :queue.in(line, buf)
+      lines
+      |> Enum.reduce(state.log_buffer, fn line, buf -> :queue.in(line, buf) end)
+      |> trim_log_buffer(state.max_log_lines)
 
-        if state.log_count >= state.max_log_lines do
-          {{:value, _}, buf} = :queue.out(buf)
-          buf
-        else
-          buf
-        end
-      end)
-
-    new_count = min(state.log_count + length(lines), state.max_log_lines)
+    new_count = :queue.len(new_buffer)
 
     {:noreply, %{state | log_buffer: new_buffer, log_count: new_count}}
   end
@@ -429,6 +421,18 @@ defmodule CodingAgent.ProcessSession do
   defp shell_escape(path) do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
+
+  defp trim_log_buffer(buffer, max_log_lines)
+       when is_integer(max_log_lines) and max_log_lines >= 0 do
+    if :queue.len(buffer) > max_log_lines do
+      {{:value, _}, buffer} = :queue.out(buffer)
+      trim_log_buffer(buffer, max_log_lines)
+    else
+      buffer
+    end
+  end
+
+  defp trim_log_buffer(buffer, _max_log_lines), do: buffer
 
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)

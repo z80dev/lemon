@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lemon-docs-site.XXXXXX")"
+DOCS_COPY="$WORK_ROOT/docs"
+
+cleanup() {
+  if [ "${LEMON_DOCS_VERIFY_KEEP_TMP:-}" = "1" ]; then
+    echo "kept docs verification temp directory: $WORK_ROOT" >&2
+  else
+    rm -rf "$WORK_ROOT"
+  fi
+}
+trap cleanup EXIT
+
+mkdir -p "$DOCS_COPY"
+cp -a "$ROOT/docs/." "$DOCS_COPY/"
+rm -rf "$DOCS_COPY/node_modules" "$DOCS_COPY/package-lock.json" "$DOCS_COPY/.vitepress/dist"
+
+cd "$DOCS_COPY"
+
+npm install
+npm audit --audit-level=high
+npm run build
+
+find . -name "*.md" \
+  ! -path "./.vitepress/*" \
+  ! -path "./node_modules/*" \
+  | xargs npx markdown-link-check \
+      --config .mlc.json \
+      --quiet
+
+echo "docs site verification passed"

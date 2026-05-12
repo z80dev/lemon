@@ -2,7 +2,7 @@
  * ConfirmOverlay — Yes/No confirmation dialog.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useTheme } from '../context/ThemeContext.js';
 import { OverlayContainer } from './OverlayContainer.js';
@@ -16,10 +16,11 @@ interface ConfirmOverlayProps {
 export function ConfirmOverlay({ title, message, onConfirm }: ConfirmOverlayProps) {
   const theme = useTheme();
   const [selected, setSelected] = useState(0); // 0 = Yes, 1 = No
+  const selectedRef = useRef(0);
 
   useInput((input, key) => {
     if (key.return) {
-      onConfirm(selected === 0);
+      onConfirm(selectedRef.current === 0);
       return;
     }
     if (key.escape) {
@@ -27,7 +28,11 @@ export function ConfirmOverlay({ title, message, onConfirm }: ConfirmOverlayProp
       return;
     }
     if (key.leftArrow || key.rightArrow || key.tab) {
-      setSelected((s) => (s === 0 ? 1 : 0));
+      setSelected((s) => {
+        const next = s === 0 ? 1 : 0;
+        selectedRef.current = next;
+        return next;
+      });
       return;
     }
     if (input === 'y' || input === 'Y') {

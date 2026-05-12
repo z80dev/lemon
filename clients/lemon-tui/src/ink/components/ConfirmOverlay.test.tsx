@@ -10,6 +10,23 @@ import { ConfirmOverlay } from './ConfirmOverlay.js';
 
 function delay(ms = 20) { return new Promise<void>(r => setTimeout(r, ms)); }
 
+async function waitFor(assertion: () => void, timeoutMs = 500) {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(10);
+    }
+  }
+
+  throw lastError;
+}
+
 function renderOverlay(props: {
   title: string;
   message: string;
@@ -125,33 +142,31 @@ describe('ConfirmOverlay', () => {
 
   it('should toggle selection with right arrow then Enter for No', async () => {
     const onConfirm = vi.fn();
-    const { stdin } = renderOverlay({
+    const { stdin, lastFrame } = renderOverlay({
       title: 'Test',
       message: 'Continue?',
       onConfirm,
     });
     await delay();
     stdin.write('\x1B[C'); // Right arrow
-    await delay(20);
+    await waitFor(() => expect(lastFrame()).toContain('> No'));
     stdin.write('\r'); // Enter
-    await delay();
-    expect(onConfirm).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(false));
   });
 
   it('should toggle back with left arrow', async () => {
     const onConfirm = vi.fn();
-    const { stdin } = renderOverlay({
+    const { stdin, lastFrame } = renderOverlay({
       title: 'Test',
       message: 'Continue?',
       onConfirm,
     });
     await delay();
     stdin.write('\x1B[C'); // Right arrow (No)
-    await delay();
+    await waitFor(() => expect(lastFrame()).toContain('> No'));
     stdin.write('\x1B[D'); // Left arrow (Yes)
-    await delay();
+    await waitFor(() => expect(lastFrame()).toContain('> Yes'));
     stdin.write('\r');
-    await delay();
-    expect(onConfirm).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(true));
   });
 });

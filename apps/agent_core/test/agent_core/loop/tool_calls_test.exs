@@ -144,15 +144,16 @@ defmodule AgentCore.Loop.ToolCallsTest do
       Mocks.tool_call("queued_tool", %{}, id: "call_abort_queued")
     ]
 
-    Task.start(fn ->
-      Process.sleep(30)
-      AbortSignal.abort(signal)
-    end)
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+      end)
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
-      ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+    assert_receive {:slow_tool_started, "call_abort_pending"}, 5_000
+    :ok = AbortSignal.abort(signal)
 
-    assert_receive {:slow_tool_started, "call_abort_pending"}, 1_000
+    {results, _steering_messages, updated_context, updated_new_messages} = Task.await(runner, 5_000)
+
     refute_received {:queued_tool_started, "call_abort_queued"}
 
     assert Enum.map(results, & &1.tool_call_id) == [

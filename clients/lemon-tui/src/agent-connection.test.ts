@@ -2056,6 +2056,65 @@ describe('AgentConnection', () => {
       });
     });
 
+    it('maps control-plane tool_use events into TUI tool execution events', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'agent',
+        payload: {
+          type: 'tool_use',
+          sessionKey: 'agent:test:main',
+          runId: 'run-1',
+          action: {
+            id: 'tool_call_missing_tool',
+            kind: 'tool',
+            title: 'missing_tool_for_runner',
+            detail: {
+              name: 'missing_tool_for_runner',
+              args: { command: 'missing_tool_for_runner' },
+              result: 'Tool missing_tool_for_runner not found',
+            },
+          },
+          phase: 'completed',
+          ok: false,
+          message: 'tool failed',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: {
+          type: 'tool_execution_start',
+          data: [
+            'tool_call_missing_tool',
+            'missing_tool_for_runner',
+            { command: 'missing_tool_for_runner' },
+          ],
+        },
+      });
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: {
+          type: 'tool_execution_end',
+          data: [
+            'tool_call_missing_tool',
+            'missing_tool_for_runner',
+            'Tool missing_tool_for_runner not found',
+            true,
+          ],
+        },
+      });
+    });
+
     it('maps non-ok responses into error messages', async () => {
       const conn = new AgentConnection({
         wsUrl: 'ws://control-plane.test/ws',

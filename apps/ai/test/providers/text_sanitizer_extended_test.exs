@@ -246,12 +246,19 @@ defmodule Ai.Providers.TextSanitizerExtendedTest do
       # Create a string with invalid bytes
       invalid = String.duplicate(<<0xFF, 0xFE>>, 1000)
 
-      {time_us, result} = :timer.tc(fn -> TextSanitizer.sanitize(invalid) end)
+      assert TextSanitizer.sanitize(invalid) |> String.valid?()
 
-      assert is_binary(result)
-      assert String.valid?(result)
-      # Should complete in reasonable time
-      assert time_us < 100_000
+      times_us =
+        for _ <- 1..5 do
+          {time_us, result} = :timer.tc(fn -> TextSanitizer.sanitize(invalid) end)
+          assert is_binary(result)
+          assert String.valid?(result)
+          time_us
+        end
+
+      median_time_us = times_us |> Enum.sort() |> Enum.at(2)
+
+      assert median_time_us < 100_000
     end
   end
 end

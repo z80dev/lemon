@@ -33,23 +33,47 @@ lemon-2026.03.1-preview-macos-aarch64.tar.gz
 
 ## Artefacts
 
-Each release produces:
+Current release automation produces:
 
-- A self-contained `.tar.gz` with the Erlang runtime baked in (via `mix release`).
-- A `manifest.json` with version, channel, and SHA-256 checksums.
+- Self-contained `.tar.gz` archives with the Erlang runtime baked in via
+  `mix release`.
+- A `manifest.json` with version, channel, file names, sizes, and SHA-256
+  checksums.
+
+As of the current workflow, public release artifacts are built for Linux
+`x86_64` for these profiles:
+
+- `lemon_runtime_min`
+- `lemon_runtime_full`
+
+The initial 1.0 stable support target is Linux `x86_64` release tarballs only.
+macOS source installs are best effort, and macOS or other platform release
+artifacts are future release-matrix work unless the release workflow is expanded.
 
 ## Update flow (`mix lemon.update`)
 
-1. Fetch the latest `manifest.json` from the configured release channel URL.
-2. Compare the remote version against the running version.
-3. Download the new tarball and verify the checksum.
-4. Perform a staged swap: unpack to a side-by-side directory, then atomically
-   replace the active binary on next start (or hot-swap via BEAM hot code loading
-   when the `product_runtime` feature flag is `"default-on"`).
+`mix lemon.update` is currently a stage-1 local maintenance task, not a remote
+binary updater.
+
+It runs:
+
+1. Version reporting.
+2. Config migration for deprecated TOML sections.
+3. Bundled-skill sync.
+
+It does not yet:
+
+- fetch a remote release manifest
+- compare local and remote channels
+- download release tarballs
+- verify downloaded artifact checksums
+- swap the active runtime binary
+
+Those remote update stages remain future release work.
 
 ## Kill-switch
 
-To pin a specific version and disable automatic update checks:
+The intended remote-update kill-switch shape is:
 
 ```toml
 [runtime]
@@ -57,8 +81,10 @@ auto_update = false
 pinned_version = "2026.03.0"
 ```
 
+Treat this as forward-looking until remote update checks are implemented.
+
 ## See also
 
-- `docs/product/runtime_plan.md` — overall M1 delivery plan
-- `M1-02` — first-class Lemon runtime releases task
-- `M1-05` — staged `mix lemon.update` task
+- `docs/release/deployment_flows.md` — supported runtime/deployment modes
+- `apps/lemon_core/lib/mix/tasks/lemon.update.ex` — current stage-1 update task
+- `docs/plans/lemon-1.0-mainstream-readiness.md` — launch readiness plan
