@@ -42,6 +42,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
   setup do
     ensure_store_started()
     ensure_cron_manager_started()
+    ensure_channel_registry_started()
 
     {:ok, token: System.unique_integer([:positive, :monotonic])}
   end
@@ -286,6 +287,17 @@ defmodule LemonAutomation.CronManagerForwardingTest do
   defp ensure_cron_manager_started do
     if is_nil(Process.whereis(CronManager)) do
       case start_supervised(CronManager) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp ensure_channel_registry_started do
+    if is_nil(Process.whereis(LemonChannels.Registry)) do
+      case start_supervised(LemonChannels.Registry) do
         {:ok, _pid} -> :ok
         {:error, {:already_started, _pid}} -> :ok
       end

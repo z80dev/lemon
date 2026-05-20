@@ -314,7 +314,7 @@
   %{
     path: "docs/plans/2026-03-19-ai-boundary-extraction-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-19],
+    last_reviewed: ~D[2026-04-24],
     max_age_days: 60
   },
   %{

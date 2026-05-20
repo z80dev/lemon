@@ -60,7 +60,7 @@ defmodule CodingAgent.Tools.ProcessTest do
       assert action_prop["type"] == "string"
 
       assert Enum.sort(action_prop["enum"]) ==
-               Enum.sort(["list", "poll", "log", "write", "kill", "clear"])
+               Enum.sort(["list", "poll", "log", "write", "kill", "restart", "clear"])
     end
 
     test "signal enum lists sigterm and sigkill" do
@@ -569,7 +569,7 @@ defmodule CodingAgent.Tools.ProcessTest do
     end
 
     test "unknown action returns error" do
-      assert {:error, msg} = execute(%{"action" => "restart"})
+      assert {:error, msg} = execute(%{"action" => "not_real"})
       assert msg =~ "Unknown action"
     end
 
@@ -584,7 +584,7 @@ defmodule CodingAgent.Tools.ProcessTest do
     end
 
     test "empty process_id rejected across all actions that need it" do
-      for action <- ["poll", "log", "write", "kill", "clear"] do
+      for action <- ["poll", "log", "write", "kill", "restart", "clear"] do
         params =
           case action do
             "write" -> %{"action" => action, "process_id" => "", "data" => "x"}
