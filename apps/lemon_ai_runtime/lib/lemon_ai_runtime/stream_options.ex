@@ -97,6 +97,21 @@ defmodule LemonAiRuntime.StreamOptions do
         |> maybe_put_struct(:project, resolved[:project])
         |> put_provider_options(:google_gemini_cli, %{project: resolved[:project]})
 
+      %{api: :openai_completions} ->
+        provider_id = provider_config_lookup_key(model)
+
+        resolved =
+          ProviderConfigResolver.resolve_for_provider(
+            provider_id,
+            openai_compatible_input(base_opts, provider_cfg)
+          )
+
+        base_opts
+        |> put_provider_options(provider_options_key(provider_id), %{
+          api_key: resolved[:api_key],
+          base_url: resolved[:base_url]
+        })
+
       _ ->
         base_opts
     end
@@ -211,6 +226,21 @@ defmodule LemonAiRuntime.StreamOptions do
     |> maybe_put(:project_secret, provider_config_value(provider_cfg, :project_secret))
   end
 
+  defp openai_compatible_input(base_opts, provider_cfg) do
+    stream_options_to_map(base_opts)
+    |> maybe_put(
+      :api_key,
+      first_non_empty_binary([
+        base_opts.api_key,
+        Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :api_key_secret),
+          env_fallback: true
+        ),
+        provider_config_value(provider_cfg, :api_key)
+      ])
+    )
+    |> maybe_put(:base_url, provider_config_value(provider_cfg, :base_url))
+  end
+
   defp put_provider_options(%StreamOptions{} = opts, provider_key, values) do
     filtered_values = reject_nil_values(values)
 
@@ -274,8 +304,21 @@ defmodule LemonAiRuntime.StreamOptions do
 
   defp provider_config_lookup_key(%{api: :azure_openai_responses}), do: :azure_openai_responses
   defp provider_config_lookup_key(%{api: :bedrock_converse_stream}), do: :amazon_bedrock
-  defp provider_config_lookup_key(%{provider: provider}), do: provider
+
+  defp provider_config_lookup_key(%{provider: provider}),
+    do: ProviderNames.provider_atom(provider) || provider
+
   defp provider_config_lookup_key(_), do: nil
+
+  defp provider_options_key(provider_id) when is_atom(provider_id), do: provider_id
+
+  defp provider_options_key(provider_id) when is_binary(provider_id) do
+    provider_id
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
+  defp provider_options_key(provider_id), do: provider_id
 
   defp provider_config_value(nil, _key), do: nil
 

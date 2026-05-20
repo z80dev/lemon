@@ -290,6 +290,25 @@ parsed = Ai.Error.parse_http_error(429, response_body, headers)
 # parsed.category, parsed.message, parsed.retryable, parsed.rate_limit_info
 ```
 
+`Ai.Error.parse_http_error/3` also normalizes common provider body variants:
+OpenAI/Anthropic maps, atom-key Elixir maps and enum values, Google `errors` arrays, FastAPI/Pydantic `detail`
+arrays, OAuth-style `error_description`, and nested detail-array
+`error_description` / `error_message` / `description` entries. String error
+codes with sibling `message`, `detail`, or `description` text are combined
+before fallback inspection. Symbolic provider `type` or string `code` fields
+also remain prefixed when paired with direct or nested effective messages.
+JSON:API-style `errors`
+arrays with `detail` or `title` fields are normalized as provider messages too,
+and nested validation-array `error` objects plus symbolic top-level error maps
+whose actionable text lives under nested `details` are unwrapped before fallback
+inspection. Placeholder-empty top-level error messages defer to actionable
+nested details when present.
+
+For rate-limit responses, parsed errors merge provider body retry hints such as
+`retry_after`, `retryAfter`, `retry_after_ms`, `retryAfterMs`, and Google
+`RetryInfo.retryDelay` into `rate_limit_info.retry_after` when retry headers are
+absent. HTTP headers still take precedence.
+
 ## Configuration
 
 ### Application Config (`config/config.exs`)

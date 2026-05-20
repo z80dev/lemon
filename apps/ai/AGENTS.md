@@ -686,7 +686,8 @@ Ai.Supervisor (one_for_one)
 
 - Error classification: `Ai.Error.classify_status/1` (private) and `Ai.Error.parse_http_error/3`
 - Retry logic: `Ai.Error.retryable?/1` and `Ai.Error.suggested_retry_delay/1`
-- Provider-specific error messages: `Ai.Error.extract_provider_message/1` handles Anthropic, OpenAI, Google, AWS formats
+- Provider-specific error messages: `Ai.Error.extract_provider_message/1` handles Anthropic, OpenAI, Google, AWS, atom-key Elixir maps and enum values, OAuth-style `error_description`, string error codes with sibling `message` / `detail` / `description`, symbolic `type` / string `code` prefixes with direct or nested effective messages, FastAPI/Pydantic `detail` arrays, JSON:API-style `errors[].detail` / `errors[].title`, nested validation-array `error` objects, nested detail-array `error_description` / `error_message` / `description` formats, symbolic top-level error maps whose actionable text lives under nested `details`, and placeholder-empty top-level messages with actionable nested details
+- Provider body retry hints: `Ai.Error.parse_http_error/3` merges `retry_after`, `retryAfter`, `retry_after_ms`, `retryAfterMs`, and Google `RetryInfo.retryDelay` into `rate_limit_info.retry_after` when retry headers are absent
 
 ## How This App Connects to Other Umbrella Apps
 

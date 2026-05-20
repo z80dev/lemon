@@ -5,11 +5,14 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 ## Scope (current slice)
 
 - This app now owns Lemon-facing runtime credential lookup and provider-specific
-  stream option shaping in addition to the auth facade.
+  stream option shaping in addition to the auth facade, including
+  OpenAI-compatible provider options for configured Z.ai/Kimi/Minimax-style
+  providers.
 - It exposes `LemonAiRuntime.Auth.*` modules that own Lemon secret persistence
   and local OAuth callback integration while delegating protocol work to
   `Ai.Auth.*`.
-- It exposes `LemonAiRuntime.Credentials`, `LemonAiRuntime.ProviderNames`, and
+- It exposes `LemonAiRuntime.Credentials`, `LemonAiRuntime.ProviderNames`,
+  `LemonAiRuntime.ProviderStatus`, `LemonAiRuntime.ProviderRouting`, and
   `LemonAiRuntime.StreamOptions` for Lemon-owned callers.
 - It has no OTP application callback or supervision tree.
 - Provider protocol implementations remain in `apps/ai` for now.
@@ -21,6 +24,10 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 - No new external app should introduce new direct `Ai.Auth.*` usage; migrate through `LemonAiRuntime.Auth.*`.
 - Callers that only need Codex auth availability should use `LemonAiRuntime.Auth.OpenAICodexOAuth.available?/0`.
 - Prefer new Lemon-owned callers to use `LemonAiRuntime` for provider credential checks and stream option shaping.
+- Use `LemonAiRuntime.ProviderStatus.snapshot/1` when operator surfaces need
+  redacted readiness booleans, route-plan previews, credential-pool summaries,
+  and routing-profile distributions without raw API keys, secret names, base
+  URLs, or env var names.
 - This app should stay intentionally thin and composable, deferring larger ownership moves to later slices.
 
 ## Ownership and dependencies

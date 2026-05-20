@@ -51,6 +51,7 @@ defmodule Ai.Error do
   """
   @spec parse_http_error(non_neg_integer(), term(), map() | [{term(), term()}]) :: parsed_error()
   def parse_http_error(status, body, headers \\ []) do
+    body = normalize_error_body(body)
     provider_message = extract_provider_message(body)
     category = classify_error(status, body, provider_message)
 
@@ -258,6 +259,11 @@ defmodule Ai.Error do
   """
   @spec rate_limit_error?(term()) :: boolean()
   def rate_limit_error?({:http_error, 429, _}), do: true
+
+  def rate_limit_error?({:http_error, status, body}) do
+    parse_http_error(status, body, []).category == :rate_limit
+  end
+
   def rate_limit_error?(:rate_limited), do: true
   def rate_limit_error?(%{category: :rate_limit}), do: true
   def rate_limit_error?(_), do: false
@@ -275,6 +281,8 @@ defmodule Ai.Error do
   """
   @spec context_length_error?(term()) :: boolean()
   def context_length_error?({:http_error, status, body}) when is_map(body) do
+    body = normalize_error_body(body)
+
     context_length_error_code?(body) or
       context_length_error_message?(status, body)
   end
@@ -448,19 +456,35 @@ defmodule Ai.Error do
        when is_binary(message),
        do: message
 
-  # Anthropic format
-  defp extract_provider_message(%{"error" => %{"message" => message}}) when is_binary(message),
-    do: message
+  defp extract_provider_message(%{"errors" => errors}) when is_list(errors),
+    do: extract_detail_message(errors)
 
-  defp extract_provider_message(%{"error" => %{"type" => type, "message" => message}})
+  defp extract_provider_message(%{"error" => %{"type" => type, "message" => message} = error_map})
        when is_binary(type) and is_binary(message) do
-    "#{type}: #{message}"
+    message = effective_error_message(error_map, message)
+
+    if message == "" do
+      type
+    else
+      symbolic_provider_message(type, message)
+    end
   end
 
-  # OpenAI format
-  defp extract_provider_message(%{"error" => %{"code" => code, "message" => message}})
+  defp extract_provider_message(%{"error" => %{"code" => code, "message" => message} = error_map})
        when is_binary(code) and is_binary(message) do
-    "#{code}: #{message}"
+    message = effective_error_message(error_map, message)
+
+    if message == "" do
+      code
+    else
+      symbolic_provider_message(code, message)
+    end
+  end
+
+  # Anthropic/OpenAI generic message format
+  defp extract_provider_message(%{"error" => %{"message" => message} = error_map})
+       when is_binary(message) do
+    effective_error_message(error_map, message)
   end
 
   defp extract_provider_message(%{"error" => %{"code" => code}}) when is_binary(code), do: code
@@ -478,6 +502,21 @@ defmodule Ai.Error do
     "#{code}: #{description}"
   end
 
+  defp extract_provider_message(%{"error" => code, "message" => message})
+       when is_binary(code) and is_binary(message) do
+    "#{code}: #{message}"
+  end
+
+  defp extract_provider_message(%{"error" => code, "detail" => message})
+       when is_binary(code) and is_binary(message) do
+    "#{code}: #{message}"
+  end
+
+  defp extract_provider_message(%{"error" => code, "description" => message})
+       when is_binary(code) and is_binary(message) do
+    "#{code}: #{message}"
+  end
+
   # Generic error formats
   defp extract_provider_message(%{"error" => error}) when is_binary(error), do: error
 
@@ -486,10 +525,20 @@ defmodule Ai.Error do
 
   defp extract_provider_message(%{"error" => error_map}) when is_map(error_map) do
     # Try to extract nested error information
+    nested_message =
+      if is_binary(error_map["message"]) do
+        nil
+      else
+        error_map
+        |> Map.drop(["type", "code", "param"])
+        |> find_nested_provider_message()
+      end
+
     parts = []
     parts = if error_map["type"], do: [error_map["type"] | parts], else: parts
     parts = if error_map["code"], do: [error_map["code"] | parts], else: parts
     parts = if error_map["message"], do: [error_map["message"] | parts], else: parts
+    parts = if nested_message, do: [nested_message | parts], else: parts
     parts = if error_map["param"], do: ["param: #{error_map["param"]}" | parts], else: parts
 
     case parts do
@@ -543,6 +592,24 @@ defmodule Ai.Error do
 
   defp extract_detail_message([%{"msg" => message} | _]) when is_binary(message), do: message
   defp extract_detail_message([%{"reason" => message} | _]) when is_binary(message), do: message
+  defp extract_detail_message([%{"detail" => message} | _]) when is_binary(message), do: message
+  defp extract_detail_message([%{"details" => message} | _]) when is_binary(message), do: message
+  defp extract_detail_message([%{"title" => message} | _]) when is_binary(message), do: message
+
+  defp extract_detail_message([%{"description" => message} | _]) when is_binary(message),
+    do: message
+
+  defp extract_detail_message([%{"error" => message} | _]) when is_binary(message),
+    do: message
+
+  defp extract_detail_message([%{"error" => error} | _]) when is_map(error),
+    do: find_nested_provider_message(error)
+
+  defp extract_detail_message([%{"error_description" => message} | _]) when is_binary(message),
+    do: message
+
+  defp extract_detail_message([%{"error_message" => message} | _]) when is_binary(message),
+    do: message
 
   defp extract_detail_message([_ | rest]), do: extract_detail_message(rest)
   defp extract_detail_message(_), do: nil
@@ -560,21 +627,64 @@ defmodule Ai.Error do
 
   defp find_nested_provider_message(_), do: nil
 
+  defp effective_error_message(error_map, message)
+       when is_map(error_map) and is_binary(message) do
+    nested_message =
+      error_map
+      |> Map.drop(["message", "type", "code", "param"])
+      |> find_nested_provider_message()
+
+    if String.trim(message) == "" and is_binary(nested_message) and nested_message != "" do
+      nested_message
+    else
+      message
+    end
+  end
+
+  defp symbolic_provider_message(symbol, message) when symbol == message, do: message
+  defp symbolic_provider_message(symbol, message), do: "#{symbol}: #{message}"
+
   defp direct_message(%{"message" => message}) when is_binary(message), do: message
   defp direct_message(%{"msg" => message}) when is_binary(message), do: message
   defp direct_message(%{"reason" => message}) when is_binary(message), do: message
+  defp direct_message(%{"detail" => message}) when is_binary(message), do: message
+  defp direct_message(%{"details" => message}) when is_binary(message), do: message
+  defp direct_message(%{"title" => message}) when is_binary(message), do: message
+  defp direct_message(%{"description" => message}) when is_binary(message), do: message
   defp direct_message(%{"error_description" => message}) when is_binary(message), do: message
   defp direct_message(%{"error_message" => message}) when is_binary(message), do: message
   defp direct_message(_), do: nil
 
   defp normalize_error_body(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, decoded} -> decoded
+      {:ok, decoded} -> normalize_error_body(decoded)
       _ -> body
     end
   end
 
+  defp normalize_error_body(body) when is_map(body) do
+    Map.new(body, fn {key, value} ->
+      {normalize_error_key(key), normalize_error_value(value)}
+    end)
+  end
+
+  defp normalize_error_body(body) when is_list(body), do: Enum.map(body, &normalize_error_value/1)
+
   defp normalize_error_body(body), do: body
+
+  defp normalize_error_value(body) when is_map(body), do: normalize_error_body(body)
+
+  defp normalize_error_value(body) when is_list(body),
+    do: Enum.map(body, &normalize_error_value/1)
+
+  defp normalize_error_value(body)
+       when is_atom(body) and not is_nil(body) and not is_boolean(body),
+       do: Atom.to_string(body)
+
+  defp normalize_error_value(body), do: body
+
+  defp normalize_error_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_error_key(key), do: key
 
   defp truncate_message(msg, max_length) when byte_size(msg) > max_length do
     String.slice(msg, 0, max_length) <> "..."
@@ -748,6 +858,22 @@ defmodule Ai.Error do
     |> find_retry_delay()
   end
 
+  defp find_retry_delay(%{"retry_after_ms" => retry_after}) do
+    parse_body_retry_after_ms(retry_after)
+  end
+
+  defp find_retry_delay(%{"retryAfterMs" => retry_after}) do
+    parse_body_retry_after_ms(retry_after)
+  end
+
+  defp find_retry_delay(%{"retry_after" => retry_after}) do
+    parse_body_retry_after_seconds(retry_after)
+  end
+
+  defp find_retry_delay(%{"retryAfter" => retry_after}) do
+    parse_body_retry_after_seconds(retry_after)
+  end
+
   defp find_retry_delay(%{"error" => error}) when is_map(error), do: find_retry_delay(error)
 
   defp find_retry_delay(%{"details" => details}) when is_list(details) do
@@ -766,6 +892,29 @@ defmodule Ai.Error do
   end
 
   defp find_retry_delay(_), do: nil
+
+  defp parse_body_retry_after_seconds(value) when is_integer(value) and value >= 0,
+    do: value * 1000
+
+  defp parse_body_retry_after_seconds(value) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {seconds, ""} when seconds >= 0 -> trunc(seconds * 1000)
+      _ -> nil
+    end
+  end
+
+  defp parse_body_retry_after_seconds(_), do: nil
+
+  defp parse_body_retry_after_ms(value) when is_integer(value) and value >= 0, do: value
+
+  defp parse_body_retry_after_ms(value) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {milliseconds, ""} when milliseconds >= 0 -> trunc(milliseconds)
+      _ -> nil
+    end
+  end
+
+  defp parse_body_retry_after_ms(_), do: nil
 
   defp parse_duration_ms(value) do
     value

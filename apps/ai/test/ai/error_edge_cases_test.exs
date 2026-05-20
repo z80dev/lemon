@@ -95,6 +95,83 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.provider_message == ""
     end
 
+    test "uses nested provider details when top-level message is empty" do
+      body = %{
+        "error" => %{
+          "type" => "invalid_request_error",
+          "message" => "",
+          "details" => %{
+            "message" => "Nested detail explains the failure"
+          }
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message ==
+               "invalid_request_error: Nested detail explains the failure"
+
+      assert result.message =~ "Nested detail explains the failure"
+    end
+
+    test "preserves symbolic error type prefixes with direct messages" do
+      body = %{
+        "error" => %{
+          "type" => "invalid_request_error",
+          "message" => "Bad request"
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "invalid_request_error: Bad request"
+      assert result.message =~ "invalid_request_error: Bad request"
+    end
+
+    test "preserves symbolic error code prefixes with direct messages" do
+      body = %{
+        "error" => %{
+          "code" => "bad_request",
+          "message" => "Bad request"
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "bad_request: Bad request"
+      assert result.message =~ "bad_request: Bad request"
+    end
+
+    test "normalizes atom-key provider error maps" do
+      body = %{
+        error: %{
+          type: "invalid_request_error",
+          message: "Bad request"
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "invalid_request_error: Bad request"
+      assert result.message =~ "invalid_request_error: Bad request"
+    end
+
+    test "normalizes atom-key placeholder messages with nested details" do
+      body = %{
+        error: %{
+          message: "",
+          details: %{
+            message: "Nested atom-key detail"
+          }
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "Nested atom-key detail"
+      assert result.message =~ "Nested atom-key detail"
+    end
+
     test "handles very long error message (truncation)" do
       long_msg = String.duplicate("x", 500)
       body = %{"error" => %{"message" => long_msg}}
@@ -211,6 +288,45 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.message =~ "Missing authorization header"
     end
 
+    test "handles string error code with sibling message" do
+      body = %{
+        "error" => "invalid_request",
+        "message" => "Prompt is required"
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "invalid_request: Prompt is required"
+      assert result.message =~ "Prompt is required"
+    end
+
+    test "handles string error code with sibling detail" do
+      body = %{
+        "error" => "bad_request",
+        "detail" => "Model does not support tool calls"
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "bad_request: Model does not support tool calls"
+      assert result.message =~ "Model does not support tool calls"
+    end
+
+    test "handles description fields in nested provider errors" do
+      body = %{
+        "error" => %{
+          "details" => [
+            %{"description" => "Nested provider description"}
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(500, body, [])
+
+      assert result.provider_message == "Nested provider description"
+      assert result.message =~ "Nested provider description"
+    end
+
     test "handles nested provider error descriptions" do
       body = %{
         "error" => %{
@@ -241,6 +357,51 @@ defmodule Ai.ErrorEdgeCasesTest do
       assert result.provider_message == "First provider detail"
     end
 
+    test "keeps nested details message when error map only has a symbolic type" do
+      body = %{
+        "error" => %{
+          "type" => "invalid_request_error",
+          "details" => %{
+            "message" => "Model does not support this request format"
+          }
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message =~ "invalid_request_error"
+      assert result.provider_message =~ "Model does not support this request format"
+      assert result.message =~ "Model does not support this request format"
+    end
+
+    test "handles provider description fields inside detail arrays" do
+      body = %{
+        "detail" => [
+          %{"error_description" => "First provider detail description"},
+          %{"error_message" => "Second provider detail message"}
+        ]
+      }
+
+      result = Error.parse_http_error(422, body, [])
+
+      assert result.provider_message == "First provider detail description"
+      assert result.message =~ "First provider detail description"
+    end
+
+    test "normalizes atom-key detail arrays" do
+      body = %{
+        detail: [
+          %{msg: "First atom-key detail"},
+          %{message: "Second atom-key detail"}
+        ]
+      }
+
+      result = Error.parse_http_error(422, body, [])
+
+      assert result.provider_message == "First atom-key detail"
+      assert result.message =~ "First atom-key detail"
+    end
+
     test "handles error with capitalized Message field" do
       body = %{"Message" => "Service error"}
 
@@ -262,6 +423,22 @@ defmodule Ai.ErrorEdgeCasesTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.provider_message == "First error"
+    end
+
+    test "handles JSON API style nested errors array with detail field" do
+      body = %{
+        "error" => %{
+          "errors" => [
+            %{"detail" => "First nested error detail"},
+            %{"detail" => "Second nested error detail"}
+          ]
+        }
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "First nested error detail"
+      assert result.message =~ "First nested error detail"
     end
 
     test "handles Google-style errors array with message field" do
@@ -291,6 +468,50 @@ defmodule Ai.ErrorEdgeCasesTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.provider_message == "First top-level error"
+    end
+
+    test "handles JSON API style top-level errors array with detail field" do
+      body = %{
+        "errors" => [
+          %{"detail" => "First top-level error detail"},
+          %{"detail" => "Second top-level error detail"}
+        ]
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "First top-level error detail"
+      assert result.message =~ "First top-level error detail"
+    end
+
+    test "handles JSON API style errors array with title fallback" do
+      body = %{
+        "errors" => [
+          %{"title" => "First top-level error title"},
+          %{"title" => "Second top-level error title"}
+        ]
+      }
+
+      result = Error.parse_http_error(400, body, [])
+
+      assert result.provider_message == "First top-level error title"
+      assert result.message =~ "First top-level error title"
+    end
+
+    test "handles nested error objects inside detail arrays" do
+      body = %{
+        "detail" => [
+          %{
+            "loc" => ["body", "input"],
+            "error" => %{"message" => "Nested detail array error object"}
+          }
+        ]
+      }
+
+      result = Error.parse_http_error(422, body, [])
+
+      assert result.provider_message == "Nested detail array error object"
+      assert result.message =~ "Nested detail array error object"
     end
   end
 
@@ -728,6 +949,14 @@ defmodule Ai.ErrorEdgeCasesTest do
       refute Error.rate_limit_error?({:http_error, 503, "overloaded"})
     end
 
+    test "detects provider-body rate limits on non-429 HTTP errors" do
+      assert Error.rate_limit_error?({:http_error, 400, %{error: %{type: :rate_limit_error}}})
+
+      assert Error.rate_limit_error?(
+               {:http_error, 400, %{"error" => %{"message" => "Too many requests"}}}
+             )
+    end
+
     test "parsed error with rate_limit category" do
       assert Error.rate_limit_error?(%{category: :rate_limit})
     end
@@ -735,6 +964,29 @@ defmodule Ai.ErrorEdgeCasesTest do
     test "string mentioning rate limit is not detected" do
       # The rate_limit_error? function doesn't check string content
       refute Error.rate_limit_error?("Rate limit exceeded")
+    end
+  end
+
+  describe "context_length_error?/1 - edge cases" do
+    test "detects atom-key context length error maps" do
+      assert Error.context_length_error?(
+               {:http_error, 400, %{error: %{code: "context_length_exceeded"}}}
+             )
+
+      assert Error.context_length_error?(
+               {:http_error, 400, %{error: %{message: "maximum context length exceeded"}}}
+             )
+    end
+
+    test "detects atom enum context length values" do
+      parsed = Error.parse_http_error(400, %{error: %{code: :context_length_exceeded}}, [])
+
+      assert parsed.category == :context_length
+      assert parsed.provider_message == "context_length_exceeded"
+
+      assert Error.context_length_error?(
+               {:http_error, 400, %{error: %{code: :context_length_exceeded}}}
+             )
     end
   end
 
@@ -809,6 +1061,72 @@ defmodule Ai.ErrorEdgeCasesTest do
 
       delay = Error.suggested_retry_delay_from_error(parsed)
       assert delay == 30_000
+    end
+
+    test "rate limit error uses retry_after body hint when headers are absent" do
+      body = %{
+        "error" => %{"message" => "Rate limit exceeded"},
+        "retry_after" => "2.5"
+      }
+
+      parsed = Error.parse_http_error(429, body, [])
+
+      assert parsed.category == :rate_limit
+      assert parsed.rate_limit_info.retry_after == 2_500
+      assert Error.suggested_retry_delay_from_error(parsed) == 2_500
+    end
+
+    test "rate limit error uses retry_after_ms body hint when headers are absent" do
+      body = %{
+        "error" => %{
+          "message" => "Too many requests",
+          "retry_after_ms" => 1750
+        }
+      }
+
+      parsed = Error.parse_http_error(429, body, [])
+
+      assert parsed.category == :rate_limit
+      assert parsed.rate_limit_info.retry_after == 1_750
+      assert Error.suggested_retry_delay_from_error(parsed) == 1_750
+    end
+
+    test "rate limit error uses atom-key retry body hints" do
+      body = %{
+        error: %{
+          code: "rate_limit_error",
+          message: "Too many requests"
+        },
+        retry_after_ms: 1_250
+      }
+
+      parsed = Error.parse_http_error(400, body, [])
+
+      assert parsed.category == :rate_limit
+      assert parsed.provider_message == "rate_limit_error: Too many requests"
+      assert parsed.rate_limit_info.retry_after == 1_250
+      assert Error.suggested_retry_delay_from_error(parsed) == 1_250
+    end
+
+    test "rate limit error uses atom enum provider fields" do
+      parsed = Error.parse_http_error(400, %{error: %{type: :rate_limit_error}}, [])
+
+      assert parsed.category == :rate_limit
+      assert parsed.provider_message == "rate_limit_error"
+      assert parsed.retryable == true
+    end
+
+    test "retry-after header takes precedence over proxy retry body hints" do
+      body = %{
+        "error" => %{"message" => "Rate limit exceeded"},
+        "retry_after_ms" => 60_000
+      }
+
+      parsed = Error.parse_http_error(429, body, [{"retry-after", "3"}])
+
+      assert parsed.category == :rate_limit
+      assert parsed.rate_limit_info.retry_after == 3_000
+      assert Error.suggested_retry_delay_from_error(parsed) == 3_000
     end
 
     test "server error without rate limit info uses default delay" do

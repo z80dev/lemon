@@ -64,6 +64,29 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     assert opts.provider_options == %{}
   end
 
+  test "openai-compatible stream options resolve provider secret and base url", %{cwd: cwd} do
+    assert {:ok, _} = Secrets.set("zai_secret", "zai-key-from-secret")
+
+    providers = %{
+      "zai" => %{
+        api_key_secret: "zai_secret",
+        base_url: "https://override.zai.test/v4"
+      }
+    }
+
+    opts =
+      LemonAiRuntime.build_stream_options(
+        mock_model(:zai, :openai_completions),
+        providers,
+        %{},
+        cwd
+      )
+
+    assert opts.api_key == nil
+    assert opts.provider_options.zai.api_key == "zai-key-from-secret"
+    assert opts.provider_options.zai.base_url == "https://override.zai.test/v4"
+  end
+
   test "google vertex stream options resolve project, location, service account, and provider_options",
        %{cwd: cwd} do
     assert {:ok, _} = Secrets.set("vertex_project", "project-from-secret")

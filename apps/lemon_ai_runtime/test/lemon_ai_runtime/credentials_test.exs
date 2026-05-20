@@ -309,6 +309,15 @@ defmodule LemonAiRuntime.CredentialsTest do
     assert LemonAiRuntime.provider_has_credentials?("vercel-ai-gateway", %{}) == false
   end
 
+  test "provider names expose sorted canonical ids for diagnostics" do
+    names = LemonAiRuntime.ProviderNames.all_canonical_names()
+
+    assert names == Enum.sort(names)
+    assert "anthropic" in names
+    assert "openai" in names
+    assert "zai" in names
+  end
+
   defp clear_secrets_table do
     Secrets.table()
     |> LemonCore.Store.list()

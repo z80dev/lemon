@@ -105,13 +105,22 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
       {:ok, stream} = EventStream.start_link()
 
       events = [
-        %{"type" => "response.failed"}
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "error" => %{
+              "code" => "insufficient_quota",
+              "message" => "You exceeded your current quota"
+            }
+          }
+        }
       ]
 
       output = base_output()
       model = base_model()
 
-      assert {:error, _} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+      assert {:error, "You exceeded your current quota"} =
+               OpenAIResponsesShared.process_stream(events, output, stream, model)
 
       EventStream.cancel(stream, :test_cleanup)
     end

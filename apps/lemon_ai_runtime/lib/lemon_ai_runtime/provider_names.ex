@@ -240,6 +240,13 @@ defmodule LemonAiRuntime.ProviderNames do
     end
   end
 
+  @spec all_canonical_names() :: [String.t()]
+  def all_canonical_names do
+    @providers
+    |> Map.keys()
+    |> Enum.sort()
+  end
+
   @spec provider_config(map() | nil, atom() | String.t()) :: map() | nil
   def provider_config(providers_map, provider) when is_map(providers_map) do
     provider_keys = all_names(provider)

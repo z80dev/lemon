@@ -1066,12 +1066,33 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     {:error, error_msg}
   end
 
-  defp process_event(%{"type" => "response.failed"}, _state) do
-    {:error, "Unknown error"}
+  defp process_event(%{"type" => "response.failed"} = event, _state) do
+    {:error, response_failed_message(event)}
   end
 
   defp process_event(_event, state) do
     {:ok, state}
+  end
+
+  defp response_failed_message(event) do
+    error =
+      event["error"] ||
+        get_in(event, ["response", "error"]) ||
+        get_in(event, ["response", "incomplete_details"])
+
+    cond do
+      is_map(error) and is_binary(error["message"]) and error["message"] != "" ->
+        error["message"]
+
+      is_map(error) and is_binary(error["code"]) and error["code"] != "" ->
+        "Response failed: #{error["code"]}"
+
+      is_map(error) and is_binary(error["reason"]) and error["reason"] != "" ->
+        "Response failed: #{error["reason"]}"
+
+      true ->
+        "Unknown error"
+    end
   end
 
   defp response_tool_call_id(item, model, fallback \\ nil)

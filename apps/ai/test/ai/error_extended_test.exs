@@ -25,8 +25,10 @@ defmodule Ai.ErrorExtendedTest do
       assert result.category == :rate_limit
       assert result.status == 429
       assert result.message =~ "Rate limit exceeded"
-      # Implementation extracts message only when type+message are both present
-      assert result.provider_message == "Rate limit exceeded. Please try again later."
+
+      assert result.provider_message ==
+               "rate_limit_error: Rate limit exceeded. Please try again later."
+
       assert result.retryable == true
     end
 
@@ -40,8 +42,7 @@ defmodule Ai.ErrorExtendedTest do
 
       result = Error.parse_http_error(429, body, [])
       assert result.category == :rate_limit
-      # Implementation extracts message only, not code
-      assert result.provider_message == "You exceeded your current quota"
+      assert result.provider_message == "insufficient_quota: You exceeded your current quota"
     end
 
     test "parses Google API error format" do
@@ -84,8 +85,7 @@ defmodule Ai.ErrorExtendedTest do
 
       result = Error.parse_http_error(401, body, [])
       assert result.category == :auth
-      # Implementation extracts the message directly
-      assert result.provider_message == "Invalid API key provided"
+      assert result.provider_message == "invalid_request_error: Invalid API key provided"
     end
 
     test "handles plain text error body" do

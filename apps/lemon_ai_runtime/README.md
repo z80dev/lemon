@@ -10,8 +10,16 @@ Current scope:
   callback integration while reusing pure `Ai.Auth.*` protocol helpers.
 - `LemonAiRuntime.Credentials` owns Lemon-facing provider API key resolution and
   provider availability checks.
+- `LemonAiRuntime.ProviderStatus` owns redacted provider credential readiness
+  diagnostics and provider route-plan previews for control-plane and Web
+  operator surfaces.
+- `LemonAiRuntime.ProviderRouting` owns deterministic primary/fallback provider
+  candidate ordering, credential-pool previews, and routing-profile
+  distributions without executing model calls.
 - `LemonAiRuntime.StreamOptions` owns Lemon-facing stream option shaping for
-  providers like Vertex, Azure, Bedrock, and Gemini CLI.
+  providers like Vertex, Azure, Bedrock, Gemini CLI, and OpenAI-compatible
+  providers such as Z.ai/Kimi/Minimax that need provider-specific API keys and
+  base URLs.
 - Lemon apps should stop depending on `Ai.Auth.*` directly and use
   `LemonAiRuntime.Auth.*` instead.
 - Callers that only need to know whether Codex OAuth is available should check

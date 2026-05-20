@@ -46,7 +46,7 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(529, body, [])
 
       assert result.category == :transient
-      assert result.provider_message == "Overloaded"
+      assert result.provider_message == "overloaded_error: Overloaded"
       assert result.retryable == true
     end
 
@@ -75,7 +75,7 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(401, body, [])
 
       assert result.category == :auth
-      assert result.provider_message == "Invalid API Key"
+      assert result.provider_message == "authentication_error: Invalid API Key"
     end
 
     test "parses Anthropic permission_error" do
@@ -384,8 +384,9 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(404, body, [])
 
       assert result.category == :client
-      # Code + message format extracts message
-      assert result.provider_message == "The API deployment for this resource does not exist."
+
+      assert result.provider_message ==
+               "DeploymentNotFound: The API deployment for this resource does not exist."
     end
 
     test "parses Azure rate limit error" do
@@ -964,8 +965,7 @@ defmodule Ai.ErrorProviderTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.category == :client
-      # Should extract message (highest priority pattern match)
-      assert result.provider_message == "Field validation failed"
+      assert result.provider_message == "validation_error: Field validation failed"
     end
 
     test "handles error with array of error objects" do

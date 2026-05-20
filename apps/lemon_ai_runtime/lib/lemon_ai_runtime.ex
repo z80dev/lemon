@@ -23,6 +23,11 @@ defmodule LemonAiRuntime do
   defdelegate provider_has_credentials?(provider, providers_map_or_cfg, opts \\ []),
     to: LemonAiRuntime.Credentials
 
+  @spec provider_route_preview(map() | nil, LemonCore.Config.t(), [map()]) :: map()
+  defdelegate provider_route_preview(params, config, provider_statuses),
+    to: LemonAiRuntime.ProviderRouting,
+    as: :preview
+
   @spec build_stream_options(
           Ai.Types.Model.t(),
           map() | nil,
