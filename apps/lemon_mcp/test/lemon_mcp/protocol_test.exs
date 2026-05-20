@@ -96,6 +96,31 @@ defmodule LemonMCP.ProtocolTest do
     end
   end
 
+  describe "resource and prompt request builders" do
+    test "creates resource list and read requests" do
+      list = Protocol.resource_list_request(id: "resources-1")
+      read = Protocol.resource_read_request(id: "read-1", uri: "file://safe")
+
+      assert list.method == "resources/list"
+      assert list.id == "resources-1"
+      assert read.method == "resources/read"
+      assert read.params.uri == "file://safe"
+    end
+
+    test "creates prompt list and get requests" do
+      list = Protocol.prompt_list_request(id: "prompts-1")
+
+      get =
+        Protocol.prompt_get_request(id: "get-1", name: "review", arguments: %{"topic" => "mcp"})
+
+      assert list.method == "prompts/list"
+      assert list.id == "prompts-1"
+      assert get.method == "prompts/get"
+      assert get.params.name == "review"
+      assert get.params.arguments == %{"topic" => "mcp"}
+    end
+  end
+
   describe "encode/1" do
     test "encodes initialize request" do
       request = Protocol.initialize_request(id: "init-1")
@@ -110,13 +135,54 @@ defmodule LemonMCP.ProtocolTest do
     end
 
     test "encodes tool call request" do
-      request = Protocol.tool_call_request(id: "call-1", name: "test_tool", arguments: %{"key" => "value"})
+      request =
+        Protocol.tool_call_request(
+          id: "call-1",
+          name: "test_tool",
+          arguments: %{"key" => "value"}
+        )
+
       {:ok, json} = Protocol.encode(request)
 
       decoded = Jason.decode!(json)
       assert decoded["method"] == "tools/call"
       assert decoded["params"]["name"] == "test_tool"
       assert decoded["params"]["arguments"]["key"] == "value"
+    end
+
+    test "encodes generic JSON-RPC responses" do
+      response = Protocol.create_response("sample-1", %{"role" => "assistant"})
+
+      {:ok, json} = Protocol.encode(response)
+
+      assert %{
+               "jsonrpc" => "2.0",
+               "id" => "sample-1",
+               "result" => %{"role" => "assistant"}
+             } = Jason.decode!(json)
+    end
+
+    test "encodes resource and prompt requests" do
+      {:ok, resource_json} =
+        Protocol.resource_read_request(id: "read-1", uri: "file://safe")
+        |> Protocol.encode()
+
+      {:ok, prompt_json} =
+        Protocol.prompt_get_request(
+          id: "prompt-1",
+          name: "brief",
+          arguments: %{"topic" => "beam"}
+        )
+        |> Protocol.encode()
+
+      resource = Jason.decode!(resource_json)
+      prompt = Jason.decode!(prompt_json)
+
+      assert resource["method"] == "resources/read"
+      assert resource["params"]["uri"] == "file://safe"
+      assert prompt["method"] == "prompts/get"
+      assert prompt["params"]["name"] == "brief"
+      assert prompt["params"]["arguments"] == %{"topic" => "beam"}
     end
   end
 
@@ -191,6 +257,60 @@ defmodule LemonMCP.ProtocolTest do
       assert response.id == "call-1"
       assert length(response.result.content) == 1
       assert response.result.isError == false
+    end
+
+    test "decodes resource list and read responses" do
+      list_json = ~s|{
+        "jsonrpc": "2.0",
+        "id": "resources-1",
+        "result": {
+          "resources": [{"uri": "file://safe", "name": "Safe Resource"}]
+        }
+      }|
+
+      read_json = ~s|{
+        "jsonrpc": "2.0",
+        "id": "read-1",
+        "result": {
+          "contents": [{"uri": "file://safe", "text": "hello"}]
+        }
+      }|
+
+      {:ok, list_response} = Protocol.decode(list_json)
+      {:ok, read_response} = Protocol.decode(read_json)
+
+      assert %Protocol.ResourceListResponse{} = list_response
+      assert [%{"uri" => "file://safe"}] = list_response.result.resources
+      assert %Protocol.ResourceReadResponse{} = read_response
+      assert [%{"text" => "hello"}] = read_response.result.contents
+    end
+
+    test "decodes prompt list and get responses" do
+      list_json = ~s|{
+        "jsonrpc": "2.0",
+        "id": "prompts-1",
+        "result": {
+          "prompts": [{"name": "brief", "description": "Brief prompt"}]
+        }
+      }|
+
+      get_json = ~s|{
+        "jsonrpc": "2.0",
+        "id": "get-1",
+        "result": {
+          "description": "Brief prompt",
+          "messages": [{"role": "user", "content": {"type": "text", "text": "hello"}}]
+        }
+      }|
+
+      {:ok, list_response} = Protocol.decode(list_json)
+      {:ok, get_response} = Protocol.decode(get_json)
+
+      assert %Protocol.PromptListResponse{} = list_response
+      assert [%{"name" => "brief"}] = list_response.result.prompts
+      assert %Protocol.PromptGetResponse{} = get_response
+      assert get_response.result.description == "Brief prompt"
+      assert [%{"role" => "user"}] = get_response.result.messages
     end
 
     test "decodes error response" do

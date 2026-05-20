@@ -50,6 +50,31 @@ defmodule LemonMCP.Server.HandlerTest do
             _ ->
               {:error, :unknown_tool}
           end
+        end,
+        resources: [%{"uri" => "fixture://status", "name" => "Status"}],
+        resource_handler: fn
+          "fixture://status" -> {:ok, [%{"uri" => "fixture://status", "text" => "ok"}]}
+          _ -> {:error, :unknown_resource}
+        end,
+        prompts: [%{"name" => "brief", "description" => "Write a brief"}],
+        prompt_handler: fn
+          "brief", args ->
+            {:ok,
+             %{
+               "description" => "Write a brief",
+               "messages" => [
+                 %{
+                   "role" => "user",
+                   "content" => %{
+                     "type" => "text",
+                     "text" => "brief:" <> Map.get(args, "topic", "")
+                   }
+                 }
+               ]
+             }}
+
+          _, _ ->
+            {:error, :unknown_prompt}
         end
       )
 
@@ -80,6 +105,8 @@ defmodule LemonMCP.Server.HandlerTest do
       assert response.result[:protocolVersion] == LemonMCP.protocol_version()
       assert response.result[:serverInfo][:name] == "Handler Test Server"
       assert response.result[:capabilities]["tools"] == %{}
+      assert response.result[:capabilities]["resources"] == %{}
+      assert response.result[:capabilities]["prompts"] == %{}
     end
 
     test "rejects unsupported protocol version", %{server: server} do
@@ -128,6 +155,20 @@ defmodule LemonMCP.Server.HandlerTest do
       }
 
       response = Handler.handle_initialized(request, server)
+
+      assert response.__struct__ == Protocol.JSONRPCResponse
+      assert Server.initialized?(server) == true
+    end
+
+    test "accepts spec notification initialized method", %{server: server} do
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: nil,
+        method: "notifications/initialized",
+        params: nil
+      }
+
+      response = Handler.handle_request(request, server)
 
       assert response.__struct__ == Protocol.JSONRPCResponse
       assert Server.initialized?(server) == true
@@ -287,6 +328,122 @@ defmodule LemonMCP.Server.HandlerTest do
 
       assert response.error[:code] == Protocol.error_code(:tool_execution_error)
       assert response.error[:message] == "Tool failed to execute"
+    end
+  end
+
+  # ============================================================================
+  # Resources Tests
+  # ============================================================================
+
+  describe "resources methods" do
+    test "returns error when not initialized", %{server: server} do
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "resources/list",
+        params: nil
+      }
+
+      response = Handler.handle_resources_list(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:server_not_initialized)
+    end
+
+    test "lists and reads resources when initialized", %{server: server} do
+      Server.mark_initialized(server)
+
+      list_request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "resources/list",
+        params: nil
+      }
+
+      read_request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "2",
+        method: "resources/read",
+        params: %{"uri" => "fixture://status"}
+      }
+
+      list_response = Handler.handle_resources_list(list_request, server)
+      read_response = Handler.handle_resources_read(read_request, server)
+
+      assert [%{"uri" => "fixture://status"}] = list_response.result[:resources]
+      assert [%{"text" => "ok"}] = read_response.result[:contents]
+    end
+
+    test "validates resource read params", %{server: server} do
+      Server.mark_initialized(server)
+
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "resources/read",
+        params: %{}
+      }
+
+      response = Handler.handle_resources_read(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:invalid_params)
+    end
+  end
+
+  # ============================================================================
+  # Prompts Tests
+  # ============================================================================
+
+  describe "prompts methods" do
+    test "returns error when not initialized", %{server: server} do
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "prompts/list",
+        params: nil
+      }
+
+      response = Handler.handle_prompts_list(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:server_not_initialized)
+    end
+
+    test "lists and gets prompts when initialized", %{server: server} do
+      Server.mark_initialized(server)
+
+      list_request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "prompts/list",
+        params: nil
+      }
+
+      get_request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "2",
+        method: "prompts/get",
+        params: %{"name" => "brief", "arguments" => %{"topic" => "beam"}}
+      }
+
+      list_response = Handler.handle_prompts_list(list_request, server)
+      get_response = Handler.handle_prompts_get(get_request, server)
+
+      assert [%{"name" => "brief"}] = list_response.result[:prompts]
+      assert [%{"role" => "user"}] = get_response.result["messages"]
+    end
+
+    test "validates prompt get arguments", %{server: server} do
+      Server.mark_initialized(server)
+
+      request = %Protocol.JSONRPCRequest{
+        jsonrpc: "2.0",
+        id: "1",
+        method: "prompts/get",
+        params: %{"name" => "brief", "arguments" => "bad"}
+      }
+
+      response = Handler.handle_prompts_get(request, server)
+
+      assert response.error[:code] == Protocol.error_code(:invalid_params)
     end
   end
 

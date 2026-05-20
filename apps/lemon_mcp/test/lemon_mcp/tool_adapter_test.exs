@@ -45,6 +45,24 @@ defmodule LemonMCP.ToolAdapterTest do
     end
   end
 
+  defmodule SchemaMapTool do
+    def tool(_cwd, _opts) do
+      %AgentTool{
+        name: "schema_map_tool",
+        description: "uses a JSON schema parameter map",
+        parameters: %{
+          "type" => "object",
+          "properties" => %{
+            "message" => %{"type" => "string", "description" => "Message"}
+          },
+          "required" => ["message"]
+        },
+        label: "Schema Map Tool",
+        execute: fn _id, _params, _signal, _on_update -> "ok" end
+      }
+    end
+  end
+
   test "marks tool error tuples as MCP tool errors" do
     adapter = %ToolAdapter{
       cwd: "/tmp",
@@ -81,6 +99,21 @@ defmodule LemonMCP.ToolAdapterTest do
 
     assert result.isError == false
     assert [%{type: "text", text: "hello from tool"}] = result.content
+  end
+
+  test "preserves JSON schema parameter maps" do
+    adapter = %ToolAdapter{
+      cwd: "/tmp",
+      tool_opts: [],
+      tool_modules: %{"schema_map_tool" => SchemaMapTool}
+    }
+
+    [tool] = ToolAdapter.list_tools(adapter)
+
+    assert tool.name == "schema_map_tool"
+    assert tool.inputSchema["type"] == "object"
+    assert tool.inputSchema["properties"]["message"]["type"] == "string"
+    assert tool.inputSchema["required"] == ["message"]
   end
 
   test "builtin adapter inventory does not expose browser" do

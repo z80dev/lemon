@@ -206,6 +206,7 @@ defmodule LemonMCP.Transport.Stdio do
   defp spawn_server(state) do
     port_options = [
       :binary,
+      :use_stdio,
       :eof,
       :exit_status,
       :stderr_to_stdout,

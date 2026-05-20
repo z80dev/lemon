@@ -37,6 +37,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 |------|-----------|---------|
 | `lib/lemon_skills/tools/read_skill.ex` | `read_skill` | Fetches skill content/metadata by key |
 | `lib/lemon_skills/tools/skill_manage.ex` | `skill_manage` | Creates, edits, patches, deletes, and audits local skills |
+| `lib/lemon_skills/tools/x_search.ex` | `x_search` | Searches recent public X posts through X API |
 | `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
 | `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |
 
@@ -47,6 +48,7 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | File | Purpose |
 |------|---------|
 | `lib/lemon_skills/application.ex` | OTP app startup: `ensure_dirs!()`, `seed!()`, starts Registry |
+| `lib/lemon_skills/mcp_source.ex` | GenServer source for stdio, HTTP JSON-RPC, and legacy HTTP+SSE MCP tool discovery/calls into `CodingAgent.ToolRegistry`; configured stdio sampling policies can route reviewed sampling through `LemonCore.ExecApprovals` with redacted summaries; configured HTTP OAuth sources can resolve client secrets, persist token caches through `LemonCore.Secrets`, capture local PKCE callbacks through LemonCore's localhost listener, and route local authorization requests through `mcp_*_oauth` operator approvals |
 | `lib/lemon_skills/http_client.ex` | Behaviour for HTTP fetching (injectable for testing) |
 | `lib/lemon_skills/http_client/httpc.ex` | Default implementation using Erlang `:httpc` |
 | `lib/mix/tasks/lemon.skill.ex` | CLI: `mix lemon.skill list/search/discover/install/update/remove/info` |
@@ -227,6 +229,7 @@ test/lemon_skills/
   tools/
     read_skill_test.exs          # ReadSkill tool
     skill_manage_test.exs        # SkillManage tool
+    x_search_test.exs            # XSearch tool
     post_to_x_test.exs           # PostToX tool
     get_x_mentions_test.exs      # GetXMentions tool
 test/mix/tasks/
@@ -273,7 +276,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | Online discovery | `discovery_test.exs` |
 | Entry struct | `entry_test.exs` |
 | Status checking | `status_test.exs` |
-| Agent tools | `tools/read_skill_test.exs`, `tools/skill_manage_test.exs`, `tools/post_to_x_test.exs`, `tools/get_x_mentions_test.exs` |
+| Agent tools | `tools/read_skill_test.exs`, `tools/skill_manage_test.exs`, `tools/x_search_test.exs`, `tools/post_to_x_test.exs`, `tools/get_x_mentions_test.exs` |
 | Mix task | `mix/tasks/lemon.skill_test.exs` |
 
 ## Connections to Other Apps
@@ -282,17 +285,17 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
 | App | What LemonSkills uses from it |
 |-----|-------------------------------|
-| `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer; `LemonCore.Secrets` for GitHub token resolution in Discovery; `LemonCore.Telemetry` for skill load/write events |
+| `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer, configured stdio MCP sampling review, and configured HTTP MCP OAuth authorization requests; `LemonCore.Secrets` for GitHub token resolution in Discovery and HTTP MCP OAuth client/token secret storage; `LemonCore.Onboarding.LocalCallbackListener` for configured HTTP MCP PKCE callback capture; `LemonCore.Telemetry` for skill load/write events |
 | `agent_core` | `AgentCore.Types.AgentTool` and `AgentCore.Types.AgentToolResult` structs for tool definitions |
 | `ai` | `Ai.Types.TextContent` struct for tool result content |
-| `lemon_channels` | `LemonChannels.Adapters.XAPI` for X API integration (post_to_x, get_x_mentions tools) |
+| `lemon_channels` | `LemonChannels.Adapters.XAPI` for X API integration (x_search, post_to_x, get_x_mentions tools) |
 
 ### Consumers (other apps use this)
 
 | App | How it uses LemonSkills |
 |-----|------------------------|
 | `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; wraps `LemonSkills.Tools.ReadSkill` and `LemonSkills.Tools.SkillManage` as agent tools; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
-| `agent_core` | Provides the common tool structs used by skill tools (`read_skill`, `skill_manage`, `post_to_x`, `get_x_mentions`) |
+| `agent_core` | Provides the common tool structs used by skill tools (`read_skill`, `skill_manage`, `x_search`, `post_to_x`, `get_x_mentions`) |
 
 ### Shared Configuration
 

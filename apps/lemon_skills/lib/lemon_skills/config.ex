@@ -74,8 +74,11 @@ defmodule LemonSkills.Config do
   @typedoc "MCP server configuration type"
   @type mcp_server_config ::
           {:stdio, command :: String.t(), args :: [String.t()]}
+          | {:stdio, command :: String.t(), args :: [String.t()], opts :: keyword()}
           | {:http, url :: String.t()}
           | {:http, url :: String.t(), opts :: keyword()}
+          | {:sse, url :: String.t()}
+          | {:sse, url :: String.t(), opts :: keyword()}
 
   @typedoc "MCP validation error type"
   @type mcp_validation_error :: {:invalid, mcp_server_config(), String.t()}
@@ -520,8 +523,11 @@ defmodule LemonSkills.Config do
 
   Returns a list of MCP server configurations. Each configuration can be:
   - `{:stdio, command, args}` - Stdio transport with command and arguments
+  - `{:stdio, command, args, opts}` - Stdio transport with filter options
   - `{:http, url}` - HTTP transport with URL
   - `{:http, url, opts}` - HTTP transport with URL and options
+  - `{:sse, url}` - Legacy HTTP+SSE transport with URL
+  - `{:sse, url, opts}` - Legacy HTTP+SSE transport with URL and options
 
   ## Configuration
 
@@ -529,9 +535,18 @@ defmodule LemonSkills.Config do
 
       config :lemon_skills, :mcp_servers, [
         {:stdio, "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]},
-        {:stdio, "uvx", ["mcp-server-git", "--repository", "/path/to/repo"]},
+        {:stdio, "uvx", ["mcp-server-git", "--repository", "/path/to/repo"],
+         allow_tools: ["git_status", "git_diff"]},
         {:http, "http://localhost:3000/mcp"},
-        {:http, "https://api.example.com/mcp", [headers: [{"Authorization", "Bearer token"}]]}
+        {:http, "https://api.example.com/mcp", [headers: [{"Authorization", "Bearer token"}]]},
+        {:http, "https://oauth.example.com/mcp",
+         [oauth: [
+           client_id: "client",
+           client_secret: "secret",
+           scopes: ["tools"],
+           token_auth_method: :client_secret_basic
+         ]]},
+        {:sse, "http://localhost:3001/sse"}
       ]
 
   Or via environment variable (JSON format):
@@ -543,7 +558,8 @@ defmodule LemonSkills.Config do
       iex> LemonSkills.Config.mcp_servers()
       [
         {:stdio, "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]},
-        {:http, "http://localhost:3000/mcp"}
+        {:http, "http://localhost:3000/mcp"},
+        {:sse, "http://localhost:3001/sse"}
       ]
   """
   @spec mcp_servers() :: [mcp_server_config()]
@@ -607,18 +623,34 @@ defmodule LemonSkills.Config do
     end
   end
 
-  defp do_validate_mcp_config({:http, url, _opts}) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and not is_nil(host) ->
-        :ok
+  defp do_validate_mcp_config({:stdio, command, args, opts})
+       when is_binary(command) and is_list(args) and is_list(opts) do
+    with :ok <- do_validate_mcp_config({:stdio, command, args}),
+         :ok <- validate_mcp_filter_opts(opts) do
+      :ok
+    end
+  end
 
-      _ ->
-        {:error, "invalid HTTP URL: #{url}"}
+  defp do_validate_mcp_config({:http, url, opts}) when is_binary(url) and is_list(opts) do
+    with :ok <- validate_http_url(url),
+         :ok <- validate_http_opts(opts) do
+      :ok
     end
   end
 
   defp do_validate_mcp_config({:http, url}) when is_binary(url) do
     do_validate_mcp_config({:http, url, []})
+  end
+
+  defp do_validate_mcp_config({:sse, url, opts}) when is_binary(url) and is_list(opts) do
+    with :ok <- validate_http_url(url),
+         :ok <- validate_http_opts(opts) do
+      :ok
+    end
+  end
+
+  defp do_validate_mcp_config({:sse, url}) when is_binary(url) do
+    do_validate_mcp_config({:sse, url, []})
   end
 
   defp do_validate_mcp_config(config) do
@@ -649,7 +681,8 @@ defmodule LemonSkills.Config do
     # Merge configs - project takes precedence
     merged_servers =
       Map.get(project_config, "servers", []) ++
-        Map.get(global_config, "servers", [])
+        Map.get(global_config, "servers", []) ++
+        mcp_servers()
 
     # Convert JSON format to tuple format
     servers = Enum.flat_map(merged_servers, &parse_mcp_server_config/1)
@@ -725,16 +758,18 @@ defmodule LemonSkills.Config do
   defp parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
        when is_binary(command) do
     args = Map.get(config, "args", [])
-    [{:stdio, command, args}]
+    opts = mcp_filter_opts(config) ++ sampling_config_opts(config)
+
+    if opts == [] do
+      [{:stdio, command, args}]
+    else
+      [{:stdio, command, args, opts}]
+    end
   end
 
   defp parse_mcp_server_config(%{"type" => "http", "url" => url} = config)
        when is_binary(url) do
-    opts =
-      case Map.get(config, "headers") do
-        headers when is_map(headers) -> [headers: Map.to_list(headers)]
-        _ -> []
-      end
+    opts = http_config_opts(config)
 
     if opts == [] do
       [{:http, url}]
@@ -743,10 +778,24 @@ defmodule LemonSkills.Config do
     end
   end
 
+  defp parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
+       when is_binary(url) do
+    opts = http_config_opts(config)
+
+    if opts == [] do
+      [{:sse, url}]
+    else
+      [{:sse, url, opts}]
+    end
+  end
+
   # Already in tuple format (from Application config)
   defp parse_mcp_server_config({:stdio, _command, _args} = config), do: [config]
+  defp parse_mcp_server_config({:stdio, _command, _args, _opts} = config), do: [config]
   defp parse_mcp_server_config({:http, _url} = config), do: [config]
   defp parse_mcp_server_config({:http, _url, _opts} = config), do: [config]
+  defp parse_mcp_server_config({:sse, _url} = config), do: [config]
+  defp parse_mcp_server_config({:sse, _url, _opts} = config), do: [config]
 
   # Unknown format - skip
   defp parse_mcp_server_config(_config) do
@@ -754,4 +803,265 @@ defmodule LemonSkills.Config do
     Logger.debug("Skipping unknown MCP server config format")
     []
   end
+
+  defp http_config_opts(config) do
+    header_opts =
+      case Map.get(config, "headers") do
+        headers when is_map(headers) -> [headers: Map.to_list(headers)]
+        _ -> []
+      end
+
+    header_opts ++ oauth_config_opts(config) ++ mcp_filter_opts(config)
+  end
+
+  defp oauth_config_opts(%{"oauth" => oauth}) when is_map(oauth) do
+    opts =
+      [
+        client_id: Map.get(oauth, "client_id"),
+        client_secret: Map.get(oauth, "client_secret") || Map.get(oauth, "client-secret"),
+        client_secret_secret:
+          Map.get(oauth, "client_secret_secret") || Map.get(oauth, "client-secret-secret"),
+        token_secret: Map.get(oauth, "token_secret") || Map.get(oauth, "token-secret"),
+        flow: Map.get(oauth, "flow"),
+        redirect_uri: Map.get(oauth, "redirect_uri") || Map.get(oauth, "redirect-uri"),
+        scope: Map.get(oauth, "scope"),
+        scopes: string_list(oauth, "scopes"),
+        authorization_approval:
+          if(Map.has_key?(oauth, "authorization_approval"),
+            do: Map.get(oauth, "authorization_approval"),
+            else: Map.get(oauth, "authorization-approval")
+          ),
+        authorization_timeout_ms:
+          Map.get(oauth, "authorization_timeout_ms") ||
+            Map.get(oauth, "authorization-timeout-ms"),
+        token_auth_method:
+          Map.get(oauth, "token_auth_method") || Map.get(oauth, "token-auth-method")
+      ]
+      |> Enum.reject(fn
+        {:scopes, []} -> true
+        {_key, nil} -> true
+        {_key, ""} -> true
+        _ -> false
+      end)
+
+    if opts == [], do: [], else: [oauth: opts]
+  end
+
+  defp oauth_config_opts(_config), do: []
+
+  defp sampling_config_opts(%{"sampling" => sampling}) when is_map(sampling) do
+    opts =
+      [
+        mode: Map.get(sampling, "mode"),
+        reviewer: sampling_reviewer(sampling),
+        max_tokens: Map.get(sampling, "max_tokens") || Map.get(sampling, "maxTokens"),
+        allowed_models: string_list(sampling, "allowed_models")
+      ]
+      |> Enum.reject(fn
+        {:allowed_models, []} -> true
+        {_key, nil} -> true
+        {_key, ""} -> true
+        _ -> false
+      end)
+
+    if opts == [], do: [], else: [sampling_policy: opts]
+  end
+
+  defp sampling_config_opts(_config), do: []
+
+  defp sampling_reviewer(%{"reviewer" => reviewer})
+       when reviewer in ["ops_approval", "approval"] do
+    :ops_approval
+  end
+
+  defp sampling_reviewer(%{"require_approval" => true}), do: :ops_approval
+  defp sampling_reviewer(_sampling), do: nil
+
+  defp mcp_filter_opts(config) do
+    [
+      allow_tools: string_list(config, "allow_tools"),
+      block_tools: string_list(config, "block_tools"),
+      allow_resources: string_list(config, "allow_resources"),
+      block_resources: string_list(config, "block_resources"),
+      allow_prompts: string_list(config, "allow_prompts"),
+      block_prompts: string_list(config, "block_prompts")
+    ]
+    |> Enum.reject(fn {_key, value} -> value == [] end)
+  end
+
+  defp string_list(config, key) do
+    case Map.get(config, key) do
+      values when is_list(values) -> Enum.filter(values, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  defp validate_mcp_filter_opts(opts) do
+    allowed_keys = [
+      :allow_tools,
+      :block_tools,
+      :allow_resources,
+      :block_resources,
+      :allow_prompts,
+      :block_prompts
+    ]
+
+    case Enum.find(opts, fn {key, value} ->
+           key in allowed_keys and not string_list?(value)
+         end) do
+      nil -> validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+      {key, _value} -> {:error, "#{key} must be a list of strings"}
+    end
+  end
+
+  defp validate_sampling_policy(nil), do: :ok
+
+  defp validate_sampling_policy(policy) when is_list(policy) do
+    mode = Keyword.get(policy, :mode)
+    reviewer = Keyword.get(policy, :reviewer)
+    max_tokens = Keyword.get(policy, :max_tokens)
+    allowed_models = Keyword.get(policy, :allowed_models, [])
+    approval_timeout_ms = Keyword.get(policy, :approval_timeout_ms)
+
+    cond do
+      not is_nil(mode) and
+          mode not in [:model, :reviewed_model, :deny, "model", "reviewed_model", "deny"] ->
+        {:error, "sampling_policy.mode must be model, reviewed_model, or deny"}
+
+      not is_nil(reviewer) and
+          not (is_function(reviewer, 1) or
+                   reviewer in [:ops_approval, "ops_approval", :approval, "approval", true]) ->
+        {:error, "sampling_policy.reviewer must be a function or ops_approval"}
+
+      not is_nil(max_tokens) and (not is_integer(max_tokens) or max_tokens <= 0) ->
+        {:error, "sampling_policy.max_tokens must be a positive integer"}
+
+      not string_list?(allowed_models) ->
+        {:error, "sampling_policy.allowed_models must be a list of strings"}
+
+      not is_nil(approval_timeout_ms) and
+          (not is_integer(approval_timeout_ms) or approval_timeout_ms <= 0) ->
+        {:error, "sampling_policy.approval_timeout_ms must be a positive integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_sampling_policy(_policy), do: {:error, "sampling_policy must be a keyword list"}
+
+  defp string_list?(value), do: is_list(value) and Enum.all?(value, &is_binary/1)
+
+  defp validate_http_url(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and not is_nil(host) ->
+        :ok
+
+      _ ->
+        {:error, "invalid HTTP URL: #{url}"}
+    end
+  end
+
+  defp validate_http_opts(opts) do
+    with :ok <- validate_mcp_filter_opts(opts),
+         :ok <- validate_http_headers(Keyword.get(opts, :headers, [])),
+         :ok <- validate_http_oauth(Keyword.get(opts, :oauth, [])) do
+      :ok
+    end
+  end
+
+  defp validate_http_headers(headers) when is_list(headers) do
+    if Enum.all?(headers, fn {key, value} -> is_binary(key) and is_binary(value) end) do
+      :ok
+    else
+      {:error, "headers must be a list of string tuples"}
+    end
+  end
+
+  defp validate_http_headers(_headers), do: {:error, "headers must be a list of string tuples"}
+
+  defp validate_http_oauth([]), do: :ok
+  defp validate_http_oauth(nil), do: :ok
+
+  defp validate_http_oauth(oauth) when is_list(oauth) do
+    client_id = Keyword.get(oauth, :client_id)
+    client_secret = Keyword.get(oauth, :client_secret)
+    client_secret_secret = Keyword.get(oauth, :client_secret_secret)
+    token_secret = Keyword.get(oauth, :token_secret)
+    flow = Keyword.get(oauth, :flow)
+    redirect_uri = Keyword.get(oauth, :redirect_uri)
+    scope = Keyword.get(oauth, :scope)
+    scopes = Keyword.get(oauth, :scopes)
+    authorization_timeout_ms = Keyword.get(oauth, :authorization_timeout_ms)
+    token_auth_method = Keyword.get(oauth, :token_auth_method)
+    authorization_code_provider = Keyword.get(oauth, :authorization_code_provider)
+
+    cond do
+      not is_binary(client_id) or client_id == "" ->
+        {:error, "oauth.client_id must be a non-empty string"}
+
+      requires_client_secret?(flow, authorization_code_provider) and
+        not configured_secret?(client_secret) and not configured_secret?(client_secret_secret) ->
+        {:error, "oauth.client_secret must be a non-empty string"}
+
+      not is_nil(client_secret_secret) and not configured_secret?(client_secret_secret) ->
+        {:error, "oauth.client_secret_secret must be a non-empty string"}
+
+      not is_nil(token_secret) and not configured_secret?(token_secret) ->
+        {:error, "oauth.token_secret must be a non-empty string"}
+
+      not is_nil(flow) and not oauth_flow?(flow) ->
+        {:error, "oauth.flow must be client_credentials or authorization_code_pkce"}
+
+      not is_nil(redirect_uri) and not is_binary(redirect_uri) ->
+        {:error, "oauth.redirect_uri must be a string"}
+
+      not is_nil(scope) and not is_binary(scope) ->
+        {:error, "oauth.scope must be a string"}
+
+      not is_nil(scopes) and not string_list?(scopes) ->
+        {:error, "oauth.scopes must be a list of strings"}
+
+      not is_nil(authorization_timeout_ms) and
+          (not is_integer(authorization_timeout_ms) or authorization_timeout_ms <= 0) ->
+        {:error, "oauth.authorization_timeout_ms must be a positive integer"}
+
+      not is_nil(token_auth_method) and
+          token_auth_method not in [
+            :client_secret_post,
+            :client_secret_basic,
+            :post,
+            :basic,
+            "client_secret_post",
+            "client_secret_basic",
+            "post",
+            "basic"
+          ] ->
+        {:error, "oauth.token_auth_method must be client_secret_post or client_secret_basic"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_http_oauth(_oauth), do: {:error, "oauth must be a keyword list"}
+
+  defp requires_client_secret?(flow, authorization_code_provider) do
+    not auth_code_flow?(flow) and not is_function(authorization_code_provider)
+  end
+
+  defp configured_secret?(value), do: is_binary(value) and value != ""
+
+  defp oauth_flow?(flow),
+    do:
+      flow in [
+        :client_credentials,
+        :authorization_code_pkce,
+        "client_credentials",
+        "authorization_code_pkce",
+        "pkce"
+      ]
+
+  defp auth_code_flow?(flow),
+    do: flow in [:authorization_code_pkce, "authorization_code_pkce", "pkce"]
 end

@@ -49,6 +49,31 @@ defmodule LemonMCP.ServerTest do
             _ ->
               {:error, :unknown_tool}
           end
+        end,
+        resources: [%{"uri" => "fixture://status", "name" => "Status"}],
+        resource_handler: fn
+          "fixture://status" -> {:ok, [%{"uri" => "fixture://status", "text" => "ok"}]}
+          _ -> {:error, :unknown_resource}
+        end,
+        prompts: [%{"name" => "brief", "description" => "Write a brief"}],
+        prompt_handler: fn
+          "brief", args ->
+            {:ok,
+             %{
+               "description" => "Write a brief",
+               "messages" => [
+                 %{
+                   "role" => "user",
+                   "content" => %{
+                     "type" => "text",
+                     "text" => "brief:" <> Map.get(args, "topic", "")
+                   }
+                 }
+               ]
+             }}
+
+          _, _ ->
+            {:error, :unknown_prompt}
         end
       )
 
@@ -138,6 +163,28 @@ defmodule LemonMCP.ServerTest do
       result = Server.get_initialize_result(server)
 
       assert result.result.capabilities["tools"] == %{}
+      assert result.result.capabilities["resources"] == %{}
+      assert result.result.capabilities["prompts"] == %{}
+    end
+  end
+
+  describe "resource and prompt management" do
+    test "lists and reads resources", %{server: server} do
+      assert [%{"uri" => "fixture://status"}] = Server.list_resources(server)
+
+      assert {:ok, [%{"uri" => "fixture://status", "text" => "ok"}]} =
+               Server.read_resource(server, "fixture://status")
+
+      assert {:error, :unknown_resource} = Server.read_resource(server, "fixture://missing")
+    end
+
+    test "lists and gets prompts", %{server: server} do
+      assert [%{"name" => "brief"}] = Server.list_prompts(server)
+
+      assert {:ok, %{"messages" => [%{"role" => "user"}]}} =
+               Server.get_prompt(server, "brief", %{"topic" => "beam"})
+
+      assert {:error, :unknown_prompt} = Server.get_prompt(server, "missing", %{})
     end
   end
 
@@ -175,6 +222,19 @@ defmodule LemonMCP.ServerTest do
       def call_tool(_name, _args) do
         {:error, :unknown_tool}
       end
+
+      @impl true
+      def list_resources do
+        [%{"uri" => "provider://status"}]
+      end
+
+      @impl true
+      def read_resource("provider://status") do
+        {:ok, [%{"uri" => "provider://status", "text" => "ok"}]}
+      end
+
+      @impl true
+      def read_resource(_uri), do: {:error, :unknown_resource}
     end
 
     test "uses tool provider module" do
@@ -193,6 +253,9 @@ defmodule LemonMCP.ServerTest do
       assert result.isError == false
       [content] = result.content
       assert content.text == "test result"
+
+      assert [%{"uri" => "provider://status"}] = Server.list_resources(server)
+      assert {:ok, [%{"text" => "ok"}]} = Server.read_resource(server, "provider://status")
     end
   end
 

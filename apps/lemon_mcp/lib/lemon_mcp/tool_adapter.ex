@@ -214,6 +214,14 @@ defmodule LemonMCP.ToolAdapter do
     }
   end
 
+  defp convert_parameters_to_schema(%{"type" => "object"} = parameters), do: parameters
+
+  defp convert_parameters_to_schema(%{type: "object"} = parameters) do
+    parameters
+    |> Enum.map(fn {key, value} -> {to_string(key), value} end)
+    |> Map.new()
+  end
+
   defp convert_parameters_to_schema(_), do: %{"type" => "object", "properties" => %{}}
 
   defp map_parameter_type(:string), do: "string"

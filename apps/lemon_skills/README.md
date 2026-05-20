@@ -80,6 +80,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
 | `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
+| `LemonSkills.Tools.XSearch` | `lib/lemon_skills/tools/x_search.ex` | Agent tool for read-only recent public X/Twitter search |
 | `LemonSkills.Tools.PostToX` | `lib/lemon_skills/tools/post_to_x.ex` | Agent tool for posting tweets to X (Twitter) |
 | `LemonSkills.Tools.GetXMentions` | `lib/lemon_skills/tools/get_x_mentions.ex` | Agent tool for fetching recent X mentions |
 | `Mix.Tasks.Lemon.Skill` | `lib/mix/tasks/lemon.skill.ex` | CLI interface for skill management |
@@ -368,7 +369,7 @@ end
 
 ## Agent Tools
 
-Three tools are available for agents to use at runtime:
+Four tools are available for agents to use at runtime:
 
 ### read_skill
 
@@ -378,6 +379,19 @@ Fetches skill content and metadata by key. Returns the full SKILL.md content alo
 LemonSkills.Tools.ReadSkill.tool(cwd: "/project/path")
 # Parameters: %{"key" => "github", "include_status" => true}
 ```
+
+### x_search
+
+Searches recent public X/Twitter posts. This is read-only and can use a
+bearer-token-only configuration.
+
+```elixir
+LemonSkills.Tools.XSearch.tool()
+# Parameters: %{"query" => "lemon lang:en", "limit" => 10}
+```
+
+Requires either `X_API_BEARER_TOKEN` for read-only search or the same OAuth
+credentials used by the other X tools.
 
 ### post_to_x
 
@@ -455,6 +469,7 @@ mix lemon.skill info <key>                    # Show skill details
 |----------|-------------|
 | `LEMON_AGENT_DIR` | Override the global agent directory (takes precedence over app config) |
 | `GITHUB_TOKEN` | GitHub personal access token for higher discovery rate limits |
+| `X_API_BEARER_TOKEN` | X API bearer token for read-only `x_search` |
 | `X_API_CLIENT_ID` | X API client ID (for post_to_x and get_x_mentions tools) |
 | `X_API_CLIENT_SECRET` | X API client secret |
 | `X_API_ACCESS_TOKEN` | X API access token |
@@ -487,7 +502,7 @@ Project configuration is deep-merged on top of global configuration.
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
 | `agent_core` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
 | `ai` | umbrella | AI types (`TextContent`) used in tool results |
-| `lemon_channels` | umbrella | X (Twitter) API integration (`LemonChannels.Adapters.XAPI`) used by post_to_x and get_x_mentions tools |
+| `lemon_channels` | umbrella | X (Twitter) API integration (`LemonChannels.Adapters.XAPI`) used by x_search, post_to_x, and get_x_mentions tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
 
 ## Installation Flow Detail

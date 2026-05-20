@@ -139,6 +139,10 @@ defmodule LemonMCP.Transport.HTTP do
     * `:tool_provider` - Module implementing tool provider behaviour
     * `:tools` - List of tools (alternative to tool_provider)
     * `:tool_handler` - Function to handle tool calls
+    * `:resources` - List of resources
+    * `:resource_handler` - Function to read resources by URI
+    * `:prompts` - List of prompts
+    * `:prompt_handler` - Function to get prompts by name and arguments
 
   """
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -235,7 +239,11 @@ defmodule LemonMCP.Transport.HTTP do
       server_version: Keyword.get(opts, :server_version, "0.1.0"),
       tool_provider: Keyword.get(opts, :tool_provider),
       tools: Keyword.get(opts, :tools),
-      tool_handler: Keyword.get(opts, :tool_handler)
+      tool_handler: Keyword.get(opts, :tool_handler),
+      resources: Keyword.get(opts, :resources),
+      resource_handler: Keyword.get(opts, :resource_handler),
+      prompts: Keyword.get(opts, :prompts),
+      prompt_handler: Keyword.get(opts, :prompt_handler)
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end

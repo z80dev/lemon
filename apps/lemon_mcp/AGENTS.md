@@ -6,7 +6,7 @@ The `lemon_mcp` app implements both sides of the **Model Context Protocol (MCP)*
 
 ### Key Responsibilities
 
-- **MCP Client**: Spawn external MCP servers as subprocesses (via stdio), perform the handshake, and proxy tool calls to them — enabling Lemon to consume third-party tool servers (e.g. `@modelcontextprotocol/server-filesystem`)
+- **MCP Client**: Spawn external MCP servers as subprocesses (via stdio) or connect to Streamable HTTP / legacy HTTP+SSE MCP endpoints, perform the handshake, handle OAuth client-credentials, refresh-token, and PKCE authorization-code callback flows for Streamable HTTP, and proxy tool calls to them — enabling Lemon to consume third-party tool servers (e.g. `@modelcontextprotocol/server-filesystem`)
 - **MCP Server**: Accept inbound MCP connections over HTTP and expose Lemon's own `CodingAgent` tools to external MCP clients
 - **Protocol Layer**: Encode/decode JSON-RPC 2.0 messages, validate lifecycle ordering, and map between Lemon's internal tool types and the MCP wire format
 
@@ -19,6 +19,7 @@ Protocol version targeted: **"2024-11-05"**
                  ___________________               ________________________
                 |                   |             |                        |
                 |  LemonMCP.Client  |             | LemonMCP.Transport.HTTP|
+                | LemonMCP.Client.HTTP            |                        |
                 |    (GenServer)    |             |  (Plug.Router / Bandit)|
                 |___________________|             |________________________|
                          |                                    |
@@ -49,6 +50,9 @@ lib/
     application.ex                 # OTP application; supervision tree (currently no children)
     protocol.ex                    # All MCP message structs + encode/decode + builder helpers
     client.ex                      # GenServer client (stdio transport, state machine)
+    client/
+      http.ex                      # GenServer client (Streamable HTTP transport)
+      sse.ex                       # GenServer client (legacy HTTP+SSE transport)
     server.ex                      # GenServer server (tool registry, init tracking)
     tool_adapter.ex                # CodingAgent → MCP bridge; also a __using__ macro
     server/
@@ -75,7 +79,10 @@ test/
 |--------|------|
 | `LemonMCP` | Thin public API; delegates to `Protocol` |
 | `LemonMCP.Protocol` | All structs and encode/decode; also server builder helpers (`parse_request/1`, `create_response/2`, `create_error_response/4`, `error_code/1`, `server_capabilities/1`, `initialize_result/4`) |
-| `LemonMCP.Client` | GenServer; owns stdio transport lifecycle, request correlation, timeout handling |
+| `LemonMCP.Client` | GenServer; owns stdio transport lifecycle, request correlation, timeout handling, resource/prompt calls, and optional `sampling/createMessage` callbacks or policies. It only advertises the MCP sampling capability when a `sampling_handler` or `sampling_policy` is configured. |
+| `LemonMCP.Sampling` | Redacted policy wrapper for stdio `sampling/createMessage`; summarizes requests without raw prompt text, enforces max-token/model allowlists, and supports reviewed model-backed delegates. |
+| `LemonMCP.Client.HTTP` | GenServer; owns Streamable HTTP initialize/initialized handshake, JSON or per-request SSE responses, session/protocol headers, OAuth protected-resource and authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, storage-agnostic OAuth token cache load/save hooks, one-shot bearer reacquisition after later 401 challenges, synchronous request calls, timeout handling, and server capability metadata |
+| `LemonMCP.Client.SSE` | GenServer; owns legacy HTTP+SSE endpoint discovery, POST/message response correlation, timeout handling, and server capability metadata |
 | `LemonMCP.Transport.Stdio` | GenServer backed by an Erlang `Port`; newline-delimited JSON framing; calls `message_handler` callback for each inbound line |
 | `LemonMCP.Server` | GenServer; holds tool list or `tool_provider` module reference; tracks `initialized` flag; also declares the `@behaviour` for tool provider modules |
 | `LemonMCP.Server.Handler` | Pure functions; routes `JSONRPCRequest` structs to handlers; validates params; calls into `Server` GenServer |
@@ -122,7 +129,7 @@ test/
 
 ### Client State Machine
 
-The `LemonMCP.Client` GenServer holds an internal `state` field (not to be confused with the GenServer `state` map):
+The `LemonMCP.Client` and `LemonMCP.Client.HTTP` GenServers hold an internal `state` field (not to be confused with the GenServer state map):
 
 ```
 :disconnected  ->  :initializing  ->  :ready
@@ -216,6 +223,8 @@ config :lemon_mcp, :http_transport,
 
 ### Connecting a Client to an External MCP Server
 
+Stdio client:
+
 ```elixir
 {:ok, client} = LemonMCP.Client.start_link(
   command: "npx",
@@ -228,6 +237,118 @@ config :lemon_mcp, :http_transport,
 {:ok, tools} = LemonMCP.Client.list_tools(client)
 {:ok, content} = LemonMCP.Client.call_tool(client, "read_file", %{"path" => "/tmp/test.txt"})
 # content is a list of %{type: "text", text: "..."} maps
+```
+
+Stdio sampling is opt-in at the low-level client boundary. Prefer
+`sampling_policy` for model-backed sampling so redacted review and local limits
+run before a delegate sees the raw request:
+
+```elixir
+{:ok, client} = LemonMCP.Client.start_link(
+  command: "node",
+  args: ["server.js"],
+  sampling_policy: [
+    mode: :reviewed_model,
+    reviewer: fn summary -> :approve end,
+    delegate: fn params, summary ->
+      {:ok, model_sampling_result(params, summary)}
+    end,
+    max_tokens: 1_024,
+    allowed_models: ["lemon"]
+  ]
+)
+```
+
+Use `sampling_handler` only for low-level integrations that already own review
+and policy checks:
+
+```elixir
+{:ok, client} = LemonMCP.Client.start_link(
+  command: "node",
+  args: ["server.js"],
+  sampling_handler: fn params ->
+    {:ok,
+     %{
+       "role" => "assistant",
+       "content" => %{"type" => "text", "text" => "sampled"},
+       "model" => "lemon",
+       "stopReason" => "endTurn"
+     }}
+  end
+)
+```
+
+Do not advertise sampling by adding `"sampling"` to static capabilities unless
+the client can actually answer server sampling requests. Prefer the
+`sampling_policy` or `sampling_handler` option so capability advertisement and
+response routing stay tied together.
+
+When a stdio server is configured through `LemonSkills.McpSource`, the source
+layer may use `reviewer: :ops_approval` to bridge reviewed sampling into
+`LemonCore.ExecApprovals`. That production-facing bridge stores only redacted
+`mcp_<server>_sampling` summaries for Web `/ops` and approval surfaces before
+the low-level MCP delegate sees raw params. Web `/ops` renders the safe request
+hash, model, token, message, role, and content-kind metadata.
+
+Streamable HTTP client:
+
+```elixir
+{:ok, client} = LemonMCP.Client.HTTP.start_link(
+  url: "http://localhost:3000/mcp",
+  headers: [{"Authorization", "Bearer token"}]
+)
+
+{:ok, tools} = LemonMCP.Client.HTTP.list_tools(client)
+{:ok, content} = LemonMCP.Client.HTTP.call_tool(client, "search", %{"query" => "beam"})
+```
+
+OAuth-protected Streamable HTTP servers can use configured client credentials:
+
+```elixir
+{:ok, client} = LemonMCP.Client.HTTP.start_link(
+  url: "https://example.com/mcp",
+  oauth: [client_id: "client", client_secret: "secret", scopes: ["tools"]]
+)
+```
+
+The client uses `WWW-Authenticate` protected-resource metadata and declared
+authorization-server metadata to find the token endpoint, requests a bearer
+token with `grant_type=client_credentials`, and retries the protected MCP
+request. If a later 401 arrives and the previous token response supplied a
+refresh token, the client prefers `grant_type=refresh_token`, rotates the stored
+refresh token when the token endpoint returns a replacement, and only falls back
+to client credentials when no refresh token is available or refresh fails.
+Metadata discovery requests use metadata-only headers; configured MCP headers
+and acquired bearer tokens are not forwarded to metadata URLs.
+
+Public-client authorization-code + PKCE flows use an
+`authorization_code_provider` callback as the narrow UI boundary. The callback
+receives the authorization URL, state, verifier/challenge metadata, resource,
+scope, and redirect URI, then returns a code plus matching state for token
+exchange. OAuth tokens remain process-local unless the caller supplies
+`oauth_token_cache: [load: ..., save: ...]` or the compatibility
+`oauth_token_loader` / `oauth_token_persister` callbacks. The client loads a
+cached access/refresh token before initialize and persists successful
+client-credentials, refresh-token, and PKCE token responses, including refresh
+token rotation. `lemon_mcp` deliberately does not own secret storage, loopback
+HTTP callback hosting, or operator UI; those belong in higher-level Lemon
+runtime or skills surfaces. If a higher-level provider may block for an
+interactive authorization flow, pass the GenServer `:timeout` start option
+alongside the client config.
+
+HTTP resource/prompt calls use the same API shape and degrade with MCP RPC
+errors when the remote endpoint does not implement those methods.
+
+Legacy HTTP+SSE client:
+
+```elixir
+{:ok, client} = LemonMCP.Client.SSE.start_link(
+  url: "http://localhost:3000/sse",
+  headers: [{"Authorization", "Bearer token"}]
+)
+
+{:ok, tools} = LemonMCP.Client.SSE.list_tools(client)
+{:ok, content} = LemonMCP.Client.SSE.call_tool(client, "search", %{"query" => "beam"})
 ```
 
 ## Error Handling Distinctions
@@ -362,4 +483,4 @@ end
 
 - **`coding_agent`** (dependency): `ToolAdapter` maps `CodingAgent.Tools.*` module names to MCP tool definitions. All `@builtin_tools` entries reference `CodingAgent.Tools` modules.
 - **`agent_core`** (dependency): `AgentCore.Types.AgentToolResult` and `AgentCore.Types.AgentTool` are used by `ToolAdapter` for result conversion.
-- **Consumers**: Any app wanting to expose Lemon tools over MCP or consume external MCP servers depends on `{:lemon_mcp, in_umbrella: true}` and calls `LemonMCP.Client.start_link/1` or `LemonMCP.Transport.HTTP.start_link/1`.
+- **Consumers**: Any app wanting to expose Lemon tools over MCP or consume external MCP servers depends on `{:lemon_mcp, in_umbrella: true}` and calls `LemonMCP.Client.start_link/1`, `LemonMCP.Client.HTTP.start_link/1`, or `LemonMCP.Transport.HTTP.start_link/1`.

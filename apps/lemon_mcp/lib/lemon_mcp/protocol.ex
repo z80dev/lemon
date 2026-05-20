@@ -15,6 +15,13 @@ defmodule LemonMCP.Protocol do
   - `ToolListRequest` / `ToolListResponse` - List available tools
   - `ToolCallRequest` / `ToolCallResponse` - Invoke a tool
 
+  ### Resources and Prompts
+  - `ResourceListRequest` / `ResourceListResponse` - List available resources
+  - `ResourceReadRequest` / `ResourceReadResponse` - Read resource contents
+  - `PromptListRequest` / `PromptListResponse` - List prompt templates
+  - `PromptGetRequest` / `PromptGetResponse` - Render a prompt template
+  - `sampling/createMessage` - Server-to-client sampling request
+
   ### Errors
   - `JSONRPCError` - JSON-RPC 2.0 error response
 
@@ -87,14 +94,16 @@ defmodule LemonMCP.Protocol do
     @type t :: %__MODULE__{
             jsonrpc: String.t(),
             id: Protocol.request_id(),
-            result: %{
-              protocolVersion: Protocol.protocol_version(),
-              capabilities: Protocol.capabilities(),
-              serverInfo: %{
-                name: String.t(),
-                version: String.t()
+            result:
+              %{
+                protocolVersion: Protocol.protocol_version(),
+                capabilities: Protocol.capabilities(),
+                serverInfo: %{
+                  name: String.t(),
+                  version: String.t()
+                }
               }
-            } | nil,
+              | nil,
             error: Protocol.JSONRPCError.t() | nil
           }
     defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
@@ -151,10 +160,100 @@ defmodule LemonMCP.Protocol do
     @type t :: %__MODULE__{
             jsonrpc: String.t(),
             id: Protocol.request_id(),
-            result: %{
-              content: [Protocol.content_item()],
-              isError: boolean()
-            } | nil,
+            result:
+              %{
+                content: [Protocol.content_item()],
+                isError: boolean()
+              }
+              | nil,
+            error: Protocol.JSONRPCError.t() | nil
+          }
+    defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
+  end
+
+  defmodule ResourceListRequest do
+    @moduledoc "MCP resources/list request"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            method: String.t(),
+            params: map()
+          }
+    defstruct jsonrpc: "2.0", id: nil, method: "resources/list", params: %{}
+  end
+
+  defmodule ResourceListResponse do
+    @moduledoc "MCP resources/list response"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            result: %{resources: [map()]} | nil,
+            error: Protocol.JSONRPCError.t() | nil
+          }
+    defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
+  end
+
+  defmodule ResourceReadRequest do
+    @moduledoc "MCP resources/read request"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            method: String.t(),
+            params: %{uri: String.t()}
+          }
+    defstruct jsonrpc: "2.0", id: nil, method: "resources/read", params: %{}
+  end
+
+  defmodule ResourceReadResponse do
+    @moduledoc "MCP resources/read response"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            result: %{contents: [map()]} | nil,
+            error: Protocol.JSONRPCError.t() | nil
+          }
+    defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
+  end
+
+  defmodule PromptListRequest do
+    @moduledoc "MCP prompts/list request"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            method: String.t(),
+            params: map()
+          }
+    defstruct jsonrpc: "2.0", id: nil, method: "prompts/list", params: %{}
+  end
+
+  defmodule PromptListResponse do
+    @moduledoc "MCP prompts/list response"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            result: %{prompts: [map()]} | nil,
+            error: Protocol.JSONRPCError.t() | nil
+          }
+    defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
+  end
+
+  defmodule PromptGetRequest do
+    @moduledoc "MCP prompts/get request"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            method: String.t(),
+            params: %{name: String.t(), arguments: map()}
+          }
+    defstruct jsonrpc: "2.0", id: nil, method: "prompts/get", params: %{}
+  end
+
+  defmodule PromptGetResponse do
+    @moduledoc "MCP prompts/get response"
+    @type t :: %__MODULE__{
+            jsonrpc: String.t(),
+            id: Protocol.request_id(),
+            result: %{description: String.t() | nil, messages: [map()]} | nil,
             error: Protocol.JSONRPCError.t() | nil
           }
     defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
@@ -300,6 +399,56 @@ defmodule LemonMCP.Protocol do
     }
   end
 
+  @doc """
+  Creates a resources/list request.
+  """
+  @spec resource_list_request(keyword()) :: ResourceListRequest.t()
+  def resource_list_request(opts \\ []) do
+    id = opts[:id] || generate_id()
+    %ResourceListRequest{id: id}
+  end
+
+  @doc """
+  Creates a resources/read request.
+  """
+  @spec resource_read_request(keyword()) :: ResourceReadRequest.t()
+  def resource_read_request(opts \\ []) do
+    id = opts[:id] || generate_id()
+    uri = opts[:uri] || raise ArgumentError, "resource uri is required"
+
+    %ResourceReadRequest{
+      id: id,
+      params: %{uri: uri}
+    }
+  end
+
+  @doc """
+  Creates a prompts/list request.
+  """
+  @spec prompt_list_request(keyword()) :: PromptListRequest.t()
+  def prompt_list_request(opts \\ []) do
+    id = opts[:id] || generate_id()
+    %PromptListRequest{id: id}
+  end
+
+  @doc """
+  Creates a prompts/get request.
+  """
+  @spec prompt_get_request(keyword()) :: PromptGetRequest.t()
+  def prompt_get_request(opts \\ []) do
+    id = opts[:id] || generate_id()
+    name = opts[:name] || raise ArgumentError, "prompt name is required"
+    arguments = opts[:arguments] || %{}
+
+    %PromptGetRequest{
+      id: id,
+      params: %{
+        name: name,
+        arguments: arguments
+      }
+    }
+  end
+
   # ============================================================================
   # Encoding / Decoding
   # ============================================================================
@@ -404,6 +553,50 @@ defmodule LemonMCP.Protocol do
     }
   end
 
+  defp struct_to_map(%ResourceListRequest{} = req) do
+    %{
+      "jsonrpc" => req.jsonrpc,
+      "id" => req.id,
+      "method" => req.method,
+      "params" => req.params
+    }
+  end
+
+  defp struct_to_map(%ResourceReadRequest{} = req) do
+    %{
+      "jsonrpc" => req.jsonrpc,
+      "id" => req.id,
+      "method" => req.method,
+      "params" => req.params
+    }
+  end
+
+  defp struct_to_map(%PromptListRequest{} = req) do
+    %{
+      "jsonrpc" => req.jsonrpc,
+      "id" => req.id,
+      "method" => req.method,
+      "params" => req.params
+    }
+  end
+
+  defp struct_to_map(%PromptGetRequest{} = req) do
+    %{
+      "jsonrpc" => req.jsonrpc,
+      "id" => req.id,
+      "method" => req.method,
+      "params" => req.params
+    }
+  end
+
+  defp struct_to_map(%JSONRPCResponse{} = response) do
+    %{
+      "jsonrpc" => response.jsonrpc,
+      "id" => response.id,
+      "result" => response.result
+    }
+  end
+
   defp decode_response(%{"id" => id, "result" => result} = data) do
     # Try to determine response type based on result structure
     response =
@@ -411,6 +604,7 @@ defmodule LemonMCP.Protocol do
         # Initialize response has serverInfo
         Map.has_key?(result, "serverInfo") ->
           server_info = result["serverInfo"]
+
           %InitializeResponse{
             id: id,
             result: %{
@@ -437,6 +631,33 @@ defmodule LemonMCP.Protocol do
             result: %{
               content: result["content"],
               isError: result["isError"] || false
+            }
+          }
+
+        Map.has_key?(result, "resources") ->
+          %ResourceListResponse{
+            id: id,
+            result: %{resources: result["resources"]}
+          }
+
+        Map.has_key?(result, "contents") ->
+          %ResourceReadResponse{
+            id: id,
+            result: %{contents: result["contents"]}
+          }
+
+        Map.has_key?(result, "prompts") ->
+          %PromptListResponse{
+            id: id,
+            result: %{prompts: result["prompts"]}
+          }
+
+        Map.has_key?(result, "messages") ->
+          %PromptGetResponse{
+            id: id,
+            result: %{
+              description: result["description"],
+              messages: result["messages"]
             }
           }
 
@@ -588,7 +809,10 @@ defmodule LemonMCP.Protocol do
   def server_capabilities(opts \\ []) do
     caps = %{}
     caps = if Keyword.get(opts, :tools, false), do: Map.put(caps, "tools", %{}), else: caps
-    caps = if Keyword.get(opts, :resources, false), do: Map.put(caps, "resources", %{}), else: caps
+
+    caps =
+      if Keyword.get(opts, :resources, false), do: Map.put(caps, "resources", %{}), else: caps
+
     caps = if Keyword.get(opts, :prompts, false), do: Map.put(caps, "prompts", %{}), else: caps
     caps = if Keyword.get(opts, :logging, false), do: Map.put(caps, "logging", %{}), else: caps
     caps

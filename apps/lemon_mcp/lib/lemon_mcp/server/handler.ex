@@ -7,6 +7,8 @@ defmodule LemonMCP.Server.Handler do
   - `initialized` - Client notification of initialization complete
   - `tools/list` - List available tools
   - `tools/call` - Invoke a tool
+  - `resources/list` / `resources/read` - List and read resources
+  - `prompts/list` / `prompts/get` - List and render prompts
 
   ## Usage
 
@@ -37,7 +39,7 @@ defmodule LemonMCP.Server.Handler do
       "initialize" ->
         handle_initialize(request, server)
 
-      "initialized" ->
+      method when method in ["initialized", "notifications/initialized"] ->
         handle_initialized(request, server)
 
       "tools/list" ->
@@ -45,6 +47,18 @@ defmodule LemonMCP.Server.Handler do
 
       "tools/call" ->
         handle_tools_call(request, server)
+
+      "resources/list" ->
+        handle_resources_list(request, server)
+
+      "resources/read" ->
+        handle_resources_read(request, server)
+
+      "prompts/list" ->
+        handle_prompts_list(request, server)
+
+      "prompts/get" ->
+        handle_prompts_get(request, server)
 
       _ ->
         Protocol.create_error_response(
@@ -104,11 +118,11 @@ defmodule LemonMCP.Server.Handler do
   end
 
   @doc """
-  Handles the tools/list request.
+   Handles the tools/list request.
 
-  Returns the list of available tools from the server.
-  Requires the server to be initialized first.
- """
+   Returns the list of available tools from the server.
+   Requires the server to be initialized first.
+  """
   @spec handle_tools_list(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
           Protocol.JSONRPCResponse.t()
   def handle_tools_list(%Protocol.JSONRPCRequest{id: id} = _request, server) do
@@ -158,6 +172,107 @@ defmodule LemonMCP.Server.Handler do
               id,
               Protocol.error_code(:tool_execution_error),
               error_message
+            )
+        end
+      else
+        {:error, {code, message}} ->
+          Protocol.create_error_response(id, Protocol.error_code(code), message)
+      end
+    else
+      Protocol.create_error_response(
+        id,
+        Protocol.error_code(:server_not_initialized),
+        "Server not initialized"
+      )
+    end
+  end
+
+  @doc """
+  Handles the resources/list request.
+  """
+  @spec handle_resources_list(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
+          Protocol.JSONRPCResponse.t()
+  def handle_resources_list(%Protocol.JSONRPCRequest{id: id}, server) do
+    if Server.initialized?(server) do
+      Protocol.create_response(id, %{resources: Server.list_resources(server)})
+    else
+      Protocol.create_error_response(
+        id,
+        Protocol.error_code(:server_not_initialized),
+        "Server not initialized"
+      )
+    end
+  end
+
+  @doc """
+  Handles the resources/read request.
+  """
+  @spec handle_resources_read(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
+          Protocol.JSONRPCResponse.t()
+  def handle_resources_read(%Protocol.JSONRPCRequest{id: id, params: params}, server) do
+    if Server.initialized?(server) do
+      with {:ok, params} <- require_params_map(params, :invalid_params),
+           {:ok, uri} <- fetch_required_string(params, "uri", :uri, :invalid_params) do
+        case Server.read_resource(server, uri) do
+          {:ok, contents} when is_list(contents) ->
+            Protocol.create_response(id, %{contents: contents})
+
+          {:error, reason} ->
+            Protocol.create_error_response(
+              id,
+              Protocol.error_code(:invalid_params),
+              resource_error_message(reason)
+            )
+        end
+      else
+        {:error, {code, message}} ->
+          Protocol.create_error_response(id, Protocol.error_code(code), message)
+      end
+    else
+      Protocol.create_error_response(
+        id,
+        Protocol.error_code(:server_not_initialized),
+        "Server not initialized"
+      )
+    end
+  end
+
+  @doc """
+  Handles the prompts/list request.
+  """
+  @spec handle_prompts_list(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
+          Protocol.JSONRPCResponse.t()
+  def handle_prompts_list(%Protocol.JSONRPCRequest{id: id}, server) do
+    if Server.initialized?(server) do
+      Protocol.create_response(id, %{prompts: Server.list_prompts(server)})
+    else
+      Protocol.create_error_response(
+        id,
+        Protocol.error_code(:server_not_initialized),
+        "Server not initialized"
+      )
+    end
+  end
+
+  @doc """
+  Handles the prompts/get request.
+  """
+  @spec handle_prompts_get(Protocol.JSONRPCRequest.t(), GenServer.server()) ::
+          Protocol.JSONRPCResponse.t()
+  def handle_prompts_get(%Protocol.JSONRPCRequest{id: id, params: params}, server) do
+    if Server.initialized?(server) do
+      with {:ok, params} <- require_params_map(params, :invalid_params),
+           {:ok, name} <- fetch_required_string(params, "name", :name, :invalid_params),
+           {:ok, arguments} <- fetch_optional_map(params, "arguments", :arguments) do
+        case Server.get_prompt(server, name, arguments) do
+          {:ok, prompt} when is_map(prompt) ->
+            Protocol.create_response(id, prompt)
+
+          {:error, reason} ->
+            Protocol.create_error_response(
+              id,
+              Protocol.error_code(:invalid_params),
+              prompt_error_message(reason)
             )
         end
       else
@@ -236,4 +351,12 @@ defmodule LemonMCP.Server.Handler do
       "2024-11-05"
     ]
   end
+
+  defp resource_error_message(reason) when is_binary(reason), do: reason
+  defp resource_error_message(:unknown_resource), do: "Resource not found"
+  defp resource_error_message(reason), do: "Resource read failed: #{inspect(reason)}"
+
+  defp prompt_error_message(reason) when is_binary(reason), do: reason
+  defp prompt_error_message(:unknown_prompt), do: "Prompt not found"
+  defp prompt_error_message(reason), do: "Prompt get failed: #{inspect(reason)}"
 end
