@@ -1,6 +1,6 @@
 # CodingAgent
 
-A full-featured AI coding agent runtime built on top of `AgentCore`. This OTP application provides session management, 30+ tools, JSONL persistence with branching, budget tracking, context compaction, WASM tool support, extensions, and subagent orchestration for building interactive coding workflows.
+A full-featured AI coding agent runtime built on top of `AgentCore`. This OTP application provides session management, 40+ tools, JSONL persistence with branching, budget tracking, context compaction, WASM tool support, extensions, and subagent orchestration for building interactive coding workflows.
 
 ## Overview
 
@@ -13,6 +13,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, @mentions, and project-local CLAUDE.md/AGENTS.md
+- **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
 
 ## Architecture
 
@@ -101,7 +102,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (23 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (55 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
@@ -112,13 +113,100 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `search_memory`, `write`, `edit`, `hashline_edit`, `patch`, `ls` |
+| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
 | Execution | `bash` |
-| Web | `websearch`, `webfetch` |
-| Task / Agent | `task`, `agent`, `parent_question`, `todo` |
-| Social | `post_to_x`, `get_x_mentions` |
+| Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
+| Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
+
+`browser_screenshot` writes screenshot bytes to local artifacts by default
+instead of returning base64 to the model. Pass `includeImage: true` only when a
+run needs model-visible screenshot content; result details remain redacted and
+do not include raw base64. Pass `sendToChannel: true` only when the screenshot
+should be attached to the final Telegram/Discord answer through redacted
+`auto_send_files` metadata. Screenshot writes prune the browser artifact
+directory to 14 days or the newest 100 files.
+
+`browser_analyze` composes screenshot capture with `media_analyze_image` so the
+model can capture and analyze the current page through one supervised BEAM
+operation. It writes managed screenshot and analysis artifacts, keeps raw
+base64 out of details, and can optionally return a model-visible image block.
+
+`browser_navigate` classifies targets on the BEAM side before worker dispatch.
+The default `route: "auto"` preserves local-first use while reporting public,
+private, or local-document target kind; `route: "public"` rejects local/private
+targets, `route: "local"` rejects public web targets, and metadata endpoints
+are always blocked before the browser worker.
+
+`browser_get_cookies`, `browser_set_cookies`, and `browser_clear_state` expose
+supervised browser session-state controls. Cookie values are redacted by
+default unless `includeValues: true` is explicit. `browser_clear_state` clears
+browser-context cookies, current-page local/session storage, and buffered events
+by default; pass `clearCookies`, `clearStorage`, or `clearEvents` to narrow it.
+
+`memory` provides the compact prompt-injected memory surface for assistant-home
+`USER.md` and `MEMORY.md`. It supports read/add/replace/remove, rejects
+duplicates, requires unique text for replace/remove, enforces bounded file
+limits, and screens writes for common secrets, prompt-injection phrases, NUL
+bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
+structured notes under `memory/topics/`.
+
+`session_search` is the Hermes-compatible no-LLM recall surface. It infers
+discovery, scroll, or browse mode from arguments: pass `query` to search durable
+Lemon memory across sessions, pass `session_id` plus `around_message_id` to
+scroll a bounded window in run history, or pass no args to browse recent runs in
+the current session. `search_memory` remains Lemon's native scoped memory-recall
+tool.
+
+`media_status` returns redacted media job summaries, recent jobs, cleanup
+policy, and worker supervisor state to the model. `media_generate_image`,
+`media_generate_speech`, and `media_transcribe_audio` are BEAM-supervised media
+previews. They run deterministic local previews, provider-backed OpenAI
+image/TTS/STT jobs, Vertex Imagen image jobs, ElevenLabs TTS, Google TTS, and
+Deepgram STT, plus provider-backed OpenAI video and Vertex Veo jobs through
+`LemonCore.MediaJobSupervisor`, write managed
+artifacts under `.lemon/media-artifacts`, record redacted `LemonCore.MediaJobs`
+metadata with prompt/input hash/chars, and can add generated `auto_send_files`
+metadata when `sendToChannel: true` is explicit. Provider media jobs retry
+bounded transient provider failures with `maxRetries`; failed provider jobs
+record only a safe error kind plus structured provider status/type when present,
+never the raw provider message.
+
+`write`, `edit`, and `patch` create filesystem checkpoints automatically when
+the tool context includes a session id. The `checkpoint` tool lists checkpoint
+history, previews filesystem diffs, restores all or selected paths, and deletes
+old checkpoints through `LemonCore.Checkpoint`. Checkpoint create, restore, and
+delete operations emit redacted introspection and run/session events for audit
+and live status surfaces. `CodingAgent.Checkpoint` remains the compatibility
+wrapper that adds todo and requirement state for coding-agent resume flows.
+`exec` also supports configured risky-shell checkpoints: pass
+`checkpoint_paths` for files that should be snapshotted before destructive
+commands such as `rm`, `mv`, `sed -i`, `find ... -delete`, `git reset`, or
+`git clean`. The result details include the checkpoint id when a checkpoint was
+created. Native LemonRunner action events preserve tool-reported `exit_code`
+metadata and synthesize nonzero `bash` exits as structured `result_meta` with
+`error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
+status surfaces do not need to parse terminal text.
+
+`lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
+`write`, `edit`, and `patch` can opt into post-edit diagnostics with
+baseline/delta reporting so newly introduced issues are surfaced without
+failing edits when local checkers are missing. Operator surfaces can inspect
+redacted checker and supervised language-server session capability metadata
+through `lsp.diagnostics.status`, Web `/ops`, and `lsp_diagnostics.json` in
+support bundles. The BEAM manager can also start/stop sessions, run the
+initialize handshake, send framed JSON-RPC requests, synchronize open/change/
+close document notifications, and capture redacted diagnostic notifications
+through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
+`lsp.document.change`, `lsp.document.close`, `lsp.server.request`, and
+`lsp.server.stop`.
+
+`kanban` exposes durable board and task operations backed by
+`LemonCore.KanbanStore`. It is the model-facing surface for multi-agent work
+that should outlive one session. Kanban-dispatched worker runs block the
+`kanban` tool so a leased task cannot recursively manage its own board.
 
 **Additional tools (not in default set):**
 
@@ -126,7 +214,7 @@ CodingAgent.Supervisor (one_for_one)
 |------|--------|-------|
 | `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
 | `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` processes |
+| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
 | `await` | `Tools.Await` | Block until background jobs complete |
 | `webdownload` | `Tools.WebDownload` | Download binary content to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
@@ -135,7 +223,7 @@ CodingAgent.Supervisor (one_for_one)
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
 | `memory_topic` | `Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
 | `glob` | `Tools.Glob` | File pattern matching |
-| `lsp_formatter` | `Tools.LspFormatter` | Format code via LSP |
+| `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
 **Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
@@ -188,6 +276,7 @@ Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no rol
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
+| `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
@@ -198,6 +287,43 @@ When an internal task omits `model`, the child session now inherits the live par
 Internal task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` now suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup now preserves the full visible task answer instead of pre-truncating it in the followup builder, and router-delivered task followups use the `echo` engine so the raw completion text is delivered without asking the parent model to re-summarize or truncate it. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions now attempt an in-session steer first before falling back to router backlog semantics.
+
+`exec` and `process` now expose terminal backend metadata. Registered backends
+include `:local`, backed by the supervised `ProcessSession` Erlang Port runner,
+`:local_pty`, backed by util-linux `script(1)` when available, `:docker`,
+backed by a bounded Docker CLI container with the cwd mounted at `/workspace`,
+read-only root filesystem by default, a bounded `/tmp` tmpfs scratch mount,
+and optional `:ssh`, backed by OpenSSH in `BatchMode=yes` when
+`LEMON_SSH_TERMINAL_TARGET` is configured. Results and process records include
+the backend id plus terminal capabilities so future sandbox backends can plug
+into the same observable `ProcessManager` boundary. Poll/list metadata also
+includes bounded-log counts, max-log settings, started/completed timestamps,
+and manual restart lineage when a finished process is restarted through the
+`process` tool. Backend launch also passes
+through `LemonCore.TerminalBackendPolicy`, which supports backend allow/deny
+lists plus optional Docker image and SSH target allowlists while keeping raw SSH
+targets out of support metadata. `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
+can require backend-specific `exec` approval; approval actions include backend,
+command hash, cwd hash, and env keys only.
+`exec.env` is validated at the tool boundary: env must be an object with string
+values and keys matching normal environment variable names before any backend is
+started.
+`exec.checkpoint_paths` is validated as a list of non-empty strings and is used
+only with filesystem checkpoints enabled. Risky shell checkpoints snapshot the
+configured file paths through `LemonCore.Checkpoint` before backend launch and
+return `checkpoint_id`, `checkpoint_kind`, and `checkpoint_trigger` in result
+details.
+`scripts/live_terminal_backend_smoke.exs` provides the opt-in live proof lane:
+it runs a fixed command through every available registered backend via
+`ProcessManager.exec_sync/1`, writes hashed command/cwd/output proof JSON, and
+exits nonzero on any backend failure or missing expected output. When no SSH
+target is configured and local `sshd` plus `ssh-keygen` are available, the
+smoke starts an ephemeral loopback `sshd` with generated host/client keys and
+temporary known-hosts storage instead of touching `~/.ssh`.
+`scripts/live_terminal_process_smoke.exs` separately proves process metadata and
+manual restart behavior: it completes a local process, validates backend/log
+metadata, restarts it as a fresh supervised child, verifies restart lineage, and
+writes a redacted proof without raw commands, logs, or process ids.
 
 ### Subagents and Commands
 
@@ -211,7 +337,7 @@ For coordination workflows that must produce one final same-turn answer, queued 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Checkpoint` | Snapshot/restore for long-running sessions with aggregate stats |
+| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo/requirement resume state |
 | `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
 | `CodingAgent.Evals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
 

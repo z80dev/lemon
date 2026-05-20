@@ -992,6 +992,7 @@ defmodule CodingAgent.Tools.Task.Runner do
       "grep" -> :tool
       "websearch" -> :web_search
       "webfetch" -> :web_search
+      "browser_" <> _ -> :browser
       "task" -> :subagent
       "agent" -> :subagent
       "cron" -> :subagent
@@ -1042,6 +1043,63 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       "webfetch" ->
         "fetch: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "browser_navigate" ->
+        "browser: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "browser_click" ->
+        "browser click: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_type" ->
+        "browser type: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_hover" ->
+        "browser hover: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_select_option" ->
+        "browser select option: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_upload_file" ->
+        "browser upload file"
+
+      "browser_download" ->
+        "browser download"
+
+      "browser_press" ->
+        "browser key: #{String.slice(a["key"] || "", 0, 30)}"
+
+      "browser_scroll" ->
+        "browser scroll"
+
+      "browser_back" ->
+        "browser back"
+
+      "browser_events" ->
+        "browser events"
+
+      "browser_get_cookies" ->
+        "browser cookies"
+
+      "browser_set_cookies" ->
+        "browser set cookies"
+
+      "browser_clear_state" ->
+        "browser clear state"
+
+      "browser_snapshot" ->
+        "browser snapshot"
+
+      "browser_get_content" ->
+        "browser content"
+
+      "browser_wait_for_selector" ->
+        "browser wait"
+
+      "browser_evaluate" ->
+        "browser evaluate"
+
+      "browser_screenshot" ->
+        "browser screenshot"
 
       "task" ->
         engine_suffix =

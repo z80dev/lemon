@@ -38,6 +38,7 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
       assert text =~ "Processes"
+      assert text =~ "backend=local"
       assert result.details.action == "list"
       assert result.details.count >= 2
 
@@ -45,6 +46,10 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       process_ids = Enum.map(result.details.processes, & &1.process_id)
       assert id1 in process_ids
       assert id2 in process_ids
+
+      entry = Enum.find(result.details.processes, &(&1.process_id == id1))
+      assert entry.backend == :local
+      assert :shell in entry.terminal_capabilities
     end
 
     test "returns empty message when no processes" do
@@ -157,9 +162,14 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
       assert text =~ "Process:"
+      assert text =~ "Backend: local"
+      assert text =~ "Capabilities: shell"
       assert result.details.action == "poll"
       assert result.details.process_id == process_id
       assert result.details.status in [:running, :completed, :error]
+      assert result.details.backend == :local
+      assert :shell in result.details.terminal_capabilities
+      assert is_integer(result.details.log_line_count)
     end
 
     test "returns error for unknown process" do
@@ -471,6 +481,48 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       # Clean up
       ProcessManager.kill(process_id, :sigkill)
+    end
+  end
+
+  describe "execute/4 restart action" do
+    test "restarts a completed process" do
+      {:ok, process_id} = ProcessManager.exec(command: "echo process_restart")
+      Elixir.Process.sleep(250)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result =
+        tool.execute.("call_1", %{"action" => "restart", "process_id" => process_id}, nil, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "restarted as"
+      assert result.details.action == "restart"
+      assert result.details.process_id == process_id
+      assert is_binary(result.details.new_process_id)
+      assert result.details.restarted_from == process_id
+      assert result.details.restart_generation == 1
+    end
+
+    test "does not restart a running process" do
+      {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
+
+      on_exit(fn ->
+        _ = ProcessManager.kill(process_id, :sigkill)
+      end)
+
+      Elixir.Process.sleep(100)
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "restart", "process_id" => process_id},
+                 nil,
+                 nil
+               )
+
+      assert reason =~ "still running"
     end
   end
 

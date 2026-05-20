@@ -45,6 +45,13 @@ defmodule CodingAgent.ProcessStore do
           command: nil,
           cwd: nil,
           env: %{},
+          backend: :local,
+          terminal_capabilities: [],
+          max_log_lines: @max_log_lines,
+          timeout_ms: nil,
+          log_line_count: 0,
+          restarted_from: nil,
+          restart_generation: 0,
           owner: nil,
           os_pid: nil,
           exit_code: nil,
@@ -61,8 +68,9 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Mark a process as running with its OS PID.
   """
-  @spec mark_running(process_id(), integer()) :: :ok
-  def mark_running(process_id, os_pid) when is_binary(process_id) and is_integer(os_pid) do
+  @spec mark_running(process_id(), integer() | nil) :: :ok
+  def mark_running(process_id, os_pid)
+      when is_binary(process_id) and (is_integer(os_pid) or is_nil(os_pid)) do
     update_record(process_id, fn record ->
       record
       |> Map.put(:status, :running)
@@ -81,7 +89,12 @@ defmodule CodingAgent.ProcessStore do
     case :ets.lookup(@table, process_id) do
       [{^process_id, record, logs}] ->
         logs = [line | logs] |> Enum.take(@max_log_lines)
-        record = Map.put(record, :updated_at, System.system_time(:second))
+
+        record =
+          record
+          |> Map.put(:updated_at, System.system_time(:second))
+          |> Map.put(:log_line_count, length(logs))
+
         insert_record(process_id, record, logs)
         :ok
 

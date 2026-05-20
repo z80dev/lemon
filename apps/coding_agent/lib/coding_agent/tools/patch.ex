@@ -35,7 +35,10 @@ defmodule CodingAgent.Tools.Patch do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.PathHelpers
 
   import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
@@ -61,6 +64,12 @@ defmodule CodingAgent.Tools.Patch do
           "patch_text" => %{
             "type" => "string",
             "description" => "Full patch text to apply"
+          },
+          "diagnostics" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :diagnostics, false),
+            "description" =>
+              "Whether to run language diagnostics after applying the patch and report newly introduced issues"
           }
         },
         "required" => ["patch_text"]
@@ -108,15 +117,100 @@ defmodule CodingAgent.Tools.Patch do
     else
       with {:ok, patch_text} <- get_patch_text(params),
            {:ok, operations} <- parse_patch(patch_text),
-           :ok <- validate_operations(operations, cwd, opts),
-           {:ok, summary} <- apply_operations(operations, cwd, signal, opts) do
-        %AgentToolResult{
-          content: [%TextContent{text: summary.output}],
-          details: summary.details
-        }
+           {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
+        if ACPFileBridge.read_enabled?(opts) and ACPFileBridge.write_enabled?(opts) do
+          execute_acp_patch(operations, cwd, signal, opts)
+        else
+          execute_local_patch(operations, cwd, diagnostics?, signal, opts)
+        end
       end
     end
   end
+
+  defp execute_local_patch(operations, cwd, diagnostics?, signal, opts) do
+    with :ok <- validate_operations(operations, cwd, opts),
+         baselines <- diagnostic_baselines(operations, cwd, diagnostics?, opts),
+         {:ok, checkpoint} <-
+           CheckpointGuard.before_mutation(operation_paths(operations, cwd), cwd, opts, %{
+             tool: "patch",
+             action: "apply",
+             operation_count: length(operations)
+           }),
+         {:ok, summary} <- apply_operations(operations, cwd, signal, opts) do
+      {diagnostics, diagnostics_text} =
+        patch_diagnostics(summary.details.changed, cwd, baselines, diagnostics?, opts)
+
+      %AgentToolResult{
+        content: [%TextContent{text: summary.output <> diagnostics_text}],
+        details:
+          summary.details
+          |> CheckpointGuard.put_details(checkpoint)
+          |> maybe_put_diagnostics(diagnostics)
+      }
+    end
+  end
+
+  defp execute_acp_patch(operations, cwd, signal, opts) do
+    with :ok <- validate_acp_operations(operations, cwd, opts),
+         {:ok, summary} <- apply_operations_acp(operations, cwd, signal, opts) do
+      %AgentToolResult{
+        content: [%TextContent{text: summary.output}],
+        details: Map.put(summary.details, :acp_client, true)
+      }
+    end
+  end
+
+  defp diagnostic_baselines(_operations, _cwd, false, _opts), do: %{}
+
+  defp diagnostic_baselines(operations, cwd, true, opts) do
+    operations
+    |> operation_paths(cwd)
+    |> Enum.filter(&File.regular?/1)
+    |> Map.new(fn path -> {path, LspDiagnostics.baseline(path, cwd, true, opts)} end)
+  end
+
+  defp patch_diagnostics(_changed, _cwd, _baselines, false, _opts), do: {nil, ""}
+
+  defp patch_diagnostics(changed, cwd, baselines, true, opts) do
+    reports =
+      changed
+      |> Enum.filter(&File.regular?/1)
+      |> Enum.map(fn path ->
+        baseline = Map.get(baselines, path)
+        {report, _text} = LspDiagnostics.post_edit(path, cwd, baseline, true, opts)
+        report
+      end)
+
+    introduced =
+      reports
+      |> Enum.flat_map(&Map.get(&1, :introduced_diagnostics, []))
+
+    text =
+      cond do
+        reports == [] ->
+          "\n\nDiagnostics skipped: no regular changed files to check."
+
+        introduced != [] ->
+          "\n\nDiagnostics introduced #{length(introduced)} issue(s):\n" <>
+            LspDiagnostics.render_diagnostics(introduced)
+
+        Enum.any?(reports, &(&1.status == :diagnostics)) ->
+          "\n\nDiagnostics found only pre-existing issues."
+
+        Enum.any?(reports, &(&1.status == :skipped)) ->
+          "\n\nDiagnostics skipped for #{Enum.count(reports, &(&1.status == :skipped))} changed file(s)."
+
+        true ->
+          "\n\nDiagnostics clean."
+      end
+
+    {reports, text}
+  end
+
+  defp maybe_put_diagnostics(details, nil), do: details
+
+  defp maybe_put_diagnostics(details, diagnostics),
+    do: Map.put(details, :diagnostics, diagnostics)
 
   # ============================================================================
   # Parameter Extraction and Validation
@@ -181,6 +275,69 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
+  defp validate_acp_operations(operations, cwd, opts) do
+    Enum.reduce_while(operations, :ok, fn
+      %{type: :delete, path: path}, _acc ->
+        if ACPFileBridge.delete_enabled?(opts) do
+          with :ok <- validate_acp_path(path, cwd, opts) do
+            {:cont, :ok}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        else
+          {:halt, {:error, "ACP patch cannot delete files without an ACP delete method: #{path}"}}
+        end
+
+      %{type: :update, path: path, move_to: move_to, hunks: []}, _acc when not is_nil(move_to) ->
+        if ACPFileBridge.rename_enabled?(opts) do
+          with :ok <- validate_acp_path(path, cwd, opts),
+               :ok <- validate_acp_path(move_to, cwd, opts) do
+            {:cont, :ok}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        else
+          {:halt,
+           {:error, "ACP patch cannot move files without an ACP rename method: #{move_to}"}}
+        end
+
+      %{type: :update, path: path, move_to: move_to}, _acc when not is_nil(move_to) ->
+        if ACPFileBridge.delete_enabled?(opts) do
+          with :ok <- validate_acp_path(path, cwd, opts),
+               :ok <- validate_acp_path(move_to, cwd, opts) do
+            {:cont, :ok}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        else
+          {:halt,
+           {:error,
+            "ACP patch cannot move changed files without an ACP delete method: #{move_to}"}}
+        end
+
+      %{path: path}, _acc ->
+        with :ok <- validate_acp_path(path, cwd, opts) do
+          {:cont, :ok}
+        else
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+    end)
+  end
+
+  defp validate_acp_path(path, cwd, opts) do
+    with :ok <- validate_path_security(path),
+         resolved <- resolve_path(path, cwd),
+         :ok <-
+           validate_path_traversal(
+             path,
+             resolved,
+             cwd,
+             Keyword.get(opts, :allow_path_traversal, false)
+           ) do
+      :ok
+    end
+  end
+
   defp validate_move_to_path(nil, _cwd, _opts), do: :ok
 
   defp validate_move_to_path(path, cwd, opts) do
@@ -188,6 +345,21 @@ defmodule CodingAgent.Tools.Patch do
          {:ok, _resolved} <- resolve_and_validate_path(path, cwd, opts) do
       :ok
     end
+  end
+
+  defp operation_paths(operations, cwd) do
+    operations
+    |> Enum.flat_map(fn
+      %{type: :update, path: path, move_to: nil} ->
+        [resolve_path(path, cwd)]
+
+      %{type: :update, path: path, move_to: move_to} ->
+        [resolve_path(path, cwd), resolve_path(move_to, cwd)]
+
+      %{path: path} ->
+        [resolve_path(path, cwd)]
+    end)
+    |> Enum.uniq()
   end
 
   defp validate_file_size(path) do
@@ -546,6 +718,109 @@ defmodule CodingAgent.Tools.Patch do
          }}
     end
   end
+
+  defp apply_operations_acp(operations, cwd, signal, opts) do
+    result =
+      Enum.reduce_while(operations, %{changed: [], additions: 0, removals: 0}, fn op, acc ->
+        if aborted?(signal) do
+          {:halt, {:error, "Operation aborted"}}
+        else
+          case apply_operation_acp(op, cwd, signal, opts) do
+            {:ok, info} ->
+              updated = %{
+                changed: acc.changed ++ info.changed,
+                additions: acc.additions + info.additions,
+                removals: acc.removals + info.removals
+              }
+
+              {:cont, updated}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end
+      end)
+
+    case result do
+      {:error, reason} ->
+        {:error, reason}
+
+      %{changed: changed, additions: adds, removals: removes} ->
+        output =
+          "Patch applied successfully. #{length(changed)} files changed, #{adds} additions, #{removes} removals"
+
+        {:ok,
+         %{
+           output: output,
+           details: %{changed: changed, additions: adds, removals: removes}
+         }}
+    end
+  end
+
+  defp apply_operation_acp(%{type: :add, path: path, content: content}, cwd, signal, opts) do
+    resolved = resolve_path(path, cwd)
+
+    with :ok <- check_abort(signal),
+         :ok <- ACPFileBridge.write_text_file(resolved, content, opts) do
+      additions = count_lines(content)
+      {:ok, %{changed: [resolved], additions: additions, removals: 0}}
+    end
+  end
+
+  defp apply_operation_acp(%{type: :delete, path: path}, cwd, signal, opts) do
+    resolved = resolve_path(path, cwd)
+
+    with :ok <- check_abort(signal),
+         {:ok, content} <- ACPFileBridge.read_text_file(resolved, nil, nil, opts),
+         :ok <- check_abort(signal),
+         :ok <- ACPFileBridge.delete_file(resolved, opts) do
+      removals = count_lines(content)
+      {:ok, %{changed: [resolved], additions: 0, removals: removals}}
+    end
+  end
+
+  defp apply_operation_acp(
+         %{type: :update, path: path, move_to: move_to, hunks: []},
+         cwd,
+         signal,
+         opts
+       )
+       when not is_nil(move_to) do
+    resolved = resolve_path(path, cwd)
+    target = resolve_path(move_to, cwd)
+
+    with :ok <- check_abort(signal),
+         :ok <- ACPFileBridge.rename_file(resolved, target, opts) do
+      {:ok, %{changed: [target], additions: 0, removals: 0}}
+    end
+  end
+
+  defp apply_operation_acp(
+         %{type: :update, path: path, move_to: move_to, hunks: hunks},
+         cwd,
+         signal,
+         opts
+       ) do
+    resolved = resolve_path(path, cwd)
+    target = if move_to, do: resolve_path(move_to, cwd), else: resolved
+
+    with :ok <- check_abort(signal),
+         {:ok, content} <- ACPFileBridge.read_text_file(resolved, nil, nil, opts),
+         :ok <- check_abort(signal),
+         {:ok, new_content, adds, removes} <- apply_hunks(content, hunks, signal),
+         :ok <- check_abort(signal),
+         :ok <- ACPFileBridge.write_text_file(target, new_content, opts),
+         :ok <- maybe_delete_moved_acp_source(resolved, target, opts) do
+      {:ok, %{changed: [target], additions: adds, removals: removes}}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_delete_moved_acp_source(path, path, _opts), do: :ok
+
+  defp maybe_delete_moved_acp_source(path, _target, opts),
+    do: ACPFileBridge.delete_file(path, opts)
 
   defp apply_operation(%{type: :add, path: path, content: content}, cwd, signal, _opts) do
     resolved = resolve_path(path, cwd)

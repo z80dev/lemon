@@ -95,6 +95,31 @@ defmodule CodingAgent.Tools.EditTest do
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified content"
     end
+
+    test "reports introduced diagnostics when requested", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "diagnostics.exs")
+      File.write!(path, "value = 1\n")
+
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "value = 1",
+            "new_text" => "defmodule Bad do",
+            "diagnostics" => true
+          },
+          nil,
+          nil,
+          tmp_dir,
+          semantic: false
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "Diagnostics introduced 1 issue"
+      assert details.diagnostics.status == :diagnostics
+      assert length(details.diagnostics.introduced_diagnostics) == 1
+    end
   end
 
   describe "execute/6 - BOM handling" do

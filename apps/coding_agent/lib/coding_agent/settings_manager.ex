@@ -34,6 +34,7 @@ defmodule CodingAgent.SettingsManager do
               optional(:project_secret) => String.t() | nil
             }
           },
+          provider_routing: map(),
 
           # Compaction settings
           compaction_enabled: boolean(),
@@ -55,6 +56,7 @@ defmodule CodingAgent.SettingsManager do
 
           # Extension settings
           extension_paths: [String.t()],
+          extension_auto_load_default_paths: boolean(),
 
           # Display settings
           theme: String.t(),
@@ -74,6 +76,7 @@ defmodule CodingAgent.SettingsManager do
 
     # Provider settings
     providers: %{},
+    provider_routing: %{enabled: true, fallback_providers: [], require_credentials: true},
 
     # Compaction settings
     compaction_enabled: true,
@@ -95,6 +98,7 @@ defmodule CodingAgent.SettingsManager do
 
     # Extension settings
     extension_paths: [],
+    extension_auto_load_default_paths: false,
 
     # Display settings
     theme: "default",
@@ -130,7 +134,9 @@ defmodule CodingAgent.SettingsManager do
 
     compaction = Map.get(agent, :compaction, %{})
     retry = Map.get(agent, :retry, %{})
+    provider_routing = Map.get(agent, :provider_routing, %{})
     shell = Map.get(agent, :shell, %{})
+    extensions = Map.get(agent, :extensions, %{})
     tools = Map.get(agent, :tools, %{})
     cli = Map.get(agent, :cli, %{})
 
@@ -138,6 +144,11 @@ defmodule CodingAgent.SettingsManager do
       default_model: default_model,
       default_thinking_level: Map.get(agent, :default_thinking_level, :medium),
       providers: config.providers || %{},
+      provider_routing:
+        Map.merge(
+          %{enabled: true, fallback_providers: [], require_credentials: true},
+          provider_routing
+        ),
       compaction_enabled: Map.get(compaction, :enabled, true),
       reserve_tokens: Map.get(compaction, :reserve_tokens, 16_384),
       keep_recent_tokens: Map.get(compaction, :keep_recent_tokens, 20_000),
@@ -149,6 +160,7 @@ defmodule CodingAgent.SettingsManager do
       auto_resize_images: Map.get(tools, :auto_resize_images, true),
       tools: tools,
       extension_paths: Map.get(agent, :extension_paths, []),
+      extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       theme: Map.get(agent, :theme, "default"),
       codex: Map.get(cli, :codex, %{}),
       kimi: Map.get(cli, :kimi, %{}),

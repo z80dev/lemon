@@ -74,6 +74,8 @@ defmodule CodingAgent.ProcessStoreTest do
 
       assert {:ok, _, logs} = ProcessStore.get(process_id)
       assert logs == ["Line 1", "Line 2"]
+      assert {:ok, record, _logs} = ProcessStore.get(process_id)
+      assert record.log_line_count == 2
     end
 
     test "maintains bounded log buffer" do

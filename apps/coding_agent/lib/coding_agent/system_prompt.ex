@@ -131,13 +131,15 @@ defmodule CodingAgent.SystemPrompt do
     """
     ## Memory Workflow
     Before answering about prior decisions, preferences, people, dates, or todos, inspect the right memory surface first.
-    Prefer the dedicated memory and skill tools below over shell commands for memory or skill work; use shell commands for project execution, not for bypassing `search_memory`, `memory_topic`, `read_skill`, or `skill_manage`.
+    Prefer the dedicated memory and skill tools below over shell commands for memory or skill work; use shell commands for project execution, not for bypassing `search_memory`, `session_search`, `memory_topic`, `memory`, `read_skill`, or `skill_manage`.
     - Use `search_memory` to recall completed run history (past bug fixes, commands run, earlier answers, "last time" context).
       Prefer `scope: "current"` to search both the project root and assistant home.
       Use `scope: "project"` for repo-specific history, `scope: "home"` for assistant-home history, and `scope: "agent"` for longer-term patterns.
+    - Use `session_search` when a prompt or imported workflow explicitly asks for Hermes-style session search, browse, or scroll behavior.
     - Use `read` to inspect user-editable workspace notes such as `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
     - Use `grep` with `path: "memory"` to quickly find relevant workspace notes before opening files.
-    - Use `memory_topic` to scaffold durable topic notes from `memory/topics/TEMPLATE.md` for facts, preferences, decisions, people, dates, or project context.
+    - Use `memory` for compact assistant-home `USER.md` profile facts and curated `MEMORY.md` quick facts.
+    - Use `memory_topic` to scaffold durable topic notes from `memory/topics/TEMPLATE.md` for longer facts, preferences, decisions, people, dates, or project context.
     - Use `write` only when creating missing workspace memory files directly (`memory/topics/<topic-slug>.md` or `memory/YYYY-MM-DD.md`); prefer `memory_topic` for new topic notes.
     - Use `skill_manage` to create or update a skill when you learn a reusable procedure, command sequence, integration, debugging playbook, or verification checklist.
     - Use `todo` only for the active run's work queue and progress tracking; todos are not durable memory.

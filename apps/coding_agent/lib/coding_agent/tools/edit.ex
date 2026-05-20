@@ -17,8 +17,11 @@ defmodule CodingAgent.Tools.Edit do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.PathHelpers
 
   import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
@@ -46,7 +49,13 @@ defmodule CodingAgent.Tools.Edit do
             "type" => "string",
             "description" => "The exact text to find and replace (must be unique in the file)"
           },
-          "new_text" => %{"type" => "string", "description" => "The replacement text"}
+          "new_text" => %{"type" => "string", "description" => "The replacement text"},
+          "diagnostics" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :diagnostics, false),
+            "description" =>
+              "Whether to run language diagnostics after editing and report newly introduced issues"
+          }
         },
         "required" => ["path", "old_text", "new_text"]
       },
@@ -79,8 +88,9 @@ defmodule CodingAgent.Tools.Edit do
       result =
         with :ok <- validate_required_param(path, "path"),
              :ok <- validate_required_param(old_text, "old_text"),
-             :ok <- validate_required_param(new_text, "new_text") do
-          do_execute(path, old_text, new_text, signal, cwd, opts)
+             :ok <- validate_required_param(new_text, "new_text"),
+             {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
+          do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts)
         end
 
       case result do
@@ -90,8 +100,68 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp do_execute(path, old_text, new_text, signal, cwd, opts) do
+  defp do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts) do
     resolved_path = resolve_path(path, cwd, opts)
+
+    if ACPFileBridge.read_enabled?(opts) and ACPFileBridge.write_enabled?(opts) do
+      do_execute_acp(path, resolved_path, old_text, new_text, signal, opts)
+    else
+      do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts)
+    end
+  end
+
+  defp do_execute_acp(path, resolved_path, old_text, new_text, signal, opts) do
+    with :ok <- check_aborted(signal),
+         {:ok, raw_content} <- ACPFileBridge.read_text_file(resolved_path, nil, nil, opts),
+         {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
+         line_ending <- FileFormatHelpers.detect_line_ending(content),
+         normalized_content <- FileFormatHelpers.normalize_to_lf(content),
+         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
+         {:ok, match_index, match_length} <-
+           fuzzy_find_text(normalized_content, normalized_old_text),
+         :ok <-
+           check_uniqueness(normalized_content, normalized_old_text, match_index, match_length),
+         {:ok, new_content} <-
+           perform_replacement(normalized_content, match_index, match_length, new_text),
+         :ok <- check_content_changed(normalized_content, new_content),
+         :ok <- check_aborted(signal),
+         final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
+         :ok <- ACPFileBridge.write_text_file(resolved_path, final_content, opts) do
+      diff = generate_diff(content, new_content)
+      first_changed_line = find_first_changed_line(content, new_content)
+
+      %AgentToolResult{
+        content: [
+          %TextContent{
+            type: :text,
+            text: "Successfully replaced text in #{path}.\n\n#{diff}"
+          }
+        ],
+        details: %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
+      }
+    else
+      {:error, :not_found} ->
+        {:error, "Could not find the exact text to replace. The text must match exactly."}
+
+      {:error, {:multiple_occurrences, count}} ->
+        {:error, "Found #{count} occurrences of the text. The text to replace must be unique."}
+
+      {:error, :no_change} ->
+        {:error, "No changes made. The replacement produces identical content."}
+
+      {:error, :aborted} ->
+        {:error, "Operation aborted"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, "Failed to edit file: #{inspect(reason)}"}
+    end
+  end
+
+  defp do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+    baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
          :ok <- check_file_access(resolved_path),
@@ -109,18 +179,30 @@ defmodule CodingAgent.Tools.Edit do
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
+         {:ok, checkpoint} <-
+           CheckpointGuard.before_mutation([resolved_path], cwd, opts, %{
+             tool: "edit",
+             action: "replace",
+             path: resolved_path
+           }),
          :ok <- File.write(resolved_path, final_content) do
       diff = generate_diff(content, new_content)
       first_changed_line = find_first_changed_line(content, new_content)
+
+      {diagnostics, diagnostics_text} =
+        LspDiagnostics.post_edit(resolved_path, cwd, baseline, diagnostics?, opts)
 
       %AgentToolResult{
         content: [
           %TextContent{
             type: :text,
-            text: "Successfully replaced text in #{path}.\n\n#{diff}"
+            text: "Successfully replaced text in #{path}.\n\n#{diff}#{diagnostics_text}"
           }
         ],
-        details: %{diff: diff, first_changed_line: first_changed_line}
+        details:
+          %{diff: diff, first_changed_line: first_changed_line}
+          |> CheckpointGuard.put_details(checkpoint)
+          |> maybe_put_diagnostics(diagnostics)
       }
     else
       {:error, :enoent} ->
@@ -148,6 +230,11 @@ defmodule CodingAgent.Tools.Edit do
         {:error, "Failed to edit file: #{inspect(reason)}"}
     end
   end
+
+  defp maybe_put_diagnostics(details, nil), do: details
+
+  defp maybe_put_diagnostics(details, diagnostics),
+    do: Map.put(details, :diagnostics, diagnostics)
 
   # ============================================================================
   # Parameter Validation

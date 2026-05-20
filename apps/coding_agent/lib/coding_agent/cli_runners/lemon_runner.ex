@@ -29,7 +29,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   Completed tool actions preserve structured `AgentToolResult.details` failure metadata
   under `action.detail.result_meta`, including `:error_type` for unknown tools,
-  invalid arguments, task crashes, timeouts, and aborted tool calls.
+  invalid arguments, task crashes, timeouts, aborted tool calls, and nonzero
+  command exits.
 
   ## Example
 
@@ -82,6 +83,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
           timeout: non_neg_integer(),
           model: term(),
           thinking_level: term(),
+          images: [map()],
           system_prompt: String.t() | nil,
           async_followups: [map()],
           stream_fn: function()
@@ -199,6 +201,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     timeout = Keyword.get(opts, :timeout, :infinity)
     model = Keyword.get(opts, :model)
     thinking_level = Keyword.get(opts, :thinking_level)
+    images = Keyword.get(opts, :images, [])
     system_prompt = Keyword.get(opts, :system_prompt)
     async_followups = Keyword.get(opts, :async_followups)
     approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
@@ -276,6 +279,15 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       |> maybe_add_opt(:run_id, run_id)
       |> maybe_add_opt(:session_key, session_key)
       |> maybe_add_opt(:agent_id, agent_id)
+      |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
+      |> maybe_add_opt(
+        :acp_client_fs_read_text_file,
+        Keyword.get(opts, :acp_client_fs_read_text_file)
+      )
+      |> maybe_add_opt(
+        :acp_client_fs_write_text_file,
+        Keyword.get(opts, :acp_client_fs_write_text_file)
+      )
       |> maybe_add_opt(:stream_options, trace_stream_options)
       |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(extra_tools))
 
@@ -298,7 +310,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
               })
 
           _ ->
-            :ok = CodingAgent.Session.prompt(session, prompt)
+            :ok = CodingAgent.Session.prompt(session, prompt, images: images)
         end
 
         session_ref = Process.monitor(session)
@@ -512,7 +524,11 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         # Tool wasn't tracked, create standalone completed action
         kind = tool_kind(name)
         title = tool_title(name, %{})
-        detail = %{name: name, result: truncate_result(result)} |> maybe_put_result_meta(result)
+
+        detail =
+          %{name: name, result: truncate_result(result)}
+          |> maybe_put_result_meta(result, name)
+
         ok? = action_ok?(name, result, is_error)
 
         {event, factory} =
@@ -532,7 +548,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         detail =
           action.detail
           |> Map.merge(%{result: truncate_result(result)})
-          |> maybe_put_result_meta(result)
+          |> maybe_put_result_meta(result, name)
 
         ok? = action_ok?(name, result, is_error)
 
@@ -810,6 +826,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       "grep" -> :tool
       "websearch" -> :web_search
       "webfetch" -> :web_search
+      "browser_" <> _ -> :browser
       "task" -> :subagent
       "agent" -> :subagent
       _ -> :tool
@@ -855,6 +872,63 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
       "webfetch" ->
         "fetch: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "browser_navigate" ->
+        "browser: #{String.slice(a["url"] || "", 0, 50)}"
+
+      "browser_click" ->
+        "browser click: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_type" ->
+        "browser type: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_hover" ->
+        "browser hover: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_select_option" ->
+        "browser select option: #{String.slice(a["selector"] || "", 0, 50)}"
+
+      "browser_upload_file" ->
+        "browser upload file"
+
+      "browser_download" ->
+        "browser download"
+
+      "browser_press" ->
+        "browser key: #{String.slice(a["key"] || "", 0, 30)}"
+
+      "browser_scroll" ->
+        "browser scroll"
+
+      "browser_back" ->
+        "browser back"
+
+      "browser_events" ->
+        "browser events"
+
+      "browser_get_cookies" ->
+        "browser cookies"
+
+      "browser_set_cookies" ->
+        "browser set cookies"
+
+      "browser_clear_state" ->
+        "browser clear state"
+
+      "browser_snapshot" ->
+        "browser snapshot"
+
+      "browser_get_content" ->
+        "browser content"
+
+      "browser_wait_for_selector" ->
+        "browser wait"
+
+      "browser_evaluate" ->
+        "browser evaluate"
+
+      "browser_screenshot" ->
+        "browser screenshot"
 
       "task" ->
         engine_suffix =
@@ -942,15 +1016,15 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp truncate_result(result), do: inspect(result, limit: 500)
 
-  defp maybe_put_result_meta(detail, %AgentCore.Types.AgentToolResult{} = result)
+  defp maybe_put_result_meta(detail, %AgentCore.Types.AgentToolResult{} = result, name)
        when is_map(detail) do
-    case extract_tool_result_meta(result.details) do
+    case extract_tool_result_meta(result.details, name) do
       nil -> detail
       meta -> Map.put(detail, :result_meta, meta)
     end
   end
 
-  defp maybe_put_result_meta(detail, _), do: detail
+  defp maybe_put_result_meta(detail, _, _name), do: detail
 
   defp action_ok?(_name, _result, true), do: false
 
@@ -970,18 +1044,22 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp command_exit_failed?(_name, _details), do: false
 
-  defp extract_tool_result_meta(details) when is_map(details) do
+  defp extract_tool_result_meta(details, name) when is_map(details) do
     auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")
     task_meta = extract_task_tool_result_meta(details)
+    command_meta = extract_command_tool_result_meta(details, name)
     error_meta = extract_error_tool_result_meta(details)
 
     meta =
       case normalize_auto_send_files(auto_send_files) do
         [] ->
-          Map.merge(task_meta || %{}, error_meta || %{})
+          (task_meta || %{})
+          |> Map.merge(command_meta || %{})
+          |> Map.merge(error_meta || %{})
 
         files ->
           (task_meta || %{})
+          |> Map.merge(command_meta || %{})
           |> Map.merge(error_meta || %{})
           |> Map.put(:auto_send_files, files)
       end
@@ -989,7 +1067,24 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     if map_size(meta) == 0, do: nil, else: meta
   end
 
-  defp extract_tool_result_meta(_), do: nil
+  defp extract_tool_result_meta(_, _name), do: nil
+
+  defp extract_command_tool_result_meta(details, name) when is_map(details) do
+    exit_code = Map.get(details, :exit_code) || Map.get(details, "exit_code")
+
+    if String.downcase(to_string(name || "")) == "bash" and is_integer(exit_code) and
+         exit_code != 0 do
+      %{}
+      |> maybe_put_meta(:error_type, :command_exit)
+      |> maybe_put_meta(:tool_name, to_string(name))
+      |> maybe_put_meta(:exit_code, exit_code)
+      |> maybe_put_meta(:message, "Command exited with code #{exit_code}")
+    else
+      nil
+    end
+  end
+
+  defp extract_command_tool_result_meta(_details, _name), do: nil
 
   defp extract_error_tool_result_meta(details) when is_map(details) do
     error_type = Map.get(details, :error_type) || Map.get(details, "error_type")
@@ -1006,6 +1101,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         :timeout_ms,
         Map.get(details, :timeout_ms) || Map.get(details, "timeout_ms")
       )
+      |> maybe_put_meta(:exit_code, Map.get(details, :exit_code) || Map.get(details, "exit_code"))
       |> maybe_put_meta(:exception, Map.get(details, :exception) || Map.get(details, "exception"))
       |> maybe_put_meta(:message, Map.get(details, :message) || Map.get(details, "message"))
       |> maybe_put_meta(:status, Map.get(details, :status) || Map.get(details, "status"))
@@ -1108,12 +1204,23 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         filename: Map.get(file, :filename) || Map.get(file, "filename"),
         caption: Map.get(file, :caption) || Map.get(file, "caption")
       }
+      |> maybe_put_auto_send_source(Map.get(file, :source) || Map.get(file, "source"))
     else
       nil
     end
   end
 
   defp normalize_auto_send_file(_), do: nil
+
+  defp maybe_put_auto_send_source(file, source) when source in [:explicit, "explicit"] do
+    Map.put(file, :source, :explicit)
+  end
+
+  defp maybe_put_auto_send_source(file, source) when source in [:generated, "generated"] do
+    Map.put(file, :source, :generated)
+  end
+
+  defp maybe_put_auto_send_source(file, _source), do: file
 
   defp extract_answer(messages, accumulated_text) do
     # Try to get the last assistant message content

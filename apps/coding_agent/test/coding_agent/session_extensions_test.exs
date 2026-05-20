@@ -116,7 +116,13 @@ defmodule CodingAgent.SessionExtensionsTest do
   end
 
   defp start_session(opts) do
-    opts = default_opts(opts)
+    opts =
+      opts
+      |> Keyword.put_new(:settings_manager, %SettingsManager{
+        extension_auto_load_default_paths: true
+      })
+      |> default_opts()
+
     {:ok, session} = Session.start_link(opts)
     session
   end

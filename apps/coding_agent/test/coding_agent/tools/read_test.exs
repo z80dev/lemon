@@ -43,6 +43,41 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - reading text files" do
+    test "reads text through ACP client filesystem bridge", %{tmp_dir: tmp_dir} do
+      run_id = unique_run_id("read")
+      path = Path.join(tmp_dir, "client-buffer.txt")
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+
+      task =
+        Task.async(fn ->
+          Read.execute(
+            "call_1",
+            %{"path" => path, "offset" => 2, "limit" => 1},
+            nil,
+            nil,
+            tmp_dir,
+            run_id: run_id,
+            acp_client_fs_read_text_file: true
+          )
+        end)
+
+      params =
+        reply_acp_request("fs/read_text_file", %{
+          "result" => %{"content" => "line one\nline two\nline three"}
+        })
+
+      assert params["path"] == path
+      assert params["line"] == 2
+      assert params["limit"] == 1
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
+               Task.await(task)
+
+      assert text =~ "2: line two"
+      refute text =~ "line one"
+      assert details.acp_client == true
+    end
+
     test "reads simple text file", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "simple.txt")
       File.write!(path, "Hello, World!")
@@ -649,6 +684,21 @@ defmodule CodingAgent.Tools.ReadTest do
       assert details.path == path
       assert details.size == byte_size(png_data)
       assert details.mime_type == "image/png"
+    end
+  end
+
+  defp unique_run_id(prefix), do: "run_acp_#{prefix}_#{System.unique_integer([:positive])}"
+
+  defp reply_acp_request(method, response) do
+    receive do
+      %LemonCore.Event{
+        type: :acp_client_request,
+        payload: %{method: ^method, params: params, reply_to: reply_to, ref: ref}
+      } ->
+        send(reply_to, {:acp_client_response, ref, response})
+        params
+    after
+      1_000 -> flunk("timed out waiting for #{method}")
     end
   end
 end

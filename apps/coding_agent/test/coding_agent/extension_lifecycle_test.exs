@@ -15,8 +15,22 @@ defmodule CodingAgent.ExtensionLifecycleTest do
   end
 
   describe "extension_paths/2" do
-    test "merges settings paths before global and project paths", %{tmp_dir: tmp_dir} do
+    test "uses explicit settings paths without auto-loading default directories", %{
+      tmp_dir: tmp_dir
+    } do
       settings_manager = %{extension_paths: ["/tmp/custom/a", "/tmp/custom/b"]}
+
+      assert ExtensionLifecycle.extension_paths(tmp_dir, settings_manager) == [
+               "/tmp/custom/a",
+               "/tmp/custom/b"
+             ]
+    end
+
+    test "merges settings paths before trusted global and project paths", %{tmp_dir: tmp_dir} do
+      settings_manager = %{
+        extension_paths: ["/tmp/custom/a", "/tmp/custom/b"],
+        extension_auto_load_default_paths: true
+      }
 
       assert ExtensionLifecycle.extension_paths(tmp_dir, settings_manager) == [
                "/tmp/custom/a",
@@ -38,7 +52,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       result =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: []},
+          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: []
         )
 
@@ -84,7 +98,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       result =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: []},
+          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: [],
           custom_tools: [custom_tool],
           extra_tools: [extra_tool]
@@ -110,7 +124,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       initial =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: []},
+          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: []
         )
 
@@ -131,7 +145,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       reloaded =
         ExtensionLifecycle.reload(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: []},
+          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: [],
           extra_tools: [extra_tool],
           previous_status_report: initial.extension_status_report

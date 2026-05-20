@@ -31,9 +31,33 @@ defmodule CodingAgent.ProcessManagerTest do
       # Process should be in store
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.command == "sleep 60"
+      assert record.backend == :local
+      assert :shell in record.terminal_capabilities
+      assert :kill in record.terminal_capabilities
 
       # Clean up
       ProcessManager.kill(process_id, :sigkill)
+    end
+
+    test "rejects unknown terminal backends" do
+      assert ProcessManager.exec(command: "echo hi", backend: "unknown-docker") ==
+               {:error, {:unknown_terminal_backend, "unknown-docker"}}
+    end
+
+    test "rejects terminal backends blocked by policy" do
+      previous = System.get_env("LEMON_TERMINAL_BACKENDS_DENY")
+      System.put_env("LEMON_TERMINAL_BACKENDS_DENY", "local")
+
+      on_exit(fn ->
+        if previous do
+          System.put_env("LEMON_TERMINAL_BACKENDS_DENY", previous)
+        else
+          System.delete_env("LEMON_TERMINAL_BACKENDS_DENY")
+        end
+      end)
+
+      assert ProcessManager.exec(command: "echo hi", backend: "local") ==
+               {:error, {:terminal_backend_denied, :local}}
     end
 
     test "supports custom cwd" do
@@ -126,6 +150,9 @@ defmodule CodingAgent.ProcessManagerTest do
       assert result.status in [:running, :completed, :error]
       assert is_list(result.logs)
       assert result.command == "echo test"
+      assert result.backend == :local
+      assert :shell in result.terminal_capabilities
+      assert is_integer(result.log_line_count)
     end
 
     test "returns not_found for unknown process" do
@@ -250,6 +277,52 @@ defmodule CodingAgent.ProcessManagerTest do
 
     test "returns error for unknown process" do
       assert {:error, :not_found} = ProcessManager.kill("unknown_process_id")
+    end
+  end
+
+  describe "restart/2" do
+    test "restarts a completed process as a new process" do
+      {:ok, process_id} = ProcessManager.exec(command: "echo restarted")
+
+      result =
+        Enum.reduce_while(1..30, nil, fn _, _ ->
+          case ProcessManager.poll(process_id) do
+            {:ok, %{status: :completed} = result} ->
+              {:halt, result}
+
+            _ ->
+              Process.sleep(100)
+              {:cont, nil}
+          end
+        end)
+
+      assert result != nil
+
+      assert {:ok, new_process_id, metadata} =
+               ProcessManager.restart(process_id, use_lane_queue: false)
+
+      assert new_process_id != process_id
+      assert metadata.restarted_from == process_id
+      assert metadata.restart_generation == 1
+
+      Process.sleep(300)
+
+      assert {:ok, restarted} = ProcessManager.poll(new_process_id)
+      assert restarted.restarted_from == process_id
+      assert restarted.restart_generation == 1
+      assert restarted.command == "echo restarted"
+      assert Enum.join(restarted.logs, "\n") =~ "restarted"
+    end
+
+    test "does not restart a running process" do
+      {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
+
+      on_exit(fn ->
+        _ = ProcessManager.kill(process_id, :sigkill)
+      end)
+
+      Process.sleep(100)
+      assert ProcessManager.restart(process_id) == {:error, :process_running}
     end
   end
 

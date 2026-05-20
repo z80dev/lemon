@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.Read do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{TextContent, ImageContent}
+  alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 
@@ -103,21 +104,27 @@ defmodule CodingAgent.Tools.Read do
 
     with {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_abort(signal) do
-      case resolve_existing_read_path(path, resolved_path, cwd, opts) do
-        {:ok, readable_path, stat} ->
-          case detect_mime_type(readable_path) do
-            nil ->
-              read_text_file(readable_path, stat, offset, limit, opts)
+      cond do
+        ACPFileBridge.read_enabled?(opts) and is_nil(detect_mime_type(resolved_path)) ->
+          read_text_file_from_acp(resolved_path, offset, limit, opts)
 
-            mime_type ->
-              read_image_file(readable_path, mime_type)
+        true ->
+          case resolve_existing_read_path(path, resolved_path, cwd, opts) do
+            {:ok, readable_path, stat} ->
+              case detect_mime_type(readable_path) do
+                nil ->
+                  read_text_file(readable_path, stat, offset, limit, opts)
+
+                mime_type ->
+                  read_image_file(readable_path, mime_type)
+              end
+
+            {:ok_optional_missing, readable_path} ->
+              optional_missing_daily_memory_result(readable_path)
+
+            {:error, _} = error ->
+              error
           end
-
-        {:ok_optional_missing, readable_path} ->
-          optional_missing_daily_memory_result(readable_path)
-
-        {:error, _} = error ->
-          error
       end
     end
   end
@@ -310,55 +317,73 @@ defmodule CodingAgent.Tools.Read do
   # ============================================================================
 
   defp read_text_file(path, _stat, offset, limit, opts) do
+    case File.read(path) do
+      {:ok, content} ->
+        text_file_result(path, content, offset, limit, opts, %{})
+
+      {:error, reason} ->
+        {:error, "Failed to read file: #{path} (#{reason})"}
+    end
+  end
+
+  defp read_text_file_from_acp(path, offset, limit, opts) do
+    case ACPFileBridge.read_text_file(path, offset, limit, opts) do
+      {:ok, content} ->
+        text_file_result(path, content, offset, limit, opts, %{acp_client: true})
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp text_file_result(path, content, offset, limit, opts, extra_details) do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
-    case File.read(path) do
-      {:ok, content} ->
-        lines = String.split(content, ~r/\r?\n/, trim: false)
-        total_lines = length(lines)
+    lines = String.split(content, ~r/\r?\n/, trim: false)
+    total_lines = length(lines)
 
-        # Apply offset (1-indexed to 0-indexed)
-        start_line = normalize_offset(offset)
-        lines_after_offset = Enum.drop(lines, start_line)
+    # Apply offset (1-indexed to 0-indexed)
+    start_line = normalize_offset(offset)
+    lines_after_offset = Enum.drop(lines, start_line)
 
-        # Apply user limit
-        lines_after_limit =
-          if limit && limit > 0 do
-            Enum.take(lines_after_offset, limit)
-          else
-            lines_after_offset
-          end
+    # Apply user limit
+    lines_after_limit =
+      if limit && limit > 0 do
+        Enum.take(lines_after_offset, limit)
+      else
+        lines_after_offset
+      end
 
-        # Apply truncation (max lines and max bytes)
-        {truncated_lines, truncation_info} =
-          truncate_head(lines_after_limit, start_line, total_lines, max_lines, max_bytes)
+    # Apply truncation (max lines and max bytes)
+    {truncated_lines, truncation_info} =
+      truncate_head(lines_after_limit, start_line, total_lines, max_lines, max_bytes)
 
-        # Format with line numbers
-        formatted = format_line_numbers(truncated_lines, start_line + 1)
+    # Format with line numbers
+    formatted = format_line_numbers(truncated_lines, start_line + 1)
 
-        # Build result text
-        result_text =
-          if truncation_info do
-            formatted <> "\n" <> truncation_info.message
-          else
-            formatted
-          end
+    # Build result text
+    result_text =
+      if truncation_info do
+        formatted <> "\n" <> truncation_info.message
+      else
+        formatted
+      end
 
-        %AgentToolResult{
-          content: [%TextContent{text: result_text}],
-          details: %{
+    %AgentToolResult{
+      content: [%TextContent{text: result_text}],
+      details:
+        Map.merge(
+          %{
             path: path,
             total_lines: total_lines,
             start_line: start_line + 1,
             lines_shown: length(truncated_lines),
             truncation: truncation_info
-          }
-        }
-
-      {:error, reason} ->
-        {:error, "Failed to read file: #{path} (#{reason})"}
-    end
+          },
+          extra_details
+        )
+    }
   end
 
   defp normalize_offset(nil), do: 0

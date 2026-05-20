@@ -1,6 +1,6 @@
 # CodingAgent App Guide
 
-The main coding agent implementation for the Lemon AI assistant platform. This app provides a complete AI coding agent with 30+ tools, session management, budget tracking, extensions, WASM tool support, and context compaction.
+The main coding agent implementation for the Lemon AI assistant platform. This app provides a complete AI coding agent with 40+ tools, session management, budget tracking, extensions, WASM tool support, and context compaction.
 
 ## Dependencies
 
@@ -61,17 +61,97 @@ When downstream store or agent processes time out, callers should log and contin
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (23 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (55 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
-| **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `search_memory`, `write`, `edit`, `patch`, `hashline_edit`, `ls` |
+| **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash` |
-| **Web** | `websearch`, `webfetch` |
-| **Task/Agent** | `task`, `agent`, `parent_question`, `todo` |
-| **Social** | `post_to_x`, `get_x_mentions` |
-| **System** | `tool_auth`, `extensions_status`, `memory_topic` |
+| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
+| **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
+| **System** | `tool_auth`, `extensions_status` |
+
+`browser_screenshot` writes screenshot bytes to local artifacts by default
+instead of returning base64 to the model. Pass `includeImage: true` only when a
+run needs model-visible screenshot content; the tool still keeps raw base64 out
+of result details. Pass `sendToChannel: true` only when the screenshot should be
+attached to the final Telegram/Discord answer through redacted `auto_send_files`
+metadata. Screenshot writes prune the browser artifact directory to 14 days or
+the newest 100 files.
+
+`browser_analyze` composes the supervised browser screenshot path with
+`media_analyze_image` so models can capture and analyze the current page in one
+BEAM-owned operation. It stores the screenshot and analysis as managed artifacts,
+keeps raw base64 out of details, and can optionally return the screenshot as
+model-visible image content.
+
+`browser_navigate` classifies targets on the BEAM side before worker dispatch.
+The default `route: "auto"` preserves local-first use while reporting public,
+private, or local-document target kind; `route: "public"` rejects local/private
+targets, `route: "local"` rejects public web targets, and metadata endpoints
+are always blocked before the browser worker.
+
+`browser_get_cookies`, `browser_set_cookies`, and `browser_clear_state` expose
+session-state controls over the supervised browser boundary. Cookie values are
+redacted by default unless `includeValues: true` is explicit. `browser_clear_state`
+clears browser-context cookies, current-page local/session storage, and buffered
+events by default; pass the specific `clear*` flags to narrow the reset.
+
+`memory` is the compact prompt-injected memory surface. It reads, adds,
+replaces, and removes bounded assistant-home `USER.md` profile notes and
+`MEMORY.md` quick facts without relying on project-local file paths. It rejects
+duplicates, requires unique text for replace/remove, enforces compact file
+limits, and screens writes for common secrets, prompt-injection phrases, NUL
+bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
+structured notes under `memory/topics/`.
+
+`session_search` is the Hermes-compatible no-LLM recall tool. It infers
+discovery, scroll, or browse mode from the argument shape and reads from Lemon's
+durable memory/run-history stores; `search_memory` remains the native scoped
+memory tool.
+
+`media_status` gives the model a read-only view of redacted media job summaries,
+recent jobs, cleanup policy, and worker supervisor state. `media_generate_image`,
+`media_generate_speech`, and `media_transcribe_audio` are model-facing media
+previews. They run deterministic local preview jobs, provider-backed OpenAI
+image/TTS/STT jobs, Vertex Imagen image jobs, ElevenLabs TTS, Google TTS, and
+Deepgram STT, plus provider-backed OpenAI video and Vertex Veo jobs through
+`LemonCore.MediaJobSupervisor`, store redacted
+`LemonCore.MediaJobs` metadata with prompt/input hash/chars and artifact
+metadata, and can opt into final Telegram/Discord generated-file delivery with
+`sendToChannel: true`. Provider media jobs retry bounded transient provider
+failures with `maxRetries`; failed provider jobs record only a safe error kind
+plus structured provider status/type when present, never raw provider messages.
+Completed live generated-media channel proof remains outside the stable surface.
+
+`write`, `edit`, and `patch` create filesystem checkpoints automatically when
+the tool context includes a session id. The `checkpoint` tool lists, diffs,
+restores, and deletes those checkpoints through `LemonCore.Checkpoint`.
+Checkpoint create/restore/delete events are recorded through
+`LemonCore.Introspection` and broadcast on run/session bus topics for audit and
+live status surfaces. `CodingAgent.Checkpoint` only adds coding-agent todo and
+requirement state for resume flows.
+`exec` can snapshot configured file paths before destructive shell commands:
+pass `checkpoint_paths` and a session id, and commands such as `rm`, `mv`,
+`sed -i`, `find ... -delete`, `git reset`, or `git clean` will create a
+filesystem checkpoint before backend launch.
+
+`lsp_diagnostics` is the model-facing diagnostics tool. It runs workspace-aware
+file diagnostics with graceful fallback when a checker is unavailable, and
+`write`, `edit`, and `patch` can opt into post-edit baseline/delta diagnostics.
+Operator status is exposed without paths, file contents, workspace roots, or
+diagnostic output through `lsp.diagnostics.status`, Web `/ops`, and support
+bundle `lsp_diagnostics.json`. `LemonCore.LspServerManager` owns redacted
+language-server registry, stdio session lifecycle status, initialize
+orchestration, document open/change/close notifications, JSON-RPC request
+framing, and diagnostic notification counters.
+
+`kanban` is the model-facing durable board tool. It creates/lists boards,
+creates/lists/updates/comments tasks, and reads from `LemonCore.KanbanStore` so
+multi-agent work can outlive one session. Kanban-dispatched worker runs block
+the `kanban` tool through tool policy to avoid recursive board management.
 
 **Additional tools** (exist as modules but NOT in default set -- must be registered explicitly or accessed via `all_tools/2`):
 
@@ -79,14 +159,14 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |------|--------|-------|
 | `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
 | `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` background processes |
+| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
 | `await` | `Tools.Await` | Block until background jobs complete |
 | `webdownload` | `Tools.WebDownload` | Download binary content (images, PDFs) to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `todoread` | `Tools.TodoRead` | Low-level todo read (used internally by `todo`) |
 | `todowrite` | `Tools.TodoWrite` | Low-level todo write (used internally by `todo`) |
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev only) |
-| `lsp_formatter` | `Tools.LspFormatter` | Format code via LSP |
+| `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
 **Internal helpers** (not exposed as tools): `Tools.Fuzzy` (fuzzy match used by `edit`), `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
@@ -156,6 +236,7 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background exec processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` | ETS store for background process state |
+| `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
 | `CodingAgent.TaskStore` | ETS+DETS store for async task tool runs |
 | `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
 | `CodingAgent.TaskProgressBindingStore` | ETS-backed parent-task surface bindings for async child runs; lazily restores `TaskProgressBindingServer` if the child is missing at runtime |
@@ -174,11 +255,47 @@ When an internal task omits `model`, `Task.Params` resolves the inherited model 
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
 Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup now forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router-delivered task followups use the `echo` engine so the raw completion text reaches the user without going back through the parent model. Any transport-specific chunking happens later at the channel layer.
 
+`exec` and `process` now carry terminal backend metadata through
+`LemonCore.TerminalBackends`. Registered backends are `:local`, implemented by
+the existing supervised `ProcessSession` Erlang Port runner, `:local_pty`,
+which wraps commands through util-linux `script(1)` when available, `:docker`,
+which runs commands in a bounded Docker CLI container with the cwd mounted at
+`/workspace`, a read-only root filesystem by default, and a bounded `/tmp`
+tmpfs scratch mount, and optional `:ssh`, which uses OpenSSH in `BatchMode=yes` when
+`LEMON_SSH_TERMINAL_TARGET` is configured. Future sandbox backends should
+implement the backend contract and stay inside `ProcessManager` so policy,
+logs, restart lineage, and status remain shared. Poll/list metadata includes
+bounded-log counts, max-log settings, started/completed timestamps, and manual
+restart lineage for finished processes restarted through the `process` tool.
+`LemonCore.TerminalBackendPolicy` enforces
+`LEMON_TERMINAL_BACKENDS_ALLOW` / `LEMON_TERMINAL_BACKENDS_DENY`, optional
+`LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`, and optional
+`LEMON_SSH_TERMINAL_ALLOWED_TARGETS` before a backend starts. It also validates
+Docker image, network, memory, CPU, pids, and tmpfs-size settings plus SSH port,
+connect-timeout, and strict-host-key settings before launch, so invalid
+container/remote policy fails closed before reaching Docker or OpenSSH. The
+`exec` tool also honors `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL` when an
+approval context is available, sending a redacted approval action with backend,
+command hash, cwd hash, and env keys only. Support surfaces show policy state
+without raw SSH targets or env values. `exec.env` is validated before launch:
+env must be an object with string values and keys matching normal environment
+variable names.
+`exec.checkpoint_paths` is validated as a list of non-empty strings. When a
+risky shell command is detected and filesystem checkpoints are enabled, those
+paths are snapshotted through `LemonCore.Checkpoint` before process start and
+the result details include checkpoint metadata for restore.
+`scripts/live_terminal_backend_smoke.exs` is the opt-in live proof lane for this
+boundary: it runs a fixed command through every available registered backend,
+records hashed proof JSON, skips unavailable backends, and fails the smoke on
+backend errors or missing expected output.
+
 Child sessions launched through `CodingAgent.Tools.Task` can now receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`).
 `CodingAgent.CliRunners.LemonRunner` also preserves task-tool result metadata such as async
-`task_id`, task status, engine, and latest `current_action` inside action `detail.result_meta`
-so router/channel layers can keep later `task action=poll` updates attached to the original
-external task status surface.
+`task_id`, task status, engine, latest `current_action`, tool-reported
+`exit_code`, and synthesized nonzero `bash` command-exit metadata inside action
+`detail.result_meta` so router/channel layers can keep later `task action=poll`
+updates and failed command summaries attached to the original external task
+status surface.
 When compacted history is restored, `SessionManager` preserves older async followup entries as
 custom `async_followup` messages with provenance metadata so the next LLM projection still knows
 which system-delivered completions came from task/delegated runs.
@@ -190,7 +307,7 @@ Lemon includes built-in harness primitives to support multi-step, long-lived imp
 - `CodingAgent.Tools.FeatureRequirements` persists `FEATURE_REQUIREMENTS.json` files in a workspace and reports requirement-level progress (`get_progress/1`, dependency-aware `get_next_features/1`).
 - `CodingAgent.Tools.Todo` exposes higher-level progress actions (`action: "progress"`, `action: "actionable"`) on top of `TodoStore`.
 - `CodingAgent.Tools.TodoStore` tracks dependency-aware todo progression and normalizes mixed key shapes (atom-key and JSON string-key todo maps).
-- `CodingAgent.Checkpoint` snapshots/restores long-running session state and provides aggregate stats (`stats/1`) used by control-plane introspection.
+- `CodingAgent.Checkpoint` wraps `LemonCore.Checkpoint` for long-running session resume state; shared rollback operations live in core for Web, control-plane, and channel reuse.
 
 ## Tool System Architecture
 
@@ -424,8 +541,12 @@ CodingAgent.BudgetTracker.check_budget(run_id)
 ## Extension System
 
 Extensions are discovered from:
-- Global: `~/.lemon/agent/extensions/`
-- Project: `<cwd>/.lemon/extensions/`
+- Explicit trusted paths in `[runtime] extension_paths`
+- Global/project defaults only when `[runtime.extensions] auto_load_default_paths = true`
+
+Default global/project extension directories are diagnostics-only unless
+explicitly trusted. This keeps third-party code from running just because a file
+exists under `~/.lemon/agent/extensions/` or `<cwd>/.lemon/extensions/`.
 
 ### Extension Behaviour
 
@@ -676,8 +797,8 @@ apps/coding_agent/
 |   |   |   +-- task.ex, agent.ex
 |   |   |   +-- tool_auth.ex, extensions_status.ex
 |   |   |   +-- read_skill.ex, skill_manage.ex, memory_topic.ex, truncate.ex
-|   |   |   +-- post_to_x.ex, get_x_mentions.ex
-|   |   |   +-- lsp_formatter.ex, restart.ex
+|   |   |   +-- x_search.ex, post_to_x.ex, get_x_mentions.ex
+|   |   |   +-- lsp_formatter.ex, lsp_diagnostics.ex, restart.ex
 |   |   |   +-- feature_requirements.ex
 |   |   +-- budget_tracker.ex, budget_enforcer.ex
 |   |   +-- run_graph.ex, run_graph_server.ex
@@ -705,10 +826,12 @@ apps/coding_agent/
 |   |   +-- parallel.ex                       # Semaphore and bounded parallelism
 |   |   +-- process_manager.ex                # DynamicSupervisor for background processes
 |   |   +-- process_session.ex, process_store.ex, process_store_server.ex
+|   |   +-- terminal_backend.ex, terminal_backends.ex
+|   |   +-- terminal_backends/local.ex
 |   |   +-- task_store.ex, task_store_server.ex
 |   |   +-- bash_executor.ex                  # Streaming shell execution
 |   |   +-- messages.ex                       # Message types and LLM conversion
-|   |   +-- checkpoint.ex                     # Snapshot/restore for long sessions
+|   |   +-- checkpoint.ex                     # Session and filesystem checkpoint/restore store
 |   |   +-- progress.ex                       # Progress reporting
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
@@ -753,6 +876,15 @@ apps/coding_agent/
 %CodingAgent.SettingsManager{
   default_model: %{provider: "anthropic", model_id: "...", base_url: nil},
   default_thinking_level: :medium,
+  provider_routing: %{
+    enabled: true,
+    fallback_providers: [],
+    default_pool: nil,
+    default_profile: nil,
+    credential_pools: %{},
+    profiles: %{},
+    require_credentials: true
+  },
   compaction_enabled: true,
   reserve_tokens: 16_384,
   keep_recent_tokens: 20_000,
@@ -774,6 +906,16 @@ settings = CodingAgent.load_settings(cwd)
 # or directly:
 settings = CodingAgent.SettingsManager.load(cwd)
 ```
+
+Default model resolution consumes `runtime.provider_routing` conservatively:
+when the configured default provider has no ready credentials, routing is
+enabled, and a configured fallback/profile/pool provider has credentials plus
+the same model id in `Ai.Models`, `CodingAgent.Session.ModelResolver` selects
+the fallback before starting the supervised `AgentCore.Agent`. Explicit user
+model specs are not rewritten. Default-model streams are also wrapped by
+`CodingAgent.Session.ProviderFallback`: if the selected provider fails before
+visible assistant content or tool calls are emitted, the same turn is retried
+against the next credential-ready fallback provider with the same model id.
 
 Key config paths (via `CodingAgent.Config`):
 

@@ -11,6 +11,7 @@ defmodule CodingAgent.Session.Lifecycle do
     ModelResolver,
     Notifier,
     Persistence,
+    ProviderFallback,
     PromptComposer,
     State,
     WasmBridge
@@ -143,6 +144,15 @@ defmodule CodingAgent.Session.Lifecycle do
         cwd
       )
 
+    stream_fn =
+      if Keyword.get(opts, :model) == nil do
+        opts
+        |> Keyword.get(:stream_fn)
+        |> ProviderFallback.maybe_wrap(model, settings_manager, cwd)
+      else
+        Keyword.get(opts, :stream_fn)
+      end
+
     agent_registry_key = {session_manager.header.id, :main, 0}
 
     {:ok, agent} =
@@ -155,7 +165,7 @@ defmodule CodingAgent.Session.Lifecycle do
           messages: []
         },
         convert_to_llm: convert_to_llm,
-        stream_fn: Keyword.get(opts, :stream_fn),
+        stream_fn: stream_fn,
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,

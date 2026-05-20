@@ -37,8 +37,10 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert String.contains?(prompt, "## Memory Workflow")
     assert String.contains?(prompt, "Prefer the dedicated memory and skill tools")
-    assert String.contains?(prompt, "not for bypassing `search_memory`")
+    assert String.contains?(prompt, "not for bypassing `search_memory`, `session_search`")
     assert String.contains?(prompt, "Use `search_memory` to recall completed run history")
+    assert String.contains?(prompt, "Use `session_search` when a prompt or imported workflow")
+    assert String.contains?(prompt, "Use `memory` for compact assistant-home")
     assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes")
     assert String.contains?(prompt, "memory/topics/*.md")
     assert String.contains?(prompt, "Use `grep` with `path: \"memory\"`")
@@ -69,8 +71,10 @@ defmodule CodingAgent.SystemPromptTest do
     assert String.contains?(prompt, "reusable workflow, recurring command sequence")
     assert String.contains?(prompt, "project convention")
     assert String.contains?(prompt, "Use `skill_manage`")
+    assert String.contains?(prompt, "Use `memory`")
     assert String.contains?(prompt, "Use `memory_topic`")
     assert String.contains?(prompt, "Use `search_memory`")
+    assert String.contains?(prompt, "Use `session_search`")
     assert String.contains?(prompt, "Use `todo`")
     assert String.contains?(prompt, "At the end of substantial work")
   end
@@ -94,6 +98,7 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert "read_skill" in referenced_tools
     assert "search_memory" in referenced_tools
+    assert "session_search" in referenced_tools
     assert "skill_manage" in referenced_tools
 
     missing_tools = Enum.reject(referenced_tools, &MapSet.member?(default_tool_names, &1))

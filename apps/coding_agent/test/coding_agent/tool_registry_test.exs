@@ -7,6 +7,21 @@ defmodule CodingAgent.ToolRegistryTest do
 
   @moduletag :tmp_dir
 
+  setup %{tmp_dir: tmp_dir} do
+    config_dir = Path.join(tmp_dir, ".lemon")
+    File.mkdir_p!(config_dir)
+
+    File.write!(
+      Path.join(config_dir, "config.toml"),
+      """
+      [runtime.extensions]
+      auto_load_default_paths = true
+      """
+    )
+
+    :ok
+  end
+
   defp create_counter_extension(tmp_dir, module_name, tool_name, counter_path) do
     ext_dir = Path.join(tmp_dir, ".lemon/extensions")
     File.mkdir_p!(ext_dir)
@@ -79,6 +94,21 @@ defmodule CodingAgent.ToolRegistryTest do
     {name, tool, {:wasm, %{name: name, path: path, capabilities: capabilities}}}
   end
 
+  defp mcp_tool(name, opts \\ []) do
+    label = Keyword.get(opts, :label, "MCP #{name}")
+    server = Keyword.get(opts, :server, :fixture)
+
+    tool = %AgentCore.Types.AgentTool{
+      name: name,
+      description: "MCP #{name}",
+      parameters: %{"type" => "object", "properties" => %{}, "required" => []},
+      label: label,
+      execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+    }
+
+    {name, tool, {:mcp, server}}
+  end
+
   describe "get_tools/2" do
     test "returns built-in tools", %{tmp_dir: tmp_dir} do
       tools = ToolRegistry.get_tools(tmp_dir)
@@ -88,11 +118,28 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "read_skill" in names
       assert "skill_manage" in names
       assert "memory_topic" in names
+      assert "memory" in names
       assert "write" in names
       assert "edit" in names
+      assert "lsp_diagnostics" in names
       assert "bash" in names
       assert "todo" in names
+      assert "kanban" in names
       assert "grep" in names
+      assert "media_status" in names
+      assert "media_generate_image" in names
+      assert "media_generate_speech" in names
+      assert "media_transcribe_audio" in names
+      assert "browser_hover" in names
+      assert "browser_select_option" in names
+      assert "browser_upload_file" in names
+      assert "browser_download" in names
+      assert "browser_wait_for_selector" in names
+      assert "browser_evaluate" in names
+      assert "browser_analyze" in names
+      assert "media_analyze_image" in names
+      assert "media_generate_video" in names
+      assert "x_search" in names
       assert "post_to_x" in names
       assert "get_x_mentions" in names
       assert "parent_question" in names
@@ -109,11 +156,12 @@ defmodule CodingAgent.ToolRegistryTest do
     end
 
     test "respects disabled option", %{tmp_dir: tmp_dir} do
-      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write"])
+      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write", "kanban"])
 
       names = Enum.map(tools, & &1.name)
       refute "bash" in names
       refute "write" in names
+      refute "kanban" in names
       assert "read" in names
     end
 
@@ -140,13 +188,27 @@ defmodule CodingAgent.ToolRegistryTest do
     test "respects tool policy allow list", %{tmp_dir: tmp_dir} do
       tools =
         ToolRegistry.get_tools(tmp_dir,
-          tool_policy: %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}
+          tool_policy: %{
+            allow: [
+              "read_skill",
+              "skill_manage",
+              "search_memory",
+              "session_search",
+              "memory_topic"
+            ]
+          }
         )
 
       names = Enum.map(tools, & &1.name)
 
       assert Enum.sort(names) ==
-               Enum.sort(["read_skill", "skill_manage", "search_memory", "memory_topic"])
+               Enum.sort([
+                 "read_skill",
+                 "skill_manage",
+                 "search_memory",
+                 "session_search",
+                 "memory_topic"
+               ])
 
       refute "bash" in names
       refute "webfetch" in names
@@ -269,6 +331,7 @@ defmodule CodingAgent.ToolRegistryTest do
       assert :write in names
       assert :edit in names
       assert :bash in names
+      assert :x_search in names
       assert :post_to_x in names
       assert :get_x_mentions in names
       assert :parent_question in names
@@ -319,6 +382,116 @@ defmodule CodingAgent.ToolRegistryTest do
       # Cleanup
       :code.purge(CustomPathExtension)
       :code.delete(CustomPathExtension)
+    end
+
+    test "emits redacted telemetry for extension tool execution", %{tmp_dir: tmp_dir} do
+      custom_ext_dir = Path.join(tmp_dir, "telemetry_extensions")
+      File.mkdir_p!(custom_ext_dir)
+
+      extension_code = """
+      defmodule TelemetryPathExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "telemetry-path-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd) do
+          [
+            %AgentCore.Types.AgentTool{
+              name: "telemetry_path_tool",
+              description: "A telemetry test tool",
+              parameters: %{},
+              label: "Telemetry Path Tool",
+              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+            }
+          ]
+        end
+      end
+      """
+
+      File.write!(Path.join(custom_ext_dir, "telemetry_path_extension.ex"), extension_code)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:coding_agent, :extension, :tool, :start],
+          [:coding_agent, :extension, :tool, :stop]
+        ])
+
+      assert {:ok, tool} =
+               ToolRegistry.get_tool(tmp_dir, "telemetry_path_tool",
+                 extension_paths: [custom_ext_dir]
+               )
+
+      _result = tool.execute.("raw-call-id", %{"secret" => "do-not-leak"}, nil, nil)
+
+      assert_received {
+        [:coding_agent, :extension, :tool, :start],
+        ^ref,
+        %{count: 1},
+        start_meta
+      }
+
+      assert_received {
+        [:coding_agent, :extension, :tool, :stop],
+        ^ref,
+        %{count: 1, duration_us: duration_us},
+        stop_meta
+      }
+
+      assert start_meta.tool_name == "telemetry_path_tool"
+      assert start_meta.host == :beam
+      assert is_binary(start_meta.extension_hash)
+      assert is_binary(start_meta.tool_call_hash)
+      assert stop_meta.status == :ok
+      assert stop_meta.extension_hash == start_meta.extension_hash
+      assert duration_us >= 0
+
+      payload = inspect({start_meta, stop_meta})
+      refute payload =~ "raw-call-id"
+      refute payload =~ "do-not-leak"
+      refute payload =~ custom_ext_dir
+
+      :telemetry.detach(ref)
+      :code.purge(TelemetryPathExtension)
+      :code.delete(TelemetryPathExtension)
+    end
+
+    test "global extension disable policy blocks explicit extension path execution", %{
+      tmp_dir: tmp_dir
+    } do
+      System.put_env("LEMON_EXTENSIONS_ENABLED", "false")
+      on_exit(fn -> System.delete_env("LEMON_EXTENSIONS_ENABLED") end)
+
+      File.write!(
+        Path.join([tmp_dir, ".lemon", "config.toml"]),
+        """
+        [runtime]
+        extension_paths = ["./.lemon/extensions"]
+
+        [runtime.extensions]
+        enabled = false
+        auto_load_default_paths = true
+        """
+      )
+
+      counter_path = Path.join(tmp_dir, "disabled_extension_counter.txt")
+      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+
+      module =
+        create_counter_extension(tmp_dir, "DisabledExtension", "disabled_tool", counter_path)
+
+      tools = ToolRegistry.get_tools(tmp_dir, extension_paths: [ext_dir])
+      names = Enum.map(tools, & &1.name)
+
+      refute "disabled_tool" in names
+      refute File.exists?(counter_path)
+
+      :code.purge(module)
+      :code.delete(module)
     end
 
     test "ignores default paths when extension_paths is provided", %{tmp_dir: tmp_dir} do
@@ -539,6 +712,34 @@ defmodule CodingAgent.ToolRegistryTest do
 
       :code.purge(WasmConflictExtension)
       :code.delete(WasmConflictExtension)
+    end
+  end
+
+  describe "mcp precedence and conflict reporting" do
+    test "mcp tools are included at lowest precedence", %{tmp_dir: tmp_dir} do
+      mcp_inventory = [mcp_tool("mcp_fixture_echo"), mcp_tool("read", label: "MCP Read")]
+
+      tools = ToolRegistry.get_tools(tmp_dir, mcp_tools: mcp_inventory)
+      names = Enum.map(tools, & &1.name)
+
+      assert "mcp_fixture_echo" in names
+      assert Enum.count(names, &(&1 == "read")) == 1
+
+      assert {:ok, read_tool} = ToolRegistry.get_tool(tmp_dir, "read", mcp_tools: mcp_inventory)
+      refute read_tool.label == "MCP Read"
+    end
+
+    test "tool_conflict_report includes mcp counts and shadowed sources", %{tmp_dir: tmp_dir} do
+      mcp_inventory = [mcp_tool("read"), mcp_tool("mcp_unique_tool")]
+
+      report = ToolRegistry.tool_conflict_report(tmp_dir, mcp_tools: mcp_inventory)
+
+      assert report.mcp_count == 1
+
+      assert Enum.any?(report.conflicts, fn conflict ->
+               conflict.tool_name == "read" and conflict.winner == :builtin and
+                 {:mcp, :fixture} in conflict.shadowed
+             end)
     end
   end
 

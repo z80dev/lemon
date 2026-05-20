@@ -17,6 +17,7 @@ defmodule CodingAgent.ProcessSession do
   require Logger
 
   alias CodingAgent.ProcessStore
+  alias LemonCore.TerminalBackends
 
   @default_max_log_lines 1000
 
@@ -103,6 +104,8 @@ defmodule CodingAgent.ProcessSession do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     env = Keyword.get(opts, :env, %{})
+    backend = Keyword.get(opts, :backend, :local)
+    terminal_capabilities = TerminalBackends.capabilities(backend)
     max_log_lines = Keyword.get(opts, :max_log_lines, @default_max_log_lines)
     timeout_ms = Keyword.get(opts, :timeout_ms)
     on_exit = Keyword.get(opts, :on_exit)
@@ -113,11 +116,17 @@ defmodule CodingAgent.ProcessSession do
       command: command,
       cwd: cwd,
       env: env,
+      backend: backend,
+      terminal_capabilities: terminal_capabilities,
+      max_log_lines: max_log_lines,
+      timeout_ms: timeout_ms,
+      restarted_from: Keyword.get(opts, :restarted_from),
+      restart_generation: Keyword.get(opts, :restart_generation, 0),
       status: :queued
     })
 
     # Start the OS process via Port
-    port = start_port(command, cwd, env)
+    port = start_port(command, cwd, env, backend)
     os_pid = get_os_pid(port)
 
     # Mark as running in the store
@@ -133,6 +142,8 @@ defmodule CodingAgent.ProcessSession do
       command: command,
       cwd: cwd,
       env: env,
+      backend: backend,
+      terminal_capabilities: terminal_capabilities,
       status: :running,
       exit_code: nil,
       max_log_lines: max_log_lines,
@@ -140,7 +151,10 @@ defmodule CodingAgent.ProcessSession do
       log_count: 0,
       timeout_ref: timeout_ref,
       on_exit: on_exit,
-      started_at: System.system_time(:second)
+      started_at: System.system_time(:second),
+      completed_at: nil,
+      restarted_from: Keyword.get(opts, :restarted_from),
+      restart_generation: Keyword.get(opts, :restart_generation, 0)
     }
 
     {:ok, state}
@@ -165,7 +179,15 @@ defmodule CodingAgent.ProcessSession do
       os_pid: state.os_pid,
       logs: logs,
       command: state.command,
-      cwd: state.cwd
+      cwd: state.cwd,
+      backend: state.backend,
+      terminal_capabilities: state.terminal_capabilities,
+      max_log_lines: state.max_log_lines,
+      log_line_count: state.log_count,
+      started_at: state.started_at,
+      completed_at: state.completed_at,
+      restarted_from: state.restarted_from,
+      restart_generation: state.restart_generation
     }
 
     {:reply, {:ok, result}, state}
@@ -187,7 +209,7 @@ defmodule CodingAgent.ProcessSession do
   def handle_call({:kill, signal}, _from, state) do
     if state.status == :running and state.os_pid do
       do_kill(state.os_pid, signal)
-      state = %{state | status: :killed}
+      state = %{state | status: :killed, completed_at: System.system_time(:second)}
       ProcessStore.mark_killed(state.process_id)
       {:reply, :ok, state}
     else
@@ -259,7 +281,12 @@ defmodule CodingAgent.ProcessSession do
       end)
     end
 
-    new_state = %{state | status: status, exit_code: exit_code}
+    new_state = %{
+      state
+      | status: status,
+        exit_code: exit_code,
+        completed_at: System.system_time(:second)
+    }
 
     # Stop the GenServer after a short delay to allow final polling
     Process.send_after(self(), :stop_after_exit, 5_000)
@@ -271,7 +298,9 @@ defmodule CodingAgent.ProcessSession do
     if state.status == :running do
       do_kill(state.os_pid, :sigkill)
       ProcessStore.mark_error(state.process_id, :timeout)
-      {:noreply, %{state | status: :error, timeout_ref: nil}}
+
+      {:noreply,
+       %{state | status: :error, timeout_ref: nil, completed_at: System.system_time(:second)}}
     else
       {:noreply, state}
     end
@@ -305,42 +334,117 @@ defmodule CodingAgent.ProcessSession do
     {:via, Registry, {CodingAgent.ProcessRegistry, process_id}}
   end
 
-  defp start_port(command, cwd, env) do
+  defp start_port(command, cwd, env, backend) do
     {shell_path, shell_args} = get_shell_config()
 
-    # Build environment variables
+    {executable, args, stderr_to_stdout?} =
+      case backend do
+        :local_pty ->
+          wrapped_command = command_with_cwd(command, cwd)
+
+          {System.find_executable("script") || "script", ["-qfec", wrapped_command, "/dev/null"],
+           false}
+
+        :docker ->
+          {LemonCore.TerminalBackends.Docker.docker_path() || "docker",
+           docker_args(command, cwd, env), true}
+
+        :ssh ->
+          {LemonCore.TerminalBackends.Ssh.ssh_path() || "ssh",
+           LemonCore.TerminalBackends.Ssh.args(command, env), true}
+
+        _ ->
+          wrapped_command = command_with_cwd(command, cwd)
+
+          {shell_path, shell_args ++ [wrapped_command], true}
+      end
+
+    port_opts =
+      [
+        :stream,
+        :binary,
+        :exit_status,
+        :use_stdio,
+        {:args, args}
+      ]
+      |> maybe_stderr_to_stdout(stderr_to_stdout?)
+
     env_list =
       Enum.map(env, fn {k, v} ->
         {String.to_charlist(k), String.to_charlist(v)}
       end)
 
-    # Wrap command with cd
-    wrapped_command =
-      if cwd && cwd != "" do
-        "cd #{shell_escape(cwd)} && #{command}"
-      else
-        command
-      end
-
-    port_opts = [
-      :stream,
-      :binary,
-      :exit_status,
-      :use_stdio,
-      :stderr_to_stdout,
-      {:args, shell_args ++ [wrapped_command]}
-    ]
-
-    # Add environment if specified
     port_opts =
-      if env_list != [] do
+      if backend not in [:docker, :ssh] and env_list != [] do
         [{:env, env_list} | port_opts]
       else
         port_opts
       end
 
-    Port.open({:spawn_executable, shell_path}, port_opts)
+    Port.open({:spawn_executable, executable}, port_opts)
   end
+
+  defp maybe_stderr_to_stdout(port_opts, true), do: [:stderr_to_stdout | port_opts]
+  defp maybe_stderr_to_stdout(port_opts, false), do: port_opts
+
+  defp docker_args(command, cwd, env) do
+    workspace = docker_workspace(cwd)
+
+    [
+      "run",
+      "--rm",
+      "-i",
+      "--pull",
+      "never",
+      "--network",
+      LemonCore.TerminalBackends.Docker.network(),
+      "--memory",
+      LemonCore.TerminalBackends.Docker.memory(),
+      "--cpus",
+      LemonCore.TerminalBackends.Docker.cpus(),
+      "--pids-limit",
+      LemonCore.TerminalBackends.Docker.pids_limit(),
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--workdir",
+      "/workspace",
+      "--volume",
+      "#{workspace}:/workspace"
+    ] ++
+      docker_read_only_args() ++
+      docker_tmpfs_args() ++
+      docker_env_args(env) ++
+      [
+        LemonCore.TerminalBackends.Docker.image(),
+        "/bin/sh",
+        "-lc",
+        command
+      ]
+  end
+
+  defp docker_workspace(nil), do: File.cwd!()
+  defp docker_workspace(""), do: File.cwd!()
+  defp docker_workspace(cwd), do: Path.expand(cwd)
+
+  defp docker_read_only_args do
+    if LemonCore.TerminalBackends.Docker.read_only_rootfs?(), do: ["--read-only"], else: []
+  end
+
+  defp docker_tmpfs_args do
+    Enum.flat_map(LemonCore.TerminalBackends.Docker.tmpfs_mounts(), fn mount ->
+      ["--tmpfs", mount]
+    end)
+  end
+
+  defp docker_env_args(env) do
+    Enum.flat_map(env, fn {k, v} -> ["--env", "#{k}=#{v}"] end)
+  end
+
+  defp command_with_cwd(command, nil), do: command
+  defp command_with_cwd(command, ""), do: command
+  defp command_with_cwd(command, cwd), do: "cd #{shell_escape(cwd)} && #{command}"
 
   defp get_os_pid(port) do
     case Port.info(port, :os_pid) do

@@ -17,6 +17,7 @@ defmodule CodingAgent.ProcessManager do
   require Logger
 
   alias CodingAgent.{ProcessSession, ProcessStore}
+  alias LemonCore.{TerminalBackendPolicy, TerminalBackends}
 
   # Default max log lines (used by ProcessSession)
 
@@ -46,12 +47,35 @@ defmodule CodingAgent.ProcessManager do
     command = Keyword.fetch!(opts, :command)
     use_lane_queue = Keyword.get(opts, :use_lane_queue, true)
 
-    if use_lane_queue do
-      # Route through LaneQueue for :background_exec lane
-      exec_with_lane_queue(command, opts)
+    with {:ok, backend} <- TerminalBackends.validate(Keyword.get(opts, :backend, :local)),
+         :ok <- ensure_backend_available(backend),
+         :ok <- TerminalBackendPolicy.validate(backend) do
+      opts = Keyword.put(opts, :backend, backend)
+
+      if use_lane_queue do
+        # Route through LaneQueue for :background_exec lane
+        exec_with_lane_queue(command, opts)
+      else
+        # Direct execution without lane scheduling
+        do_exec(command, opts)
+      end
     else
-      # Direct execution without lane scheduling
-      do_exec(command, opts)
+      {:error, :unknown_backend} ->
+        {:error, {:unknown_terminal_backend, Keyword.get(opts, :backend)}}
+
+      {:error, :backend_unavailable} ->
+        {:error, {:unavailable_terminal_backend, Keyword.get(opts, :backend)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp ensure_backend_available(backend) do
+    if TerminalBackends.available?(backend) do
+      :ok
+    else
+      {:error, :backend_unavailable}
     end
   end
 
@@ -156,7 +180,15 @@ defmodule CodingAgent.ProcessManager do
             os_pid: Map.get(record, :os_pid),
             logs: Enum.take(logs, -line_count),
             command: Map.get(record, :command),
-            cwd: Map.get(record, :cwd)
+            cwd: Map.get(record, :cwd),
+            backend: Map.get(record, :backend, :local),
+            terminal_capabilities: Map.get(record, :terminal_capabilities, []),
+            max_log_lines: Map.get(record, :max_log_lines),
+            log_line_count: Map.get(record, :log_line_count, length(logs)),
+            started_at: Map.get(record, :started_at),
+            completed_at: Map.get(record, :completed_at),
+            restarted_from: Map.get(record, :restarted_from),
+            restart_generation: Map.get(record, :restart_generation, 0)
           }
 
           {:ok, result}
@@ -236,6 +268,68 @@ defmodule CodingAgent.ProcessManager do
 
         {:error, :not_found} ->
           {:error, :not_found}
+      end
+    end
+  end
+
+  @doc """
+  Restart a non-running stored process as a fresh supervised process.
+  """
+  @spec restart(String.t(), keyword()) :: {:ok, String.t(), map()} | {:error, term()}
+  def restart(process_id, opts \\ []) when is_binary(process_id) do
+    case ProcessStore.get(process_id) do
+      {:ok, record, _logs} ->
+        active_status = active_session_status(process_id)
+
+        cond do
+          active_status == :running or
+              (active_status == nil and Map.get(record, :status) == :running) ->
+            {:error, :process_running}
+
+          not is_binary(Map.get(record, :command)) ->
+            {:error, :missing_command}
+
+          true ->
+            restart_generation = Map.get(record, :restart_generation, 0) + 1
+
+            restart_opts =
+              [
+                command: Map.fetch!(record, :command),
+                cwd: Map.get(record, :cwd),
+                env: Map.get(record, :env, %{}) || %{},
+                backend: Map.get(record, :backend, :local),
+                max_log_lines: Map.get(record, :max_log_lines, 1000),
+                timeout_ms: Keyword.get(opts, :timeout_ms, Map.get(record, :timeout_ms)),
+                restarted_from: process_id,
+                restart_generation: restart_generation,
+                use_lane_queue: Keyword.get(opts, :use_lane_queue, true)
+              ]
+
+            case exec(restart_opts) do
+              {:ok, new_process_id} ->
+                {:ok, new_process_id,
+                 %{
+                   restarted_from: process_id,
+                   restart_generation: restart_generation,
+                   backend: Map.get(record, :backend, :local),
+                   command: Map.get(record, :command)
+                 }}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  defp active_session_status(process_id) do
+    if ProcessSession.alive?(process_id) do
+      case ProcessSession.get_state(process_id) do
+        {:ok, state} -> Map.get(state, :status)
+        _ -> nil
       end
     end
   end

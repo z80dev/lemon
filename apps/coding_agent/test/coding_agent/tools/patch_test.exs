@@ -149,6 +149,34 @@ defmodule CodingAgent.Tools.PatchTest do
       assert File.read!(file) == "before\ninserted line\nafter"
     end
 
+    test "reports introduced diagnostics when requested", %{tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "diagnostics.exs")
+      File.write!(file, "value = 1\n")
+
+      patch_text = """
+      *** Update File: diagnostics.exs
+      @@ diagnostics
+      -value = 1
+      +defmodule Bad do
+      """
+
+      result =
+        Patch.execute(
+          "call_1",
+          %{"patch_text" => patch_text, "diagnostics" => true},
+          nil,
+          nil,
+          tmp_dir,
+          semantic: false
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "Diagnostics introduced 1 issue"
+      assert [report] = details.diagnostics
+      assert report.status == :diagnostics
+      assert length(report.introduced_diagnostics) == 1
+    end
+
     test "removes lines without adding", %{tmp_dir: tmp_dir} do
       file = Path.join(tmp_dir, "remove_only.txt")
       File.write!(file, "keep\nremove\nkeep")

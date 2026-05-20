@@ -15,6 +15,9 @@ defmodule CodingAgent.Tools.Exec do
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.ProcessManager
+  alias CodingAgent.ToolExecutor
+  alias CodingAgent.Tools.CheckpointGuard
+  alias LemonCore.{TerminalBackendPolicy, TerminalBackends}
 
   @doc """
   Returns the exec tool definition.
@@ -37,6 +40,11 @@ defmodule CodingAgent.Tools.Exec do
             "type" => "string",
             "description" => "The command to execute"
           },
+          "backend" => %{
+            "type" => "string",
+            "enum" => ["local", "local_pty", "docker", "ssh"],
+            "description" => "Terminal backend to use (default: local)"
+          },
           "cwd" => %{
             "type" => "string",
             "description" => "Working directory (optional, defaults to project root)"
@@ -56,6 +64,12 @@ defmodule CodingAgent.Tools.Exec do
           "max_log_lines" => %{
             "type" => "integer",
             "description" => "Maximum log lines to keep (default: 1000)"
+          },
+          "checkpoint_paths" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" =>
+              "Files to snapshot before risky shell commands when filesystem checkpoints are enabled"
           }
         },
         "required" => ["command"]
@@ -84,55 +98,48 @@ defmodule CodingAgent.Tools.Exec do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, default_cwd, _opts) do
+  def execute(_tool_call_id, params, signal, _on_update, default_cwd, opts) do
     if AbortSignal.aborted?(signal) do
       %AgentToolResult{
         content: [%TextContent{text: "Command cancelled."}]
       }
     else
-      do_execute(params, default_cwd)
+      do_execute(params, default_cwd, opts)
     end
   end
 
-  defp do_execute(params, default_cwd) do
+  defp do_execute(params, default_cwd, opts) do
     command = Map.fetch!(params, "command")
+    backend = Map.get(params, "backend", "local")
     cwd = Map.get(params, "cwd", default_cwd)
     yield_ms = Map.get(params, "yield_ms")
     background? = Map.get(params, "background", false)
     env = Map.get(params, "env", %{})
     max_log_lines = Map.get(params, "max_log_lines", 1000)
 
+    checkpoint_paths =
+      Map.get(params, "checkpoint_paths", Keyword.get(opts, :risky_shell_checkpoint_paths, []))
+
     # Validate parameters
     with :ok <- validate_command(command),
-         :ok <- validate_yield_ms(yield_ms) do
+         {:ok, backend} <- validate_backend(backend),
+         :ok <- validate_yield_ms(yield_ms),
+         :ok <- validate_env(env),
+         {:ok, checkpoint_paths} <- validate_checkpoint_paths(checkpoint_paths) do
       exec_opts = [
         command: command,
+        backend: backend,
         cwd: cwd,
         env: env,
         max_log_lines: max_log_lines
       ]
 
-      cond do
-        background? or yield_ms != nil ->
-          # Start in background
-          case ProcessManager.exec(exec_opts) do
-            {:ok, process_id} ->
-              build_background_result(process_id, command, yield_ms)
-
-            {:error, reason} ->
-              {:error, "Failed to start process: #{inspect(reason)}"}
-          end
-
-        true ->
-          # Run synchronously
-          case ProcessManager.exec_sync(exec_opts) do
-            {:ok, result} ->
-              build_sync_result(result)
-
-            {:error, reason} ->
-              {:error, "Command failed: #{inspect(reason)}"}
-          end
-      end
+      maybe_with_backend_approval(backend, command, cwd, env, opts, fn ->
+        with {:ok, checkpoint} <-
+               maybe_checkpoint_risky_shell(command, checkpoint_paths, cwd, backend, opts) do
+          run_process(exec_opts, background?, yield_ms, command, backend, checkpoint)
+        end
+      end)
     end
   end
 
@@ -160,7 +167,144 @@ defmodule CodingAgent.Tools.Exec do
 
   defp validate_yield_ms(_), do: {:error, "yield_ms must be a non-negative integer"}
 
-  defp build_background_result(process_id, command, yield_ms) do
+  defp validate_env(env) when is_map(env) do
+    Enum.reduce_while(env, :ok, fn
+      {key, value}, :ok when is_binary(key) and is_binary(value) ->
+        if Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, key) do
+          {:cont, :ok}
+        else
+          {:halt, {:error, "env keys must be valid environment variable names"}}
+        end
+
+      {_key, _value}, :ok ->
+        {:halt, {:error, "env keys and values must be strings"}}
+    end)
+  end
+
+  defp validate_env(_), do: {:error, "env must be an object"}
+
+  defp validate_checkpoint_paths(paths) when is_list(paths) do
+    paths
+    |> Enum.reduce_while({:ok, []}, fn
+      path, {:ok, acc} when is_binary(path) ->
+        case String.trim(path) do
+          "" -> {:halt, {:error, "checkpoint_paths entries must be non-empty strings"}}
+          trimmed -> {:cont, {:ok, [trimmed | acc]}}
+        end
+
+      _path, {:ok, _acc} ->
+        {:halt, {:error, "checkpoint_paths must be a list of strings"}}
+    end)
+    |> case do
+      {:ok, paths} -> {:ok, Enum.reverse(paths)}
+      error -> error
+    end
+  end
+
+  defp validate_checkpoint_paths(_), do: {:error, "checkpoint_paths must be a list of strings"}
+
+  defp validate_backend(backend) do
+    case TerminalBackends.validate(backend) do
+      {:ok, backend} ->
+        cond do
+          not TerminalBackends.available?(backend) ->
+            {:error, "Terminal backend unavailable: #{inspect(backend)}"}
+
+          TerminalBackendPolicy.validate(backend) != :ok ->
+            {:error, "Terminal backend blocked by policy: #{inspect(backend)}"}
+
+          true ->
+            {:ok, backend}
+        end
+
+      {:error, :unknown_backend} ->
+        {:error, "Unknown terminal backend: #{inspect(backend)}"}
+    end
+  end
+
+  defp maybe_with_backend_approval(backend, command, cwd, env, opts, run_fun) do
+    if TerminalBackendPolicy.requires_approval?(backend) do
+      case Keyword.get(opts, :approval_context) do
+        nil ->
+          {:error,
+           "Terminal backend requires approval but no approval context is available: #{inspect(backend)}"}
+
+        approval_context ->
+          ToolExecutor.execute_with_approval(
+            "exec",
+            approval_action(backend, command, cwd, env),
+            run_fun,
+            approval_context
+          )
+      end
+    else
+      run_fun.()
+    end
+  end
+
+  defp approval_action(backend, command, cwd, env) do
+    %{
+      "cmd" => "terminal backend #{backend} command #{short_hash(command)}",
+      "backend" => Atom.to_string(backend),
+      "commandHash" => short_hash(command),
+      "cwdHash" => short_hash(cwd || ""),
+      "envKeys" => env |> Map.keys() |> Enum.sort()
+    }
+  end
+
+  defp short_hash(value) do
+    :crypto.hash(:sha256, to_string(value))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
+  defp maybe_checkpoint_risky_shell(_command, [], _cwd, _backend, _opts), do: {:ok, nil}
+
+  defp maybe_checkpoint_risky_shell(command, paths, cwd, backend, opts) do
+    if risky_shell_command?(command) or Keyword.get(opts, :checkpoint_all_shell_mutations, false) do
+      CheckpointGuard.before_mutation(paths, cwd, opts, %{
+        tool: "exec",
+        action: "risky_shell",
+        backend: Atom.to_string(backend),
+        command_hash: short_hash(command)
+      })
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp risky_shell_command?(command) do
+    Regex.match?(
+      ~r/(^|[;&|()\s])(?:rm|rmdir|mv|cp|dd|truncate|chmod|chown|sed\s+-i|perl\s+-pi|find\b.*\s-delete|git\s+(?:reset|clean|checkout|restore)\b)/,
+      command
+    )
+  end
+
+  defp run_process(exec_opts, background?, yield_ms, command, backend, checkpoint) do
+    cond do
+      background? or yield_ms != nil ->
+        # Start in background
+        case ProcessManager.exec(exec_opts) do
+          {:ok, process_id} ->
+            build_background_result(process_id, command, yield_ms, backend, checkpoint)
+
+          {:error, reason} ->
+            {:error, "Failed to start process: #{inspect(reason)}"}
+        end
+
+      true ->
+        # Run synchronously
+        case ProcessManager.exec_sync(exec_opts) do
+          {:ok, result} ->
+            build_sync_result(result, checkpoint)
+
+          {:error, reason} ->
+            {:error, "Command failed: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp build_background_result(process_id, command, yield_ms, backend, checkpoint) do
     text =
       if yield_ms do
         "Process started in background after #{yield_ms}ms: #{command}"
@@ -170,16 +314,20 @@ defmodule CodingAgent.Tools.Exec do
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: %{
-        process_id: process_id,
-        status: "running",
-        command: command,
-        background: true
-      }
+      details:
+        %{
+          process_id: process_id,
+          status: "running",
+          command: command,
+          backend: backend,
+          background: true
+        }
+        |> CheckpointGuard.put_details(checkpoint)
+        |> maybe_put_checkpoint_trigger(checkpoint)
     }
   end
 
-  defp build_sync_result(result) do
+  defp build_sync_result(result, checkpoint) do
     logs = Enum.join(result.logs, "\n")
 
     status = result.status
@@ -205,15 +353,24 @@ defmodule CodingAgent.Tools.Exec do
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: %{
-        process_id: result.process_id,
-        status: status_str,
-        exit_code: exit_code,
-        command: result.command,
-        background: false
-      }
+      details:
+        %{
+          process_id: result.process_id,
+          status: status_str,
+          exit_code: exit_code,
+          command: result.command,
+          backend: Map.get(result, :backend, :local),
+          background: false
+        }
+        |> CheckpointGuard.put_details(checkpoint)
+        |> maybe_put_checkpoint_trigger(checkpoint)
     }
   end
+
+  defp maybe_put_checkpoint_trigger(details, nil), do: details
+
+  defp maybe_put_checkpoint_trigger(details, _checkpoint),
+    do: Map.put(details, :checkpoint_trigger, "risky_shell")
 
   defp build_description do
     """
@@ -224,11 +381,13 @@ defmodule CodingAgent.Tools.Exec do
 
     Parameters:
     - command: The shell command to execute (required)
+    - backend: Terminal backend to use (local, local_pty, docker, or ssh)
     - cwd: Working directory (optional, defaults to project root)
     - yield_ms: Return immediately after this many milliseconds, leaving process running (optional)
     - background: Start in background immediately without waiting (optional, default: false)
     - env: Environment variables as key-value pairs (optional)
     - max_log_lines: Maximum log lines to keep (default: 1000)
+    - checkpoint_paths: files to snapshot before risky shell commands when filesystem checkpoints are enabled
 
     Use the 'process' tool to poll status, get logs, write to stdin, or kill the process.
     """

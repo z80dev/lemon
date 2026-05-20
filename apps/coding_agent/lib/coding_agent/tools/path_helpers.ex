@@ -38,9 +38,9 @@ defmodule CodingAgent.Tools.PathHelpers do
   Returns true if `path` should resolve against `workspace_dir` rather than
   the current working directory.
 
-  This is the case for memory-related paths (`MEMORY.md`, `memory/`, and
-  optionally the bare `memory` directory) when a non-empty workspace directory
-  is provided and the path is not explicitly relative.
+  This is the case for memory-related paths (`MEMORY.md`, `USER.md`, `memory/`,
+  and optionally the bare `memory` directory) when a non-empty workspace
+  directory is provided and the path is not explicitly relative.
 
   ## Options
 
@@ -53,7 +53,7 @@ defmodule CodingAgent.Tools.PathHelpers do
 
     is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
       not explicit_relative?(path) and
-      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
+      (path in ["MEMORY.md", "USER.md"] or String.starts_with?(path, "memory/") or
          String.starts_with?(path, "memory\\") or
          (include_bare and path == "memory"))
   end

@@ -29,7 +29,7 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-  @read_tools ["read", "read_skill", "search_memory", "grep", "find", "ls"]
+  @read_tools ["read", "read_skill", "search_memory", "session_search", "grep", "find", "ls"]
 
   @minimal_core_tools [
     "read",
@@ -37,6 +37,9 @@ defmodule CodingAgent.ToolPolicy do
     "search_memory",
     "skill_manage",
     "memory_topic",
+    "memory",
+    "checkpoint",
+    "session_search",
     "write",
     "edit",
     "patch",
@@ -46,15 +49,100 @@ defmodule CodingAgent.ToolPolicy do
     "ls",
     "webfetch",
     "websearch",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_get_content",
+    "browser_click",
+    "browser_type",
+    "browser_hover",
+    "browser_select_option",
+    "browser_upload_file",
+    "browser_download",
+    "browser_press",
+    "browser_scroll",
+    "browser_back",
+    "browser_wait_for_selector",
+    "browser_evaluate",
+    "browser_events",
+    "browser_get_cookies",
+    "browser_set_cookies",
+    "browser_clear_state",
+    "browser_screenshot",
+    "browser_analyze",
+    "media_status",
+    "media_generate_image",
+    "media_generate_speech",
+    "media_transcribe_audio",
+    "media_analyze_image",
+    "media_generate_video",
     "todo",
+    "kanban",
     "task",
     "agent",
-    "extensions_status"
+    "extensions_status",
+    "x_search"
   ]
 
-  @external_tools ["webfetch", "websearch"]
+  @external_tools [
+    "webfetch",
+    "websearch",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_get_content",
+    "browser_click",
+    "browser_type",
+    "browser_hover",
+    "browser_select_option",
+    "browser_upload_file",
+    "browser_download",
+    "browser_press",
+    "browser_scroll",
+    "browser_back",
+    "browser_wait_for_selector",
+    "browser_evaluate",
+    "browser_events",
+    "browser_get_cookies",
+    "browser_set_cookies",
+    "browser_clear_state",
+    "browser_screenshot",
+    "browser_analyze",
+    "x_search",
+    "media_status",
+    "media_generate_image",
+    "media_generate_speech",
+    "media_transcribe_audio",
+    "media_analyze_image",
+    "media_generate_video"
+  ]
 
-  @dangerous_tools ["write", "edit", "patch", "skill_manage", "bash", "exec", "process", "agent"]
+  @dangerous_tools [
+    "write",
+    "edit",
+    "patch",
+    "checkpoint",
+    "skill_manage",
+    "memory",
+    "bash",
+    "exec",
+    "process",
+    "agent",
+    "browser_click",
+    "browser_type",
+    "browser_select_option",
+    "browser_upload_file",
+    "browser_download",
+    "browser_press",
+    "browser_set_cookies",
+    "browser_clear_state",
+    "browser_evaluate",
+    "browser_screenshot",
+    "browser_analyze",
+    "media_generate_image",
+    "media_generate_speech",
+    "media_transcribe_audio",
+    "media_analyze_image",
+    "media_generate_video"
+  ]
 
   # ============================================================================
   # Profile Creation

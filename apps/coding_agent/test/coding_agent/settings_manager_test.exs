@@ -60,6 +60,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.auto_resize_images == true
       assert settings.tools == %{}
       assert settings.extension_paths == []
+      assert settings.extension_auto_load_default_paths == false
       assert settings.theme == "default"
       assert settings.codex == %{}
       assert settings.kimi == %{}
@@ -412,6 +413,25 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.extension_paths == ["/path/to/ext1", "/path/to/ext2"]
     end
 
+    test "extracts extension trust policy from agent config" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          extensions: %{
+            auto_load_default_paths: true
+          }
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.extension_auto_load_default_paths == true
+    end
+
     test "extracts theme from agent config" do
       config = %LemonConfig{
         providers: %{},
@@ -691,6 +711,11 @@ defmodule CodingAgent.SettingsManagerTest do
           shell: %{
             path: "/bin/bash",
             command_prefix: nil
+          },
+          provider_routing: %{
+            enabled: true,
+            fallback_providers: ["azure_openai_responses"],
+            require_credentials: true
           }
         },
         tui: %{},
@@ -705,6 +730,7 @@ defmodule CodingAgent.SettingsManagerTest do
       model_settings = SettingsManager.get_model_settings(settings)
       assert model_settings.default_model.provider == :anthropic
       assert model_settings.default_thinking_level == :medium
+      assert settings.provider_routing.fallback_providers == ["azure_openai_responses"]
 
       compaction_settings = SettingsManager.get_compaction_settings(settings)
       assert compaction_settings.enabled == true

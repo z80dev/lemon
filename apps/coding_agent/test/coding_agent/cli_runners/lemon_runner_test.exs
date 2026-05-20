@@ -287,7 +287,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
               %ActionEvent{
                 phase: :completed,
                 ok: false,
-                action: %Action{detail: detail}
+                action: %Action{detail: %{result_meta: result_meta} = detail}
               }} =
                Enum.find(events, fn
                  {:cli_event, %ActionEvent{phase: :completed, action: %Action{id: id}}} ->
@@ -298,6 +298,10 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
                end)
 
       assert detail.result =~ "Command exited with code 7"
+      assert result_meta.error_type == :command_exit
+      assert result_meta.tool_name == "bash"
+      assert result_meta.exit_code == 7
+      assert result_meta.message == "Command exited with code 7"
     end
 
     @tag :tmp_dir
@@ -325,7 +329,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
       result = %AgentToolResult{
         content: [%TextContent{type: :text, text: "Tool task timed out after 123ms"}],
-        details: %{error_type: :tool_task_timeout, timeout_ms: 123}
+        details: %{error_type: :tool_task_timeout, timeout_ms: 123, exit_code: 124}
       }
 
       send(
@@ -369,6 +373,87 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
       assert result_meta.error_type == :tool_task_timeout
       assert result_meta.timeout_ms == 123
+      assert result_meta.exit_code == 124
+    end
+
+    @tag :tmp_dir
+    test "preserves generated auto-send source metadata for tool completions", %{tmp_dir: tmp_dir} do
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "generate media",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: mock_stream_fn_single_delayed(assistant_message("ack"), 5_000)
+        )
+
+      stream = LemonRunner.stream(runner)
+      path = Path.join(tmp_dir, "generated.svg")
+      File.write!(path, "<svg></svg>")
+
+      wait_until(fn ->
+        try do
+          session = :sys.get_state(runner).session
+          is_pid(session) and Process.alive?(session)
+        catch
+          :exit, _ -> false
+        end
+      end)
+
+      result = %AgentToolResult{
+        content: [%TextContent{type: :text, text: "generated"}],
+        details: %{
+          "auto_send_files" => [
+            %{
+              "path" => path,
+              "filename" => "generated.svg",
+              "caption" => "preview",
+              "source" => "generated"
+            }
+          ]
+        }
+      }
+
+      send(
+        runner,
+        {:session_event, "manual-session",
+         {:tool_execution_end, "orphan_media", "media_generate_image", result, false}}
+      )
+
+      :sys.get_state(runner)
+      queue_size = EventStream.stats(stream).queue_size
+
+      events =
+        if queue_size > 0 do
+          for _ <- 1..queue_size, reduce: [] do
+            acc ->
+              case GenServer.call(stream, :take, 1_000) do
+                {:event, event} -> [event | acc]
+                _ -> acc
+              end
+          end
+          |> Enum.reverse()
+        else
+          []
+        end
+
+      GenServer.stop(runner)
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :completed,
+                ok: true,
+                action: %Action{detail: %{result_meta: result_meta}}
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :completed, action: %Action{id: id}}} ->
+                   id == "tool_orphan_media"
+
+                 _ ->
+                   false
+               end)
+
+      assert [%{path: ^path, filename: "generated.svg", caption: "preview", source: :generated}] =
+               result_meta.auto_send_files
     end
   end
 

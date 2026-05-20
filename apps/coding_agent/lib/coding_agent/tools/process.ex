@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.Process do
   - log: Get logs for a process (alias for poll with focus on logs)
   - write: Write to a process's stdin
   - kill: Kill a running process
+  - restart: Start a finished process again as a new supervised process
   - clear: Remove a completed process from the store
 
   This tool provides the control interface for processes started via exec.
@@ -18,7 +19,7 @@ defmodule CodingAgent.Tools.Process do
   alias Ai.Types.TextContent
   alias CodingAgent.ProcessManager
 
-  @valid_actions ["list", "poll", "log", "write", "kill", "clear"]
+  @valid_actions ["list", "poll", "log", "write", "kill", "restart", "clear"]
 
   @doc """
   Returns the process tool definition.
@@ -35,11 +36,11 @@ defmodule CodingAgent.Tools.Process do
           "action" => %{
             "type" => "string",
             "enum" => @valid_actions,
-            "description" => "Action to perform: list, poll, log, write, kill, or clear"
+            "description" => "Action to perform: list, poll, log, write, kill, restart, or clear"
           },
           "process_id" => %{
             "type" => "string",
-            "description" => "Process ID (required for poll, log, write, kill, clear)"
+            "description" => "Process ID (required for poll, log, write, kill, restart, clear)"
           },
           "status" => %{
             "type" => "string",
@@ -94,6 +95,7 @@ defmodule CodingAgent.Tools.Process do
       "log" -> do_log(params)
       "write" -> do_write(params)
       "kill" -> do_kill(params)
+      "restart" -> do_restart(params)
       "clear" -> do_clear(params)
       _ -> {:error, "Unknown action: #{action}"}
     end
@@ -124,7 +126,13 @@ defmodule CodingAgent.Tools.Process do
           exit_code: record.exit_code,
           os_pid: record.os_pid,
           started_at: record.started_at,
-          completed_at: record.completed_at
+          completed_at: record.completed_at,
+          backend: Map.get(record, :backend, :local),
+          terminal_capabilities: Map.get(record, :terminal_capabilities, []),
+          max_log_lines: Map.get(record, :max_log_lines),
+          log_line_count: Map.get(record, :log_line_count, 0),
+          restarted_from: Map.get(record, :restarted_from),
+          restart_generation: Map.get(record, :restart_generation, 0)
         }
       end)
 
@@ -157,6 +165,14 @@ defmodule CodingAgent.Tools.Process do
               exit_code: result.exit_code,
               os_pid: result.os_pid,
               command: result.command,
+              backend: Map.get(result, :backend, :local),
+              terminal_capabilities: Map.get(result, :terminal_capabilities, []),
+              max_log_lines: Map.get(result, :max_log_lines),
+              log_line_count: Map.get(result, :log_line_count, length(result.logs)),
+              started_at: Map.get(result, :started_at),
+              completed_at: Map.get(result, :completed_at),
+              restarted_from: Map.get(result, :restarted_from),
+              restart_generation: Map.get(result, :restart_generation, 0),
               logs: result.logs
             }
           }
@@ -253,6 +269,34 @@ defmodule CodingAgent.Tools.Process do
     end
   end
 
+  defp do_restart(params) do
+    with {:ok, process_id} <- get_process_id(params) do
+      case ProcessManager.restart(process_id) do
+        {:ok, new_process_id, metadata} ->
+          %AgentToolResult{
+            content: [
+              %TextContent{text: "Process #{process_id} restarted as #{new_process_id}."}
+            ],
+            details:
+              Map.merge(metadata, %{
+                action: "restart",
+                process_id: process_id,
+                new_process_id: new_process_id
+              })
+          }
+
+        {:error, :process_running} ->
+          {:error, "Process is still running: #{process_id}"}
+
+        {:error, :not_found} ->
+          {:error, "Process not found: #{process_id}"}
+
+        {:error, reason} ->
+          {:error, "Failed to restart process: #{inspect(reason)}"}
+      end
+    end
+  end
+
   defp do_clear(params) do
     with {:ok, process_id} <- get_process_id(params) do
       case ProcessManager.clear(process_id) do
@@ -303,10 +347,11 @@ defmodule CodingAgent.Tools.Process do
     lines =
       Enum.map(processes, fn p ->
         status = p.status |> to_string() |> String.upcase()
+        backend = Map.get(p, :backend, :local)
         cmd = String.slice(p.command || "", 0, 50)
         cmd = if String.length(p.command || "") > 50, do: cmd <> "...", else: cmd
 
-        "#{p.process_id} [#{status}] #{cmd}"
+        "#{p.process_id} [#{status}] backend=#{backend} #{cmd}"
       end)
 
     header <> Enum.join(lines, "\n")
@@ -314,8 +359,11 @@ defmodule CodingAgent.Tools.Process do
 
   defp format_poll_result(result) do
     status = result.status |> to_string() |> String.upcase()
+    backend = Map.get(result, :backend, :local)
+    capabilities = Map.get(result, :terminal_capabilities, [])
 
-    header = "Process: #{result.process_id}\nStatus: #{status}\n"
+    header =
+      "Process: #{result.process_id}\nStatus: #{status}\nBackend: #{backend}\nCapabilities: #{format_capabilities(capabilities)}\n"
 
     header =
       if result.exit_code do
@@ -331,11 +379,34 @@ defmodule CodingAgent.Tools.Process do
         header
       end
 
+    header =
+      if Map.get(result, :log_line_count) do
+        header <> "Log Lines: #{Map.get(result, :log_line_count)}\n"
+      else
+        header
+      end
+
+    header =
+      if Map.get(result, :restarted_from) do
+        header <>
+          "Restarted From: #{Map.get(result, :restarted_from)} (generation #{Map.get(result, :restart_generation, 0)})\n"
+      else
+        header
+      end
+
     header = header <> "Command: #{result.command}\n\n"
 
     logs = if result.logs == [], do: "[No output yet]", else: Enum.join(result.logs, "\n")
 
     header <> "Output:\n" <> logs
+  end
+
+  defp format_capabilities([]), do: "none"
+
+  defp format_capabilities(capabilities) do
+    capabilities
+    |> Enum.map(&to_string/1)
+    |> Enum.join(", ")
   end
 
   defp build_description do
@@ -348,11 +419,12 @@ defmodule CodingAgent.Tools.Process do
     - log: Get logs for a process (same as poll but focused on logs)
     - write: Write data to a process's stdin
     - kill: Kill a running process
+    - restart: Start a finished process again as a new supervised process
     - clear: Remove a completed process from the store
 
     Parameters:
     - action: The action to perform (required)
-    - process_id: Process ID (required for poll, log, write, kill, clear)
+    - process_id: Process ID (required for poll, log, write, kill, restart, clear)
     - status: Status filter for list action (all, running, completed, error, killed, lost)
     - lines: Number of log lines to return (default: 100)
     - data: Data to write to stdin (required for write action)

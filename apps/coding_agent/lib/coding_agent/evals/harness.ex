@@ -13,7 +13,18 @@ defmodule CodingAgent.Evals.Harness do
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Security.UntrustedToolBoundary
   alias CodingAgent.Session.EventHandler
-  alias CodingAgent.Tools.{Grep, MemoryTopic, Patch, Read, ReadSkill, SearchMemory, SkillManage}
+
+  alias CodingAgent.Tools.{
+    Bash,
+    Grep,
+    MemoryTopic,
+    Patch,
+    Read,
+    ReadSkill,
+    SearchMemory,
+    SkillManage
+  }
+
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonCore.Introspection
   alias LemonSkills.Curator
@@ -30,7 +41,7 @@ defmodule CodingAgent.Evals.Harness do
     UserMessage
   }
 
-  @required_builtin_tools ~w(read read_skill skill_manage memory_topic search_memory write edit patch bash grep find ls webfetch websearch todo task extensions_status)
+  @required_builtin_tools ~w(read read_skill skill_manage memory_topic memory search_memory session_search checkpoint write edit patch bash grep find ls webfetch websearch browser_navigate browser_snapshot browser_get_content browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_wait_for_selector browser_evaluate browser_events browser_get_cookies browser_set_cookies browser_clear_state browser_screenshot todo task extensions_status x_search)
 
   @type eval_result :: %{
           name: String.t(),
@@ -381,7 +392,10 @@ defmodule CodingAgent.Evals.Harness do
               %{}
             )
 
-          not String.contains?(system_prompt, "not for bypassing `search_memory`") ->
+          not String.contains?(
+            system_prompt,
+            "not for bypassing `search_memory`, `session_search`"
+          ) ->
             contract_fail(
               "dedicated_tool_preference_contract",
               "system prompt does not protect dedicated memory tools from shell bypass",
@@ -396,7 +410,14 @@ defmodule CodingAgent.Evals.Harness do
             )
 
           not Enum.all?(
-            ["read_skill", "search_memory", "memory_topic", "skill_manage"],
+            [
+              "read_skill",
+              "search_memory",
+              "session_search",
+              "memory_topic",
+              "memory",
+              "skill_manage"
+            ],
             fn tool ->
               String.contains?(learning_prompt, "`#{tool}`")
             end
@@ -1568,7 +1589,8 @@ defmodule CodingAgent.Evals.Harness do
         live_model_untrusted_prompt_injection_contract_eval(cwd, opts),
         live_model_parallel_delegation_contract_eval(cwd, opts),
         live_model_delegation_artifact_contract_eval(cwd, opts),
-        live_model_leaf_toolset_contract_eval(cwd, opts)
+        live_model_leaf_toolset_contract_eval(cwd, opts),
+        live_model_coding_repair_contract_eval(cwd, opts)
       ]
     else
       []
@@ -2667,6 +2689,126 @@ defmodule CodingAgent.Evals.Harness do
     e -> contract_fail("live_model_leaf_toolset_contract", Exception.message(e), %{})
   end
 
+  @spec live_model_coding_repair_contract_eval(String.t(), keyword()) :: eval_result()
+  def live_model_coding_repair_contract_eval(_cwd, opts \\ []) do
+    with {:ok, model, stream_options} <- live_model_config(opts),
+         {:ok, tmp_dir} <- create_tmp_dir() do
+      try do
+        project_dir = Path.join(tmp_dir, "coding-repair")
+        lib_dir = Path.join(project_dir, "lib")
+        test_dir = Path.join(project_dir, "test")
+        File.mkdir_p!(lib_dir)
+        File.mkdir_p!(test_dir)
+
+        source_path = Path.join(lib_dir, "lemon_release_report.ex")
+        test_path = Path.join(test_dir, "lemon_release_report_test.exs")
+
+        File.write!(
+          source_path,
+          """
+          defmodule LemonReleaseReport do
+            def summarize(events) do
+              events
+              |> Enum.filter(&(&1.status == :complete))
+              |> Enum.map(& &1.phase)
+            end
+          end
+          """
+        )
+
+        File.write!(
+          test_path,
+          """
+          ExUnit.start()
+
+          Code.require_file("../lib/lemon_release_report.ex", __DIR__)
+
+          defmodule LemonReleaseReportTest do
+            use ExUnit.Case, async: true
+
+            test "summarize returns sorted unique release phases that are done or verified" do
+              events = [
+                %{phase: "media", status: :blocked},
+                %{phase: "browser", status: :verified},
+                %{phase: "media", status: :complete},
+                %{phase: "doctor", status: :complete},
+                %{phase: "media", status: :complete}
+              ]
+
+              assert LemonReleaseReport.summarize(events) == ["browser", "doctor", "media"]
+            end
+          end
+          """
+        )
+
+        context =
+          AgentContext.new(
+            system_prompt: live_coding_repair_eval_prompt(),
+            tools: [
+              Read.tool(project_dir),
+              Patch.tool(project_dir),
+              Bash.tool(project_dir, timeout_ms: 30_000)
+            ]
+          )
+
+        config = %AgentLoopConfig{
+          model: model,
+          convert_to_llm: &trace_convert_to_llm/1,
+          stream_options: live_coding_stream_options(stream_options, opts),
+          max_tool_turns: 6
+        }
+
+        stream =
+          Loop.agent_loop(
+            [
+              trace_user_message(
+                "Fix the failing release report test in this tiny Elixir project."
+              )
+            ],
+            context,
+            config,
+            nil,
+            nil
+          )
+
+        timeout_ms = Keyword.get(opts, :live_timeout_ms, 180_000)
+
+        with {:ok, messages} <- EventStream.result(stream, timeout_ms),
+             :ok <- assert_loop_tool_result(messages, "read", "LemonReleaseReport"),
+             :ok <- assert_loop_tool_result(messages, "patch", "Patch applied successfully"),
+             :ok <- assert_loop_tool_result(messages, "bash", "0 failures"),
+             :ok <- assert_final_after_tool(messages, "bash"),
+             :ok <- assert_final_contains(messages, ["LIVE_CODING_REPAIR_DONE"]),
+             :ok <- assert_contains(File.read!(source_path), ":verified") do
+          %{
+            name: "live_model_coding_repair_contract",
+            status: :pass,
+            details: %{
+              provider: model.provider,
+              model: model.id,
+              tool_results: trace_tool_result_names(messages),
+              fixture: "coding-repair",
+              verified_command: "elixir test/lemon_release_report_test.exs"
+            }
+          }
+        else
+          {:error, reason} ->
+            contract_fail("live_model_coding_repair_contract", format_reason(reason), %{
+              provider: model.provider,
+              model: model.id
+            })
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    else
+      {:error, reason} ->
+        contract_fail("live_model_coding_repair_contract", format_reason(reason), %{})
+    end
+  rescue
+    e -> contract_fail("live_model_coding_repair_contract", Exception.message(e), %{})
+  end
+
   defp live_memory_eval_prompt do
     """
     You are running a live-model Lemon eval.
@@ -2790,6 +2932,20 @@ defmodule CodingAgent.Evals.Harness do
     """
   end
 
+  defp live_coding_repair_eval_prompt do
+    """
+    You are running a live-model Lemon coding repair eval.
+
+    This workspace is a tiny Elixir project. You must:
+    1. Read `lib/lemon_release_report.ex`.
+    2. Patch only `lib/lemon_release_report.ex`.
+    3. Run `elixir test/lemon_release_report_test.exs`.
+    4. After the bash result shows the test passes, answer with the exact marker LIVE_CODING_REPAIR_DONE and one short sentence naming the behavior you fixed.
+
+    Do not edit the test. Do not answer before running the test.
+    """
+  end
+
   defp blocked_cron_tool do
     %AgentTool{
       name: "cron",
@@ -2862,6 +3018,17 @@ defmodule CodingAgent.Evals.Harness do
         opts,
         :live_delegation_max_tokens,
         max(stream_options.max_tokens || 0, 1024)
+      )
+
+    %{stream_options | max_tokens: max_tokens}
+  end
+
+  defp live_coding_stream_options(stream_options, opts) do
+    max_tokens =
+      Keyword.get(
+        opts,
+        :live_coding_max_tokens,
+        max(stream_options.max_tokens || 0, 1536)
       )
 
     %{stream_options | max_tokens: max_tokens}
@@ -3245,8 +3412,14 @@ defmodule CodingAgent.Evals.Harness do
       not String.contains?(prompt, "Use `memory_topic`") ->
         {:error, "learning prompt does not mention memory_topic"}
 
+      not String.contains?(prompt, "Use `memory`") ->
+        {:error, "learning prompt does not mention memory"}
+
       not String.contains?(prompt, "Use `search_memory`") ->
         {:error, "learning prompt does not mention search_memory"}
+
+      not String.contains?(prompt, "Use `session_search`") ->
+        {:error, "learning prompt does not mention session_search"}
 
       not String.contains?(prompt, "At the end of substantial work") ->
         {:error, "learning prompt does not include end-of-run capture trigger"}

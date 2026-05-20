@@ -226,6 +226,66 @@ defmodule CodingAgent.WasmIntegrationTest do
     assert invoke.output_json =~ "host_message"
   end
 
+  test "sidecar lifecycle telemetry is redacted", %{tmp_dir: tmp_dir} do
+    runtime_path = write_sidecar_with_host_call(tmp_dir)
+    session_id = "private-wasm-session"
+    tool_name = "echo_wasm"
+
+    wasm_config = %WasmConfig{
+      enabled: true,
+      auto_build: false,
+      runtime_path: runtime_path,
+      tool_paths: [],
+      discover_paths: [tmp_dir],
+      default_memory_limit: 10_485_760,
+      default_timeout_ms: 60_000,
+      default_fuel_limit: 10_000_000,
+      cache_compiled: true,
+      cache_dir: nil,
+      max_tool_invoke_depth: 4
+    }
+
+    {:ok, sidecar} =
+      SidecarSession.start_link(
+        cwd: tmp_dir,
+        session_id: session_id,
+        wasm_config: wasm_config,
+        host_invoke_fun: fn _tool, _params_json -> {:error, :not_used} end
+      )
+
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:lemon, :wasm, :discover, :start],
+        [:lemon, :wasm, :discover, :stop],
+        [:lemon, :wasm, :invoke, :start],
+        [:lemon, :wasm, :invoke, :stop]
+      ])
+
+    assert {:ok, _discover} = SidecarSession.discover(sidecar)
+    assert {:ok, invoke} = SidecarSession.invoke(sidecar, tool_name, Jason.encode!(%{}), nil)
+    assert invoke.error == nil
+
+    assert_received {[:lemon, :wasm, :discover, :start], ^ref, %{count: 1}, discover_start}
+    assert_received {[:lemon, :wasm, :discover, :stop], ^ref, %{ok: true}, discover_stop}
+    assert_received {[:lemon, :wasm, :invoke, :start], ^ref, %{count: 1}, invoke_start}
+    assert_received {[:lemon, :wasm, :invoke, :stop], ^ref, %{ok: true}, invoke_stop}
+
+    assert discover_start.host == :wasm
+    assert is_binary(discover_start.session_hash)
+    assert is_binary(discover_start.cwd_hash)
+    assert discover_stop.session_hash == discover_start.session_hash
+    assert invoke_start.host == :wasm
+    assert is_binary(invoke_start.tool_hash)
+    assert invoke_stop.tool_hash == invoke_start.tool_hash
+
+    payload = inspect({discover_start, discover_stop, invoke_start, invoke_stop})
+    refute payload =~ session_id
+    refute payload =~ tmp_dir
+    refute payload =~ tool_name
+
+    :telemetry.detach(ref)
+  end
+
   @tag timeout: 300_000
   test "real runtime discovers and invokes json_transform wasm tool", %{tmp_dir: tmp_dir} do
     case Builder.ensure_runtime_binary(%WasmConfig{enabled: true, auto_build: true}) do

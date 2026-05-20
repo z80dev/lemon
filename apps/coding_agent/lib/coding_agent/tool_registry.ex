@@ -38,22 +38,54 @@ defmodule CodingAgent.ToolRegistry do
     {:read_skill, Tools.ReadSkill},
     {:skill_manage, Tools.SkillManage},
     {:memory_topic, Tools.MemoryTopic},
+    {:memory, Tools.Memory},
     {:search_memory, Tools.SearchMemory},
+    {:session_search, Tools.SessionSearch},
+    {:checkpoint, Tools.Checkpoint},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},
+    {:lsp_diagnostics, Tools.LspDiagnostics},
     {:bash, Tools.Bash},
     {:grep, Tools.Grep},
     {:find, Tools.Find},
     {:ls, Tools.Ls},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
+    {:browser_navigate, Tools.BrowserNavigate},
+    {:browser_snapshot, Tools.BrowserSnapshot},
+    {:browser_get_content, Tools.BrowserGetContent},
+    {:browser_click, Tools.BrowserClick},
+    {:browser_type, Tools.BrowserType},
+    {:browser_hover, Tools.BrowserHover},
+    {:browser_select_option, Tools.BrowserSelectOption},
+    {:browser_upload_file, Tools.BrowserUploadFile},
+    {:browser_download, Tools.BrowserDownload},
+    {:browser_press, Tools.BrowserPress},
+    {:browser_scroll, Tools.BrowserScroll},
+    {:browser_back, Tools.BrowserBack},
+    {:browser_wait_for_selector, Tools.BrowserWaitForSelector},
+    {:browser_evaluate, Tools.BrowserEvaluate},
+    {:browser_events, Tools.BrowserEvents},
+    {:browser_get_cookies, Tools.BrowserGetCookies},
+    {:browser_set_cookies, Tools.BrowserSetCookies},
+    {:browser_clear_state, Tools.BrowserClearState},
+    {:browser_screenshot, Tools.BrowserScreenshot},
+    {:browser_analyze, Tools.BrowserAnalyze},
+    {:media_status, Tools.MediaStatus},
+    {:media_generate_image, Tools.MediaGenerateImage},
+    {:media_generate_speech, Tools.MediaGenerateSpeech},
+    {:media_transcribe_audio, Tools.MediaTranscribeAudio},
+    {:media_analyze_image, Tools.MediaAnalyzeImage},
+    {:media_generate_video, Tools.MediaGenerateVideo},
     {:todo, Tools.Todo},
+    {:kanban, Tools.Kanban},
     {:task, Tools.Task},
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
+    {:x_search, Tools.XSearch},
     {:post_to_x, Tools.PostToX},
     {:get_x_mentions, Tools.GetXMentions},
     {:hashline_edit, Tools.HashlineEdit}
@@ -67,9 +99,11 @@ defmodule CodingAgent.ToolRegistry do
     disabled = Keyword.get(opts, :disabled, [])
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
+    include_mcp = Keyword.get(opts, :include_mcp, true)
 
     builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
+    mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
     extension_tools =
       if include_extensions do
@@ -77,6 +111,7 @@ defmodule CodingAgent.ToolRegistry do
 
         Extensions.get_tools_with_source(extensions, cwd)
         |> Enum.map(fn {tool, ext_module} ->
+          tool = wrap_extension_tool(tool, ext_module)
           {tool.name, tool, {:extension, ext_module}}
         end)
         # Keep tool ordering deterministic for stable prompts / prompt caching.
@@ -87,7 +122,8 @@ defmodule CodingAgent.ToolRegistry do
         []
       end
 
-    {resolved_tools, _conflicts} = resolve_tools(builtin, wasm_tools, extension_tools, true)
+    {resolved_tools, _conflicts} =
+      resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, true)
 
     tools =
       resolved_tools
@@ -239,6 +275,7 @@ defmodule CodingAgent.ToolRegistry do
           builtin_count: non_neg_integer(),
           wasm_count: non_neg_integer(),
           extension_count: non_neg_integer(),
+          mcp_count: non_neg_integer(),
           shadowed_count: non_neg_integer(),
           load_errors: [Extensions.load_error()],
           wasm: map() | nil
@@ -250,9 +287,11 @@ defmodule CodingAgent.ToolRegistry do
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
   def tool_conflict_report(cwd, opts \\ []) do
     include_extensions = Keyword.get(opts, :include_extensions, true)
+    include_mcp = Keyword.get(opts, :include_mcp, true)
 
     builtin = builtin_tool_tuples(cwd, opts)
     wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
+    mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
     {extension_tools, load_errors} =
       if include_extensions do
@@ -269,11 +308,13 @@ defmodule CodingAgent.ToolRegistry do
         {[], []}
       end
 
-    {resolved_tools, conflicts} = resolve_tools(builtin, wasm_tools, extension_tools, false)
+    {resolved_tools, conflicts} =
+      resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, false)
 
     wasm_count = source_count(resolved_tools, :wasm)
     builtin_count = source_count(resolved_tools, :builtin)
     extension_count = source_count(resolved_tools, :extension)
+    mcp_count = source_count(resolved_tools, :mcp)
 
     shadowed_count = Enum.reduce(conflicts, 0, fn c, acc -> acc + length(c.shadowed) end)
 
@@ -283,6 +324,7 @@ defmodule CodingAgent.ToolRegistry do
       builtin_count: builtin_count,
       wasm_count: wasm_count,
       extension_count: extension_count,
+      mcp_count: mcp_count,
       shadowed_count: shadowed_count,
       load_errors: load_errors,
       wasm: Keyword.get(opts, :wasm_status)
@@ -299,6 +341,102 @@ defmodule CodingAgent.ToolRegistry do
       {Atom.to_string(name), module.tool(cwd, opts), :builtin}
     end)
   end
+
+  defp mcp_tool_tuples(_cwd, _opts, false), do: []
+
+  defp mcp_tool_tuples(cwd, opts, true) do
+    case Keyword.fetch(opts, :mcp_tools) do
+      {:ok, tools} when is_list(tools) ->
+        Enum.map(tools, fn
+          {name, %AgentTool{} = tool, {:mcp, _server_name} = source} ->
+            {name, tool, source}
+
+          %AgentTool{} = tool ->
+            {tool.name, tool, {:mcp, :configured}}
+        end)
+
+      _ ->
+        discover_configured_mcp_tools(cwd)
+    end
+  end
+
+  defp discover_configured_mcp_tools(cwd) do
+    try do
+      LemonSkills.McpSource.discover_tools(cwd: cwd)
+      |> Enum.map(fn %AgentTool{} = tool ->
+        {tool.name, tool, {:mcp, :configured}}
+      end)
+    rescue
+      _ -> []
+    catch
+      :exit, _ -> []
+    end
+  end
+
+  defp wrap_extension_tool(%AgentTool{} = tool, ext_module) do
+    original_execute = tool.execute
+    tool_name = tool.name
+    extension_hash = hash_value(Atom.to_string(ext_module))
+
+    wrapped_execute = fn tool_call_id, params, signal, on_update ->
+      base_meta = %{
+        host: :beam,
+        tool_name: tool_name,
+        extension_hash: extension_hash,
+        tool_call_hash: hash_value(tool_call_id)
+      }
+
+      LemonCore.Telemetry.emit([:coding_agent, :extension, :tool, :start], %{count: 1}, base_meta)
+      started_at = System.monotonic_time(:microsecond)
+
+      try do
+        result = original_execute.(tool_call_id, params, signal, on_update)
+        duration_us = System.monotonic_time(:microsecond) - started_at
+
+        LemonCore.Telemetry.emit(
+          [:coding_agent, :extension, :tool, :stop],
+          %{count: 1, duration_us: duration_us},
+          Map.put(base_meta, :status, extension_tool_status(result))
+        )
+
+        result
+      rescue
+        error ->
+          duration_us = System.monotonic_time(:microsecond) - started_at
+
+          LemonCore.Telemetry.emit(
+            [:coding_agent, :extension, :tool, :exception],
+            %{count: 1, duration_us: duration_us},
+            base_meta
+            |> Map.put(:kind, :error)
+            |> Map.put(:error_type, error.__struct__ |> Atom.to_string())
+          )
+
+          reraise error, __STACKTRACE__
+      catch
+        kind, reason ->
+          duration_us = System.monotonic_time(:microsecond) - started_at
+
+          LemonCore.Telemetry.emit(
+            [:coding_agent, :extension, :tool, :exception],
+            %{count: 1, duration_us: duration_us},
+            base_meta
+            |> Map.put(:kind, kind)
+            |> Map.put(:error_type, reason |> reason_type())
+          )
+
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+    end
+
+    %{tool | execute: wrapped_execute}
+  end
+
+  defp extension_tool_status({:error, _reason}), do: :error
+  defp extension_tool_status(_result), do: :ok
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason), do: reason |> :erlang.term_to_binary() |> hash_value()
 
   @spec extension_inventory(String.t(), tool_opts()) :: {[module()], [Extensions.load_error()]}
   defp extension_inventory(cwd, opts) do
@@ -327,17 +465,84 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp resolve_extension_paths(cwd, opts) do
-    case Keyword.get(opts, :extension_paths) do
-      paths when is_list(paths) ->
-        paths
+    if extensions_enabled?(cwd) do
+      case Keyword.get(opts, :extension_paths) do
+        paths when is_list(paths) ->
+          paths
 
-      _ ->
-        [
-          CodingAgent.Config.extensions_dir(),
-          CodingAgent.Config.project_extensions_dir(cwd)
-        ]
+        _ ->
+          configured_extension_paths(cwd) ++ default_extension_paths_if_trusted(cwd)
+      end
+    else
+      []
     end
   end
+
+  defp extensions_enabled?(cwd) do
+    cwd
+    |> load_agent_config()
+    |> Map.get(:extensions, %{})
+    |> map_value(:enabled)
+    |> enabled?()
+  end
+
+  defp configured_extension_paths(cwd) do
+    cwd
+    |> load_agent_config()
+    |> Map.get(:extension_paths, [])
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&expand_path(&1, cwd))
+  end
+
+  defp default_extension_paths_if_trusted(cwd) do
+    if default_extension_paths_trusted?(cwd) do
+      [
+        CodingAgent.Config.extensions_dir(),
+        CodingAgent.Config.project_extensions_dir(cwd)
+      ]
+    else
+      []
+    end
+  end
+
+  defp default_extension_paths_trusted?(cwd) do
+    cwd
+    |> load_agent_config()
+    |> Map.get(:extensions, %{})
+    |> map_value(:auto_load_default_paths)
+    |> truthy?()
+  end
+
+  defp load_agent_config(cwd) do
+    cwd
+    |> LemonCore.Config.load(cache: false)
+    |> Map.get(:agent, %{})
+  rescue
+    _ -> %{}
+  end
+
+  defp expand_path(path, cwd) do
+    cond do
+      String.starts_with?(path, "~/") -> Path.expand(path)
+      Path.type(path) == :absolute -> Path.expand(path)
+      true -> Path.expand(path, cwd)
+    end
+  end
+
+  defp map_value(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, to_string(key))
+    end
+  end
+
+  defp map_value(_, _), do: nil
+
+  defp truthy?(value), do: value in [true, "true", 1]
+
+  defp enabled?(value) when value in [false, "false", 0], do: false
+  defp enabled?(_), do: true
 
   defp cache_key(cwd, extension_paths) do
     {Path.expand(cwd), normalize_paths(extension_paths)}
@@ -409,9 +614,15 @@ defmodule CodingAgent.ToolRegistry do
     end
   end
 
-  @spec resolve_tools([tool_tuple()], [tool_tuple()], [tool_tuple()], boolean()) ::
+  @spec resolve_tools(
+          [tool_tuple()],
+          [tool_tuple()],
+          [tool_tuple()],
+          [tool_tuple()],
+          boolean()
+        ) ::
           {[tool_tuple()], [conflict_entry()]}
-  defp resolve_tools(builtin_tools, wasm_tools, extension_tools, log_conflicts?) do
+  defp resolve_tools(builtin_tools, wasm_tools, extension_tools, mcp_tools, log_conflicts?) do
     initial_winners =
       builtin_tools
       |> Enum.map(fn {name, _tool, source} -> {name, source} end)
@@ -419,7 +630,7 @@ defmodule CodingAgent.ToolRegistry do
 
     {rev_resolved, _winners, conflicts} =
       Enum.reduce(
-        [wasm_tools, extension_tools],
+        [wasm_tools, extension_tools, mcp_tools],
         {Enum.reverse(builtin_tools), initial_winners, %{}},
         fn tools, {resolved_acc, winners_acc, conflicts_acc} ->
           Enum.reduce(tools, {resolved_acc, winners_acc, conflicts_acc}, fn {name, tool, source},
@@ -479,6 +690,7 @@ defmodule CodingAgent.ToolRegistry do
   defp serialize_source(:builtin), do: :builtin
 
   defp serialize_source({:extension, mod}), do: {:extension, mod}
+  defp serialize_source({:mcp, server_name}), do: {:mcp, server_name}
 
   defp serialize_source({:wasm, meta}) do
     {:wasm, wasm_identity(meta)}
@@ -506,6 +718,8 @@ defmodule CodingAgent.ToolRegistry do
     do:
       "wasm #{Map.get(meta, :path) || Map.get(meta, "path") || Map.get(meta, :name) || Map.get(meta, "name") || "unknown"}"
 
+  defp source_label({:mcp, server_name}), do: "mcp #{server_name}"
+
   defp source_label(_), do: "unknown"
 
   defp source_count(tools, :builtin) do
@@ -518,6 +732,10 @@ defmodule CodingAgent.ToolRegistry do
 
   defp source_count(tools, :extension) do
     Enum.count(tools, fn {_name, _tool, source} -> match?({:extension, _}, source) end)
+  end
+
+  defp source_count(tools, :mcp) do
+    Enum.count(tools, fn {_name, _tool, source} -> match?({:mcp, _}, source) end)
   end
 
   defp filter_tools(tools, disabled, nil) do
@@ -608,4 +826,14 @@ defmodule CodingAgent.ToolRegistry do
   defp sort_extensions(extensions) do
     Enum.sort_by(extensions, fn module -> Atom.to_string(module) end)
   end
+
+  defp hash_value(nil), do: nil
+
+  defp hash_value(value) when is_binary(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
+  defp hash_value(value), do: value |> inspect() |> hash_value()
 end

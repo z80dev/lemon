@@ -214,6 +214,7 @@ defmodule CodingAgent.Session.PersistenceTest do
       run_id: "run-123",
       session_key: "agent:test:main",
       prompt: "[task task-123] delegated work completed",
+      images: [%{data: "ZmFrZQ==", mime_type: "image/png"}],
       meta: %{model: Mocks.mock_model(), async_followups: async_followups}
     }
 
@@ -228,6 +229,7 @@ defmodule CodingAgent.Session.PersistenceTest do
 
     assert_receive {:runner_start_opts, start_opts}, 1_000
     assert start_opts[:async_followups] == async_followups
+    assert start_opts[:images] == [%{data: "ZmFrZQ==", mime_type: "image/png"}]
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :started, resume: %{value: session_id}}},

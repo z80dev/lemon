@@ -128,7 +128,7 @@ defmodule CodingAgent.Tools.MemoryPathsTest do
   end
 
   @tag :tmp_dir
-  test "edit resolves MEMORY.md to workspace_dir", %{tmp_dir: tmp_dir} do
+  test "edit resolves MEMORY.md and USER.md to workspace_dir", %{tmp_dir: tmp_dir} do
     project_dir = Path.join(tmp_dir, "project")
     workspace_dir = Path.join(tmp_dir, "workspace")
 
@@ -137,6 +137,8 @@ defmodule CodingAgent.Tools.MemoryPathsTest do
 
     File.write!(Path.join(project_dir, "MEMORY.md"), "project-foo")
     File.write!(Path.join(workspace_dir, "MEMORY.md"), "ws-foo")
+    File.write!(Path.join(project_dir, "USER.md"), "project-user")
+    File.write!(Path.join(workspace_dir, "USER.md"), "ws-user")
 
     tool = Edit.tool(project_dir, workspace_dir: workspace_dir)
 
@@ -150,6 +152,17 @@ defmodule CodingAgent.Tools.MemoryPathsTest do
 
     assert File.read!(Path.join(workspace_dir, "MEMORY.md")) == "ws-bar"
     assert File.read!(Path.join(project_dir, "MEMORY.md")) == "project-foo"
+
+    _result_user =
+      tool.execute.(
+        "t2",
+        %{"path" => "USER.md", "old_text" => "ws-user", "new_text" => "ws-user-updated"},
+        nil,
+        nil
+      )
+
+    assert File.read!(Path.join(workspace_dir, "USER.md")) == "ws-user-updated"
+    assert File.read!(Path.join(project_dir, "USER.md")) == "project-user"
   end
 
   @tag :tmp_dir

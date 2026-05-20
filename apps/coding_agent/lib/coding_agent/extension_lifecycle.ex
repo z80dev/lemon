@@ -171,12 +171,21 @@ defmodule CodingAgent.ExtensionLifecycle do
         _ -> []
       end
 
-    settings_paths ++
-      [
-        Config.extensions_dir(),
-        Config.project_extensions_dir(cwd)
-      ]
+    default_paths =
+      if auto_load_default_paths?(settings_manager) do
+        [
+          Config.extensions_dir(),
+          Config.project_extensions_dir(cwd)
+        ]
+      else
+        []
+      end
+
+    settings_paths ++ default_paths
   end
+
+  defp auto_load_default_paths?(%{extension_auto_load_default_paths: true}), do: true
+  defp auto_load_default_paths?(_), do: false
 
   @spec load_extensions([String.t()]) :: {[module()], [Extensions.load_error()]}
   defp load_extensions(extension_paths) do

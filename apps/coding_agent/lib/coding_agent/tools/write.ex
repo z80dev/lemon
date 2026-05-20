@@ -9,6 +9,9 @@ defmodule CodingAgent.Tools.Write do
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.CheckpointGuard
+  alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
 
@@ -49,6 +52,12 @@ defmodule CodingAgent.Tools.Write do
             "default" => format_default,
             "description" =>
               "Whether to auto-format the file after writing (if a formatter is available for the file extension)"
+          },
+          "diagnostics" => %{
+            "type" => "boolean",
+            "default" => Keyword.get(opts, :diagnostics, false),
+            "description" =>
+              "Whether to run language diagnostics after writing and report newly introduced issues"
           }
         },
         "required" => ["path", "content"]
@@ -90,9 +99,10 @@ defmodule CodingAgent.Tools.Write do
     else
       with {:ok, path} <- get_path(params),
            {:ok, content} <- get_content(params),
-           {:ok, format?} <- get_format(params, opts) do
+           {:ok, format?} <- get_format(params, opts),
+           {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
-        write_file(resolved_path, content, signal, format?, cwd, opts)
+        write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
       end
     end
   end
@@ -131,46 +141,113 @@ defmodule CodingAgent.Tools.Write do
     PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :expand, false))
   end
 
-  defp write_file(path, content, signal, format?, cwd, opts) do
+  defp write_file(path, content, signal, format?, diagnostics?, cwd, opts) do
     # Check for abort before write
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}
     else
-      try do
-        # Create parent directories
-        dir = Path.dirname(path)
-        File.mkdir_p!(dir)
+      if ACPFileBridge.write_enabled?(opts) do
+        write_file_with_acp(path, content, opts)
+      else
+        write_file_local(path, content, signal, format?, diagnostics?, cwd, opts)
+      end
+    end
+  end
 
-        # Write the file
-        File.write!(path, content)
-
+  defp write_file_with_acp(path, content, opts) do
+    case ACPFileBridge.write_text_file(path, content, opts) do
+      :ok ->
         byte_count = byte_size(content)
-        {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
-        success_text = success_message(path, byte_count, formatted)
 
         %AgentToolResult{
           content: [
             %TextContent{
               type: :text,
-              text: success_text
+              text: success_message(path, byte_count, false)
             }
           ],
-          details:
-            %{
-              path: path,
-              bytes_written: byte_count,
-              formatted: formatted
-            }
-            |> maybe_put_format_error(format_error)
+          details: %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
         }
-      rescue
-        e in File.Error ->
-          {:error, "Failed to write file: #{Exception.message(e)}"}
 
-        e ->
-          {:error, "Unexpected error: #{Exception.message(e)}"}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  defp write_file_local(path, content, signal, format?, diagnostics?, cwd, opts) do
+    try do
+      with {:ok, checkpoint} <-
+             CheckpointGuard.before_mutation([path], cwd, opts, %{
+               tool: "write",
+               action: "overwrite",
+               path: path
+             }) do
+        baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
+
+        do_write_file(
+          path,
+          content,
+          signal,
+          format?,
+          diagnostics?,
+          baseline,
+          cwd,
+          opts,
+          checkpoint
+        )
+      end
+    rescue
+      e in File.Error ->
+        {:error, "Failed to write file: #{Exception.message(e)}"}
+
+      e ->
+        {:error, "Unexpected error: #{Exception.message(e)}"}
+    end
+  end
+
+  defp do_write_file(
+         path,
+         content,
+         _signal,
+         format?,
+         diagnostics?,
+         baseline,
+         cwd,
+         opts,
+         checkpoint
+       ) do
+    # Create parent directories
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+
+    # Write the file
+    File.write!(path, content)
+
+    byte_count = byte_size(content)
+    {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+
+    {diagnostics, diagnostics_text} =
+      LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)
+
+    success_text = success_message(path, byte_count, formatted) <> diagnostics_text
+
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          type: :text,
+          text: success_text
+        }
+      ],
+      details:
+        %{
+          path: path,
+          bytes_written: byte_count,
+          formatted: formatted
+        }
+        |> CheckpointGuard.put_details(checkpoint)
+        |> maybe_put_format_error(format_error)
+        |> maybe_put_diagnostics(diagnostics)
+    }
   end
 
   defp maybe_format_file(_path, false, _cwd, _opts), do: {false, nil}
@@ -193,4 +270,9 @@ defmodule CodingAgent.Tools.Write do
 
   defp maybe_put_format_error(details, nil), do: details
   defp maybe_put_format_error(details, reason), do: Map.put(details, :format_error, reason)
+
+  defp maybe_put_diagnostics(details, nil), do: details
+
+  defp maybe_put_diagnostics(details, diagnostics),
+    do: Map.put(details, :diagnostics, diagnostics)
 end

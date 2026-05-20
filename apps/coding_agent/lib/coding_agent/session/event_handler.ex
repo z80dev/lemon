@@ -289,7 +289,7 @@ defmodule CodingAgent.Session.EventHandler do
   defp tool_result_name(%{"tool_name" => name}) when is_binary(name), do: name
   defp tool_result_name(_message), do: nil
 
-  defp learning_tool_names, do: ["search_memory", "skill_manage", "memory_topic"]
+  defp learning_tool_names, do: ["search_memory", "skill_manage", "memory_topic", "memory"]
 
   defp message_text(%Ai.Types.UserMessage{content: content}), do: content_text(content)
   defp message_text(%Ai.Types.AssistantMessage{content: content}), do: content_text(content)

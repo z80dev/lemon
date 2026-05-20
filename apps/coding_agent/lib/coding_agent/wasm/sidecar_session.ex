@@ -188,8 +188,9 @@ defmodule CodingAgent.Wasm.SidecarSession do
       }
 
       LemonCore.Telemetry.emit([:lemon, :wasm, :discover, :start], %{count: 1}, %{
-        session_id: state.session_id,
-        cwd: state.cwd
+        host: :wasm,
+        session_hash: hash_value(state.session_id),
+        cwd_hash: hash_value(state.cwd)
       })
 
       {:noreply, send_request(state, "discover", payload, from, :discover)}
@@ -216,8 +217,10 @@ defmodule CodingAgent.Wasm.SidecarSession do
       }
 
       LemonCore.Telemetry.emit([:lemon, :wasm, :invoke, :start], %{count: 1}, %{
-        session_id: state.session_id,
-        tool: tool
+        host: :wasm,
+        session_hash: hash_value(state.session_id),
+        cwd_hash: hash_value(state.cwd),
+        tool_hash: hash_value(tool)
       })
 
       {state, request_id} = send_request_with_id(state, "invoke", payload, from, {:invoke, tool})
@@ -373,8 +376,9 @@ defmodule CodingAgent.Wasm.SidecarSession do
             [:lemon, :wasm, :discover, :stop],
             %{duration_ms: duration_ms, ok: ok},
             %{
-              session_id: state.session_id,
-              cwd: state.cwd
+              host: :wasm,
+              session_hash: hash_value(state.session_id),
+              cwd_hash: hash_value(state.cwd)
             }
           )
 
@@ -404,8 +408,10 @@ defmodule CodingAgent.Wasm.SidecarSession do
             [:lemon, :wasm, :invoke, :stop],
             %{duration_ms: duration_ms, ok: ok},
             %{
-              session_id: state.session_id,
-              tool: tool
+              host: :wasm,
+              session_hash: hash_value(state.session_id),
+              cwd_hash: hash_value(state.cwd),
+              tool_hash: hash_value(tool)
             }
           )
 
@@ -585,6 +591,16 @@ defmodule CodingAgent.Wasm.SidecarSession do
 
   defp truthy?(value) when value in [true, "true", "1", 1], do: true
   defp truthy?(_), do: false
+
+  defp hash_value(nil), do: nil
+
+  defp hash_value(value) when is_binary(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
+  defp hash_value(value), do: value |> inspect() |> hash_value()
 
   defp build_status(state) do
     %{

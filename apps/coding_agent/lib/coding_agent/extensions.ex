@@ -86,7 +86,7 @@ defmodule CodingAgent.Extensions do
   @typedoc """
   Provider conflict when multiple extensions try to register the same provider name.
 
-  - `:type` - The provider type (e.g., `:model`)
+  - `:type` - The provider type (e.g., `:model` or `:memory`)
   - `:name` - The conflicting provider name
   - `:winner` - The extension module that won (first to register)
   - `:shadowed` - List of extension modules that were shadowed
@@ -409,10 +409,13 @@ defmodule CodingAgent.Extensions do
         |> Enum.map(fn provider_spec ->
           # Normalize the provider spec with defaults
           normalized = %{
-            type: Map.get(provider_spec, :type),
-            name: Map.get(provider_spec, :name),
-            module: Map.get(provider_spec, :module),
-            config: Map.get(provider_spec, :config, %{})
+            type:
+              normalize_provider_type(
+                Map.get(provider_spec, :type) || Map.get(provider_spec, "type")
+              ),
+            name: Map.get(provider_spec, :name) || Map.get(provider_spec, "name"),
+            module: Map.get(provider_spec, :module) || Map.get(provider_spec, "module"),
+            config: Map.get(provider_spec, :config) || Map.get(provider_spec, "config") || %{}
           }
 
           {normalized, ext}
@@ -424,12 +427,12 @@ defmodule CodingAgent.Extensions do
   end
 
   @doc """
-  Register extension-provided providers into the Ai.ProviderRegistry.
+  Register extension-provided providers.
 
   Collects all providers from extensions and registers them, detecting and
   reporting conflicts when multiple extensions try to register the same
-  provider name. Only `:model` type providers are currently registered;
-  other types are logged and skipped.
+  provider name. Model providers register into `Ai.ProviderRegistry`; memory
+  providers register into `LemonCore.MemoryProviders`.
 
   ## Conflict Resolution
 
@@ -478,15 +481,10 @@ defmodule CodingAgent.Extensions do
         [{winner_spec, winner_ext} | losers] = sorted
 
         # Check if already registered (built-in provider takes precedence)
-        already_registered =
-          case type do
-            :model -> Ai.ProviderRegistry.registered?(name)
-            _ -> false
-          end
+        already_registered = provider_registered?(type, name)
 
         cond do
-          # Skip non-model providers for now (log info)
-          type != :model ->
+          type not in [:model, :memory] ->
             require Logger
 
             Logger.debug(
@@ -519,7 +517,7 @@ defmodule CodingAgent.Extensions do
 
           # Register the winner
           true ->
-            :ok = Ai.ProviderRegistry.register(name, winner_spec.module)
+            :ok = register_provider(type, name, winner_spec, winner_ext)
 
             registered_entry = %{
               type: type,
@@ -580,8 +578,15 @@ defmodule CodingAgent.Extensions do
   def unregister_extension_providers(nil), do: :ok
 
   def unregister_extension_providers(%{registered: registered}) when is_list(registered) do
-    Enum.each(registered, fn %{type: :model, name: name} ->
-      Ai.ProviderRegistry.unregister(name)
+    Enum.each(registered, fn
+      %{type: :model, name: name} ->
+        Ai.ProviderRegistry.unregister(name)
+
+      %{type: :memory, name: name} ->
+        LemonCore.MemoryProviders.unregister_provider(provider_id(name))
+
+      _ ->
+        :ok
     end)
 
     :ok
@@ -1051,6 +1056,63 @@ defmodule CodingAgent.Extensions do
     ensure_load_error_table()
     :ets.insert(@load_error_table, {:last_validation_errors, errors})
     :ok
+  end
+
+  defp provider_registered?(:model, name), do: Ai.ProviderRegistry.registered?(name)
+
+  defp provider_registered?(:memory, name) do
+    id = provider_id(name)
+
+    LemonCore.MemoryProviders.status()
+    |> Map.get(:providers, [])
+    |> Enum.any?(fn provider -> provider[:id] == id or provider["id"] == id end)
+  end
+
+  defp provider_registered?(_type, _name), do: false
+
+  defp normalize_provider_type(type) when is_binary(type) do
+    case type do
+      "model" -> :model
+      "memory" -> :memory
+      other -> other
+    end
+  end
+
+  defp normalize_provider_type(type), do: type
+
+  defp register_provider(:model, name, spec, _ext) do
+    Ai.ProviderRegistry.register(name, spec.module)
+  end
+
+  defp register_provider(:memory, name, spec, ext) do
+    config = provider_config(spec.config)
+
+    LemonCore.MemoryProviders.register_provider(%{
+      id: provider_id(name),
+      module: spec.module,
+      enabled: Map.get(config, :enabled, Map.get(config, "enabled", true)),
+      label: Map.get(config, :label) || Map.get(config, "label"),
+      source: "extension:#{safe_extension_name(ext)}",
+      scopes: Map.get(config, :scopes) || Map.get(config, "scopes"),
+      timeout_ms: Map.get(config, :timeout_ms) || Map.get(config, "timeout_ms")
+    })
+  end
+
+  defp provider_config(config) when is_map(config), do: config
+  defp provider_config(_), do: %{}
+
+  defp provider_id(name) when is_atom(name), do: Atom.to_string(name)
+  defp provider_id(name) when is_binary(name), do: String.trim(name)
+  defp provider_id(name), do: to_string(name)
+
+  defp safe_extension_name(ext) do
+    if has_callback?(ext, :name, 0) do
+      ext.name()
+    else
+      inspect(ext)
+    end
+  rescue
+    _ -> inspect(ext)
   end
 
   # Store the source path for an extension module

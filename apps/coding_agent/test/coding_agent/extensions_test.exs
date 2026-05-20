@@ -1135,7 +1135,13 @@ defmodule CodingAgent.ExtensionsTest do
   describe "unregister_extension_providers/1" do
     setup do
       Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+
+      on_exit(fn ->
+        Ai.ProviderRegistry.clear()
+        LemonCore.MemoryProviders.unregister_provider("my_memory")
+        LemonCore.MemoryProviders.unregister_provider("string_memory")
+      end)
+
       :ok
     end
 
@@ -1722,7 +1728,7 @@ defmodule CodingAgent.ExtensionsTest do
       :code.delete(CustomExecutorModule)
     end
 
-    test "mixes model and non-model providers correctly", %{tmp_dir: tmp_dir} do
+    test "mixes model, memory, and unsupported providers correctly", %{tmp_dir: tmp_dir} do
       ext_code = """
       defmodule MixedTypeProviderExt do
         @behaviour CodingAgent.Extensions.Extension
@@ -1737,6 +1743,7 @@ defmodule CodingAgent.ExtensionsTest do
         def providers do
           [
             %{type: :model, name: :my_model, module: MyModelModule},
+            %{type: :memory, name: :my_memory, module: MyMemoryModule, config: %{scopes: [:session], timeout_ms: 1234}},
             %{type: :storage, name: :my_storage, module: MyStorageModule},
             %{type: :tool_executor, name: :my_executor, module: MyExecutorModule}
           ]
@@ -1744,6 +1751,16 @@ defmodule CodingAgent.ExtensionsTest do
       end
 
       defmodule MyModelModule do
+      end
+
+      defmodule MyMemoryModule do
+        @behaviour LemonCore.MemoryProvider
+
+        @impl true
+        def put(_doc, _opts), do: :ok
+
+        @impl true
+        def search(_query, _opts), do: []
       end
 
       defmodule MyStorageModule do
@@ -1760,22 +1777,93 @@ defmodule CodingAgent.ExtensionsTest do
 
       report = Extensions.register_extension_providers(extensions)
 
-      # Only model provider should be registered
-      assert report.total_registered == 1
-      assert hd(report.registered).name == :my_model
+      assert report.total_registered == 2
+      assert Enum.any?(report.registered, &(&1.type == :model and &1.name == :my_model))
+      assert Enum.any?(report.registered, &(&1.type == :memory and &1.name == :my_memory))
       assert Ai.ProviderRegistry.registered?(:my_model)
       refute Ai.ProviderRegistry.registered?(:my_storage)
       refute Ai.ProviderRegistry.registered?(:my_executor)
+
+      status = LemonCore.MemoryProviders.status()
+      memory_provider = Enum.find(status.providers, &(&1.id == "my_memory"))
+      assert memory_provider.source == "extension:mixed-type-provider"
+      assert memory_provider.scopes == ["session"]
+      assert memory_provider.timeout_ms == 1234
+
+      Extensions.unregister_extension_providers(report)
+      refute Enum.any?(LemonCore.MemoryProviders.status().providers, &(&1.id == "my_memory"))
 
       # Cleanup
       :code.purge(MixedTypeProviderExt)
       :code.delete(MixedTypeProviderExt)
       :code.purge(MyModelModule)
       :code.delete(MyModelModule)
+      :code.purge(MyMemoryModule)
+      :code.delete(MyMemoryModule)
       :code.purge(MyStorageModule)
       :code.delete(MyStorageModule)
       :code.purge(MyExecutorModule)
       :code.delete(MyExecutorModule)
+    end
+
+    test "registers string-keyed memory providers from extensions", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule StringMemoryProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "string-memory-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [
+            %{
+              "type" => "memory",
+              "name" => "string_memory",
+              "module" => StringMemoryProviderModule,
+              "config" => %{"scopes" => ["workspace"], "label" => "String Memory"}
+            }
+          ]
+        end
+      end
+
+      defmodule StringMemoryProviderModule do
+        @behaviour LemonCore.MemoryProvider
+
+        @impl true
+        def put(_doc, _opts), do: :ok
+
+        @impl true
+        def search(_query, _opts), do: []
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "string_memory_provider_ext.ex"), ext_code)
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 1
+      assert hd(report.registered).type == :memory
+      assert hd(report.registered).name == "string_memory"
+
+      status = LemonCore.MemoryProviders.status()
+      provider = Enum.find(status.providers, &(&1.id == "string_memory"))
+      assert provider.scopes == ["workspace"]
+      assert provider.source == "extension:string-memory-provider"
+
+      Extensions.unregister_extension_providers(report)
+      refute Enum.any?(LemonCore.MemoryProviders.status().providers, &(&1.id == "string_memory"))
+
+      :code.purge(StringMemoryProviderExt)
+      :code.delete(StringMemoryProviderExt)
+      :code.purge(StringMemoryProviderModule)
+      :code.delete(StringMemoryProviderModule)
     end
 
     test "handles custom/unknown provider types", %{tmp_dir: tmp_dir} do

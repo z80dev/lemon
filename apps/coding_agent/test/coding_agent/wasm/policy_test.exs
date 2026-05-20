@@ -28,6 +28,11 @@ defmodule CodingAgent.Wasm.PolicyTest do
       assert Policy.capability_requires_approval?(%{"tool_invoke" => true})
     end
 
+    test "returns true with exec capability" do
+      assert Policy.capability_requires_approval?(%{exec: true})
+      assert Policy.capability_requires_approval?(%{"exec" => true})
+    end
+
     test "returns false with empty map" do
       refute Policy.capability_requires_approval?(%{})
     end
@@ -56,6 +61,13 @@ defmodule CodingAgent.Wasm.PolicyTest do
     test "returns false when policy sets approval to :never even with http capability" do
       policy = %{approvals: %{"my_tool" => :never}}
       metadata = %{capabilities: %{http: true}}
+
+      refute Policy.requires_approval?(policy, "my_tool", metadata)
+    end
+
+    test "returns false when policy sets approval to :never with tool invoke capability" do
+      policy = %{approvals: %{"my_tool" => :never}}
+      metadata = %{capabilities: %{tool_invoke: true}}
 
       refute Policy.requires_approval?(policy, "my_tool", metadata)
     end

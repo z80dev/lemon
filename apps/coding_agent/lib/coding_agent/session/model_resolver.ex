@@ -106,6 +106,7 @@ defmodule CodingAgent.Session.ModelResolver do
     provider = Map.get(config, :provider)
     model_id = Map.get(config, :model_id)
     base_url = Map.get(config, :base_url)
+    provider = route_default_provider(provider, model_id, settings)
 
     model =
       case provider do
@@ -122,18 +123,11 @@ defmodule CodingAgent.Session.ModelResolver do
 
               _ ->
                 nil
-            end ||
+            end || provider_model(provider_atom, model_id) ||
             Ai.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
-          provider_atom =
-            try do
-              String.to_existing_atom(provider_str)
-            rescue
-              ArgumentError -> String.to_atom(provider_str)
-            end
-
-          Ai.Models.get_model(provider_atom, model_id)
+          lookup_model(provider_str, model_id)
       end
 
     case model do
@@ -153,6 +147,36 @@ defmodule CodingAgent.Session.ModelResolver do
         apply_provider_base_url(model, settings)
     end
   end
+
+  @spec runtime_fallback_models(Ai.Types.Model.t(), CodingAgent.SettingsManager.t()) :: [
+          Ai.Types.Model.t()
+        ]
+  def runtime_fallback_models(
+        %Ai.Types.Model{} = model,
+        %CodingAgent.SettingsManager{} = settings
+      ) do
+    routing = settings.provider_routing || %{}
+
+    cond do
+      Map.get(routing, :enabled, true) == false ->
+        []
+
+      is_nil(model.provider) or is_nil(model.id) ->
+        []
+
+      true ->
+        routing
+        |> routing_fallback_providers(model.id)
+        |> Enum.map(&fallback_model(&1, model.id, settings, routing))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.reject(
+          &(normalize_provider_id(&1.provider) == normalize_provider_id(model.provider))
+        )
+        |> Enum.uniq_by(&normalize_provider_id(&1.provider))
+    end
+  end
+
+  def runtime_fallback_models(_model, _settings), do: []
 
   # ============================================================================
   # Provider Configuration
@@ -275,6 +299,130 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp configured_provider_atoms(_), do: []
 
+  defp route_default_provider(provider, model_id, %CodingAgent.SettingsManager{} = settings) do
+    routing = settings.provider_routing || %{}
+
+    cond do
+      Map.get(routing, :enabled, true) == false ->
+        provider
+
+      is_nil(provider) or is_nil(model_id) ->
+        provider
+
+      provider_credentials_ready?(provider, settings, routing) ->
+        provider
+
+      true ->
+        routing
+        |> routing_fallback_providers(model_id)
+        |> Enum.find_value(provider, fn fallback_provider ->
+          if fallback_model_available?(fallback_provider, model_id) and
+               provider_credentials_ready?(fallback_provider, settings, routing) do
+            fallback_provider
+          end
+        end)
+    end
+  end
+
+  defp provider_credentials_ready?(_provider, _settings, %{require_credentials: false}), do: true
+
+  defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, _routing) do
+    LemonAiRuntime.provider_has_credentials?(provider, settings.providers)
+  end
+
+  defp fallback_model_available?(provider, model_id) do
+    model = lookup_model(to_string(provider), model_id)
+    match?(%Ai.Types.Model{}, model)
+  end
+
+  defp fallback_model(provider, model_id, %CodingAgent.SettingsManager{} = settings, routing) do
+    if provider_credentials_ready?(provider, settings, routing) do
+      provider
+      |> to_string()
+      |> lookup_model(model_id)
+      |> case do
+        %Ai.Types.Model{} = model -> apply_provider_base_url(model, settings)
+        _ -> nil
+      end
+    end
+  end
+
+  defp routing_fallback_providers(routing, model_id) when is_map(routing) do
+    profile_name = routing_value(routing, :default_profile)
+
+    profile =
+      named_routing_config(
+        routing_value(routing, :profiles, %{}),
+        profile_name
+      )
+
+    pool_name =
+      routing_value(profile || %{}, :credential_pool) || routing_value(routing, :default_pool)
+
+    pool = named_routing_config(routing_value(routing, :credential_pools, %{}), pool_name)
+    pool_providers = routing_value(pool || %{}, :providers, [])
+
+    [
+      routing_value(profile || %{}, :fallback_providers, []),
+      distribution_providers(profile),
+      LemonCore.ProviderPoolRotator.ordered_providers(
+        {:provider_pool, profile_name, pool_name, model_id},
+        pool_providers,
+        routing_value(pool || %{}, :strategy, "priority")
+      ),
+      routing_value(routing, :fallback_providers, [])
+    ]
+    |> List.flatten()
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp routing_fallback_providers(_, _), do: []
+
+  defp distribution_providers(profile) when is_map(profile) do
+    profile
+    |> routing_value(:distribution, %{})
+    |> case do
+      distribution when is_map(distribution) ->
+        distribution
+        |> Enum.sort_by(fn {provider, weight} ->
+          {-numeric_weight(weight), to_string(provider)}
+        end)
+        |> Enum.map(fn {provider, _weight} -> provider end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp distribution_providers(_), do: []
+
+  defp named_routing_config(configs, name) when is_map(configs) and is_binary(name) do
+    Map.get(configs, name) || existing_atom_routing_config(configs, name)
+  end
+
+  defp named_routing_config(_, _), do: nil
+
+  defp existing_atom_routing_config(configs, name) do
+    Map.get(configs, String.to_existing_atom(name))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp routing_value(map, key, default \\ nil)
+
+  defp routing_value(map, key, default) when is_map(map) do
+    Map.get(map, key) || Map.get(map, to_string(key)) || default
+  end
+
+  defp routing_value(_, _, default), do: default
+
+  defp numeric_weight(weight) when is_integer(weight), do: weight
+  defp numeric_weight(weight) when is_float(weight), do: weight
+  defp numeric_weight(_), do: 0
+
   defp has_api_key_config?(cfg) do
     Map.has_key?(cfg, :api_key) or Map.has_key?(cfg, :api_key_secret) or
       Map.has_key?(cfg, :oauth_secret) or Map.has_key?(cfg, "api_key") or
@@ -299,4 +447,15 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   defp non_empty_string(_), do: nil
+
+  defp normalize_provider_id(provider) when is_atom(provider), do: Atom.to_string(provider)
+
+  defp normalize_provider_id(provider) when is_binary(provider) do
+    provider
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+  end
+
+  defp normalize_provider_id(_), do: nil
 end

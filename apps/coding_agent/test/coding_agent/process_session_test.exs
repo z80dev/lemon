@@ -109,6 +109,8 @@ defmodule CodingAgent.ProcessSessionTest do
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status in [:completed, :running]
       assert is_list(result.logs)
+      assert is_integer(result.log_line_count)
+      assert result.max_log_lines == 1000
     end
   end
 
@@ -299,7 +301,9 @@ defmodule CodingAgent.ProcessSessionTest do
         ProcessSession.start_link(
           command: cmd,
           process_id: process_id,
-          max_log_lines: 10
+          max_log_lines: 10,
+          restarted_from: "previous-process",
+          restart_generation: 1
         )
 
       Process.sleep(500)
@@ -307,6 +311,8 @@ defmodule CodingAgent.ProcessSessionTest do
       assert {:ok, state} = ProcessSession.get_state(process_id)
       # log_count should be capped at max_log_lines
       assert state.log_count <= 10
+      assert state.restarted_from == "previous-process"
+      assert state.restart_generation == 1
       # Buffer may exceed max_log_lines slightly due to per-batch trimming,
       # but should be significantly less than total output (100 lines)
       buf_size = :queue.len(state.log_buffer)

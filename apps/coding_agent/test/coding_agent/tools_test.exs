@@ -31,23 +31,55 @@ defmodule CodingAgent.ToolsTest do
         "read_skill",
         "skill_manage",
         "memory_topic",
+        "memory",
         "search_memory",
+        "session_search",
+        "checkpoint",
         "write",
         "edit",
         "hashline_edit",
         "patch",
+        "lsp_diagnostics",
         "bash",
         "grep",
         "find",
         "ls",
         "webfetch",
         "websearch",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_get_content",
+        "browser_click",
+        "browser_type",
+        "browser_hover",
+        "browser_select_option",
+        "browser_upload_file",
+        "browser_download",
+        "browser_press",
+        "browser_scroll",
+        "browser_back",
+        "browser_wait_for_selector",
+        "browser_evaluate",
+        "browser_events",
+        "browser_get_cookies",
+        "browser_set_cookies",
+        "browser_clear_state",
+        "browser_screenshot",
+        "browser_analyze",
+        "media_status",
+        "media_generate_image",
+        "media_generate_speech",
+        "media_transcribe_audio",
+        "media_analyze_image",
+        "media_generate_video",
         "todo",
+        "kanban",
         "task",
         "agent",
         "parent_question",
         "tool_auth",
         "extensions_status",
+        "x_search",
         "post_to_x",
         "get_x_mentions"
       ]
@@ -57,9 +89,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 23 tools" do
+    test "returns exactly 55 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 23
+      assert length(tools) == 55
     end
 
     test "passes cwd to each tool" do
@@ -78,7 +110,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 23
+      assert length(tools) == 55
     end
   end
 
@@ -102,14 +134,22 @@ defmodule CodingAgent.ToolsTest do
       tools = Tools.read_only_tools(@test_cwd)
       tool_names = Enum.map(tools, & &1.name)
 
-      expected_tools = ["read", "read_skill", "search_memory", "grep", "find", "ls"]
+      expected_tools = [
+        "read",
+        "read_skill",
+        "search_memory",
+        "session_search",
+        "grep",
+        "find",
+        "ls"
+      ]
 
       assert Enum.sort(tool_names) == Enum.sort(expected_tools)
     end
 
     test "returns exactly 6 tools" do
       tools = Tools.read_only_tools(@test_cwd)
-      assert length(tools) == 6
+      assert length(tools) == 7
     end
 
     test "does not include write/edit tools" do
@@ -149,24 +189,56 @@ defmodule CodingAgent.ToolsTest do
         "read_skill",
         "skill_manage",
         "memory_topic",
+        "memory",
         "search_memory",
+        "session_search",
         "write",
         "edit",
         "hashline_edit",
         "patch",
+        "lsp_diagnostics",
         "bash",
         "grep",
         "find",
         "ls",
         "webfetch",
         "websearch",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_get_content",
+        "browser_click",
+        "browser_type",
+        "browser_hover",
+        "browser_select_option",
+        "browser_upload_file",
+        "browser_download",
+        "browser_press",
+        "browser_scroll",
+        "browser_back",
+        "browser_wait_for_selector",
+        "browser_evaluate",
+        "browser_events",
+        "browser_get_cookies",
+        "browser_set_cookies",
+        "browser_clear_state",
+        "browser_screenshot",
+        "browser_analyze",
+        "media_status",
+        "media_generate_image",
+        "media_generate_speech",
+        "media_transcribe_audio",
+        "media_analyze_image",
+        "media_generate_video",
+        "checkpoint",
         "todo",
+        "kanban",
         "truncate",
         "task",
         "agent",
         "parent_question",
         "tool_auth",
         "extensions_status",
+        "x_search",
         "post_to_x",
         "get_x_mentions"
       ]
@@ -177,9 +249,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 24 tools (includes truncate plus skill_manage, memory, parent_question, and X tools)" do
+    test "returns 56 tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, parent_question, and X tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 24
+      assert map_size(tools_map) == 56
     end
 
     test "tool names match map keys" do
@@ -232,7 +304,9 @@ defmodule CodingAgent.ToolsTest do
         "read_skill",
         "skill_manage",
         "memory_topic",
+        "memory",
         "search_memory",
+        "session_search",
         "write",
         "edit",
         "hashline_edit",
@@ -243,12 +317,33 @@ defmodule CodingAgent.ToolsTest do
         "ls",
         "webfetch",
         "websearch",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_get_content",
+        "browser_click",
+        "browser_type",
+        "browser_hover",
+        "browser_select_option",
+        "browser_upload_file",
+        "browser_download",
+        "browser_press",
+        "browser_scroll",
+        "browser_back",
+        "browser_wait_for_selector",
+        "browser_evaluate",
+        "browser_events",
+        "browser_get_cookies",
+        "browser_set_cookies",
+        "browser_clear_state",
+        "browser_screenshot",
+        "browser_analyze",
         "todo",
         "truncate",
         "task",
         "agent",
         "tool_auth",
         "extensions_status",
+        "x_search",
         "post_to_x",
         "get_x_mentions"
       ]
@@ -319,12 +414,33 @@ defmodule CodingAgent.ToolsTest do
         "ls",
         "webfetch",
         "websearch",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_get_content",
+        "browser_click",
+        "browser_type",
+        "browser_hover",
+        "browser_select_option",
+        "browser_upload_file",
+        "browser_download",
+        "browser_press",
+        "browser_scroll",
+        "browser_back",
+        "browser_wait_for_selector",
+        "browser_evaluate",
+        "browser_events",
+        "browser_get_cookies",
+        "browser_set_cookies",
+        "browser_clear_state",
+        "browser_screenshot",
+        "browser_analyze",
         "todo",
         "truncate",
         "task",
         "agent",
         "tool_auth",
         "extensions_status",
+        "x_search",
         "post_to_x",
         "get_x_mentions"
       ]

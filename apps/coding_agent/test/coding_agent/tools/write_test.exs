@@ -2,6 +2,7 @@ defmodule CodingAgent.Tools.WriteTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Write
+  alias CodingAgent.Checkpoint
   alias AgentCore.Types.AgentToolResult
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
@@ -138,6 +139,31 @@ defmodule CodingAgent.Tools.WriteTest do
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == long_content
+    end
+
+    test "creates filesystem checkpoint when session opts are present", %{tmp_dir: tmp_dir} do
+      session_id = "write-checkpoint-#{System.unique_integer([:positive])}"
+      path = Path.join(tmp_dir, "checkpointed.txt")
+      File.write!(path, "before")
+
+      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+
+      result =
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "after"},
+          nil,
+          nil,
+          tmp_dir,
+          session_id: session_id
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert is_binary(details.checkpoint_id)
+      assert details.checkpoint_kind == "filesystem"
+
+      {:ok, _restored} = Checkpoint.restore_filesystem(details.checkpoint_id)
+      assert File.read!(path) == "before"
     end
   end
 
@@ -685,6 +711,32 @@ defmodule CodingAgent.Tools.WriteTest do
 
       assert tool.parameters["properties"]["format"]["type"] == "boolean"
       assert tool.parameters["properties"]["format"]["description"] =~ "format"
+    end
+
+    test "tool parameter includes diagnostics option", %{tmp_dir: tmp_dir} do
+      tool = Write.tool(tmp_dir)
+
+      assert tool.parameters["properties"]["diagnostics"]["type"] == "boolean"
+      assert tool.parameters["properties"]["diagnostics"]["description"] =~ "diagnostics"
+    end
+
+    test "reports introduced diagnostics when requested", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "bad.exs")
+
+      result =
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "defmodule Bad do\n", "diagnostics" => true},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "Diagnostics introduced 1 issue"
+      assert details.diagnostics.status == :diagnostics
+      assert length(details.diagnostics.introduced_diagnostics) == 1
     end
 
     test "format parameter defaults to false in tool definition", %{tmp_dir: tmp_dir} do
