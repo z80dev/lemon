@@ -230,7 +230,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
           result: "Tool missing_tool_for_runner not found",
           result_meta: %{
             error_type: :unknown_tool,
-            tool_name: "missing_tool_for_runner"
+            tool_name: "missing_tool_for_runner",
+            exit_code: 127
           }
         }
       },
@@ -256,7 +257,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
              kind: "tool",
              ok: false,
              error_type: :unknown_tool,
-             tool_name: "missing_tool_for_runner"
+             tool_name: "missing_tool_for_runner",
+             exit_code: 127
            }
   end
 
@@ -449,6 +451,63 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert child_action.caller_engine == "codex"
     assert String.contains?(state.last_text, "▸ task(codex): inspect repo")
     assert String.contains?(state.last_text, "  ✓ Read: AGENTS.md")
+  end
+
+  test "expands browser partial-result current_action into a child action" do
+    session_key = "agent:browser:telegram:bot:dm:656"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    ev = %{
+      engine: "lemon",
+      action: %{
+        id: "browser_1",
+        kind: "tool",
+        title: "Browser Navigate",
+        detail: %{
+          name: "browser_navigate",
+          partial_result: %AgentCore.Types.AgentToolResult{
+            content: [%Ai.Types.TextContent{type: :text, text: "browser started"}],
+            details: %{
+              "tool" => "browser_navigate",
+              "method" => "browser.navigate",
+              "phase" => "started",
+              "browser" => %{"scheme" => "https", "hostHash" => "abc123"},
+              "current_action" => %{
+                "title" => "Browser navigate",
+                "kind" => "browser",
+                "phase" => "started"
+              }
+            },
+            trust: :trusted
+          }
+        }
+      },
+      phase: :updated,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+
+    child_action =
+      state.actions
+      |> Map.values()
+      |> Enum.find(fn action ->
+        action[:detail][:parent_tool_use_id] == "browser_1"
+      end)
+
+    assert child_action.title == "Browser navigate"
+    assert child_action.kind == "browser"
+    assert child_action.phase == :started
+    assert String.contains?(state.last_text, "▸ Browser Navigate")
+    assert String.contains?(state.last_text, "  ▸ Browser navigate")
+    refute state.last_text =~ "abc123"
   end
 
   test "skips internal task poll action and renders its current_action as a child" do

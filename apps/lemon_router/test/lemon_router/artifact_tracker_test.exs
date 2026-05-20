@@ -60,7 +60,12 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
         detail: %{
           result_meta: %{
             auto_send_files: [
-              %{path: "workspace/image.png", filename: "custom.png", caption: "Generated"},
+              %{
+                path: "workspace/image.png",
+                filename: "custom.png",
+                caption: "Generated",
+                source: :generated
+              },
               %{"path" => "workspace/report.txt"}
             ]
           }
@@ -70,7 +75,12 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
 
     assert ArtifactTracker.track_requested_send_files(state, action_event).requested_send_files ==
              [
-               %{path: "workspace/image.png", filename: "custom.png", caption: "Generated"},
+               %{
+                 path: "workspace/image.png",
+                 filename: "custom.png",
+                 caption: "Generated",
+                 source: :generated
+               },
                %{path: "workspace/report.txt", filename: "report.txt", caption: nil}
              ]
   end
@@ -144,6 +154,73 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
                %{path: file, filename: "second.txt", caption: nil, source: :explicit}
              ]
            }
+  end
+
+  test "finalize_meta/2 turns final-answer MEDIA directives into explicit files" do
+    cwd = tmp_dir!("artifact-tracker-media-directive")
+    file = canonical_path(write_file!(cwd, "artifacts/chart.png", "png"))
+    write_file!(cwd, "notes.txt", "notes")
+
+    outside_dir = tmp_dir!("artifact-tracker-media-directive-outside")
+    outside = write_file!(outside_dir, "secret.png", "secret")
+
+    state = %{
+      execution_request: request(cwd),
+      requested_send_files: [%{path: "notes.txt", caption: "Notes"}]
+    }
+
+    answer = """
+    Done.
+    MEDIA: artifacts/chart.png
+    inline MEDIA: notes.txt
+    MEDIA: missing.png
+    MEDIA: #{outside}
+    """
+
+    assert ArtifactTracker.finalize_meta(state, answer) == %{
+             auto_send_files: [
+               %{
+                 path: canonical_path(Path.join(cwd, "notes.txt")),
+                 filename: "notes.txt",
+                 caption: "Notes",
+                 source: :explicit
+               },
+               %{path: file, filename: "chart.png", caption: nil, source: :explicit}
+             ]
+           }
+  end
+
+  test "finalize_meta/2 dedupes MEDIA directives against explicit file requests" do
+    cwd = tmp_dir!("artifact-tracker-media-directive-dedupe")
+    file = canonical_path(write_file!(cwd, "artifacts/chart.png", "png"))
+
+    state = %{
+      execution_request: request(cwd),
+      requested_send_files: [%{path: "artifacts/chart.png"}]
+    }
+
+    answer = """
+    MEDIA:artifacts/chart.png
+    MEDIA: `artifacts/chart.png`
+    """
+
+    assert ArtifactTracker.finalize_meta(state, answer) == %{
+             auto_send_files: [
+               %{path: file, filename: "chart.png", caption: nil, source: :explicit}
+             ]
+           }
+  end
+
+  test "strip_media_directives/1 removes host-visible MEDIA lines from final text" do
+    answer = """
+    Here is the chart.
+    MEDIA: artifacts/chart.png
+    Inline MEDIA: artifacts/chart.png stays text.
+    MEDIA:
+    """
+
+    assert ArtifactTracker.strip_media_directives(answer) ==
+             "Here is the chart.\nInline MEDIA: artifacts/chart.png stays text."
   end
 
   test "finalize_meta/1 rejects paths outside cwd" do

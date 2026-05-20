@@ -46,6 +46,7 @@ defmodule LemonRouter.SubmissionBuilder do
     session_key = params.session_key
     agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
     prompt = params.prompt
+    images = params.images || []
     queue_mode = params.queue_mode || :collect
     engine_id = params.engine_id
     request_model = params.model
@@ -164,6 +165,7 @@ defmodule LemonRouter.SubmissionBuilder do
         session_key: session_key,
         prompt: prompt,
         engine_id: resolved_engine_id,
+        images: images,
         cwd: cwd,
         resume: resolved_resume,
         lane: MapHelpers.get_key(meta, :lane) || :main,

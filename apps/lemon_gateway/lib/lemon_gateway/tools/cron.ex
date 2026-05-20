@@ -2,15 +2,15 @@ defmodule LemonGateway.Tools.Cron do
   @moduledoc """
   AgentCore tool for managing Lemon internal cron/scheduled jobs.
 
-  Supports actions to list, add, update, remove, and trigger cron jobs, as well
-  as viewing run history. Delegates to `LemonAutomation.CronManager` for
-  persistence and scheduling.
+  Supports actions to list, add, update, pause, resume, abort, remove, and trigger cron
+  jobs, as well as viewing run history. Delegates to
+  `LemonAutomation.CronManager` for persistence and scheduling.
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
 
-  @actions ~w(status list add update remove run runs)
+  @actions ~w(status list add update pause resume abort remove run runs)
   @default_timeout_ms 300_000
   @default_limit 100
 
@@ -23,7 +23,7 @@ defmodule LemonGateway.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs (not OS crontab): status, list, add, update, remove, run, and runs.",
+        "Manage Lemon internal cron jobs (not OS crontab): status, list, add, update, pause, resume, remove, run, and runs. Add/update accepts 5-field cron plus supported shorthands like 'every 30m', 'daily at 9am', and 'weekdays at 09:30'.",
       parameters: tool_schema(),
       execute: &execute(&1, &2, &3, &4, session_key, agent_id)
     }
@@ -53,7 +53,8 @@ defmodule LemonGateway.Tools.Cron do
         "action" => %{
           "type" => "string",
           "enum" => @actions,
-          "description" => "Cron action: status, list, add, update, remove, run, or runs."
+          "description" =>
+            "Cron action: status, list, add, update, pause, resume, abort, remove, run, or runs."
         },
         "includeDisabled" => %{
           "type" => "boolean",
@@ -67,13 +68,22 @@ defmodule LemonGateway.Tools.Cron do
           "type" => "string",
           "description" => "Alias for id (update/remove/run/runs)."
         },
+        "runId" => %{
+          "type" => "string",
+          "description" => "Cron run id for abort."
+        },
+        "cronRunId" => %{
+          "type" => "string",
+          "description" => "Alias for runId for abort."
+        },
         "name" => %{
           "type" => "string",
           "description" => "Job name (add/update)."
         },
         "schedule" => %{
           "type" => "string",
-          "description" => "Cron expression with 5 fields, for example: '0 9 * * *'."
+          "description" =>
+            "Schedule as a 5-field cron expression or supported shorthand, for example: '0 9 * * *', 'every 30m', 'daily at 9am', or 'weekdays at 09:30'."
         },
         "prompt" => %{
           "type" => "string",
@@ -99,6 +109,14 @@ defmodule LemonGateway.Tools.Cron do
         "timeoutMs" => %{
           "type" => "integer",
           "description" => "Optional timeout in milliseconds (default: 300000)."
+        },
+        "maxRetries" => %{
+          "type" => "integer",
+          "description" => "Scheduled-run retry count after failure/timeout (default: 0)."
+        },
+        "retryBackoffMs" => %{
+          "type" => "integer",
+          "description" => "Delay before retry runs in milliseconds (default: 30000)."
         },
         "agentId" => %{
           "type" => "string",
@@ -207,6 +225,16 @@ defmodule LemonGateway.Tools.Cron do
               parse_positive_integer(
                 fetch_param(source, "timeoutMs") || fetch_param(source, "timeout_ms"),
                 @default_timeout_ms
+              ),
+            max_retries:
+              parse_non_negative_integer(
+                fetch_param(source, "maxRetries") || fetch_param(source, "max_retries"),
+                0
+              ),
+            retry_backoff_ms:
+              parse_non_negative_integer(
+                fetch_param(source, "retryBackoffMs") || fetch_param(source, "retry_backoff_ms"),
+                30_000
               )
           }
           |> maybe_put(:meta, if(is_map(meta), do: meta, else: nil))
@@ -266,6 +294,19 @@ defmodule LemonGateway.Tools.Cron do
         )
       )
       |> maybe_put(
+        :max_retries,
+        parse_non_negative_integer_or_nil(
+          fetch_param(patch_source, "maxRetries") || fetch_param(patch_source, "max_retries")
+        )
+      )
+      |> maybe_put(
+        :retry_backoff_ms,
+        parse_non_negative_integer_or_nil(
+          fetch_param(patch_source, "retryBackoffMs") ||
+            fetch_param(patch_source, "retry_backoff_ms")
+        )
+      )
+      |> maybe_put(
         :meta,
         if(is_map(fetch_param(patch_source, "meta")),
           do: fetch_param(patch_source, "meta"),
@@ -321,6 +362,43 @@ defmodule LemonGateway.Tools.Cron do
     end
   end
 
+  defp dispatch("pause", params, _session_key, _default_agent_id) do
+    update_enabled(params, false, "paused", "Cron job paused")
+  end
+
+  defp dispatch("resume", params, _session_key, _default_agent_id) do
+    update_enabled(params, true, "resumed", "Cron job resumed")
+  end
+
+  defp dispatch("abort", params, _session_key, _default_agent_id) do
+    with {:ok, run_id} <- require_run_id(params) do
+      case cron_call(:abort_run, [run_id]) do
+        {:ok, {:ok, run}} ->
+          payload = %{
+            "aborted" => true,
+            "runId" => Map.get(run, :id),
+            "jobId" => Map.get(run, :job_id),
+            "status" => run |> Map.get(:status) |> to_string(),
+            "routerRunId" => Map.get(run, :run_id)
+          }
+
+          {:ok, {"Cron run aborted", payload}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron run not found: #{run_id}"}
+
+        {:ok, {:error, :not_active}} ->
+          {:error, "Cron run is not active: #{run_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to abort cron run: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
   defp dispatch("run", params, _session_key, _default_agent_id) do
     with {:ok, job_id} <- require_job_id(params) do
       case cron_call(:run_now, [job_id]) do
@@ -363,6 +441,31 @@ defmodule LemonGateway.Tools.Cron do
 
   defp dispatch(action, _params, _session_key, _default_agent_id),
     do: {:error, "Unknown action '#{action}'. Supported: #{Enum.join(@actions, ", ")}"}
+
+  defp update_enabled(params, enabled, result_key, title) do
+    with {:ok, job_id} <- require_job_id(params) do
+      case cron_call(:update, [job_id, %{enabled: enabled}]) do
+        {:ok, {:ok, job}} ->
+          payload = %{
+            "id" => Map.get(job, :id),
+            result_key => true,
+            "enabled" => Map.get(job, :enabled),
+            "nextRunAtMs" => Map.get(job, :next_run_at_ms)
+          }
+
+          {:ok, {title, payload}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron job not found: #{job_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to update cron job: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
 
   defp ensure_scheduler_started do
     manager = cron_manager()
@@ -416,8 +519,20 @@ defmodule LemonGateway.Tools.Cron do
     end
   end
 
+  defp require_run_id(params) do
+    case resolve_run_id(params) do
+      nil -> {:error, "runId (or cronRunId) is required"}
+      run_id -> {:ok, run_id}
+    end
+  end
+
   defp resolve_job_id(params) do
     normalize_string(fetch_param(params, "id")) || normalize_string(fetch_param(params, "jobId"))
+  end
+
+  defp resolve_run_id(params) do
+    normalize_string(fetch_param(params, "runId")) ||
+      normalize_string(fetch_param(params, "cronRunId"))
   end
 
   defp resolve_agent_id(source, session_key, default_agent_id) do
@@ -478,6 +593,8 @@ defmodule LemonGateway.Tools.Cron do
       "timezone" => Map.get(job, :timezone) || "UTC",
       "jitterSec" => Map.get(job, :jitter_sec) || 0,
       "timeoutMs" => Map.get(job, :timeout_ms),
+      "maxRetries" => Map.get(job, :max_retries) || 0,
+      "retryBackoffMs" => Map.get(job, :retry_backoff_ms) || 30_000,
       "createdAtMs" => Map.get(job, :created_at_ms),
       "updatedAtMs" => Map.get(job, :updated_at_ms),
       "lastRunAtMs" => Map.get(job, :last_run_at_ms),
@@ -491,12 +608,27 @@ defmodule LemonGateway.Tools.Cron do
       "jobId" => Map.get(run, :job_id),
       "status" => run |> Map.get(:status) |> to_string(),
       "triggeredBy" => run |> Map.get(:triggered_by) |> to_string(),
+      "retryAttempt" => retry_attempt(run),
+      "retryOf" => meta_value(run, :retry_of),
+      "retryRootId" => meta_value(run, :retry_root_id),
       "startedAtMs" => Map.get(run, :started_at_ms),
       "completedAtMs" => Map.get(run, :completed_at_ms),
       "output" => truncate(Map.get(run, :output), 500),
       "error" => Map.get(run, :error),
       "suppressed" => Map.get(run, :suppressed) || false
     }
+  end
+
+  defp retry_attempt(run) do
+    case meta_value(run, :retry_attempt) do
+      value when is_integer(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp meta_value(run, key) do
+    meta = Map.get(run, :meta) || %{}
+    Map.get(meta, key) || Map.get(meta, to_string(key))
   end
 
   defp truncate(nil, _max), do: nil

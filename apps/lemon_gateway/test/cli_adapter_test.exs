@@ -37,7 +37,7 @@ defmodule LemonGateway.CliAdapterTest do
   end
 
   test "maps action result metadata" do
-    result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123}
+    result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123, exit_code: 124}
 
     action =
       Action.new("tool_1", :tool, "slow_tool", %{name: "slow_tool", result_meta: result_meta})
@@ -68,6 +68,50 @@ defmodule LemonGateway.CliAdapterTest do
              answer: "done",
              resume: %GatewayToken{value: "thread_123"}
            } = result
+  end
+
+  test "passes ACP filesystem metadata into runner options" do
+    parent = self()
+
+    defmodule CliAdapterMetadataRunner do
+      use GenServer
+
+      def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+      def init(opts) do
+        send(opts[:owner], {:cli_adapter_start_opts, opts})
+        {:ok, stream} = AgentCore.EventStream.start(owner: self())
+        AgentCore.EventStream.complete(stream, [])
+        {:ok, %{stream: stream}}
+      end
+
+      def stream(pid), do: GenServer.call(pid, :stream)
+
+      def handle_call(:stream, _from, state), do: {:reply, state.stream, state}
+    end
+
+    job = %{
+      prompt: "use editor fs",
+      resume: nil,
+      images: [],
+      tool_policy: nil,
+      session_key: "agent:default:acp-test",
+      run_id: "run_acp_meta",
+      cwd: nil,
+      meta: %{
+        acp_session_id: "acp_session",
+        acp_client_fs_read_text_file: true,
+        acp_client_fs_write_text_file: true
+      }
+    }
+
+    assert {:ok, _run_ref, _ctx} =
+             CliAdapter.start_run(CliAdapterMetadataRunner, "lemon", job, %{}, parent)
+
+    assert_receive {:cli_adapter_start_opts, opts}, 1_000
+    assert opts[:acp_session_id] == "acp_session"
+    assert opts[:acp_client_fs_read_text_file] == true
+    assert opts[:acp_client_fs_write_text_file] == true
   end
 
   test "cancel uses cancel/2 when runner exports it" do

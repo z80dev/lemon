@@ -43,13 +43,19 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   end
 
   @spec finalize_meta(map()) :: map()
-  def finalize_meta(state) do
+  def finalize_meta(state), do: finalize_meta(state, nil)
+
+  @spec finalize_meta(map(), binary() | nil) :: map()
+  def finalize_meta(state, answer) do
     cwd = request_cwd(state)
     root = normalize_root(cwd)
 
     files =
       merge_files(
-        resolve_explicit_send_files(requested_send_files(state), root),
+        merge_files(
+          resolve_explicit_send_files(requested_send_files(state), root),
+          resolve_explicit_send_files(media_directive_files(answer), root)
+        ),
         resolve_generated_files(generated_image_paths(state), root)
       )
 
@@ -59,6 +65,17 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
       %{auto_send_files: files}
     end
   end
+
+  @spec strip_media_directives(term()) :: term()
+  def strip_media_directives(answer) when is_binary(answer) do
+    answer
+    |> String.split(["\r\n", "\n", "\r"])
+    |> Enum.reject(&media_directive_line?/1)
+    |> Enum.join("\n")
+    |> String.trim_trailing()
+  end
+
+  def strip_media_directives(answer), do: answer
 
   defp extract_generated_image_paths(action_event) do
     action = MapHelpers.get_key(action_event, :action) || %{}
@@ -149,17 +166,74 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     path = MapHelpers.get_key(file, :path)
     filename = MapHelpers.get_key(file, :filename)
     caption = MapHelpers.get_key(file, :caption)
+    source = normalize_source(MapHelpers.get_key(file, :source))
+    mime_type = MapHelpers.get_key(file, :mime_type)
 
     if is_binary(path) and path != "" do
-      %{
+      base = %{
         path: path,
         filename: normalize_filename(filename, path),
         caption: normalize_caption(caption)
       }
+
+      base
+      |> maybe_put(:source, source)
+      |> maybe_put(:mime_type, normalize_mime_type(mime_type))
     end
   end
 
   defp normalize_requested_send_file(_), do: nil
+
+  defp media_directive_files(answer) when is_binary(answer) do
+    answer
+    |> String.split(["\r\n", "\n", "\r"])
+    |> Enum.map(&media_directive_file/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp media_directive_files(_), do: []
+
+  defp media_directive_file(line) when is_binary(line) do
+    case media_directive_path(line) do
+      path when is_binary(path) and path != "" -> %{path: path, source: :explicit}
+      _ -> nil
+    end
+  end
+
+  defp media_directive_file(_), do: nil
+
+  defp media_directive_line?(line) when is_binary(line), do: is_binary(media_directive_path(line))
+  defp media_directive_line?(_), do: false
+
+  defp media_directive_path(line) when is_binary(line) do
+    trimmed = String.trim(line)
+
+    if String.starts_with?(trimmed, "MEDIA:") do
+      trimmed
+      |> String.replace_prefix("MEDIA:", "")
+      |> String.trim()
+      |> unwrap_media_path()
+    end
+  end
+
+  defp media_directive_path(_), do: nil
+
+  defp unwrap_media_path(path) do
+    path
+    |> unwrap_media_path("`")
+    |> unwrap_media_path("\"")
+    |> unwrap_media_path("'")
+  end
+
+  defp unwrap_media_path(path, wrapper) do
+    if String.starts_with?(path, wrapper) and String.ends_with?(path, wrapper) do
+      path
+      |> String.trim_leading(wrapper)
+      |> String.trim_trailing(wrapper)
+    else
+      path
+    end
+  end
 
   defp resolve_generated_files(paths, root) when is_list(paths) do
     paths
@@ -188,6 +262,8 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     path = MapHelpers.get_key(file, :path)
     filename = MapHelpers.get_key(file, :filename)
     caption = MapHelpers.get_key(file, :caption)
+    source = normalize_source(MapHelpers.get_key(file, :source)) || :explicit
+    mime_type = MapHelpers.get_key(file, :mime_type)
 
     with path when is_binary(path) and path != "" <- path,
          resolved when is_binary(resolved) <- resolve_explicit_path(path, root),
@@ -196,8 +272,9 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
         path: valid_path,
         filename: normalize_filename(filename, valid_path),
         caption: normalize_caption(caption),
-        source: :explicit
+        source: source
       }
+      |> maybe_put(:mime_type, normalize_mime_type(mime_type))
     else
       _ -> nil
     end
@@ -278,6 +355,19 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
   defp normalize_caption(caption) when is_binary(caption) and caption != "", do: caption
   defp normalize_caption(_), do: nil
+
+  defp normalize_source(source) when source in [:explicit, :generated], do: source
+  defp normalize_source("explicit"), do: :explicit
+  defp normalize_source("generated"), do: :generated
+  defp normalize_source(_source), do: nil
+
+  defp normalize_mime_type(mime_type) when is_binary(mime_type) and mime_type != "",
+    do: mime_type
+
+  defp normalize_mime_type(_mime_type), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp image_path?(path) when is_binary(path) do
     path

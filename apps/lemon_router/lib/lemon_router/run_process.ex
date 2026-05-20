@@ -19,6 +19,7 @@ defmodule LemonRouter.RunProcess do
   - `RunProcess.RetryHandler` -- zero-answer auto-retry
   - `LemonRouter.SurfaceManager` -- semantic answer/status coordination and fanout
   - `RunProcess.ArtifactTracker` -- generated file tracking and answer metadata enrichment
+  - `LemonRouter.MediaJobRecorder` -- generated media delivery metadata recording
   """
 
   use GenServer
@@ -26,6 +27,7 @@ defmodule LemonRouter.RunProcess do
   require Logger
 
   alias LemonCore.{Bus, ExecutionCommand, Introspection}
+  alias LemonRouter.MediaJobRecorder
   alias LemonRouter.SurfaceManager
   alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
 
@@ -297,11 +299,18 @@ defmodule LemonRouter.RunProcess do
     end
 
     unless retried? do
-      extra_meta = safe_finalize_meta(state)
+      extra_meta = safe_finalize_meta(state, event)
+      media_recording = safe_record_media_jobs(extra_meta, state)
+      surface_event = strip_media_directives_from_event(event)
 
       Introspection.record(
         :answer_finalize_started,
-        %{saw_delta: state.saw_delta, extra_meta_keys: Map.keys(extra_meta)},
+        %{
+          saw_delta: state.saw_delta,
+          extra_meta_keys: Map.keys(extra_meta),
+          media_jobs_recorded_count: media_recording.recorded_count,
+          media_jobs_failed_count: media_recording.failed_count
+        },
         run_id: state.run_id,
         session_key: state.session_key,
         engine: "lemon",
@@ -310,7 +319,7 @@ defmodule LemonRouter.RunProcess do
 
       # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
       # channels keep their dedicated final-answer behavior separate from tool status UI.
-      SurfaceManager.finalize_answer(state, event, extra_meta)
+      SurfaceManager.finalize_answer(state, surface_event, extra_meta)
 
       Introspection.record(
         :answer_finalize_completed,
@@ -695,8 +704,15 @@ defmodule LemonRouter.RunProcess do
   defp artifact_tracker(%{artifact_tracker: mod}) when is_atom(mod), do: mod
   defp artifact_tracker(_state), do: ArtifactTracker
 
-  defp safe_finalize_meta(state) do
-    artifact_tracker(state).finalize_meta(state)
+  defp safe_finalize_meta(state, event) do
+    tracker = artifact_tracker(state)
+    answer = CompactionTrigger.extract_completed_answer(event)
+
+    if function_exported?(tracker, :finalize_meta, 2) do
+      tracker.finalize_meta(state, answer)
+    else
+      tracker.finalize_meta(state)
+    end
   rescue
     error ->
       Introspection.record(
@@ -714,6 +730,57 @@ defmodule LemonRouter.RunProcess do
       )
 
       %{}
+  end
+
+  defp strip_media_directives_from_event(%LemonCore.Event{payload: payload} = event)
+       when is_map(payload) do
+    %{event | payload: strip_media_directives_from_payload(payload)}
+  end
+
+  defp strip_media_directives_from_event(event), do: event
+
+  defp strip_media_directives_from_payload(payload) do
+    payload
+    |> strip_media_directives_from_key(:answer)
+    |> strip_media_directives_from_key("answer")
+    |> strip_media_directives_from_completed(:completed)
+    |> strip_media_directives_from_completed("completed")
+  end
+
+  defp strip_media_directives_from_completed(payload, key) do
+    case Map.get(payload, key) do
+      completed when is_map(completed) ->
+        Map.put(payload, key, strip_media_directives_from_payload(completed))
+
+      _ ->
+        payload
+    end
+  end
+
+  defp strip_media_directives_from_key(payload, key) do
+    case Map.get(payload, key) do
+      answer when is_binary(answer) ->
+        Map.put(payload, key, ArtifactTracker.strip_media_directives(answer))
+
+      _ ->
+        payload
+    end
+  end
+
+  defp safe_record_media_jobs(extra_meta, state) do
+    MediaJobRecorder.record_auto_send_files(extra_meta, state)
+  rescue
+    error ->
+      Introspection.record(
+        :answer_media_jobs_record_failed,
+        %{error: Exception.message(error)},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
+
+      %{recorded_count: 0, skipped_count: 0, failed_count: 1}
   end
 
   defp maybe_monitor_gateway_run(%{gateway_run_ref: ref} = state) when not is_nil(ref), do: state

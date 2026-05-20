@@ -209,14 +209,51 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     assert_phase_event(run_id_3, :queued_in_session, :accepted)
   end
 
-  defp submit(key, run_id, prompt, queue_mode, run_supervisor) do
+  test "user collect submission starts before queued goal continuation", %{
+    run_supervisor: run_supervisor
+  } do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+    active_run_id = "run_phase_goal_preempt_active"
+    goal_run_id = "run_phase_goal_preempt_followup"
+    user_run_id = "run_phase_goal_preempt_user"
+
+    :ok = Bus.subscribe(Bus.run_topic(goal_run_id))
+    :ok = Bus.subscribe(Bus.run_topic(user_run_id))
+
+    :ok = submit(key, active_run_id, "active", :collect, run_supervisor)
+    assert_receive {:started, ^active_run_id, _opts}, 500
+
+    :ok =
+      submit(key, goal_run_id, "goal continuation", :followup, run_supervisor, %{
+        origin: :goal,
+        goal_continuation: true
+      })
+
+    assert_phase_event(goal_run_id, :accepted, nil)
+    assert_phase_event(goal_run_id, :queued_in_session, :accepted)
+
+    :ok =
+      submit(key, user_run_id, "user message", :collect, run_supervisor, %{origin: :channel})
+
+    assert_phase_event(user_run_id, :accepted, nil)
+    assert_phase_event(user_run_id, :queued_in_session, :accepted)
+
+    SessionCoordinator.cancel(session_key, :user_requested)
+    assert_receive {:aborted, ^active_run_id, :user_requested}, 500
+    assert_receive {:started, ^user_run_id, _opts}, 500
+    assert_phase_event(user_run_id, :waiting_for_slot, :queued_in_session)
+    refute_receive {:started, ^goal_run_id, _opts}, 100
+  end
+
+  defp submit(key, run_id, prompt, queue_mode, run_supervisor, meta \\ %{}) do
     request = %ExecutionCommand{
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,
       engine_id: "codex",
       conversation_key: key,
-      meta: %{}
+      meta: meta
     }
 
     submission =
@@ -228,7 +265,8 @@ defmodule LemonRouter.RunPhaseSequenceTest do
         execution_request: request,
         run_supervisor: run_supervisor,
         run_process_module: PhaseStubRunProcess,
-        run_process_opts: %{test_pid: self()}
+        run_process_opts: %{test_pid: self()},
+        meta: meta
       })
 
     SessionCoordinator.submit(key, submission)
@@ -281,5 +319,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
   end
 
   defp restore_engine_runtime(nil), do: Application.delete_env(:lemon_router, :engine_runtime)
-  defp restore_engine_runtime(value), do: Application.put_env(:lemon_router, :engine_runtime, value)
+
+  defp restore_engine_runtime(value),
+    do: Application.put_env(:lemon_router, :engine_runtime, value)
 end

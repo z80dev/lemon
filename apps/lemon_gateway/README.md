@@ -160,6 +160,11 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
 | `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, timeouts, and stale lock reaping |
 
+Gateway action events preserve nested `action.detail.result_meta` metadata,
+including safe failure fields such as `error_type`, `timeout_ms`, and
+`exit_code`, so downstream router and control-plane consumers can classify tool
+failures without parsing rendered command output.
+
 ### Engine Layer
 
 | Module | File | Purpose |
@@ -236,7 +241,7 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs via `LemonAutomation.CronManager` |
+| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs and active cron runs via `LemonAutomation.CronManager` |
 | `LemonGateway.Tools.SmsGetInboxNumber` | `tools/sms_get_inbox_number.ex` | Get the Twilio inbox phone number |
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |
@@ -445,7 +450,8 @@ The Run re-emits all events to `LemonCore.Bus` as plain maps on topic `"run:<run
 
 ## Health Check
 
-The health endpoint runs on port 4042 (configurable via `:health_port`). `GET /health` returns JSON with built-in checks for:
+The health endpoint runs on port 4042 (configurable via `:health_port` or
+`LEMON_GATEWAY_HEALTH_PORT`). `GET /health` returns JSON with built-in checks for:
 
 - Supervisor process liveness
 - Scheduler state (in_flight count, waitq length, max slots)

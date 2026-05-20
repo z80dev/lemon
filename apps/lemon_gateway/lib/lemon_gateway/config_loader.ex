@@ -214,7 +214,8 @@ defmodule LemonGateway.ConfigLoader do
       bot_token: fetch(discord, :bot_token),
       allowed_guild_ids: fetch(discord, :allowed_guild_ids),
       allowed_channel_ids: fetch(discord, :allowed_channel_ids),
-      deny_unbound_channels: fetch(discord, :deny_unbound_channels)
+      deny_unbound_channels: fetch(discord, :deny_unbound_channels),
+      files: parse_telegram_files(fetch(discord, :files))
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -410,6 +411,7 @@ defmodule LemonGateway.ConfigLoader do
       enabled: fetch(files, :enabled),
       auto_put: fetch(files, :auto_put),
       auto_put_mode: fetch(files, :auto_put_mode),
+      auto_send_generated_files: fetch(files, :auto_send_generated_files),
       auto_send_generated_images: fetch(files, :auto_send_generated_images),
       auto_send_generated_max_files: fetch(files, :auto_send_generated_max_files),
       uploads_dir: fetch(files, :uploads_dir),

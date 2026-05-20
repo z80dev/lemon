@@ -651,6 +651,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
       |> maybe_put(:reason, map_value(result_meta, :reason))
       |> maybe_put(:errors, map_value(result_meta, :errors))
       |> maybe_put(:timeout_ms, map_value(result_meta, :timeout_ms))
+      |> maybe_put(:exit_code, map_value(result_meta, :exit_code))
+      |> maybe_put(:exception, map_value(result_meta, :exception))
       |> maybe_put(:message, map_value(result_meta, :message))
       |> maybe_put(:status, map_value(result_meta, :status))
     end
@@ -1095,6 +1097,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       "command",
       "file_change",
       "web_search",
+      "browser",
       "subagent",
       "reasoning"
     ]

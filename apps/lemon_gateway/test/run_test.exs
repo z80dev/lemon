@@ -723,7 +723,7 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, run_ref}, 2000
 
-      result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123}
+      result_meta = %{error_type: :tool_task_timeout, timeout_ms: 123, exit_code: 124}
 
       action =
         Event.action(%{

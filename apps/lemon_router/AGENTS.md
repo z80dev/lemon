@@ -99,6 +99,9 @@ Router output is semantic:
 
 Tool-status intents include rendered `body.text` and may include
 `body.tool_failures` when completed tool actions carry structured failure metadata.
+Failure summaries preserve safe `result_meta` fields needed by operator surfaces,
+including `error_type`, tool name, timeout, command exit code, exception
+class/name, status, reason, message, and validation errors.
 
 `lemon_channels` owns:
 
@@ -186,8 +189,12 @@ filtered, but notes carrying reasoning details are preserved instead of being dr
 Chat renderers keep the usual line budget for these actions; non-chat/operator renderers can show
 the full structured action stream.
 Generated images and explicit file-send requests are tracked in
-`RunProcess.ArtifactTracker`; channels still receive them only through
-`auto_send_files` metadata on the answer finalization path.
+`RunProcess.ArtifactTracker`; final-answer lines of the form
+`MEDIA:<project-relative-path>` are also parsed into explicit file-send
+requests. Channels still receive all of them only through `auto_send_files`
+metadata on the answer finalization path, after existing-file, cwd, and symlink
+escape checks pass. The host-visible `MEDIA:` directive line is stripped from
+the final text before Telegram or Discord rendering.
 The router tool-status coalescer no longer drops older actions after a fixed count;
 it keeps the full in-memory action order and leaves presentation budgeting to
 the renderer/channel layer.

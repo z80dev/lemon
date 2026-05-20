@@ -125,6 +125,7 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:env, Map.get(opts, :env))
       |> maybe_put(:timeout, Map.get(opts, :timeout_ms))
       |> maybe_put(:run_id, Map.get(opts, :run_id))
+      |> maybe_put(:images, job.images)
 
     # Pass tool_policy, session_key, and agent_id for approval context
     start_opts =
@@ -135,6 +136,15 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:model, get_in(job.meta || %{}, [:model]))
       |> maybe_put(:thinking_level, get_in(job.meta || %{}, [:thinking_level]))
       |> maybe_put(:system_prompt, get_in(job.meta || %{}, [:system_prompt]))
+      |> maybe_put(:acp_session_id, get_in(job.meta || %{}, [:acp_session_id]))
+      |> maybe_put(
+        :acp_client_fs_read_text_file,
+        get_in(job.meta || %{}, [:acp_client_fs_read_text_file])
+      )
+      |> maybe_put(
+        :acp_client_fs_write_text_file,
+        get_in(job.meta || %{}, [:acp_client_fs_write_text_file])
+      )
       |> maybe_put(:async_followups, async_followups(job))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
       |> maybe_put(:extra_tools, gateway_extra_tools(engine_id, job, opts))

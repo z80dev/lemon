@@ -429,7 +429,8 @@ defmodule LemonRouter.StreamCoalescerTest do
                )
 
       assert_receive {:dispatched_intent,
-                      %DeliveryIntent{run_id: ^run_id, kind: :stream_finalize}}, 1_000
+                      %DeliveryIntent{run_id: ^run_id, kind: :stream_finalize}},
+                     1_000
 
       assert :ok =
                StreamCoalescer.ingest_delta(
@@ -896,7 +897,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                      200
 
       entry = LemonChannels.PresentationState.get(route, run_id, :answer)
-      assert entry.last_text_hash == :erlang.phash2({expected_chunks, nil})
+      assert entry.last_text_hash == :erlang.phash2({expected_chunks, nil, []})
     end
 
     test "handles explicit nil final_text with no prior deltas" do

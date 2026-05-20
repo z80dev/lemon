@@ -135,7 +135,7 @@ defmodule LemonRouter.SessionTransitions do
          requested_mode
        ) do
     submission = stamp_router_delivery(submission, requested_mode, :collect, :queued)
-    {%SessionState{state | queue: state.queue ++ [submission]}, []}
+    {%SessionState{state | queue: insert_collect_submission(state.queue, submission)}, []}
   end
 
   defp enqueue_by_mode(
@@ -226,6 +226,29 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp maybe_request_start_next(_state, effects), do: effects
+
+  defp insert_collect_submission(queue, submission) do
+    if user_preempt_submission?(submission) do
+      {before_goal_continuations, goal_continuations} =
+        Enum.split_while(queue, &(not goal_continuation_submission?(&1)))
+
+      before_goal_continuations ++ [submission] ++ goal_continuations
+    else
+      queue ++ [submission]
+    end
+  end
+
+  defp user_preempt_submission?(%{meta: meta}) when is_map(meta) do
+    MapHelpers.get_key(meta, :origin) in [:channel, :control_plane]
+  end
+
+  defp user_preempt_submission?(_submission), do: false
+
+  defp goal_continuation_submission?(%{queue_mode: :followup, meta: meta}) when is_map(meta) do
+    truthy?(MapHelpers.get_key(meta, :goal_continuation))
+  end
+
+  defp goal_continuation_submission?(_submission), do: false
 
   defp maybe_promote_auto_followup(%{queue_mode: :followup, meta: meta} = submission, state)
        when not is_nil(state.active) do

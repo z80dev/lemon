@@ -14,7 +14,7 @@ defmodule LemonGateway.Tools.CronTest do
     :ok
   end
 
-  test "add, list, update, and remove actions operate on Lemon internal cron" do
+  test "add, list, update, pause, resume, abort, and remove actions operate on Lemon internal cron" do
     session_key = LemonCore.SessionKey.main("default")
     tool = Cron.tool(".", session_key: session_key, agent_id: "default")
 
@@ -22,18 +22,57 @@ defmodule LemonGateway.Tools.CronTest do
       call_tool(tool, %{
         "action" => "add",
         "name" => "Tool test job",
-        "schedule" => "*/5 * * * *",
-        "prompt" => "say hello"
+        "schedule" => "every 5 minutes",
+        "prompt" => "say hello",
+        "maxRetries" => 1,
+        "retryBackoffMs" => 1_000
       })
 
     assert %{"id" => job_id, "name" => "Tool test job"} = add_result.details
+    assert add_result.details["schedule"] == "*/5 * * * *"
+    assert add_result.details["maxRetries"] == 1
+    assert add_result.details["retryBackoffMs"] == 1_000
     assert is_binary(job_id)
 
     list_result = call_tool(tool, %{"action" => "list"})
     assert Enum.any?(list_result.details["jobs"], &(&1["id"] == job_id))
 
-    update_result = call_tool(tool, %{"action" => "update", "id" => job_id, "enabled" => false})
+    update_result =
+      call_tool(tool, %{
+        "action" => "update",
+        "id" => job_id,
+        "enabled" => false,
+        "maxRetries" => 2,
+        "retryBackoffMs" => 2_000
+      })
+
     assert %{"id" => ^job_id, "updated" => true, "nextRunAtMs" => _} = update_result.details
+
+    list_after_update = call_tool(tool, %{"action" => "list"})
+    updated = Enum.find(list_after_update.details["jobs"], &(&1["id"] == job_id))
+    assert updated["maxRetries"] == 2
+    assert updated["retryBackoffMs"] == 2_000
+
+    pause_result = call_tool(tool, %{"action" => "pause", "id" => job_id})
+    assert %{"id" => ^job_id, "paused" => true, "enabled" => false} = pause_result.details
+
+    resume_result = call_tool(tool, %{"action" => "resume", "id" => job_id})
+    assert %{"id" => ^job_id, "resumed" => true, "enabled" => true} = resume_result.details
+
+    cron_run_id = "tool_cron_abort_run_#{System.unique_integer([:positive])}"
+
+    run =
+      job_id
+      |> LemonAutomation.CronRun.new(:manual)
+      |> Map.put(:id, cron_run_id)
+      |> LemonAutomation.CronRun.start("tool_router_run")
+
+    LemonAutomation.CronStore.put_run(run)
+
+    abort_result = call_tool(tool, %{"action" => "abort", "runId" => cron_run_id})
+
+    assert %{"runId" => ^cron_run_id, "aborted" => true, "status" => "aborted"} =
+             abort_result.details
 
     remove_result = call_tool(tool, %{"action" => "remove", "id" => job_id})
     assert %{"removed" => true, "id" => ^job_id} = remove_result.details

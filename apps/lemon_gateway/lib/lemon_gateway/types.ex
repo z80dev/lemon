@@ -24,6 +24,7 @@ defmodule LemonGateway.Types do
     - `:session_key` - Stable session key for routing and state
     - `:prompt` - User prompt text (or synthesized prompt)
     - `:engine_id` - Resolved engine identifier
+    - `:images` - Runtime-only image blocks forwarded to native Lemon providers
     - `:cwd` - Working directory (optional)
     - `:resume` - Resume token for session continuation
     - `:lane` - Execution lane (:main, :subagent, :background_exec)
@@ -36,6 +37,7 @@ defmodule LemonGateway.Types do
       :session_key,
       :prompt,
       :engine_id,
+      {:images, []},
       :cwd,
       :resume,
       :lane,
@@ -48,6 +50,7 @@ defmodule LemonGateway.Types do
             session_key: String.t() | nil,
             prompt: String.t() | nil,
             engine_id: LemonGateway.Types.engine_id() | nil,
+            images: [map()],
             cwd: String.t() | nil,
             resume: LemonCore.ResumeToken.t() | nil,
             lane: LemonGateway.Types.lane() | nil,

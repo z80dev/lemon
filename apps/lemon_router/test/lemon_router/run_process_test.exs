@@ -778,6 +778,7 @@ defmodule LemonRouter.RunProcessTest do
         error_type: :tool_task_timeout,
         tool_name: "slow_tool",
         timeout_ms: 123,
+        exception: "RuntimeError",
         message: "timed out waiting for slow_tool"
       }
 
@@ -866,6 +867,7 @@ defmodule LemonRouter.RunProcessTest do
                error_type: :tool_task_timeout,
                tool_name: "slow_tool",
                timeout_ms: 123,
+               exception: "RuntimeError",
                message: "timed out waiting for slow_tool"
              }
 
@@ -3073,6 +3075,188 @@ defmodule LemonRouter.RunProcessTest do
       assert String.contains?(delivered_text, "Final answer with file")
       assert File.regular?(delivered_path)
       assert String.ends_with?(delivered_path, "/workspace/image.png")
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "delivers final-answer MEDIA directives through the file channel path" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.PresentationState, fn ->
+        LemonChannels.PresentationState.start_link([])
+      end)
+
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
+
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
+
+      on_exit(fn ->
+        _ =
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      cwd =
+        Path.join(
+          System.tmp_dir!(),
+          "run-process-media-directive-#{System.unique_integer([:positive])}"
+        )
+
+      file_path = Path.join(cwd, "workspace/image.png")
+      File.mkdir_p!(Path.dirname(file_path))
+      File.write!(file_path, "png-bytes")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      job =
+        make_test_request(
+          run_id,
+          %{progress_msg_id: 111, user_msg_id: 222},
+          %{cwd: cwd, session_key: session_key, conversation_key: {:session, session_key}}
+        )
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer\nMEDIA: workspace/image.png"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: text_kind,
+                        content: text_content,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     3_000
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: :file,
+                        content: %{
+                          path: delivered_path,
+                          filename: "image.png",
+                          caption: nil
+                        },
+                        meta: %{run_id: ^run_id}
+                      }},
+                     3_000
+
+      assert text_kind in [:text, :edit]
+
+      delivered_text =
+        case text_content do
+          %{text: text} -> text
+          text when is_binary(text) -> text
+        end
+
+      assert String.contains?(delivered_text, "Final answer")
+      refute String.contains?(delivered_text, "MEDIA:")
+      assert File.regular?(delivered_path)
+      assert String.ends_with?(delivered_path, "/workspace/image.png")
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "records generated auto-send files into media job metadata on finalization" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      cwd =
+        Path.join(
+          System.tmp_dir!(),
+          "run-process-media-jobs-#{System.unique_integer([:positive])}"
+        )
+
+      file_path = Path.join(cwd, "artifacts/chart.png")
+      File.mkdir_p!(Path.dirname(file_path))
+      File.write!(file_path, "png-bytes")
+      on_exit(fn -> File.rm_rf(cwd) end)
+
+      job =
+        make_test_request(run_id, %{}, %{
+          cwd: cwd,
+          session_key: session_key,
+          conversation_key: {:session, session_key}
+        })
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            phase: :completed,
+            ok: true,
+            action: %{
+              kind: "file_change",
+              detail: %{changes: [%{path: "artifacts/chart.png", kind: "added"}]}
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer with generated file"}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> length(LemonCore.MediaJobs.recent(project_dir: cwd)) == 1 end)
+
+      [job] = LemonCore.MediaJobs.recent(project_dir: cwd)
+      assert job.type == :image
+      assert job.status == :completed
+      assert job.artifact.name == "chart.png"
+      assert job.artifact.bytes == 9
+      refute inspect(job) =~ file_path
+      refute inspect(job) =~ session_key
       assert eventually(fn -> not Process.alive?(pid) end)
     end
   end

@@ -153,7 +153,7 @@ These tools are added to Lemon engine runs only (not CLI engines) via `CliAdapte
 
 | File | Module | Notes |
 |------|--------|-------|
-| `lib/lemon_gateway/tools/cron.ex` | `Tools.Cron` | Manage cron jobs (status, list, add, update, remove, run, runs) |
+| `lib/lemon_gateway/tools/cron.ex` | `Tools.Cron` | Manage cron jobs (status, list, add, update, pause, resume, abort, remove, run, runs) |
 | `lib/lemon_gateway/tools/sms_get_inbox_number.ex` | `Tools.SmsGetInboxNumber` | Get the Twilio inbox phone number |
 | `lib/lemon_gateway/tools/sms_wait_for_code.ex` | `Tools.SmsWaitForCode` | Block until matching SMS code arrives |
 | `lib/lemon_gateway/tools/sms_list_messages.ex` | `Tools.SmsListMessages` | List recent SMS messages |
@@ -261,6 +261,9 @@ Engines MUST send to `sink_pid`:
 3. `{:engine_event, run_ref, Event.completed(%{engine: id, ok: bool, answer: text, ...})}` -- at end (exactly once)
 
 Optional: `{:engine_event, run_ref, Event.action_event(%{...})}` for tool/action progress.
+Action detail metadata must stay nested and lossless; in particular,
+`action.detail.result_meta` may carry safe failure fields such as `error_type`,
+`timeout_ms`, and `exit_code` for router/control-plane/operator surfaces.
 
 ### If Using CliAdapter
 

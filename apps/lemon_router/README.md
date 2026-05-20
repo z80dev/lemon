@@ -46,6 +46,8 @@ Channel transport or gateway-native ingress
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before runtime submission |
 | `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
+| `LemonRouter.MediaJobRecorder` | Records generated final-answer files into redacted media job metadata before channel delivery |
+| `LemonRouter.ChannelsDelivery` | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
@@ -59,12 +61,23 @@ streamed answer deltas, then finalizes `StreamCoalescer` state so late flushes c
 the final. For non-streamed completions it still finalizes through `StreamCoalescer`, with a direct
 `:final_text` fallback if the coalescer finalize call exits or times out. Completion-time artifact
 metadata enrichment is best-effort and must not block the final answer path.
+`RunProcess.ArtifactTracker` also supports Hermes-style final-answer media
+directives: a line containing `MEDIA:<project-relative-path>` is converted into
+an explicit `auto_send_files` entry after existing-file, cwd, and symlink escape
+checks pass. The directive line is removed from the final text before channel
+rendering, and Telegram/Discord delivery still goes through the normal
+attachment policy.
 
 ## Important Contracts
 
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
 - Engine ID validation and normalization should use `LemonCore.EngineCatalog`; default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
+- Tool-status failure summaries preserve safe structured fields from
+  `action.detail.result_meta`, including `error_type`, tool name, timeout,
+  command exit code, exception class/name, status, reason, message, and
+  validation errors.
+- Cron/channel-origin summary delivery may cross router through `LemonRouter.ChannelsDelivery`, but the bridge must stay narrow. Router must not construct `LemonChannels.OutboundPayload`; `LemonChannels` remains responsible for enqueue semantics, retries, chunking, and adapter delivery.
 - Runtime input is `LemonCore.ExecutionCommand`; gateway-private adapters may translate it to `LemonGateway.ExecutionRequest`.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
