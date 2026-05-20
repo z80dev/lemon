@@ -265,8 +265,15 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
     end
 
     test "emits redacted exception telemetry when wasm invoke raises" do
-      sidecar = spawn(fn -> :ok end)
+      sidecar =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
       monitor = Process.monitor(sidecar)
+      send(sidecar, :stop)
       assert_receive {:DOWN, ^monitor, :process, ^sidecar, :normal}
 
       [{_name, tool, _source}] =
