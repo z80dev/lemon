@@ -209,12 +209,32 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     on_exit(fn ->
       :persistent_term.erase({ForwardingTelegramPlugin, :notify_pid})
-      _ = LemonChannels.Registry.unregister("telegram")
+      _ = unregister_channel_plugin("telegram")
 
       if is_atom(existing) and not is_nil(existing) do
-        _ = LemonChannels.Registry.register(existing)
+        _ = register_channel_plugin(existing)
       end
     end)
+  end
+
+  defp unregister_channel_plugin(plugin_id) do
+    if is_pid(Process.whereis(LemonChannels.Registry)) do
+      LemonChannels.Registry.unregister(plugin_id)
+    else
+      :ok
+    end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp register_channel_plugin(plugin) do
+    if is_pid(Process.whereis(LemonChannels.Registry)) do
+      LemonChannels.Registry.register(plugin)
+    else
+      :ok
+    end
+  catch
+    :exit, _reason -> :ok
   end
 
   defp build_running_run(token, suffix, session_key) do

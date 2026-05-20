@@ -4,10 +4,10 @@ defmodule LemonAutomation.CronManagerRetryTest do
   alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
 
   defmodule RetrySubmitter do
-    def submit(_job, run, _opts) do
+    def submit(job, run, _opts) do
       send(
         :persistent_term.get({__MODULE__, :test_pid}),
-        {:cron_submit, run.id, run.triggered_by, run.meta}
+        {:cron_submit, job.id, run.id, run.triggered_by, run.meta}
       )
 
       case run.triggered_by do
@@ -61,11 +61,12 @@ defmodule LemonAutomation.CronManagerRetryTest do
 
     CronManager.tick()
 
-    assert_receive {:cron_submit, first_run_id, :schedule, first_meta}, 2_000
+    assert_receive {:cron_submit, job_id, first_run_id, :schedule, first_meta}, 2_000
+    assert job_id == job.id
     assert first_meta.retry_attempt == 0
     assert first_meta.retry_root_id == first_run_id
 
-    assert_receive {:cron_submit, retry_run_id, :retry, retry_meta}, 2_000
+    assert_receive {:cron_submit, ^job_id, retry_run_id, :retry, retry_meta}, 2_000
     assert retry_run_id != first_run_id
     assert retry_meta.retry_attempt == 1
     assert retry_meta.retry_of == first_run_id
@@ -83,8 +84,9 @@ defmodule LemonAutomation.CronManagerRetryTest do
   test "manual runs do not retry by default", %{job: job} do
     assert {:ok, %CronRun{id: run_id, triggered_by: :manual}} = CronManager.run_now(job.id)
 
-    assert_receive {:cron_submit, ^run_id, :manual, _meta}, 2_000
-    refute_receive {:cron_submit, _retry_run_id, :retry, _meta}, 150
+    assert_receive {:cron_submit, job_id, ^run_id, :manual, _meta}, 2_000
+    assert job_id == job.id
+    refute_receive {:cron_submit, ^job_id, _retry_run_id, :retry, _meta}, 150
 
     assert await(fn ->
              match?(%CronRun{id: ^run_id, status: :failed}, CronStore.get_run(run_id))
