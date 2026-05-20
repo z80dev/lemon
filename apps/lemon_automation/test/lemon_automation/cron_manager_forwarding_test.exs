@@ -43,6 +43,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     ensure_store_started()
     ensure_cron_manager_started()
     ensure_channel_registry_started()
+    ensure_channel_outbox_started()
 
     {:ok, token: System.unique_integer([:positive, :monotonic])}
   end
@@ -298,6 +299,49 @@ defmodule LemonAutomation.CronManagerForwardingTest do
   defp ensure_channel_registry_started do
     if is_nil(Process.whereis(LemonChannels.Registry)) do
       case start_supervised(LemonChannels.Registry) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp ensure_channel_outbox_started do
+    ensure_channel_dedupe_started()
+    ensure_channel_rate_limiter_started()
+
+    if is_nil(Process.whereis(LemonChannels.Outbox.WorkerSupervisor)) do
+      case start_supervised({Task.Supervisor, name: LemonChannels.Outbox.WorkerSupervisor}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox)) do
+      case start_supervised(LemonChannels.Outbox) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp ensure_channel_dedupe_started do
+    if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
+      case start_supervised(LemonChannels.Outbox.Dedupe) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp ensure_channel_rate_limiter_started do
+    if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
+      case start_supervised(LemonChannels.Outbox.RateLimiter) do
         {:ok, _pid} -> :ok
         {:error, {:already_started, _pid}} -> :ok
       end
