@@ -9,6 +9,9 @@ LemonAutomation provides scheduled and triggered automation for agents:
 - **Cron Jobs** - Schedule agent prompts with cron expressions
 - **Heartbeats** - Periodic health checks with smart suppression
 - **Wake** - Immediate manual triggering of scheduled jobs
+- **Goal Continuation** - Supervised one-shot continuation runs for active session goals
+- **Goal Loop Preview** - One supervised judge tick that continues, completes, or pauses a goal
+- **Kanban Dispatch** - Supervised leasing/reclaim loop for durable board tasks
 - **Run Tracking** - Full lifecycle tracking of job executions
 
 ## Supervision Tree
@@ -18,6 +21,9 @@ LemonAutomation.Supervisor (one_for_one)
 +-- LemonAutomation.TaskSupervisor  (Task.Supervisor)
 +-- LemonAutomation.CronManager     (GenServer)
 +-- LemonAutomation.HeartbeatManager (GenServer)
++-- LemonAutomation.GoalContinuationManager (GenServer)
++-- LemonAutomation.GoalLoopManager (GenServer)
++-- LemonAutomation.KanbanDispatcher (GenServer)
 +-- LemonAutomation.SkillCuratorManager (GenServer)
 ```
 
@@ -26,11 +32,11 @@ LemonAutomation.Supervisor (one_for_one)
 ```
 CronManager (GenServer, ticks every 60s)
     |
-    +- on tick: finds due jobs, calls execute_job/2
+    +- on tick: finds due jobs, claims scheduled run slots
     |
     +- execute_job/2
            |
-           +- creates CronRun, persists to CronStore
+           +- creates CronRun, persists or claims it in CronStore
            +- emits :cron_run_started on "cron" bus
            +- spawns Task via TaskSupervisor
                   |
@@ -51,6 +57,51 @@ CronManager (GenServer, ticks every 60s)
 
 **Wake** is a separate module (not intermediary in the above flow). It creates runs with `triggered_by: :wake`, submits directly to `LemonRouter`, and sends `{:run_complete, ...}` back to `CronManager`.
 
+**CronCommandRunner** is the operator-owned no-agent cron path. Jobs with
+`command` instead of `prompt` run as supervised local shell commands under
+`CronManager`, persist output/error in `CronRun`, and never create LemonRouter
+runs or channel summaries. Prompt jobs still require `agent_id`, `session_key`,
+and `prompt`; command jobs require only `name`, `schedule`, and `command`.
+
+**GoalContinuationManager** runs one active persistent-goal continuation at a
+time through `TaskSupervisor`. `GoalContinuation` submits normal
+`LemonRouter` requests with `origin: :goal`, `queue_mode: :followup`, and goal
+metadata, then records the returned run id in `LemonCore.GoalStore`.
+
+**GoalLoopManager** runs goal-loop work through `TaskSupervisor`. `run_once/2`
+performs one preview judge tick. `start_loop/2` starts one bounded autonomous
+loop per session, waits for each submitted continuation to emit `:run_completed`,
+and stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
+`auto: true` persists opt-in auto scheduling in `LemonCore.GoalStore`; the
+manager scheduler scans active goals and re-starts only persisted auto loops
+when no loop for that session is already running. Focused tests cover that
+persisted-auto path through the real goal loop and router judge runner.
+
+`GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
+`judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
+is the dev/prod default runner; it submits isolated `:goal_judge` runs through
+`LemonRouter`, waits for completion, and parses JSON verdicts. The focused
+goal-loop tests prove this path through the real router, a router `RunProcess`,
+and `RunCompletionWaiter` using a deterministic runtime. Set
+`LEMON_GOAL_JUDGE_MODEL` to pin the model used for default judge runs. Judge
+failures pause goals by default;
+`judge_failure_policy: :continue_once` is the explicit fail-open path for one
+continuation.
+
+**KanbanDispatcher** is the first BEAM-native fleet-work supervisor. It scans
+durable `LemonCore.KanbanStore` boards, reclaims expired leases, leases
+dependency-unblocked tasks to a worker profile, runs a worker module through
+`TaskSupervisor`, then records completion or failure back into the durable task.
+Focused dispatcher tests cover bounded multi-worker leasing, completion,
+explicit failure, crashed-worker failure marking, expired-lease reclaim, and a
+production-shaped bounded-concurrency path through the real `KanbanRunWorker`
+with router/waiter stubs. The default `KanbanRunWorker` submits leased tasks
+through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
+`kanban` tool policy, and an isolated git worktree cwd when the board workspace
+is a git repository. Worktrees are created under
+`<repo>/.worktrees/kanban-<task_id>` on `lemon-kanban/<task_id>` branches, so
+concurrent board workers do not edit the same checkout.
+
 **HeartbeatManager** subscribes to the "cron" bus and auto-processes every `:cron_run_completed` event for suppression checks.
 
 **SkillCuratorManager** is the idle-triggered background path for learned-skill
@@ -70,6 +121,14 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - Output is truncated to 1000 chars before storage
 - Jobs execute in supervised tasks; fallback to `Task.start/1` if supervisor is unavailable
 - For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
+- Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover as `:timeout`.
+- Scheduled runs use deterministic slot ids and `CronStore.claim_scheduled_run/3`, backed by `LemonCore.Store.put_new/3`, so competing dispatchers preserve the first claimant instead of overwriting a run.
+- `scripts/live_cron_runtime_restart_smoke.exs` boots `:runtime_full` twice against one isolated durable store, then proves a scheduled run before restart, persisted job/run history after restart, and a fresh scheduled run after restart.
+- `scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and Discord plugins, completes channel-peer cron runs through `CronManager`, and proves forwarded run history plus `LemonRouter.ChannelsDelivery` -> `LemonChannels` outbox delivery with redacted proof metadata.
+- Scheduled failures/timeouts can retry as separate `:retry` runs when `max_retries` is set. Manual and wake runs stay single-shot by default.
+- Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
+- Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
+- Web `/ops` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
 
 ## Top-Level Facade
 
@@ -81,6 +140,7 @@ LemonAutomation.add_job(params)       # delegates to CronManager.add/1
 LemonAutomation.update_job(id, params) # delegates to CronManager.update/2
 LemonAutomation.remove_job(id)        # delegates to CronManager.remove/1
 LemonAutomation.run_now(id)           # delegates to CronManager.run_now/1
+LemonAutomation.abort_run(run_id)     # delegates to CronManager.abort_run/1
 LemonAutomation.runs(job_id, opts)    # delegates to CronManager.runs/2
 LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 ```
@@ -99,6 +159,17 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 })
 ```
 
+### Command Job
+
+```elixir
+{:ok, job} = LemonAutomation.CronManager.add(%{
+  name: "Disk Usage Snapshot",
+  schedule: "hourly",
+  command: "df -h /",
+  cwd: "/tmp"
+})
+```
+
 ### With Timezone and Jitter
 
 ```elixir
@@ -109,7 +180,9 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
   session_key: "agent:agent_abc:main",
   prompt: "Check system status",
   timezone: "America/New_York",  # Default: "UTC"
-  jitter_sec: 30                 # Random 0-30s delay before execution
+  jitter_sec: 30,                # Random 0-30s delay before execution
+  max_retries: 2,                # Scheduled failure/timeout retries
+  retry_backoff_ms: 60_000       # Delay before each retry
 })
 ```
 
@@ -131,10 +204,14 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 | Field | Description |
 |-------|-------------|
 | `name` | Human-readable identifier |
-| `schedule` | Cron expression (5 fields) |
-| `agent_id` | Target agent |
-| `session_key` | Routing key (e.g., `"agent:{id}:main"`) |
-| `prompt` | Text sent to agent |
+| `schedule` | Cron expression (5 fields) or supported shorthand |
+| `agent_id` | Target agent for prompt jobs |
+| `session_key` | Routing key for prompt jobs (e.g., `"agent:{id}:main"`) |
+| `prompt` | Text sent to agent; mutually exclusive with `command` |
+| `command` | Local shell command for no-agent operator jobs |
+
+Updates preserve target type. Prompt jobs can update `prompt`; command jobs can
+update `command`, `cwd`, and `env`; `agent_id` and `session_key` stay immutable.
 
 ### Optional Fields
 
@@ -144,6 +221,10 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 | `timezone` | `"UTC"` | Timezone for schedule interpretation |
 | `jitter_sec` | `0` | Random delay spread in seconds |
 | `timeout_ms` | `300_000` | Max execution time (5 minutes) |
+| `max_retries` | `0` | Number of retries after scheduled failure/timeout |
+| `retry_backoff_ms` | `30_000` | Delay before retry runs |
+| `cwd` | runtime cwd | Command working directory |
+| `env` | `%{}` | Command environment overrides |
 | `memory_file` | auto | Path to persistent cross-run memory file |
 | `meta` | `nil` | Arbitrary metadata map |
 
@@ -158,7 +239,17 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 +---------- Minute (0-59)
 ```
 
-Supported syntax: `*`, `N`, `N-M` (range), `*/N` (step), `N,M,O` (list).
+Supported cron syntax: `*`, `N`, `N-M` (range), `*/N` (step), `N,M,O` (list).
+
+Supported shorthands are normalized into 5-field cron expressions before
+storage. Interval shorthands must map cleanly to cron step fields, so minute
+intervals divide 60 and hour intervals divide 24:
+
+- `"every 30m"`, `"15 minutes"` -> `"*/30 * * * *"`, `"*/15 * * * *"`
+- `"hourly"`, `"every 2h"` -> `"0 * * * *"`, `"0 */2 * * *"`
+- `"daily at 9am"`, `"every day at 17:45"` -> `"0 9 * * *"`, `"45 17 * * *"`
+- `"weekdays at 09:30"` -> `"30 9 * * 1-5"`
+- `"weekly monday at 8am"`, `"fridays at 18:15"` -> `"0 8 * * 1"`, `"15 18 * * 5"`
 
 Examples:
 - `"*/15 * * * *"` - Every 15 minutes
@@ -203,6 +294,8 @@ LemonAutomation.CronManager.tick()  # cast, returns :ok immediately
   timezone: "UTC",
   jitter_sec: 0,
   timeout_ms: 300_000,
+  max_retries: 0,
+  retry_backoff_ms: 30_000,
   created_at_ms: 1739989200000,
   updated_at_ms: 1739989200000,
   last_run_at_ms: nil,
@@ -220,8 +313,8 @@ Key functions: `CronJob.new/1`, `CronJob.update/2`, `CronJob.due?/1`, `CronJob.m
   id: "run_abc123",            # auto-generated via LemonCore.Id.run_id()
   job_id: "cron_xyz789",
   run_id: nil,                 # LemonRouter run ID (set after submission)
-  status: :pending,            # :pending | :running | :completed | :failed | :timeout
-  triggered_by: :schedule,    # :schedule | :manual | :wake
+  status: :pending,            # :pending | :running | :completed | :failed | :timeout | :aborted
+  triggered_by: :schedule,    # :schedule | :manual | :wake | :retry
   started_at_ms: nil,
   completed_at_ms: nil,
   duration_ms: nil,
@@ -239,10 +332,13 @@ CronRun.start(run, run_id \\ nil)   => status: :running
 CronRun.complete(run, output)        => status: :completed
 CronRun.fail(run, error)             => status: :failed
 CronRun.timeout(run)                 => status: :timeout
+CronRun.abort(run, reason)           => status: :aborted
 CronRun.suppress(run)                => suppressed: true (can combine with any terminal state)
 ```
 
 Helper predicates: `CronRun.active?/1` (pending or running), `CronRun.finished?/1`.
+
+Scheduled failures and timeouts retry only when `max_retries > 0`. Each retry is a separate run with `triggered_by: :retry` and lineage metadata (`retry_attempt`, `retry_of`, `retry_root_id`). Manual and wake-triggered runs do not retry by default.
 
 ## CronMemory (Persistent Cross-Run Memory)
 
@@ -362,7 +458,7 @@ results = LemonAutomation.Wake.trigger_matching("heartbeat")
 results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
-Wake runs use `triggered_by: :wake` and fire-and-forget: they return the `CronRun` immediately and completion is handled asynchronously by `CronManager`.
+Wake runs use `triggered_by: :wake` and fire-and-forget: they return the `CronRun` immediately and completion is handled asynchronously by `CronManager`. Wake failures do not enter the scheduled retry path.
 
 ## Events
 
@@ -378,6 +474,7 @@ All events are broadcast on the `"cron"` bus topic as `%LemonCore.Event{}` struc
 | `:cron_job_deleted` | `CronManager` | Job removed |
 | `:cron_run_started` | `CronManager`, `Wake`, `HeartbeatManager` | Run begins |
 | `:cron_run_completed` | `CronManager`, `HeartbeatManager` | Run finishes |
+| `:cron_lifecycle_action` | `CronManager` | Durable audit event recorded |
 | `:heartbeat_suppressed` | `HeartbeatManager` | "HEARTBEAT_OK" response |
 | `:heartbeat_alert` | `HeartbeatManager` | Non-OK heartbeat response |
 
@@ -392,6 +489,9 @@ receive do
 
   %LemonCore.Event{type: :cron_run_completed, payload: payload} ->
     IO.puts("Run completed: #{payload.run.status}, suppressed: #{payload.suppressed}")
+
+  %LemonCore.Event{type: :cron_lifecycle_action, payload: payload} ->
+    IO.puts("Audit action: #{payload.audit.action}")
 
   %LemonCore.Event{type: :heartbeat_suppressed, payload: payload} ->
     IO.puts("Heartbeat OK for job #{payload.job_id}")
@@ -414,12 +514,19 @@ CronStore.list_due_jobs()       # enabled and due?(job) == true
 
 # Runs (table: :cron_runs)
 CronStore.put_run(run)
+CronStore.claim_run(run)
+CronStore.claim_scheduled_run(job, scheduled_for_ms, router_run_id)
 CronStore.get_run(run_id)
 CronStore.delete_run(run_id)
 CronStore.list_runs(job_id, opts)    # opts: limit (100), status (atom), since_ms
 CronStore.list_all_runs(opts)        # across all jobs
 CronStore.active_runs(job_id)        # runs where status in [:pending, :running]
 CronStore.cleanup_old_runs(keep_per_job \\ 100)
+
+# Audit (table: :cron_audit_events)
+CronStore.record_audit(action, attrs)
+CronStore.list_audit_events(opts)    # opts: limit, job_id, run_id, action, since_ms
+CronStore.delete_audit_event(id)
 ```
 
 ## CronSchedule API
@@ -486,6 +593,11 @@ test/lemon_automation/
 +-- heartbeat_timer_test.exs       # Timer-based heartbeats
 +-- run_completion_waiter_test.exs # Wait logic
 +-- run_submitter_test.exs         # Router submission
++-- goal_loop_test.exs             # Goal loops and router judge proof
++-- goal_judge_router_live_test.exs # Opt-in provider-backed judge proof
++-- kanban_dispatcher_test.exs     # Dispatcher leasing/concurrency/failure proof
++-- kanban_dispatcher_live_test.exs # Opt-in provider-backed dispatcher proof
++-- kanban_run_worker_test.exs     # Router-backed kanban worker proof
 +-- wake_test.exs                  # Wake triggering
 ```
 
@@ -497,6 +609,31 @@ mix test apps/lemon_automation
 
 # Specific module
 mix test apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs
+
+# Provider-backed goal-judge proof
+ZAI_API_KEY="$(MIX_ENV=dev mix run --no-start -e 'Logger.configure(level: :emergency); Logger.remove_backend(:console); {:ok, _} = Application.ensure_all_started(:lemon_core); IO.write(LemonCore.Secrets.fetch_value("llm_zai_api_key") || "")')" \
+LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
+LEMON_GOAL_JUDGE_MODEL="zai:glm-5-turbo" \
+scripts/test path apps/lemon_automation/test/lemon_automation/goal_judge_router_live_test.exs --include integration --seed 1
+
+# Provider-backed kanban dispatcher proof
+secret_file=$(mktemp "${TMPDIR:-/tmp}/lemon-zai-secret.XXXXXX")
+LEMON_SECRET_OUTPUT="$secret_file" MIX_ENV=dev mix run --no-start -e '
+Logger.configure(level: :emergency)
+Logger.remove_backend(:console)
+{:ok, _} = Application.ensure_all_started(:lemon_core)
+case LemonCore.Secrets.fetch_value("llm_zai_api_key") do
+  value when is_binary(value) and value != "" -> File.write!(System.fetch_env!("LEMON_SECRET_OUTPUT"), value)
+  _ -> System.halt(66)
+end
+' >/dev/null 2>&1
+ZAI_API_KEY="$(cat "$secret_file")" \
+LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
+LEMON_KANBAN_LIVE_MODEL="zai:glm-5-turbo" \
+scripts/test path apps/lemon_automation/test/lemon_automation/kanban_dispatcher_live_test.exs --include integration --seed 1
+rc=$?
+rm -f "$secret_file"
+exit "$rc"
 
 # With coverage
 mix test --cover apps/lemon_automation

@@ -6,11 +6,13 @@ defmodule LemonAutomation.CronStoreTest do
 
   @jobs_table :cron_jobs
   @runs_table :cron_runs
+  @audit_table :cron_audit_events
   @future_ms 4_102_444_800_000
 
   setup do
     clear_table(@jobs_table)
     clear_table(@runs_table)
+    clear_table(@audit_table)
 
     {:ok, token: System.unique_integer([:positive, :monotonic])}
   end
@@ -57,6 +59,47 @@ defmodule LemonAutomation.CronStoreTest do
       assert CronStore.get_job(job_due.id) == nil
 
       assert Enum.map(CronStore.list_jobs(), & &1.id) == [job_disabled.id, job_future.id]
+    end
+  end
+
+  describe "audit operations" do
+    test "record/list/delete audit events with filters", %{token: token} do
+      job_id = job_id(token, "audit")
+      run_id = "cron_audit_run_#{token}"
+
+      older =
+        CronStore.record_audit(:job_paused, %{
+          job_id: job_id,
+          source: :test,
+          status: :disabled,
+          changed_fields: [:enabled]
+        })
+
+      Process.sleep(2)
+
+      newer =
+        CronStore.record_audit(:run_aborted, %{
+          job_id: job_id,
+          run_id: run_id,
+          router_run_id: "router_audit_#{token}",
+          source: :test,
+          status: :aborted,
+          triggered_by: :manual,
+          reason: "operator requested"
+        })
+
+      assert [^newer, ^older] = CronStore.list_audit_events(limit: 10)
+      assert [^older] = CronStore.list_audit_events(action: :job_paused)
+      assert [^newer] = CronStore.list_audit_events(run_id: run_id)
+      assert [^newer, ^older] = CronStore.list_audit_events(job_id: job_id)
+
+      assert older.action == "job_paused"
+      assert older.changed_fields == ["enabled"]
+      assert newer.status == "aborted"
+      assert newer.triggered_by == "manual"
+
+      CronStore.delete_audit_event(older.id)
+      assert CronStore.list_audit_events(action: :job_paused) == []
     end
   end
 
@@ -165,13 +208,21 @@ defmodule LemonAutomation.CronStoreTest do
           started_at_ms: 50
         )
 
+      run_aborted =
+        build_run(token, "aborted", job_b,
+          status: :aborted,
+          started_at_ms: 500
+        )
+
       :ok = CronStore.put_run(run_completed)
       :ok = CronStore.put_run(run_running_b)
       :ok = CronStore.put_run(run_pending)
       :ok = CronStore.put_run(run_timeout)
       :ok = CronStore.put_run(run_running_a)
+      :ok = CronStore.put_run(run_aborted)
 
       assert Enum.map(CronStore.list_all_runs(), & &1.id) == [
+               run_aborted.id,
                run_running_b.id,
                run_running_a.id,
                run_completed.id,
@@ -180,9 +231,9 @@ defmodule LemonAutomation.CronStoreTest do
              ]
 
       assert Enum.map(CronStore.list_all_runs(limit: 3), & &1.id) == [
+               run_aborted.id,
                run_running_b.id,
-               run_running_a.id,
-               run_completed.id
+               run_running_a.id
              ]
 
       assert Enum.map(CronStore.list_all_runs(status: :running), & &1.id) == [
@@ -190,7 +241,10 @@ defmodule LemonAutomation.CronStoreTest do
                run_running_a.id
              ]
 
+      assert Enum.map(CronStore.list_all_runs(status: :aborted), & &1.id) == [run_aborted.id]
+
       assert Enum.map(CronStore.list_all_runs(since_ms: 200), & &1.id) == [
+               run_aborted.id,
                run_running_b.id,
                run_running_a.id,
                run_completed.id
@@ -223,6 +277,33 @@ defmodule LemonAutomation.CronStoreTest do
 
       assert Enum.map(CronStore.list_runs(job_one.id, limit: 10), & &1.id) == [one_4.id, one_3.id]
       assert Enum.map(CronStore.list_runs(job_two.id, limit: 10), & &1.id) == [two_3.id, two_2.id]
+    end
+
+    test "claim_run preserves the first claimant", %{token: token} do
+      job_id = job_id(token, "claim")
+      run = build_run(token, "claim", job_id, status: :running, output: nil)
+      duplicate = %{run | output: "overwritten"}
+
+      assert :ok = CronStore.claim_run(run)
+      assert {:error, :exists} = CronStore.claim_run(duplicate)
+      assert CronStore.get_run(run.id).output == nil
+    end
+
+    test "claim_scheduled_run uses a deterministic slot id and allows one winner", %{token: token} do
+      job = build_job(token, "scheduled_claim", created_at_ms: 30_000)
+      scheduled_for_ms = 1_700_000_000_000
+      expected_id = CronStore.scheduled_run_id(job.id, scheduled_for_ms)
+
+      assert {:ok, run} = CronStore.claim_scheduled_run(job, scheduled_for_ms, "router_first")
+      assert run.id == expected_id
+      assert run.status == :running
+      assert run.run_id == "router_first"
+      assert run.meta.scheduled_for_ms == scheduled_for_ms
+
+      assert {:error, :exists} =
+               CronStore.claim_scheduled_run(job, scheduled_for_ms, "router_second")
+
+      assert CronStore.get_run(expected_id).run_id == "router_first"
     end
   end
 

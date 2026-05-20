@@ -4,6 +4,41 @@ defmodule LemonAutomation.CronManagerForwardingTest do
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonCore.{Bus, Event, Store}
 
+  defmodule ForwardingTelegramPlugin do
+    @behaviour LemonChannels.Plugin
+
+    @impl true
+    def id, do: "telegram"
+
+    @impl true
+    def meta do
+      %{
+        label: "Forwarding Telegram Test",
+        capabilities: %{chunk_limit: 4096},
+        docs: nil
+      }
+    end
+
+    @impl true
+    def child_spec(_opts), do: %{id: __MODULE__, start: {Task, :start_link, [fn -> :ok end]}}
+
+    @impl true
+    def normalize_inbound(_raw), do: {:error, :not_implemented}
+
+    @impl true
+    def deliver(payload) do
+      case :persistent_term.get({__MODULE__, :notify_pid}, nil) do
+        pid when is_pid(pid) -> send(pid, {:cron_forwarded_channel_payload, payload})
+        _ -> :ok
+      end
+
+      {:ok, :delivered}
+    end
+
+    @impl true
+    def gateway_methods, do: []
+  end
+
   setup do
     ensure_store_started()
     ensure_cron_manager_started()
@@ -71,6 +106,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     run = build_running_run(token, "channel", channel_session_key)
     :ok = CronStore.put_run(run)
+    register_forwarding_telegram_plugin()
 
     topic = Bus.session_topic(channel_session_key)
     Bus.subscribe(topic)
@@ -119,6 +155,64 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     assert forwarded_completed[:ok] == true
     assert is_binary(forwarded_completed[:answer])
     assert forwarded_completed[:answer] =~ "RUN SUMMARY"
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %LemonChannels.OutboundPayload{content: channel_content}},
+                   2_000
+
+    assert channel_content =~ "RUN SUMMARY"
+  end
+
+  test "enqueues completed cron summary into originating channel outbox", %{token: token} do
+    channel_session_key =
+      "agent:cron_forward_#{token}:telegram:default:group:-100#{abs(token)}:thread:#{abs(token)}"
+
+    run = build_running_run(token, "channel_delivery", channel_session_key)
+    :ok = CronStore.put_run(run)
+    register_forwarding_telegram_plugin()
+
+    send(CronManager, {:run_complete, run.id, {:ok, "RUN SUMMARY\n- delivered to topic"}})
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      account_id: "default",
+                      peer: %{kind: :group, id: peer_id, thread_id: thread_id},
+                      kind: :text,
+                      content: content,
+                      idempotency_key: idempotency_key,
+                      meta: %{
+                        origin: :cron,
+                        cron_forwarded_summary: true,
+                        cron_run_id: run_id,
+                        cron_job_id: job_id
+                      }
+                    }},
+                   2_000
+
+    assert peer_id == "-100#{abs(token)}"
+    assert thread_id == "#{abs(token)}"
+    assert content =~ "RUN SUMMARY"
+    assert content =~ "cron_run_id: #{run.id}"
+    assert idempotency_key == "cron_notify_#{run.id}"
+    assert run_id == run.id
+    assert job_id == run.job_id
+  end
+
+  defp register_forwarding_telegram_plugin do
+    existing = LemonChannels.Registry.get_plugin("telegram")
+    _ = LemonChannels.Registry.unregister("telegram")
+    :persistent_term.put({ForwardingTelegramPlugin, :notify_pid}, self())
+    :ok = LemonChannels.Registry.register(ForwardingTelegramPlugin)
+
+    on_exit(fn ->
+      :persistent_term.erase({ForwardingTelegramPlugin, :notify_pid})
+      _ = LemonChannels.Registry.unregister("telegram")
+
+      if is_atom(existing) and not is_nil(existing) do
+        _ = LemonChannels.Registry.register(existing)
+      end
+    end)
   end
 
   defp build_running_run(token, suffix, session_key) do

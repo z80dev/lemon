@@ -3,6 +3,45 @@ defmodule LemonAutomation.CronScheduleTest do
 
   alias LemonAutomation.CronSchedule
 
+  describe "normalize/1" do
+    test "keeps 5-field cron expressions unchanged" do
+      assert CronSchedule.normalize("0 9 * * 1-5") == {:ok, "0 9 * * 1-5"}
+    end
+
+    test "normalizes interval shorthands" do
+      assert CronSchedule.normalize("every 30m") == {:ok, "*/30 * * * *"}
+      assert CronSchedule.normalize("15 minutes") == {:ok, "*/15 * * * *"}
+      assert CronSchedule.normalize("every 2h") == {:ok, "0 */2 * * *"}
+      assert CronSchedule.normalize("hourly") == {:ok, "0 * * * *"}
+      assert CronSchedule.normalize("60 minutes") == {:ok, "0 * * * *"}
+      assert CronSchedule.normalize("every 24h") == {:ok, "0 0 * * *"}
+    end
+
+    test "rejects interval shorthands that do not map cleanly to cron steps" do
+      assert CronSchedule.normalize("every 45m") ==
+               {:error, "Minute interval must evenly divide 60"}
+
+      assert CronSchedule.normalize("every 7h") ==
+               {:error, "Hour interval must evenly divide 24"}
+    end
+
+    test "normalizes daily and weekday time shorthands" do
+      assert CronSchedule.normalize("daily at 9am") == {:ok, "0 9 * * *"}
+      assert CronSchedule.normalize("every day at 17:45") == {:ok, "45 17 * * *"}
+      assert CronSchedule.normalize("weekdays at 09:30") == {:ok, "30 9 * * 1-5"}
+    end
+
+    test "normalizes weekly day-name shorthands" do
+      assert CronSchedule.normalize("weekly monday at 8am") == {:ok, "0 8 * * 1"}
+      assert CronSchedule.normalize("every friday at 18:15") == {:ok, "15 18 * * 5"}
+      assert CronSchedule.normalize("sundays at 10pm") == {:ok, "0 22 * * 0"}
+    end
+
+    test "returns unknown schedule text for normal validation errors" do
+      assert CronSchedule.normalize("daily after lunch") == {:ok, "daily after lunch"}
+    end
+  end
+
   describe "parse/1" do
     test "parses simple wildcard expression" do
       assert {:ok, parsed} = CronSchedule.parse("* * * * *")
@@ -59,6 +98,17 @@ defmodule LemonAutomation.CronScheduleTest do
     test "returns error for invalid field count" do
       assert {:error, msg} = CronSchedule.parse("* * *")
       assert msg =~ "Expected 5 fields"
+    end
+
+    test "parses normalized schedule shorthands" do
+      assert {:ok, parsed} = CronSchedule.parse("daily at 9am")
+      assert parsed.minute == [0]
+      assert parsed.hour == [9]
+
+      assert {:ok, parsed} = CronSchedule.parse("weekdays at 09:30")
+      assert parsed.minute == [30]
+      assert parsed.hour == [9]
+      assert parsed.weekday == [1, 2, 3, 4, 5]
     end
 
     test "returns error for invalid value" do

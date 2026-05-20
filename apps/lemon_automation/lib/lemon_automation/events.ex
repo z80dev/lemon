@@ -18,6 +18,7 @@ defmodule LemonAutomation.Events do
   ### Run Lifecycle Events
   - `:cron_run_started` - Job execution began
   - `:cron_run_completed` - Job execution finished (success or failure)
+  - `:cron_lifecycle_action` - Durable cron lifecycle/audit action was recorded
 
   ### Heartbeat Events
   - `:heartbeat_suppressed` - Healthy heartbeat response was suppressed
@@ -166,6 +167,25 @@ defmodule LemonAutomation.Events do
       )
 
     Bus.broadcast(@topic, event)
+  end
+
+  @doc """
+  Emit event when a durable lifecycle audit action is recorded.
+  """
+  @spec emit_lifecycle_action(map()) :: :ok
+  def emit_lifecycle_action(event) when is_map(event) do
+    bus_event =
+      Event.new(
+        :cron_lifecycle_action,
+        %{audit: event},
+        %{
+          job_id: meta_value(event, :job_id),
+          run_id: meta_value(event, :router_run_id) || meta_value(event, :run_id),
+          cron_run_id: meta_value(event, :run_id)
+        }
+      )
+
+    Bus.broadcast(@topic, bus_event)
   end
 
   # ============================================================================

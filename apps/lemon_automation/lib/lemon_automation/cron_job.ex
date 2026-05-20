@@ -8,13 +8,18 @@ defmodule LemonAutomation.CronJob do
   - `:name` - Human-readable job name
   - `:schedule` - Cron expression (e.g., "0 9 * * *" for 9 AM daily)
   - `:enabled` - Whether the job is active
-  - `:agent_id` - Target agent for the job
-  - `:session_key` - Session key for routing
+  - `:agent_id` - Target agent for prompt jobs
+  - `:session_key` - Session key for prompt-job routing
   - `:prompt` - The prompt to send to the agent
+  - `:command` - Optional operator-owned shell command for no-agent jobs
+  - `:cwd` - Optional command working directory
+  - `:env` - Optional command environment overrides
   - `:memory_file` - Optional markdown file used as persistent cross-run memory
   - `:timezone` - Timezone for schedule interpretation (default: "UTC")
   - `:jitter_sec` - Random delay in seconds to spread load (default: 0)
   - `:timeout_ms` - Maximum execution time in milliseconds
+  - `:max_retries` - Number of retry runs after failure/timeout (default: 0)
+  - `:retry_backoff_ms` - Delay before retry runs in milliseconds (default: 30000)
   - `:created_at_ms` - Creation timestamp
   - `:updated_at_ms` - Last update timestamp
   - `:last_run_at_ms` - Last execution timestamp
@@ -49,7 +54,7 @@ defmodule LemonAutomation.CronJob do
       %CronJob{schedule: "*/15 * * * *", ...}
   """
 
-  @enforce_keys [:id, :name, :schedule, :agent_id, :session_key, :prompt]
+  @enforce_keys [:id, :name, :schedule]
   defstruct [
     :id,
     :name,
@@ -57,6 +62,9 @@ defmodule LemonAutomation.CronJob do
     :agent_id,
     :session_key,
     :prompt,
+    :command,
+    :cwd,
+    :env,
     :memory_file,
     :created_at_ms,
     :updated_at_ms,
@@ -66,7 +74,9 @@ defmodule LemonAutomation.CronJob do
     enabled: true,
     timezone: "UTC",
     jitter_sec: 0,
-    timeout_ms: 300_000
+    timeout_ms: 300_000,
+    max_retries: 0,
+    retry_backoff_ms: 30_000
   ]
 
   @type t :: %__MODULE__{
@@ -74,13 +84,18 @@ defmodule LemonAutomation.CronJob do
           name: binary(),
           schedule: binary(),
           enabled: boolean(),
-          agent_id: binary(),
-          session_key: binary(),
-          prompt: binary(),
+          agent_id: binary() | nil,
+          session_key: binary() | nil,
+          prompt: binary() | nil,
+          command: binary() | nil,
+          cwd: binary() | nil,
+          env: map() | nil,
           memory_file: binary() | nil,
           timezone: binary(),
           jitter_sec: non_neg_integer(),
           timeout_ms: non_neg_integer(),
+          max_retries: non_neg_integer(),
+          retry_backoff_ms: non_neg_integer(),
           created_at_ms: non_neg_integer() | nil,
           updated_at_ms: non_neg_integer() | nil,
           last_run_at_ms: non_neg_integer() | nil,
@@ -103,10 +118,15 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(attrs, :agent_id),
       session_key: get_attr(attrs, :session_key),
       prompt: get_attr(attrs, :prompt),
+      command: get_attr(attrs, :command),
+      cwd: get_attr(attrs, :cwd),
+      env: get_attr(attrs, :env),
       memory_file: get_attr(attrs, :memory_file),
       timezone: get_attr(attrs, :timezone, "UTC"),
       jitter_sec: get_attr(attrs, :jitter_sec, 0),
       timeout_ms: get_attr(attrs, :timeout_ms, 300_000),
+      max_retries: get_attr(attrs, :max_retries, 0),
+      retry_backoff_ms: get_attr(attrs, :retry_backoff_ms, 30_000),
       created_at_ms: now,
       updated_at_ms: now,
       last_run_at_ms: nil,
@@ -128,10 +148,15 @@ defmodule LemonAutomation.CronJob do
         schedule: get_attr(attrs, :schedule, job.schedule),
         enabled: get_attr(attrs, :enabled, job.enabled),
         prompt: get_attr(attrs, :prompt, job.prompt),
+        command: get_attr(attrs, :command, job.command),
+        cwd: get_attr(attrs, :cwd, job.cwd),
+        env: get_attr(attrs, :env, job.env),
         memory_file: get_attr(attrs, :memory_file, job.memory_file),
         timezone: get_attr(attrs, :timezone, job.timezone),
         jitter_sec: get_attr(attrs, :jitter_sec, job.jitter_sec),
         timeout_ms: get_attr(attrs, :timeout_ms, job.timeout_ms),
+        max_retries: get_attr(attrs, :max_retries, job.max_retries),
+        retry_backoff_ms: get_attr(attrs, :retry_backoff_ms, job.retry_backoff_ms),
         meta: get_attr(attrs, :meta, job.meta),
         updated_at_ms: now
     }
@@ -178,10 +203,15 @@ defmodule LemonAutomation.CronJob do
       agent_id: job.agent_id,
       session_key: job.session_key,
       prompt: job.prompt,
+      command: job.command,
+      cwd: job.cwd,
+      env: job.env,
       memory_file: job.memory_file,
       timezone: job.timezone,
       jitter_sec: job.jitter_sec,
       timeout_ms: job.timeout_ms,
+      max_retries: job.max_retries,
+      retry_backoff_ms: job.retry_backoff_ms,
       created_at_ms: job.created_at_ms,
       updated_at_ms: job.updated_at_ms,
       last_run_at_ms: job.last_run_at_ms,
@@ -203,10 +233,15 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(map, :agent_id),
       session_key: get_attr(map, :session_key),
       prompt: get_attr(map, :prompt),
+      command: get_attr(map, :command),
+      cwd: get_attr(map, :cwd),
+      env: get_attr(map, :env),
       memory_file: get_attr(map, :memory_file),
       timezone: get_attr(map, :timezone, "UTC"),
       jitter_sec: get_attr(map, :jitter_sec, 0),
       timeout_ms: get_attr(map, :timeout_ms, 300_000),
+      max_retries: get_attr(map, :max_retries, 0),
+      retry_backoff_ms: get_attr(map, :retry_backoff_ms, 30_000),
       created_at_ms: get_attr(map, :created_at_ms),
       updated_at_ms: get_attr(map, :updated_at_ms),
       last_run_at_ms: get_attr(map, :last_run_at_ms),
@@ -214,6 +249,16 @@ defmodule LemonAutomation.CronJob do
       meta: get_attr(map, :meta)
     }
   end
+
+  @doc """
+  Return how this cron job executes.
+  """
+  @spec execution_mode(t()) :: :agent | :command
+  def execution_mode(%__MODULE__{command: command}) when is_binary(command) do
+    if String.trim(command) == "", do: :agent, else: :command
+  end
+
+  def execution_mode(%__MODULE__{}), do: :agent
 
   # Looks up an attribute by atom key first, then string key, with optional default.
   defp get_attr(map, key, default \\ nil) do

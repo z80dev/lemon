@@ -40,6 +40,11 @@ defmodule LemonAutomation.CronRunTest do
       run = CronRun.new("cron_new_2", :manual)
       assert run.triggered_by == :manual
     end
+
+    test "accepts retry trigger" do
+      run = CronRun.new("cron_new_3", :retry)
+      assert run.triggered_by == :retry
+    end
   end
 
   describe "start/2" do
@@ -207,12 +212,12 @@ defmodule LemonAutomation.CronRunTest do
           "id" => "run_string",
           "job_id" => "cron_string",
           "status" => "failed",
-          "triggered_by" => "manual",
+          "triggered_by" => "retry",
           "suppressed" => true
         })
 
       assert parsed.status == :failed
-      assert parsed.triggered_by == :manual
+      assert parsed.triggered_by == :retry
       assert parsed.suppressed == true
 
       fallback =

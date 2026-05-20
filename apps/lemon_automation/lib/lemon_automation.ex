@@ -84,6 +84,11 @@ defmodule LemonAutomation do
   defdelegate run_now(id), to: LemonAutomation.CronManager
 
   @doc """
+  Abort an active cron run by cron run ID.
+  """
+  defdelegate abort_run(run_id), to: LemonAutomation.CronManager
+
+  @doc """
   Get run history for a job.
   """
   defdelegate runs(job_id, opts \\ []), to: LemonAutomation.CronManager

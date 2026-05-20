@@ -10,11 +10,11 @@ defmodule LemonAutomation.CronRun do
   - `:id` - Unique run identifier
   - `:job_id` - Reference to the parent CronJob
   - `:run_id` - The LemonRouter run ID (if applicable)
-  - `:status` - Current status: :pending, :running, :completed, :failed, :timeout
+  - `:status` - Current status: :pending, :running, :completed, :failed, :timeout, :aborted
   - `:started_at_ms` - When the run started
   - `:completed_at_ms` - When the run finished
   - `:duration_ms` - Total execution time
-  - `:triggered_by` - What triggered the run: :schedule, :manual, :wake
+  - `:triggered_by` - What triggered the run: :schedule, :manual, :wake, :retry
   - `:error` - Error message if failed
   - `:output` - Captured output/response summary
   - `:suppressed` - Whether output was suppressed (heartbeat OK)
@@ -47,8 +47,8 @@ defmodule LemonAutomation.CronRun do
     suppressed: false
   ]
 
-  @type status :: :pending | :running | :completed | :failed | :timeout
-  @type trigger :: :schedule | :manual | :wake
+  @type status :: :pending | :running | :completed | :failed | :timeout | :aborted
+  @type trigger :: :schedule | :manual | :wake | :retry
 
   @type t :: %__MODULE__{
           id: binary(),
@@ -130,6 +130,23 @@ defmodule LemonAutomation.CronRun do
   end
 
   @doc """
+  Mark the run as aborted by an operator or runtime cancellation path.
+  """
+  @spec abort(t(), reason :: binary()) :: t()
+  def abort(%__MODULE__{} = run, reason \\ "Run aborted") do
+    now = LemonCore.Clock.now_ms()
+    duration = if run.started_at_ms, do: now - run.started_at_ms, else: nil
+
+    %{
+      run
+      | status: :aborted,
+        completed_at_ms: now,
+        duration_ms: duration,
+        error: reason
+    }
+  end
+
+  @doc """
   Mark the run's output as suppressed (heartbeat OK).
   """
   @spec suppress(t()) :: t()
@@ -150,7 +167,7 @@ defmodule LemonAutomation.CronRun do
   """
   @spec finished?(t()) :: boolean()
   def finished?(%__MODULE__{status: status}) do
-    status in [:completed, :failed, :timeout]
+    status in [:completed, :failed, :timeout, :aborted]
   end
 
   @doc """
@@ -201,11 +218,13 @@ defmodule LemonAutomation.CronRun do
   defp parse_status("completed"), do: :completed
   defp parse_status("failed"), do: :failed
   defp parse_status("timeout"), do: :timeout
+  defp parse_status("aborted"), do: :aborted
   defp parse_status(_), do: :pending
 
   defp parse_trigger(trigger) when is_atom(trigger), do: trigger
   defp parse_trigger("schedule"), do: :schedule
   defp parse_trigger("manual"), do: :manual
   defp parse_trigger("wake"), do: :wake
+  defp parse_trigger("retry"), do: :retry
   defp parse_trigger(_), do: :schedule
 end

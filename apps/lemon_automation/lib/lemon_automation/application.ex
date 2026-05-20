@@ -9,6 +9,9 @@ defmodule LemonAutomation.Application do
       {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
       LemonAutomation.CronManager,
       LemonAutomation.HeartbeatManager,
+      LemonAutomation.GoalContinuationManager,
+      LemonAutomation.GoalLoopManager,
+      LemonAutomation.KanbanDispatcher,
       LemonAutomation.SkillCuratorManager
     ]
 

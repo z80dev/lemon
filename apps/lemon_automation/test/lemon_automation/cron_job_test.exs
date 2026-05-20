@@ -33,6 +33,8 @@ defmodule LemonAutomation.CronJobTest do
           :timezone => "America/New_York",
           "jitter_sec" => 9,
           :timeout_ms => 120_000,
+          "max_retries" => 2,
+          :retry_backoff_ms => 5_000,
           "meta" => %{"source" => "mixed"}
         })
 
@@ -49,6 +51,8 @@ defmodule LemonAutomation.CronJobTest do
       assert job.timezone == "America/New_York"
       assert job.jitter_sec == 9
       assert job.timeout_ms == 120_000
+      assert job.max_retries == 2
+      assert job.retry_backoff_ms == 5_000
       assert job.meta == %{"source" => "mixed"}
       assert job.created_at_ms >= before
       assert job.created_at_ms <= after_ms
@@ -77,6 +81,8 @@ defmodule LemonAutomation.CronJobTest do
           :timezone => "America/Chicago",
           "jitter_sec" => 30,
           :timeout_ms => 90_000,
+          "max_retries" => 3,
+          :retry_backoff_ms => 10_000,
           "meta" => %{"v" => 2},
           "id" => "cron_changed",
           :agent_id => "agent_changed",
@@ -93,6 +99,8 @@ defmodule LemonAutomation.CronJobTest do
       assert updated.timezone == "America/Chicago"
       assert updated.jitter_sec == 30
       assert updated.timeout_ms == 90_000
+      assert updated.max_retries == 3
+      assert updated.retry_backoff_ms == 10_000
       assert updated.meta == %{"v" => 2}
 
       assert updated.id == job.id
@@ -176,6 +184,8 @@ defmodule LemonAutomation.CronJobTest do
           timezone: "America/Los_Angeles",
           jitter_sec: 22,
           timeout_ms: 75_000,
+          max_retries: 4,
+          retry_backoff_ms: 15_000,
           created_at_ms: 1_700_000_001_000,
           updated_at_ms: 1_700_000_002_000,
           last_run_at_ms: 1_700_000_003_000,
@@ -195,6 +205,8 @@ defmodule LemonAutomation.CronJobTest do
                timezone: "America/Los_Angeles",
                jitter_sec: 22,
                timeout_ms: 75_000,
+               max_retries: 4,
+               retry_backoff_ms: 15_000,
                created_at_ms: 1_700_000_001_000,
                updated_at_ms: 1_700_000_002_000,
                last_run_at_ms: 1_700_000_003_000,
@@ -217,6 +229,8 @@ defmodule LemonAutomation.CronJobTest do
         timezone: "UTC",
         jitter_sec: 3,
         timeout_ms: 33_000,
+        max_retries: 2,
+        retry_backoff_ms: 7_500,
         created_at_ms: 101,
         updated_at_ms: 202,
         last_run_at_ms: 303,
@@ -235,6 +249,8 @@ defmodule LemonAutomation.CronJobTest do
                timezone: "UTC",
                jitter_sec: 3,
                timeout_ms: 33_000,
+               max_retries: 2,
+               retry_backoff_ms: 7_500,
                created_at_ms: 101,
                updated_at_ms: 202,
                last_run_at_ms: 303,
@@ -255,6 +271,8 @@ defmodule LemonAutomation.CronJobTest do
         "timezone" => "America/New_York",
         "jitter_sec" => 99,
         "timeout_ms" => 200_000,
+        "max_retries" => 99,
+        "retry_backoff_ms" => 200_000,
         "created_at_ms" => 222,
         "updated_at_ms" => 444,
         "last_run_at_ms" => 666,
@@ -270,6 +288,8 @@ defmodule LemonAutomation.CronJobTest do
         :timezone => "UTC",
         :jitter_sec => 1,
         :timeout_ms => 10_000,
+        :max_retries => 1,
+        :retry_backoff_ms => 10_000,
         :created_at_ms => 111,
         :updated_at_ms => 333,
         :last_run_at_ms => 555,
@@ -289,6 +309,8 @@ defmodule LemonAutomation.CronJobTest do
       assert job.timezone == "UTC"
       assert job.jitter_sec == 1
       assert job.timeout_ms == 10_000
+      assert job.max_retries == 1
+      assert job.retry_backoff_ms == 10_000
       assert job.created_at_ms == 111
       assert job.updated_at_ms == 333
       assert job.last_run_at_ms == 555
@@ -311,6 +333,8 @@ defmodule LemonAutomation.CronJobTest do
       assert job.timezone == "UTC"
       assert job.jitter_sec == 0
       assert job.timeout_ms == 300_000
+      assert job.max_retries == 0
+      assert job.retry_backoff_ms == 30_000
       assert job.memory_file == nil
       assert job.created_at_ms == nil
       assert job.updated_at_ms == nil
