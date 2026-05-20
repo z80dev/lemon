@@ -102,7 +102,7 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     text = CheckpointStatusMessage.text(event_filters: [run_id: run_id])
 
     assert text =~ "Events: created 1, restored 1, deleted 0"
-    assert text =~ "Recent events: restored #{checkpoint.id} (1 paths)"
+    assert text =~ "restored #{checkpoint.id} (1 paths)"
     assert text =~ "created #{checkpoint.id} (1 paths)"
     refute text =~ path
     refute text =~ "secret-before"

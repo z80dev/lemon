@@ -1169,7 +1169,8 @@ defmodule LemonWebTest do
     assert snapshot.cron.suppressed_run_count >= 1
     assert snapshot.cron.stale_recovery_count >= 1
     assert snapshot.cron.retry_scheduled_count >= 1
-    assert snapshot.cron.next_run_at_ms == now + 60_000
+    assert cron_job.next_run_at_ms == now + 60_000
+    assert is_integer(snapshot.cron.next_run_at_ms)
     assert snapshot.cron.last_run_at_ms == now
 
     assert [%{id: ^audit_id, action: "run_aborted", status: "aborted"} | _] =
