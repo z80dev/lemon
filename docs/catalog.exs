@@ -32,7 +32,7 @@
   %{
     path: "docs/support.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-05-15],
     max_age_days: 60
   },
   %{
@@ -122,7 +122,7 @@
   %{
     path: "docs/subagent-parent-questions.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-13],
+    last_reviewed: ~D[2026-05-15],
     max_age_days: 60
   },
   %{
@@ -168,15 +168,39 @@
     max_age_days: 45
   },
   %{
+    path: "docs/tools/acp.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-16],
+    max_age_days: 90
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-03-08],
     max_age_days: 90
   },
   %{
+    path: "docs/tools/lsp.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-16],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/tools/media.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-16],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/tools/openai-compatible-api.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-16],
+    max_age_days: 90
+  },
+  %{
     path: "docs/tools/web.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-08],
+    last_reviewed: ~D[2026-05-15],
     max_age_days: 90
   },
   %{
@@ -230,13 +254,13 @@
   %{
     path: "docs/skills_v2.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{
     path: "docs/reference/skill-manifest-v2.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-17],
+    last_reviewed: ~D[2026-05-17],
     max_age_days: 60
   },
   %{
@@ -260,31 +284,31 @@
   %{
     path: "docs/user-guide/setup.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-05-15],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/skills.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/memory.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/adaptive.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{
@@ -308,7 +332,7 @@
   %{
     path: "docs/plans/lemon-1.0-mainstream-readiness.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-05-15],
     max_age_days: 60
   },
   %{
@@ -362,7 +386,7 @@
   %{
     path: "docs/user-guide/rollout.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-05-16],
     max_age_days: 60
   },
   %{

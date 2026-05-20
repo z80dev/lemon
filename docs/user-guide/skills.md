@@ -288,4 +288,4 @@ skills_hub_v2                = "default-on"   # full hub UX
 skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
-*Last reviewed: 2026-03-16*
+*Last reviewed: 2026-05-16*

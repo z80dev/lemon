@@ -48,9 +48,42 @@ mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
 ### 3. Run the automated setup (optional)
 
 ```bash
-mix lemon.setup        # interactive walkthrough
-mix lemon.doctor       # verify everything is working
+./bin/lemon setup      # interactive walkthrough
+./bin/lemon channels
+./bin/lemon config validate
+./bin/lemon doctor     # verify everything is working
+./bin/lemon media --limit 5
+./bin/lemon models --provider anthropic
+./bin/lemon providers --provider openai
+./bin/lemon policy list
+./bin/lemon proofs --limit 5
+./bin/lemon readiness --limit 5
+./bin/lemon secrets status
+./bin/lemon skill list
+./bin/lemon usage
+scripts/verify_source_install --skip-compile  # optional local install proof
 ```
+
+The source wrapper commands delegate to the same Mix tasks:
+`./bin/lemon setup ...` -> `mix lemon.setup ...`,
+`./bin/lemon channels ...` -> `mix lemon.channels ...`,
+`./bin/lemon config ...` -> `mix lemon.config ...`,
+`./bin/lemon doctor ...` -> `mix lemon.doctor ...`,
+`./bin/lemon media ...` -> `mix lemon.media ...`,
+`./bin/lemon models ...` -> `mix lemon.models ...`,
+`./bin/lemon providers ...` -> `mix lemon.providers ...`,
+`./bin/lemon policy ...` -> `mix lemon.policy ...`,
+`./bin/lemon proofs ...` -> `mix lemon.proofs ...`,
+`./bin/lemon readiness ...` -> `mix lemon.readiness ...`,
+`./bin/lemon secrets status` -> `mix lemon.secrets.status`,
+`./bin/lemon skill ...` -> `mix lemon.skill ...`,
+`./bin/lemon usage ...` -> `mix lemon.usage ...`, and
+`./bin/lemon update ...` -> `mix lemon.update ...`.
+
+For source-checkout maintenance, `./bin/lemon update --check` delegates to the
+stage-1 local `mix lemon.update` task. It reports the current version, checks
+config migration state, and can sync bundled skills when run without
+`--no-skill-sync`; it does not download or swap remote release binaries.
 
 ### 4. Start Lemon
 
@@ -71,6 +104,16 @@ mix lemon.doctor       # verify everything is working
 # open http://localhost:4080/ops for health, active runs, approvals, and support commands
 ```
 
+**Script notification:**
+```bash
+./bin/lemon send --to telegram:<chat_id> "deploy finished"
+echo "RAM 92%" | ./bin/lemon send --to discord:<channel_id>
+./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "deploy report"
+./bin/lemon send --dry-run --to discord:#ops --attach report.txt "validate only"
+```
+
+`./bin/lemon send` supports Telegram and Discord targets, optional `:thread_id`, `--thread`, `--topic`, `--account`, `--reply-to`, `--subject`, `--file`, `--file -`, repeated `--attach` uploads up to 10 files, `--dry-run`, `--json`, `--quiet`, `--help`, and filtered `--list`. Platform-only targets use env defaults first, then `[gateway.telegram] default_chat_id` / `default_thread_id` / `default_topic_id` or `[gateway.discord] default_channel_id` / `default_thread_id`. Default account ids use `LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID` / `LEMON_DISCORD_DEFAULT_ACCOUNT_ID`, then `[gateway.telegram] default_account_id` / `[gateway.discord] default_account_id`. Dry-run validates targets, body/caption resolution, and attachment metadata without platform credentials or delivery. List mode reports env/config defaults plus bounded recent Telegram/Discord known-target windows with exact reusable aliases when the BEAM store has seen chats, channels, or threads. `--account <id>` selects the channel account for delivery and scopes known-target listing/name resolution. `--thread <id-or-name>` and Telegram-friendly `--topic <id-or-name>` set the thread/topic separately from `--to` and fail if the target already embeds a thread. `--reply-to <message-id>` replies under an existing platform message when the channel adapter supports it. Unique known names work for Telegram and Discord, such as `telegram:#lemon-ops`, `telegram:@lemon_ops`, `telegram:#lemon-ops:deploys`, `discord:#ops`, or `discord:#ops:deploys`.
+
 ### 5. Telegram quickstart
 
 1. Create a bot via `@BotFather` — run `/newbot`, copy the token
@@ -87,10 +130,20 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 |---|---|
 | Chat with an AI coding assistant | Telegram, TUI, or Web UI |
 | Run tasks in a specific repo | `/new /path/to/repo` or bind a project in config |
-| Use skills (reusable knowledge modules) | `mix lemon.skill list` / `install` / `inspect` |
+| Use skills (reusable knowledge modules) | `./bin/lemon skill list` / `install` / `inspect` |
 | Search past runs by content | `search_memory` tool (enable `session_search` flag) |
 | Generate skill drafts from memory | `mix lemon.skill draft generate` |
 | Schedule recurring tasks | Cron configuration in `~/.lemon/config.toml` |
+| Send shell/CI notifications | `./bin/lemon send --to telegram:<chat_id> "done"` |
+| Check Telegram/Discord readiness | `./bin/lemon channels` |
+| Check media/provider proof readiness | `./bin/lemon media --limit 5` |
+| List model catalog | `./bin/lemon models --provider anthropic` |
+| Check provider readiness | `./bin/lemon providers --provider openai` |
+| Set route model policy | `./bin/lemon policy set telegram --model anthropic:claude-sonnet-4-20250514` |
+| Inspect redacted proof artifacts | `./bin/lemon proofs --limit 5` |
+| Check launch readiness gates | `./bin/lemon readiness --limit 5` (`--strict` fails unless ready) |
+| Check secret store | `./bin/lemon secrets status` |
+| Check usage/cost totals | `./bin/lemon usage` |
 | Use multiple LLM providers | 26 providers supported; configure in `[providers]` |
 
 ---
@@ -161,6 +214,7 @@ Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.
 scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
 scripts/test path apps/lemon_skills/test
 scripts/test quality              # lint + doc freshness + architecture boundaries
+scripts/test clients              # Python CLI package check + Node client CI parity
 ```
 
 See [`docs/testing.md`](docs/testing.md) for the canonical local test lanes and
@@ -185,7 +239,7 @@ MIX_ENV=prod mix release lemon_runtime_full
 ```
 
 See [`docs/plans/lemon-1.0-mainstream-readiness.md`](docs/plans/lemon-1.0-mainstream-readiness.md)
-for the launch readiness goal, [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md)
+for the Hermes-on-BEAM product goal, [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md)
 for the source-grounded Hermes feature comparison, and [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](docs/plans/lemon-hermes-agent-harness-parity-scorecard.md)
 for the harness contract ledger. See
 [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](docs/plans/lemon-sim-platform-mission-2026-05-12.md)

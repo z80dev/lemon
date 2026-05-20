@@ -294,7 +294,7 @@ Generate a redacted support bundle when filing a bug or asking for help:
 mix lemon.doctor --bundle
 ```
 
-The bundle is written under `tmp/lemon-support-bundles/` by default. It contains the doctor report, runtime metadata, selected environment shape, and redacted Lemon config files. Review it before sharing; it is designed to exclude provider keys, tokens, passwords, private prompts, memory contents, and tool outputs.
+The bundle is written under `tmp/lemon-support-bundles/` by default. It contains the doctor report, runtime metadata, selected environment shape, redacted Lemon config files, provider setup diagnostics, extension directory diagnostics, and browser automation diagnostics when available. Review it before sharing; it is designed to exclude provider keys, secret names, base URLs, environment variable names, tokens, passwords, private prompts, memory contents, page contents, source file contents, screenshot bytes, and tool outputs.
 
 For release-runtime installs, run the same bundle writer through the release `eval` command:
 

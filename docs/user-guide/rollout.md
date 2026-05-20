@@ -161,4 +161,4 @@ Before setting a flag to `"default-on"` in the codebase:
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
 - `LemonCore.RolloutGate` — module documentation and gate thresholds
 
-*Last reviewed: 2026-03-16*
+*Last reviewed: 2026-05-16*

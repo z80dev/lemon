@@ -158,6 +158,7 @@ apps/
 
 clients/
 ├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
+├── lemon-cli/           # Python TUI client packaged with uv
 ├── lemon-tui/           # Terminal UI client (TypeScript)
 └── lemon-web/           # Web workspace (shared, server, web packages)
 
@@ -183,7 +184,7 @@ mix compile
 scripts/test help
 scripts/test fast       # compile with warnings as errors + ExUnit excluding integration
 scripts/test quality    # Lemon quality gates and focused quality tests
-scripts/test clients    # Node client CI parity checks
+scripts/test clients    # Python CLI + Node client CI parity checks
 scripts/test eval-fast  # small eval harness run
 scripts/test smoke      # CI-only product-smoke pointer
 scripts/test all        # useful local aggregate
@@ -201,6 +202,16 @@ npm install
 npm run build
 npm run test:coverage
 npm run dev      # Watch mode
+```
+
+### Python CLI Client
+
+```bash
+cd clients/lemon-cli
+uv sync --locked --dev
+uv run ruff check src tests
+uv run pytest
+uv build --sdist --wheel
 ```
 
 ### Web Client
@@ -228,6 +239,9 @@ npm run dev      # Watch mode
 ```bash
 ./bin/lemon-dev    # Installs deps, builds, launches TUI
 ./bin/lemon        # Unified runtime (gateway + control plane + router + channels + web)
+./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
+./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
+./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
 ./bin/lemon-tui    # TUI attached to unified runtime; auto-starts runtime if needed
 ```
 
@@ -263,7 +277,7 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, coding_agent*
+lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, lemon_ai_runtime, coding_agent*
 lemon_router ─────────→ lemon_core, lemon_channels, coding_agent, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent, lemon_channels*
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
@@ -275,7 +289,7 @@ lemon_mcp ────────────→ coding_agent, agent_core
 lemon_sim ────────────→ lemon_core, agent_core, ai, lemon_ai_runtime
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
-lemon_web ────────────→ lemon_core, lemon_router
+lemon_web ────────────→ lemon_core, lemon_router, lemon_ai_runtime
 lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
 coding_agent_ui ──────→ coding_agent
 ai ───────────────────→ lemon_core
@@ -301,6 +315,8 @@ Key env vars:
 - `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
+- `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
+- `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS
 - `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_PHONE_NUMBER` - SMS

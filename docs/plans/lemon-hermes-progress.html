@@ -1,0 +1,1679 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lemon Hermes Parity Progress</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --ink: #111827;
+      --muted: #5f6b7a;
+      --line: #dce4ee;
+      --soft: #edf3fa;
+      --green: #21865f;
+      --amber: #c47b19;
+      --red: #c24a4a;
+      --blue: #2767b1;
+      --violet: #6741a3;
+      --slate: #748094;
+      --shadow: 0 12px 32px rgba(17, 24, 39, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(180deg, rgba(39, 103, 177, 0.08), transparent 260px),
+        var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1220px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 30px 0 46px;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(32px, 4vw, 56px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 18px;
+      margin-bottom: 14px;
+    }
+
+    h3 {
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #edf3f9;
+      color: #274f81;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .subhead {
+      max-width: 820px;
+      margin-top: 12px;
+      font-size: 16px;
+    }
+
+    .header-actions {
+      display: grid;
+      gap: 8px;
+      justify-items: end;
+    }
+
+    .stamp, button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+    }
+
+    .stamp {
+      padding: 10px 12px;
+      white-space: nowrap;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 7px 12px;
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .cols-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel, .metric {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .metric {
+      min-height: 118px;
+      padding: 16px;
+      display: grid;
+      align-content: space-between;
+      gap: 12px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .value {
+      display: block;
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .title-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 26px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fbfcfe;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .pill.done {
+      border-color: #afd9c7;
+      background: #e8f6ef;
+      color: #16623f;
+    }
+
+    .pill.progress {
+      border-color: #b8d1ee;
+      background: #e9f2ff;
+      color: #274f81;
+    }
+
+    .pill.warn {
+      border-color: #e4c587;
+      background: #fff4dc;
+      color: #744a06;
+    }
+
+    .pill.blocked {
+      border-color: #e7b3b3;
+      background: #fff0f0;
+      color: #8b2e2e;
+    }
+
+    .callout {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #c8daee;
+      border-left: 4px solid var(--blue);
+      border-radius: 8px;
+      background: #f5f9ff;
+    }
+
+    .progress-stack {
+      height: 14px;
+      display: flex;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--soft);
+      box-shadow: inset 0 0 0 1px #dce5f0;
+    }
+
+    .progress-stack span {
+      display: block;
+      min-width: 2px;
+    }
+
+    .green { background: var(--green); }
+    .amber { background: var(--amber); }
+    .red { background: var(--red); }
+    .slate { background: var(--slate); }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend b {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 6px;
+      border-radius: 50%;
+    }
+
+    .ring-wrap {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 20px;
+      align-items: center;
+    }
+
+    .ring {
+      width: 160px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: conic-gradient(var(--green) 0 68.1%, var(--red) 68.1% 83.6%, var(--amber) 83.6% 100%, var(--slate) 100% 100%);
+      display: grid;
+      place-items: center;
+    }
+
+    .ring::after {
+      content: "238 proofs";
+      width: 108px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--panel);
+      color: var(--ink);
+      font-weight: 800;
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .bars {
+      display: grid;
+      gap: 11px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: minmax(145px, 0.9fr) minmax(180px, 1.6fr) 76px;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .track {
+      height: 11px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--soft);
+      box-shadow: inset 0 0 0 1px #dce5f0;
+    }
+
+    .fill {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--blue), var(--violet));
+    }
+
+    .workstreams {
+      display: grid;
+      gap: 10px;
+    }
+
+    .stream {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr) 108px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 0;
+      border-top: 1px solid #edf1f6;
+    }
+
+    .stream:first-child {
+      border-top: 0;
+    }
+
+    .stream strong {
+      font-size: 14px;
+    }
+
+    .stream p {
+      font-size: 13px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 25px;
+      line-height: 1;
+    }
+
+    .card span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #edf1f6;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #edf1f6;
+    }
+
+    .event:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .event strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    footer {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 900px) {
+      header, .hero, .cols-4, .cols-3, .cols-2, .ring-wrap, .bar-row, .stream, .cards, .event {
+        grid-template-columns: 1fr;
+      }
+
+      .header-actions {
+        justify-items: start;
+      }
+
+      .stamp {
+        white-space: normal;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Lemon Hermes Parity</h1>
+        <p class="subhead">Static progress view for the Hermes-class agent harness goal. It tracks the scorecard-backed product capability model, the current validation slice, and the remaining live-proof gates without widening the public claim.</p>
+      </div>
+      <div class="header-actions">
+        <div class="stamp">Last updated: 2026-05-18 Slice 412 validated<br>Source: parity scorecard, support bundles, Web ops, control plane, media doctor, final audit, and current proofs</div>
+        <button type="button" id="refresh">Refresh from disk</button>
+      </div>
+    </header>
+
+    <section class="grid cols-4">
+      <div class="metric">
+        <span class="label">Completed slices</span>
+        <span class="value">412</span>
+        <span class="hint">Latest slice hardens support-bundle provider-media reason contracts.</span>
+      </div>
+      <div class="metric">
+        <span class="label">Current slice</span>
+        <span class="value">413</span>
+        <span class="hint">Next launch-gate reduction slice pending selection.</span>
+      </div>
+      <div class="metric">
+        <span class="label">Proof artifacts</span>
+        <span class="value">live</span>
+        <span class="hint">Canonical Discord free-response proof is completed.</span>
+      </div>
+      <div class="metric">
+        <span class="label">Release gate</span>
+        <span class="value">discord</span>
+        <span class="hint">DM and real client-click remain the Discord launch gates.</span>
+      </div>
+    </section>
+
+    <section class="panel hero">
+      <div>
+        <div class="title-row">
+          <h2>Current Active Workstream</h2>
+          <span class="pill done">validated</span>
+        </div>
+        <p>Slice 412 hardens support-bundle coverage so <code>readiness_summary.json</code> must preserve the compact <code>provider_media</code> unresolved gate's <code>reason_kinds</code> list. This makes the durable support artifact carry the same safe blocker labels as CLI, JSON-RPC, and Web.</p>
+        <p>Focused support-bundle validation passed with <code>3 tests, 0 failures</code>.</p>
+        <div class="callout">
+          <p><strong>Launch read:</strong> Lemon has moved well beyond a narrow harness clone on BEAM-native runtime surfaces, but the stable public claim should stay bounded by live proof. Telegram text/document/local voice and Discord text/file/generated-audio/free-response paths are proof-backed; Discord DM/client-click and provider-backed media/voice remain explicit gates.</p>
+        </div>
+      </div>
+      <div>
+        <h3>Immediate gates</h3>
+        <div class="bars">
+          <div class="bar-row"><span>MEDIA directive live proof</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Rate-limit helper validation</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Discord free-response proof</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Discord client-click proof</span><div class="track"><span class="fill" style="width:45%"></span></div><strong>wait-mode ready</strong></div>
+          <div class="bar-row"><span>Discord DM proof</span><div class="track"><span class="fill" style="width:15%"></span></div><strong>blocked</strong></div>
+          <div class="bar-row"><span>Provider media proof</span><div class="track"><span class="fill" style="width:40%"></span></div><strong>2/5 + reasons</strong></div>
+          <div class="bar-row"><span>X search compatibility</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>History integrity CI</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Python CLI package check</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Source install, update, policy, proofs, media, readiness</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>done</strong></div>
+          <div class="bar-row"><span>Telegram/Discord script notifications</span><div class="track"><span class="fill" style="width:100%"></span></div><strong>send + replies</strong></div>
+          <div class="bar-row"><span>Browser/Terminal/API/MCP/LSP/ACP/Ext preview</span><div class="track"><span class="fill" style="width:99%"></span></div><strong>release-gated</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid cols-2">
+      <div class="panel">
+        <h2>Proof Health</h2>
+        <div class="ring-wrap">
+          <div class="ring" aria-label="Proof status donut"></div>
+          <div>
+            <div class="progress-stack" aria-label="Proof artifact status">
+              <span class="green" style="width:68.1%"></span>
+              <span class="red" style="width:15.5%"></span>
+              <span class="amber" style="width:16.4%"></span>
+              <span class="slate" style="width:0%"></span>
+            </div>
+            <div class="legend">
+              <span><b class="green"></b>162 complete, 68.1%</span>
+              <span><b class="red"></b>37 failed, 15.5%</span>
+              <span><b class="amber"></b>39 skipped, 16.4%</span>
+              <span><b class="slate"></b>0 unknown, 0.0%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Parity Balance</h2>
+        <div class="bars">
+          <div class="bar-row"><span>Tool loop and provider edges</span><div class="track"><span class="fill" style="width:88%"></span></div><strong>high</strong></div>
+          <div class="bar-row"><span>Memory and skills</span><div class="track"><span class="fill" style="width:86%"></span></div><strong>high</strong></div>
+          <div class="bar-row"><span>Delegation and artifacts</span><div class="track"><span class="fill" style="width:80%"></span></div><strong>high</strong></div>
+          <div class="bar-row"><span>Install and setup</span><div class="track"><span class="fill" style="width:76%"></span></div><strong>bounded</strong></div>
+          <div class="bar-row"><span>Channels</span><div class="track"><span class="fill" style="width:67%"></span></div><strong>partial</strong></div>
+          <div class="bar-row"><span>Media providers</span><div class="track"><span class="fill" style="width:40%"></span></div><strong>gated</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel grid">
+      <h2>Workstream Status</h2>
+      <div class="workstreams">
+        <div class="stream">
+          <strong>Provider errors</strong>
+          <p>Many proxy, OAuth, validation, retry, context-length, nested-detail, symbolic-prefix, atom-key map, and atom enum value shapes are normalized. Direct helper checks now follow parsed rate-limit classifications for non-429 provider-body signals, <code>providers.status</code> exposes provider readiness, routing, live fallback proof, and cleanup summaries, <code>secrets.status</code> exposes encrypted-store health/fallback diagnostics, <code>./bin/lemon channels</code> exposes promoted channel readiness, <code>./bin/lemon models</code> exposes catalog discovery from source installs, <code>./bin/lemon providers</code> exposes redacted provider readiness, <code>./bin/lemon policy</code> exposes route-specific model/thinking policy management, <code>./bin/lemon proofs</code> exposes redacted proof inventory, <code>./bin/lemon media</code> exposes redacted media diagnostics, <code>./bin/lemon readiness</code> exposes compact launch readiness, <code>./bin/lemon secrets</code> exposes allowlisted secret-store tasks, <code>./bin/lemon usage</code> exposes redacted usage diagnostics, and <code>health</code> plus root <code>status</code> expose BEAM runtime summaries for operator clients.</p>
+          <span class="pill done">validated</span>
+        </div>
+        <div class="stream">
+          <strong>Tool lifecycle</strong>
+          <p>Tool-call ordering, abort closure, schema coercion, timeout/crash/error envelopes, transcript validation, and result metadata propagation are scorecard-backed.</p>
+          <span class="pill done">strong</span>
+        </div>
+        <div class="stream">
+          <strong>Memory and skills</strong>
+          <p>Dedicated memory/skill tools, relevant-skill loading, durable topics, curator reports, prompt contracts, and live-model coverage are in the established model. <code>memory.status</code> now exposes provider counts, enabled-provider counts, health state, searchable scopes, and cleanup metadata. <code>skills.status</code>, <code>skills.bins</code>, <code>skills.install</code>, and <code>skills.update</code> preserve useful lifecycle summaries, <code>skills.update</code> redacts sensitive env response values while preserving safe env keys, and source installs can use <code>./bin/lemon skill</code> for the existing skill lifecycle task.</p>
+          <span class="pill done">strong</span>
+        </div>
+        <div class="stream">
+          <strong>Delegation</strong>
+          <p>Async child tasks, wait-all joins, leaf worker policies, and artifact verification are covered by deterministic and live-model contracts. The run/task monitoring APIs now expose compact status, engine, event, reasoning, and duration summaries so operators can inspect orchestration without raw run graphs or full task records. Deep run graph, session detail, active-session, and snapshot APIs now report when full graphs, event payloads, run records, raw run events, harness snapshots, or section records were requested; raw run graph, session detail, introspection internals, and compact session/chat previews also redact sensitive payload values before leaving JSON-RPC.</p>
+          <span class="pill done">strong</span>
+        </div>
+        <div class="stream">
+          <strong>Cron and goals</strong>
+          <p>Cron is preview but proof-backed for scheduling, retry/backoff, pause/resume, abort, audit history, channel-origin delivery, runtime restart survival, and operator command jobs. <code>cron.preview</code> now covers diagnostics, runtime restart, and Telegram/Discord-shaped channel-origin proof, while Web <code>/ops</code> and control-plane <code>cron.status</code> show active locks, suppressed slots, stale recoveries, retry scheduling counters, and cleanup summaries from the durable run/audit stores. <code>cron.add</code>, <code>cron.update</code>, <code>cron.pause</code>, <code>cron.resume</code>, <code>cron.abort</code>, <code>cron.run</code>, <code>cron.remove</code>, and <code>cron.runs</code> now report lifecycle/run-history summaries with byte counts, changed fields, status counts, raw-id state, include flags, and cleanup metadata; <code>cron.runs</code> also redacts sensitive output/error and optional metadata internals. <code>cron.audit</code> reports lifecycle action/filter summaries and explicit raw-id/reason-text return flags, and <code>cron.list</code> redacts scheduled prompt/command text by default with byte-count cleanup summaries. Goal control-plane reads and writes now expose objective byte counts and cleanup summaries instead of objective text.</p>
+          <span class="pill warn">preview</span>
+        </div>
+        <div class="stream">
+          <strong>Kanban</strong>
+          <p>Board, task, and dispatcher methods now expose compact summaries for board return state, filters, columns, task counts, task status counts, dependencies, comments, session/run return state, dispatcher running state, worker fields, concurrency, and cleanup metadata. The summaries explicitly mark operator-authored titles, descriptions, comments, metadata, session keys, and run ids as returned fields.</p>
+          <span class="pill warn">preview+</span>
+        </div>
+        <div class="stream">
+          <strong>Browser, terminal, ACP, LSP</strong>
+          <p>Current docs describe browser tools, terminal backends, ACP preview, and LSP diagnostics as supervised preview surfaces with redacted status, proof lanes, doctor gates, final readiness wiring, and support-bundle visibility. Browser proof now covers local driver, CDP attach, route guardrails, interaction, uploads/downloads, screenshots, cookies, reset, redaction, model-visible screenshots, and browser-to-media vision, and the latest browser proof state is visible through <code>browser.status</code>. <code>browser.request</code> now adds result/error/network-policy summaries and cleanup flags for content-bearing browser responses while preserving paired-node invocation metadata. LSP document open/change/close responses now report byte-count and cleanup summaries without raw URI or document text. LSP server start/initialize/request/stop responses now carry session/protocol cleanup summaries as well. Terminal proof state, backend/policy counts, Docker hardening return state, and cleanup metadata are now visible through <code>terminal.backends.status</code>, while LSP timeout, language, executable, server, proof, check, and cleanup summaries are visible through <code>lsp.diagnostics.status</code>.</p>
+          <span class="pill warn">preview+</span>
+        </div>
+        <div class="stream">
+          <strong>Install and setup</strong>
+          <p>The public install claim stays bounded to source install plus Linux <code>x86_64</code> tarballs. <code>scripts/verify_source_install</code> now provides repeatable source proof for BEAM toolchain checks, source-wrapper help discoverability, locked dependency resolution, warning-free compile, source-wrapper non-interactive setup dispatch, source-wrapper promoted channel readiness, source-wrapper config validation, source-wrapper model catalog listing, source-wrapper provider readiness listing, source-wrapper model policy listing, source-wrapper proof inventory listing, source-wrapper media diagnostics, source-wrapper readiness summary, source-wrapper secrets status, source-wrapper skill listing, source-wrapper usage diagnostics, source-wrapper stage-1 update dry-run dispatch, source-wrapper doctor JSON diagnostics, and redacted support-bundle generation; one-line remote install and remote binary update remain out of scope until they have equivalent proof.</p>
+          <span class="pill done">bounded</span>
+        </div>
+        <div class="stream">
+          <strong>Checkpoint rollback</strong>
+          <p>Rollback remains a BEAM-native preview surface backed by <code>LemonCore.Checkpoint</code>. <code>checkpoint.status</code> exposes redacted checkpoint-store metadata plus create/restore/delete lifecycle counts and recent summaries for run-, session-, or agent-filtered operator views. <code>checkpoint.diff</code> and <code>checkpoint.restore</code> now expose path/diff/restore cleanup summaries so operator clients can distinguish returned paths and diff text from excluded raw session ids, credentials, secret values, and restored file contents. Telegram and Discord now also expose a Hermes-style <code>/rollback</code> alias over the same redacted checkpoint diff/restore flow.</p>
+          <span class="pill warn">preview+</span>
+        </div>
+        <div class="stream">
+          <strong>MCP and extensions</strong>
+          <p>Stdio, Streamable HTTP, legacy HTTP+SSE, OAuth/token flows, sampling approvals, WASM telemetry/policy/lifecycle, and registry audit are deterministic-proof backed. MCP, extension host, WASM telemetry, WASM policy, extension registry audit, and WASM lifecycle proofs now feed final readiness audit gates, while support bundles, JSON-RPC proof status, and Web <code>/ops</code> preserve redaction-only proof evidence. <code>proofs.status</code> and <code>extensions.status</code> now expose launch-gate, host-runtime, count, and cleanup summaries for non-Web operator clients.</p>
+          <span class="pill done">proofed</span>
+        </div>
+        <div class="stream">
+          <strong>Telegram</strong>
+          <p>Text/document plus deterministic local voice, local generated media, live MEDIA directive attachment proof, and source-tree script notifications are visible. <code>./bin/lemon send</code> can deliver script text or up to 10 local file attachments to Telegram chat/topic ids, unique known chat usernames/titles, named topics, config-backed default chat/topic/account targets, account-scoped known targets, separate <code>--topic</code>/<code>--thread</code> overrides, or <code>--reply-to</code> platform message ids with positional, file, or stdin body/caption handling; dry-run validates the same target/body/attachment path without credentials or delivery. List mode exposes a bounded BEAM-store known-target window with exact reusable aliases. <code>channels.status</code> now exposes the redacted Telegram support-diagnostics shape, recent channel proof state, promoted-platform counts, and cleanup summaries for operator clients, while <code>transports.status</code> reports legacy gateway registry health. Provider-backed media/voice claims remain bounded to the proven STT and vision lanes until image, TTS, and video complete.</p>
+          <span class="pill done">bounded</span>
+        </div>
+        <div class="stream">
+          <strong>Discord</strong>
+          <p>Text/file/generated-audio, free-response, live MEDIA directive attachment proof, deterministic slash breadth, components, dedupe, reconnect replay, safe mentions, split finalized edits, and source-tree script notifications are proof-backed. <code>./bin/lemon send</code> can deliver script text or up to 10 local file attachments to Discord channel/thread ids, unique known names, config-backed default channel/thread/account targets, account-scoped known targets, separate <code>--thread</code> overrides, or <code>--reply-to</code> platform message ids with positional, file, or stdin body/caption handling; dry-run validates the same path without credentials or delivery. List mode now exposes a bounded BEAM-store known-target window with exact reusable aliases for allowed channels/threads. <code>channels.status</code> now exposes redacted Discord DM/free-response/replay/slash readiness, shared launch-gate counts, bot-message policy diagnostics, latest channel proof checks, promoted-platform counts, and cleanup summaries. DM and real client-click stay blocked pending external/live proof.</p>
+          <span class="pill warn">partial</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel grid">
+      <h2>Promotion Scoreboard</h2>
+      <div class="cards">
+        <div class="card"><strong>2</strong><span>Promoted messaging platforms stay scoped to Telegram and Discord.</span></div>
+        <div class="card"><strong>412</strong><span>Scorecard-completed harness slices through support-bundle provider-media reason contracts.</span></div>
+        <div class="card"><strong>3</strong><span>TTS proof can now use OpenAI, ElevenLabs, or Google evidence.</span></div>
+        <div class="card"><strong>5/5</strong><span>Local no-credential media proofs completed for image, speech, transcription, vision, and video.</span></div>
+        <div class="card"><strong>2/5</strong><span>Provider-backed media has current STT and vision proof; image, TTS, and video now have alternate-provider blocker diagnostics.</span></div>
+        <div class="card"><strong>not done</strong><span>The broad public claim waits on Discord operator proof and provider-backed media/voice proof.</span></div>
+      </div>
+    </section>
+
+    <section class="grid cols-2">
+      <div class="panel">
+        <h2>Current Blockers</h2>
+        <table>
+          <thead><tr><th>Gate</th><th>Status</th><th>Current read</th></tr></thead>
+          <tbody>
+            <tr><td>Discord slash client-click</td><td><span class="pill warn">operator action</span></td><td>Passive recording, repeatable artifact checks, and wait-mode operator handoff exist. Broad parity still needs an operator click on a real registered command after deploy or hot reload.</td></tr>
+            <tr><td>Discord DM live proof</td><td><span class="pill blocked">blocked</span></td><td>Current model keeps this classified as <code>discord_dm_setup_refused</code>; promotion needs a reachable human or open-DM path.</td></tr>
+            <tr><td>Discord free-response</td><td><span class="pill done">done</span></td><td>The live second-bot unmentioned-thread proof passed and <code>channels.discord.free_response</code> now reports pass in doctor. The transport fallback covers Discord thread events that omit parent-channel context.</td></tr>
+            <tr><td>Provider-backed media</td><td><span class="pill warn">warning</span></td><td>Canonical provider vision proof is current and Deepgram STT proof now passes. Image now has two live provider lanes: OpenAI previously reached the provider but was blocked by <code>openai_image_http_error:billing_limit_user_error</code>, and the current Vertex proof reaches Google but is blocked by <code>vertex_imagen_http_error:permission_denied</code>. TTS now has three provider lanes: ElevenLabs reached the provider but was blocked by <code>elevenlabs_tts_http_error:payment_required</code>, and the current Google TTS proof reaches Google but is blocked by <code>google_tts_http_error:permission_denied</code>. Video now has OpenAI and Vertex Veo lanes; the current Vertex Veo proof reaches Google but is blocked by <code>vertex_veo_create_http_error:permission_denied</code>.</td></tr>
+            <tr><td>Terminal fleet and marketplace breadth</td><td><span class="pill warn">preview</span></td><td>Local, local PTY, Docker, and loopback SSH terminal proof is now doctor- and final-readiness-gated; broader fleet/container, marketplace, and external-server compatibility remain future parity work.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Latest Scorecard Movement</h2>
+        <div class="timeline">
+          <div class="event">
+            <time>Slice 412</time>
+            <div><strong>Support-bundle provider-media reason contract</strong><p>Support-bundle coverage now asserts <code>readiness_summary.json</code> preserves the compact <code>provider_media</code> unresolved gate's <code>reason_kinds</code> list while preserving redaction boundaries. Focused support-bundle validation passed with <code>3 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 411</time>
+            <div><strong>Readiness CLI unresolved reason lists</strong><p>Human-readable <code>mix lemon.readiness</code> / <code>./bin/lemon readiness</code> unresolved gate rows now print <code>reasons=...</code> for list-shaped reason kinds, while preserving existing singular <code>reason=...</code> output. Focused readiness CLI validation passed with <code>3 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 410</time>
+            <div><strong>Readiness JSON-RPC unresolved reason summary</strong><p><code>readiness.status.summary</code> now includes <code>unresolvedGateReasonKindCount</code> and <code>unresolvedGateReasonKinds</code>, derived from both singular unresolved-gate reason labels and provider-media reason lists. Focused control-plane validation passed with <code>69 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 409</time>
+            <div><strong>Provider-media unresolved-gate reason kinds</strong><p><code>LemonCore.Doctor.ReadinessSummary</code> now derives <code>reason_kinds</code> for the compact <code>provider_media</code> unresolved gate from shared provider-media proof-gate lanes. Web <code>/ops</code> requests enough unresolved rows to include the provider-media gate and renders those reason labels; JSON-RPC <code>readiness.status</code> exposes them as <code>reasonKinds</code>. Validation passed with core <code>3</code>, Web <code>37</code>, and control-plane <code>69</code> tests at zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 408</time>
+            <div><strong>Discord DM unresolved-gate reason kind</strong><p><code>LemonCore.Doctor.ChannelReadiness</code> now attaches <code>discord_dm_setup_refused</code> to blocked DM setup gates and <code>discord_dm_missing</code> to missing-proof warnings. Because readiness summaries already forward channel gate reason kinds, <code>mix lemon.readiness</code>, <code>./bin/lemon readiness</code>, support-bundle <code>readiness_summary.json</code>, JSON-RPC <code>readiness.status</code>, and Web <code>/ops</code> now preserve that safe blocker label. Validation passed with focused channel readiness, direct CLI JSON proof, and broader core/Web/control-plane readiness-surface tests.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 407</time>
+            <div><strong>Verifier support-bundle proof-gate shape</strong><p><code>scripts/verify_source_install</code> and <code>scripts/verify_release_runtime_boot</code> now inspect support-bundle <code>readiness_summary.json</code> for the shared proof-gate object, the five expected launch-gate ids, <code>proof_gate_summary.gateCount == 5</code>, status-map shape, and provider-media proof-gate status. Validation passed with shell syntax checks, docs/HTML checks, and <code>scripts/verify_source_install --skip-compile</code>; full release-runtime boot still awaits an artifact directory.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 406</time>
+            <div><strong>Readiness JSON-RPC proof-gate summary</strong><p><code>readiness.status.summary</code> now includes proof-gate status, count, passed, blocked, warning, and status-map fields derived from the shared <code>proofGateSummary</code>. Focused validation passed with <code>69 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 405</time>
+            <div><strong>Source verifier guards readiness proof gates</strong><p><code>scripts/verify_source_install</code> now requires <code>./bin/lemon readiness</code> output to include the human-readable <code>Proof gates:</code> summary, keeping source-install validation aligned with shared proof-gate visibility. Validation passed with <code>bash -n scripts/verify_source_install</code> and <code>scripts/verify_source_install --skip-compile</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 404</time>
+            <div><strong>Readiness CLI proof-gate summary</strong><p><code>mix lemon.readiness</code> and <code>./bin/lemon readiness</code> now print a compact <code>Proof gates:</code> line from the shared <code>proof_gate_summary</code>, covering Discord DM, Discord slash registration, Discord slash client-click, provider media, and terminal backend launch-gate counts. Focused validation passed with <code>3 tests, 0 failures</code>, and <code>scripts/verify_source_install --skip-compile</code> passed the source-wrapper readiness plus support-bundle diagnostics checks.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 403</time>
+            <div><strong>Shared proof launch-gate diagnostics</strong><p><code>LemonCore.Doctor.ProofLaunchGates</code> now owns the redacted proof launch-gate model for Discord DM, Discord slash registration, Discord slash client-click, provider media, and terminal backends. <code>proofs.status</code> delegates to that shared module, while <code>LemonCore.Doctor.ReadinessSummary</code> includes <code>proof_gates</code> and <code>proof_gate_summary</code> for CLI readiness, support-bundle <code>readiness_summary.json</code>, JSON-RPC <code>readiness.status</code>, and Web <code>/ops</code>. Focused validation passed with <code>8 tests, 0 failures</code> for core readiness/support and <code>69 tests, 0 failures</code> for control-plane proof parity.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 402</time>
+            <div><strong>Web ops launch readiness panel</strong><p>Web <code>/ops</code> now renders the same compact launch-readiness rollup as <code>mix lemon.readiness</code>, <code>./bin/lemon readiness</code>, support-bundle <code>readiness_summary.json</code>, and JSON-RPC <code>readiness.status</code>. The panel shows doctor counts, promoted Telegram/Discord gate counts, provider-media state, proof totals, unresolved gate labels, safe evidence/reason/next-action fields, and cleanup flags without raw ids, prompts, provider responses, proof paths/details, bot tokens, secret names, message bodies, or secret values. Focused validation passed with <code>37 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 401</time>
+            <div><strong>Control-plane launch readiness status</strong><p><code>readiness.status</code> now exposes the same compact launch-readiness rollup as <code>mix lemon.readiness</code>, <code>./bin/lemon readiness</code>, and support-bundle <code>readiness_summary.json</code>. The read-only method returns lowerCamelCase doctor, Telegram/Discord gate, provider-media, proof, unresolved-gate, and cleanup summaries without raw ids, prompts, provider responses, proof paths/details, bot tokens, or secret values. Focused validation passed with <code>69 tests, 0 failures</code>; the schema-inclusive lane passed with <code>120 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 400</time>
+            <div><strong>Support-bundle launch readiness summary</strong><p><code>LemonCore.Doctor.ReadinessSummary</code> now backs <code>mix lemon.readiness</code>, <code>./bin/lemon readiness</code>, and support-bundle <code>readiness_summary.json</code>. The bundle entry consolidates doctor counts, Telegram/Discord gate counts, provider-media state, proof totals, unresolved gates, and cleanup flags without raw ids, prompts, provider responses, proof paths/details, or secret values. Focused readiness/support validation passed with <code>6 tests, 0 failures</code>, the broader source-wrapper support lane passed with <code>14 tests, 0 failures</code>, and <code>scripts/verify_source_install</code> passed the new bundle-entry check.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 399</time>
+            <div><strong>Strict source wrapper readiness gate</strong><p><code>mix lemon.readiness --strict</code> and <code>./bin/lemon readiness --strict</code> now fail unless the compact launch-readiness status is fully ready. Normal mode stays informational, while strict mode gives scripts a hard local pass/fail gate without running the full final audit.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 398</time>
+            <div><strong>Source wrapper readiness summary command</strong><p><code>mix lemon.readiness</code> and <code>./bin/lemon readiness</code> consolidate doctor counts, channel launch gates, proof totals, provider-media state, unresolved gates, and cleanup flags. The source verifier exercises <code>./bin/lemon readiness --project-dir --limit 1</code> and checks raw-proof-path plus provider-response cleanup; <code>--strict</code> is available for hard local gates.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 397</time>
+            <div><strong>Source wrapper media diagnostics command</strong><p><code>mix lemon.media</code> and <code>./bin/lemon media</code> now expose redacted media job, artifact, worker, and provider-proof diagnostics from <code>LemonCore.MediaJobs</code>, <code>LemonCore.MediaJobSupervisor</code>, and proof diagnostics. The source verifier exercises <code>./bin/lemon media --project-dir --limit 1</code> and checks prompt and provider-response cleanup.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 396</time>
+            <div><strong>Source wrapper usage diagnostics command</strong><p><code>mix lemon.usage</code> and <code>./bin/lemon usage</code> now expose redacted usage/cost/token/provider/quota diagnostics from <code>LemonCore.UsageDiagnostics</code>. The source verifier exercises <code>./bin/lemon usage</code> and checks prompt and credential cleanup.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 395</time>
+            <div><strong>Source wrapper channel readiness command</strong><p><code>mix lemon.channels</code> and <code>./bin/lemon channels</code> now expose promoted Telegram/Discord readiness gates, safe evidence, reason kinds, and next actions from <code>LemonCore.Doctor.ChannelReadiness</code>. The source verifier exercises <code>./bin/lemon channels --project-dir</code> and checks bot-token and proof-detail cleanup.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 394</time>
+            <div><strong>Source wrapper proof inventory command</strong><p><code>mix lemon.proofs</code> and <code>./bin/lemon proofs</code> now expose the existing redacted proof artifact inventory for source installs. The source verifier exercises <code>./bin/lemon proofs --project-dir --limit 1</code> and checks raw-path and raw-filename cleanup.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 393</time>
+            <div><strong>Source wrapper skill lifecycle command</strong><p><code>./bin/lemon skill</code> now delegates to the existing <code>mix lemon.skill</code> lifecycle task. The source verifier exercises <code>./bin/lemon skill list</code> so source installs can inspect skill state without remembering Mix task names.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 392</time>
+            <div><strong>Source wrapper secret-store command</strong><p><code>./bin/lemon secrets</code> now dispatches to allowlisted <code>mix lemon.secrets.*</code> tasks for status, init, set, list, delete, check, and import-env. The source verifier exercises <code>./bin/lemon secrets status</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 391</time>
+            <div><strong>Source wrapper provider readiness command</strong><p><code>mix lemon.providers</code> and <code>./bin/lemon providers</code> now show redacted provider readiness, routing decision, fallback proof status, and cleanup flags from <code>LemonAiRuntime.ProviderStatus</code>. The source verifier exercises <code>./bin/lemon providers --provider anthropic --project-dir</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 390</time>
+            <div><strong>Source wrapper model discovery command</strong><p><code>mix lemon.models</code> and <code>./bin/lemon models</code> now list the BEAM model catalog with provider/capability filters, JSON output, and explicit credential/secret cleanup summaries. The source verifier exercises <code>./bin/lemon models --provider anthropic --limit 1</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 389</time>
+            <div><strong>Source wrapper model policy command</strong><p><code>./bin/lemon policy</code> now delegates to <code>mix lemon.policy</code>. The source verifier checks help discoverability and runs <code>./bin/lemon policy list</code> so route-level model/thinking policy management remains part of the supported source path.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 388</time>
+            <div><strong>Source wrapper help discoverability</strong><p><code>scripts/verify_source_install</code> now checks <code>./bin/lemon --help</code> for setup, config, doctor, send, policy, and update entries so wrapper ergonomics remain visible.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 387</time>
+            <div><strong>Source config wrapper</strong><p><code>./bin/lemon config</code> now delegates to <code>mix lemon.config</code>. The source verifier runs <code>./bin/lemon config validate --project-dir</code> before update and doctor proof.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 386</time>
+            <div><strong>Source setup and doctor wrappers</strong><p><code>./bin/lemon setup</code> and <code>./bin/lemon doctor</code> now delegate to the existing Mix tasks. The source verifier exercises setup, update, and doctor through the wrapper family.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 385</time>
+            <div><strong>Source update wrapper</strong><p><code>./bin/lemon update</code> now delegates to <code>mix lemon.update</code> without booting the runtime. The source verifier exercises the wrapper with <code>--check --no-skill-sync --verbose</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 384</time>
+            <div><strong>Stage-1 update proof</strong><p><code>scripts/verify_source_install</code> now also proves <code>mix lemon.update --check --no-skill-sync --verbose</code> and verifies the output keeps remote binary update out of the current support claim.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 383</time>
+            <div><strong>Source install verifier</strong><p><code>scripts/verify_source_install</code> now proves the supported source path with toolchain checks, locked deps, warning-free compile, non-interactive setup dispatch, doctor JSON, and required support-bundle diagnostics.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 382</time>
+            <div><strong>Script-send reply-to routing</strong><p><code>--reply-to</code> passes an existing platform message id into <code>OutboundPayload.reply_to</code>, reusing the Telegram/Discord adapter reply paths and returning bounded confirmation metadata.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 381</time>
+            <div><strong>Script-send default account ids</strong><p>Default account ids now resolve from env/config before BEAM known-name lookup and outbound payload construction, with explicit <code>--account</code> still taking precedence.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 380</time>
+            <div><strong>Script-send thread and topic options</strong><p><code>--thread</code> and <code>--topic</code> set thread/topic routing separately from <code>--to</code>, with conflict checks when both target forms specify a thread.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 379</time>
+            <div><strong>Script-send account selection</strong><p><code>--account</code> selects the outbound channel account and filters BEAM known-target listing/name resolution, preserving fail-closed ambiguity behavior when no account is supplied.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 378</time>
+            <div><strong>Script-send config defaults</strong><p>Platform-only Telegram and Discord script notifications now resolve from env overrides first, then durable <code>[gateway.telegram]</code> and <code>[gateway.discord]</code> default target fields.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 377</time>
+            <div><strong>Script-send list aliases</strong><p>Bounded Telegram and Discord <code>known_targets</code> now include exact reusable named-target aliases for list-mode human and JSON consumers.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 376</time>
+            <div><strong>Telegram named script-send targets</strong><p><code>LemonChannels.ScriptSend</code> now resolves unique Telegram known names from <code>LemonChannels.Telegram.KnownTargetStore</code>, including chat titles, usernames, and topic names, while preserving conservative missing/ambiguous usage failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 375</time>
+            <div><strong>Script-send dry-run validation</strong><p><code>LemonChannels.ScriptSend</code> now supports <code>--dry-run</code> for Telegram/Discord script notifications. It validates target/default/name resolution, body and caption selection, and local attachment metadata without sending or requiring platform credentials, and returns normal bounded metadata with <code>dry_run: true</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 374</time>
+            <div><strong>Script-send batch delivery ids</strong><p><code>LemonChannels.ScriptSend</code> now extracts message ids from list-shaped delivery responses. Telegram file batches keep the first delivered id as <code>message_id</code> and the remaining ids as <code>extra_message_ids</code>, preserving script-visible delivery metadata without returning raw adapter payloads.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 373</time>
+            <div><strong>Script-send multi-attachment uploads</strong><p><code>LemonChannels.ScriptSend</code> now accepts repeated <code>--attach</code> flags up to 10 files. Telegram uses its existing batch-file path, Discord direct outbound now accepts the same bounded file-list shape, and result metadata includes sanitized filenames, count, and total bytes.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 372</time>
+            <div><strong>Script-send attachment uploads</strong><p><code>LemonChannels.ScriptSend</code> added <code>--attach</code> / <code>-a</code> for local file delivery through the existing Telegram and Discord file adapters. Body text becomes the caption, JSON/human output includes sanitized attachment metadata, and missing attachment inputs fail as usage errors.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 371</time>
+            <div><strong>Discord named script-send targets</strong><p><code>LemonChannels.ScriptSend</code> now resolves unique Discord known names from <code>LemonChannels.Discord.KnownTargetStore</code>, including <code>discord:#channel</code>, <code>discord:#channel:thread-name</code>, and <code>discord:&lt;channel_id&gt;:thread-name</code>. Missing or ambiguous names map to usage failures, so scripts get convenient names without unsafe guessing.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 370</time>
+            <div><strong>Discord script-send target directory</strong><p><code>LemonChannels.Discord.KnownTargetStore</code> records allowed inbound Discord channel/thread targets on the BEAM path, and <code>mix lemon.send --list discord</code> returns bounded <code>known_targets</code> metadata with total/truncated fields. Later slices use this directory for exact known-name resolution and copyable aliases.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 369</time>
+            <div><strong>Script-send Telegram target discovery</strong><p><code>mix lemon.send --list</code> and <code>./bin/lemon send --list</code> now include a bounded recent Telegram target window from <code>LemonChannels.Telegram.KnownTargetStore</code> as <code>known_targets</code> metadata with total/truncated fields. The output gives scripts reusable <code>telegram:&lt;chat_id&gt;[:thread_id]</code> targets without message text, tokens, or raw platform responses; later slices add exact known-name resolution and copyable aliases.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 368</time>
+            <div><strong>Script-send exit-code contract</strong><p><code>mix lemon.send</code> and <code>./bin/lemon send</code> now preserve script-friendly exit codes: success/list/help <code>0</code>, delivery failures <code>1</code>, and usage/config/input failures <code>2</code>. Docs and docs-lint now guard the contract.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 367</time>
+            <div><strong>Script-send JSON delivery summary</strong><p><code>LemonChannels.ScriptSend</code> now extracts sanitized <code>message_id</code> and <code>extra_message_ids</code> from Telegram- and Discord-shaped adapter responses. <code>mix lemon.send --json</code> omits the raw platform response while still giving scripts the identifier they need for follow-up logging or threading workflows.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 366</time>
+            <div><strong>Script-send CLI ergonomics</strong><p><code>./bin/lemon send</code> and <code>mix lemon.send</code> now match the credential-free Hermes send ergonomics for forced stdin with <code>--file -</code>, filtered target listing, <code>-l</code>, and built-in help. The platform boundary remains Telegram/Discord only. Focused validation covers forced stdin, filtered list mode, unsupported platform filters, and help output.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 365</time>
+            <div><strong>Telegram/Discord script notification command</strong><p><code>LemonChannels.ScriptSend</code>, <code>mix lemon.send</code>, and <code>./bin/lemon send</code> now provide Hermes-style script notifications for promoted Telegram and Discord targets only. The command supports <code>--to</code>, <code>--file</code>, <code>--subject</code>, stdin, default target env vars, JSON/list/quiet modes, and unit-proven direct outbound payload construction. Focused validation passed with <code>10 tests, 0 failures</code>, side-effect-free <code>--list --json</code>, and shell syntax checks.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 364</time>
+            <div><strong>Python CLI package check lane</strong><p><code>.github/workflows/python-cli.yml</code> now lint/tests/builds <code>clients/lemon-cli</code> with <code>uv</code>, ruff, pytest, wheel build, and source distribution build while keeping PyPI publishing out of the support claim. <code>scripts/test clients</code> now runs the same Python CLI package checks before the Node client lanes. Full client validation passed with Python <code>27 tests</code>, Lemon web <code>941 tests</code>, Lemon TUI <code>1290 tests</code>, browser node <code>29 tests</code>, audits, builds, and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 363</time>
+            <div><strong>PR history integrity workflow</strong><p><code>.github/workflows/history-check.yml</code> now protects <code>main</code> from unrelated-history PRs by requiring a common ancestor between the PR head and target base branch. <code>scripts/lint_ci_docs.sh</code> guards the workflow and release/testing docs so the check remains wired. Validation passed with docs lint, YAML parsing, local common-ancestor proof, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 362</time>
+            <div><strong>First-party x_search tool</strong><p><code>LemonSkills.Tools.XSearch</code> and <code>CodingAgent.Tools.XSearch</code> now expose read-only recent public X/Twitter search with query, limit, sort order, id-boundary, and pagination parameters. The X API adapter supports bearer-token-only search credentials through <code>X_API_BEARER_TOKEN</code> and keeps <code>x_search</code> inside the no-external policy boundary. Focused validation passed with <code>151 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 361</time>
+            <div><strong>session_search prompt guidance</strong><p>Native system prompts, learning prompt composition, and deterministic prompt contracts now tell agents to choose <code>session_search</code> for Hermes-style session search, browse, or scroll workflows instead of shell/session-file spelunking. Focused validation passed with <code>93 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 360</time>
+            <div><strong>Hermes-compatible session_search tool</strong><p><code>CodingAgent.Tools.SessionSearch</code> now exposes a no-LLM <code>session_search</code> surface with inferred discovery, scroll, and browse modes. The tool uses <code>LemonCore.SessionSearch</code> for durable memory discovery and <code>LemonCore.Store</code> run history for bounded scroll/browse windows, while remaining available in read-only and minimal-core policies. Focused validation passed with <code>137 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 359</time>
+            <div><strong>OSV supply-chain parity workflow</strong><p><code>.github/workflows/osv-scanner.yml</code> now runs Google's pinned reusable OSV scanner over first-party Mix, npm, and uv lockfiles on dependency changes, weekly schedule, and manual dispatch, with SARIF upload and <code>fail-on-vuln: false</code>. The release checklist documents maintainer triage, and the Hermes feature matrix is refreshed to upstream <code>94c523f0c</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 358</time>
+            <div><strong>Discord slash client-click blocker refresh</strong><p>The read-only client-click artifact check still fails closed with <code>discord_slash_client_click_missing</code> because no runtime real-slash proof artifact exists. The redacted failed check now sits at <code>.lemon/proofs/discord-slash-client-click-check-latest.json</code>; <code>proofs.status</code> and <code>channels.status.summary</code> both surface the warning and wait-mode next action.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 357</time>
+            <div><strong>Channel-status launch-gate summary maps</strong><p><code>channels.status.summary</code> now exposes compact <code>launchGateStatuses</code> and <code>launchGateReasonKinds</code> maps, so operator clients can read Discord slash registration, DM, free-response, and client-click gate states without scanning the full readiness list. Focused validation passed with <code>67 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and targeted diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 356</time>
+            <div><strong>Proof-status slash-registration launch gate</strong><p><code>proofs.status</code> now exposes <code>discordSlashRegistration</code> in <code>launchGates</code>, giving JSON-RPC clients the same all-command registration state and rollback partial-evidence warning that doctor/support surfaces already had. Focused validation passed with <code>67 tests, 0 failures</code>, warning-free compile, docs lint, and targeted diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 355</time>
+            <div><strong>Rollback live-registration promotion</strong><p>A read-only live Discord API check against Zeebot first confirmed <code>/rollback</code> was missing. The documented registration path upserted the in-repo schema, then rollback and all-command registration checks passed with <code>registered_command_count: 16</code>, <code>expected_command_count: 16</code>, and no missing commands. <code>scripts/live_discord_matrix.py</code> now labels future missing rollback drift as <code>rollback</code>; Python compile, docs lint, HTML lint, and diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 354</time>
+            <div><strong>Discord feature-matrix rollback refresh</strong><p>The Discord row in the Hermes feature-parity matrix now describes the current <code>/rollback</code> registration path, final readiness rollback gate, 16-command all-slash inventory, and slash-registration partial evidence in <code>channel_readiness.json</code> and <code>channels.status</code>. Validation passed with docs lint, HTML lint, diff hygiene, and a stale 15-command inventory scan.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 353</time>
+            <div><strong>Channel-readiness rollback partial evidence</strong><p><code>LemonCore.Doctor.ChannelReadiness</code> now recognizes <code>discord_rollback_slash_registration</code> and <code>contains_rollback_slash_registration</code> as partial slash-registration evidence, while still requiring all-command proof before passing the gate. Focused validation passed with <code>3 tests, 0 failures</code>, warning-free compile, <code>mix lemon.quality</code>, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 352</time>
+            <div><strong>Final readiness rollback slash gate</strong><p><code>scripts/audit_1_0_readiness</code> now requires explicit raw and redacted Discord <code>/rollback</code> slash-registration proof artifacts, and the all-command slash verifier now expects 16 commands. Release checklist docs and docs lint are updated; shell syntax, docs lint, HTML lint, and diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 351</time>
+            <div><strong>Rollback slash docs-lint guardrail</strong><p><code>scripts/lint_ci_docs.sh</code> now asserts that rollback slash registration, <code>contains_rollback_slash_registration</code>, channel diagnostics, command matrix docs, support docs, and testing docs stay wired together. Focused validation passed with shell syntax, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 350</time>
+            <div><strong>Rollback slash-registration proof coverage</strong><p>The Discord live-matrix sanitizer now emits <code>contains_rollback_slash_registration</code> when the rollback registration check is present. <code>LemonCore.Doctor.ProofDiagnostics</code> preserves that safe coverage flag through support bundles and lowerCamelCase control-plane proof status while continuing to filter raw proof fields. Focused validation passed with <code>69 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, Python compile, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 349</time>
+            <div><strong>Channel rollback command alias</strong><p>Telegram now recognizes <code>/rollback</code> and Discord now exports a <code>/rollback</code> slash command schema as Hermes-style aliases for the existing checkpoint rollback surface. Both route through <code>LemonChannels.CheckpointStatusMessage</code> and <code>LemonCore.Checkpoint</code> for redacted status/events/diff/restore output, explicit restore confirmation, and no raw paths, file contents, or session ids in chat. Focused validation passed with <code>154 tests, 0 failures</code>, deterministic Discord slash proof at <code>35 completed</code>, warning-free compile, docs lint, HTML lint, Python compile, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 348</time>
+            <div><strong>Public support docs for channel readiness</strong><p><code>docs/support.md</code> now documents <code>channel_readiness.json</code> as the shared Telegram/Discord launch-gate summary in support bundles, including status/counts, safe reason kinds, cleanup flags, and bounded next actions without raw ids, tokens, message bodies, proof paths, or proof details. Docs lint now guards that the public support doc keeps the artifact documented alongside the release verifier and release checklist. Docs lint, HTML lint, and targeted diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 347</time>
+            <div><strong>Release support-bundle entry verification</strong><p><code>scripts/verify_release_runtime_boot</code> now validates the generated support-bundle ZIP and requires <code>channel_readiness.json</code> with core doctor/proof/channel entries. The release checklist documents the bundle-entry inspection, and docs lint now guards the script and checklist. Shell syntax, docs lint, HTML lint, and diff-hygiene checks passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 346</time>
+            <div><strong>Doctor channel-readiness summary</strong><p><code>mix lemon.doctor</code> now includes <code>channels.readiness</code>, a shared launch-gate summary backed by <code>LemonCore.Doctor.ChannelReadiness</code>. It reports passed/warning/blocked/skipped gate counts and remediates from the first unresolved safe next action without exposing tokens, ids, message bodies, or proof details. Focused doctor validation passed with <code>61 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 345</time>
+            <div><strong>Support-bundle README channel readiness</strong><p>The generated support-bundle <code>README.txt</code> now lists channel readiness among bundled diagnostics and states the redaction boundaries for chat/channel/guild ids, message bodies, proof file contents, secrets, media bytes, and tool outputs. Focused support-bundle validation passed with <code>3 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 344</time>
+            <div><strong>Web ops shared channel readiness</strong><p>Web <code>/ops</code> now includes the shared <code>LemonCore.Doctor.ChannelReadiness</code> payload in the channel snapshot and renders aggregate launch-gate status/counts in the Channel Config panel. The existing Discord DM/free-response/reconnect/client-click drilldown stays in place for operator-specific next actions. Focused Web validation passed with <code>37 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 343</time>
+            <div><strong>Shared channel launch-gate readiness</strong><p><code>LemonCore.Doctor.ChannelReadiness</code> now produces the shared Telegram/Discord launch-gate summary used by support bundles and <code>channels.status</code>. The new <code>channel_readiness.json</code> bundle entry and control-plane <code>readiness</code> payload expose gate counts, safe reason kinds, and copy-ready next actions without bot tokens, secret names, channel ids, message bodies, raw proof paths, or proof details. Focused validation passed with <code>71 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 342</time>
+            <div><strong>Shared usage diagnostics contract tests</strong><p><code>LemonCore.UsageDiagnosticsTest</code> now directly covers aggregate shape, mixed atom/string keys, provider normalization, daily totals, cleanup flags, over-limit status, and sensitive-field redaction. The root <code>LemonCore</code> moduledoc inventory now names both <code>UsageStore</code> and <code>UsageDiagnostics</code>. Focused validation passed with <code>65 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 341</time>
+            <div><strong>Control-plane usage diagnostics convergence</strong><p><code>usage.status</code> now converts from <code>LemonCore.UsageDiagnostics.status/1</code> into the existing client JSON shape. The handler-local aggregation path is gone, and a regression seeds private prompt, response, message-body, and API-key-like fields to prove only aggregate values and cleanup booleans return. Focused validation passed with <code>59 tests, 0 failures</code>; the broader optional/schema lane passed with <code>176 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 340</time>
+            <div><strong>Shared usage diagnostics convergence</strong><p>Web <code>/ops</code> now calls <code>LemonCore.UsageDiagnostics.status/1</code>, matching support-bundle <code>usage_diagnostics.json</code> and doctor <code>usage.status</code>. The duplicate Web-only aggregation helpers are gone, so all three operator surfaces share one redacted usage contract. Focused validation passed with <code>99 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 339</time>
+            <div><strong>Doctor usage quota status</strong><p><code>LemonCore.UsageDiagnostics</code> centralizes redacted usage aggregation for doctor checks and support bundles. <code>mix lemon.doctor</code> now includes <code>usage.status</code>, which skips when no current usage exists, passes for visible aggregate usage, and warns when configured run, token, or cost limits are exceeded. Focused validation passed with <code>62 tests, 0 failures</code>; broad compile, quality, docs, HTML, and diff-hygiene checks also passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 338</time>
+            <div><strong>Support-bundle usage diagnostics</strong><p><code>usage_diagnostics.json</code> now carries redacted cost, request, token, provider, today, quota, and limit-state aggregates from <code>LemonCore.UsageStore</code>. The fixture seeds private prompt, response, message-body, and API-key-like fields and proves none are emitted. Focused support-bundle validation passed with <code>3 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 337</time>
+            <div><strong>Web ops usage aggregate visibility</strong><p><code>LemonCore.UsageStore</code> is now the shared typed usage wrapper, and Web <code>/ops</code> shows redacted cost, request, token, provider, today, and quota aggregates without prompt text, responses, message bodies, credentials, or secret values. Focused validation passed with <code>37</code>, <code>175</code>, and <code>64</code> tests across Web, control-plane optional parity, and core store lanes.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 336</time>
+            <div><strong>Usage cost cleanup summary</strong><p><code>usage.cost</code> now reports grouping, provider, daily-row, request, token, and no-prompt/no-secret cleanup metadata alongside cost breakdowns. Focused validation passed with <code>175 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>591 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 335</time>
+            <div><strong>Session compact cleanup summary</strong><p><code>sessions.compact</code> now adds bounded compaction state, force-mode, custom-summary presence, token-count return-state, and no-text cleanup metadata without echoing custom compaction summary text. Focused validation passed with <code>112 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>591 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 334</time>
+            <div><strong>Agent wait sensitive answer redaction</strong><p><code>agent.wait</code> now redacts inline credential patterns in completed-run answer/error values while preserving bounded result summaries and answer/error return semantics. Focused validation passed with <code>109 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>588 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 333</time>
+            <div><strong>Preview-mode sensitive text redaction</strong><p><code>session.detail</code>, <code>sessions.preview</code>, and preview-mode <code>chat.history</code> now redact inline credential patterns in compact prompt/answer previews while preserving explicit full-text opt-ins. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>587 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 332</time>
+            <div><strong>Session detail sensitive run-internal redaction</strong><p><code>session.detail</code> now redacts sensitive tool-call previews, summary/completed internals, top-level errors, raw events, and run records while preserving explicit full-text and raw-internal opt-ins. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>587 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 331</time>
+            <div><strong>Run internals sensitive payload redaction</strong><p><code>run.graph.get</code> and <code>run.introspection.list</code> now redact sensitive payload, run-record, raw-event, introspection, and inline bearer/key values while preserving graph/timeline payloads, opt-ins, and return-state summaries. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>587 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 330</time>
+            <div><strong>Cron run-history sensitive output redaction</strong><p><code>cron.runs</code> now redacts sensitive output/error values plus optional metadata, run-record, and introspection internals while preserving previews, opt-ins, and summaries. Focused validation passed with <code>83 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>585 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 329</time>
+            <div><strong>Log-tail sensitive value redaction</strong><p><code>logs.tail</code> now redacts sensitive log keys and common inline credential patterns while preserving the log array shape and filter/count summaries. Focused validation passed with <code>67 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>585 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 328</time>
+            <div><strong>Skills env response redaction</strong><p><code>skills.update</code> now redacts sensitive env response values for API-key, token, password, private-key, secret, and credential setup flows while preserving safe env keys and env-key summaries. Focused validation passed with <code>74 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>585 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 327</time>
+            <div><strong>Wizard-step sensitive response redaction</strong><p><code>wizard.step</code> now redacts sensitive response data for setup/API-key wizard flows while preserving non-sensitive wizard progress fields. Focused validation passed with <code>109 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>585 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 326</time>
+            <div><strong>Remaining capability helper summaries</strong><p><code>skills.bins</code>, <code>skills.install</code>, <code>skills.update</code>, <code>tts.convert</code>, <code>update.run</code>, <code>wake</code>, and <code>wizard.*</code> now report compact action/count/return-state/cleanup metadata. The new wizard success-path test fixed a fresh-wizard <code>wizard.step</code> crash. Focused validation passed with <code>255 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>585 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 325</time>
+            <div><strong>Kanban board, task, and dispatcher summaries</strong><p><code>kanban.board.*</code>, <code>kanban.task.*</code>, and <code>kanban.dispatcher.*</code> now report board/task/dispatcher return state, counts, and cleanup metadata. Focused validation passed with <code>55 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>583 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 324</time>
+            <div><strong>Terminal backend and LSP diagnostics status summaries</strong><p><code>terminal.backends.status</code> and <code>lsp.diagnostics.status</code> now report backend, policy, proof, server, executable, and cleanup metadata in top-level summaries. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>579 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 323</time>
+            <div><strong>Provider, proof, and extension status summaries</strong><p><code>providers.status</code>, <code>proofs.status</code>, and <code>extensions.status</code> now report readiness, launch-gate, host-runtime, count, and cleanup metadata in top-level summaries. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>579 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 322</time>
+            <div><strong>Memory and secrets status summaries</strong><p><code>memory.status</code> and <code>secrets.status</code> now report provider/store health, fallback state, counts, and cleanup metadata in top-level summaries. Focused validation passed with <code>120 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>579 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 321</time>
+            <div><strong>Active-session and introspection snapshot summaries</strong><p><code>sessions.active</code> and <code>introspection.snapshot</code> now report active state, section counts, include flags, filters, harness counts, and cleanup metadata. Focused validation passed with <code>62 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>579 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 320</time>
+            <div><strong>Health and root status runtime summaries</strong><p><code>health</code> and root <code>status</code> now report public runtime state, BEAM capacity counters, connection/run/channel/skill counts, and cleanup flags. Focused validation passed with <code>54 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>577 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 319</time>
+            <div><strong>Run graph and introspection return-state summaries</strong><p><code>run.graph.get</code> and <code>run.introspection.list</code> now report graph/event counts, option state, status/event-type counts, and explicit raw-internal return flags. Focused validation passed with <code>134 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>576 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 318</time>
+            <div><strong>Config and system reload lifecycle summaries</strong><p><code>config.reload</code> and <code>system.reload</code> now report reload counts, return-state metadata, and cleanup flags for config values, source code, file contents, compile output, process state, credentials, and secret values. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>571 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 317</time>
+            <div><strong>LSP server lifecycle cleanup summaries</strong><p><code>lsp.server.start</code>, <code>lsp.server.initialize</code>, <code>lsp.server.request</code>, and <code>lsp.server.stop</code> now report session/protocol return state, diagnostic counts, and cleanup metadata. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 316</time>
+            <div><strong>LSP document lifecycle cleanup summaries</strong><p><code>lsp.document.open</code>, <code>lsp.document.change</code>, and <code>lsp.document.close</code> now report lifecycle action, byte counts, change counts, raw-URI state, document-text state, and cleanup metadata. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 315</time>
+            <div><strong>Channel status readiness summaries</strong><p><code>channels.status</code> now reports promoted Telegram/Discord scope, readiness counts, proof counts, and cleanup flags for redacted channel diagnostics. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 314</time>
+            <div><strong>Browser request result cleanup summaries</strong><p><code>browser.request</code> now reports mode, method, await state, result/error return state, network-policy return state, and cleanup flags for content-bearing browser responses. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 313</time>
+            <div><strong>Checkpoint diff and restore cleanup summaries</strong><p><code>checkpoint.diff</code> and <code>checkpoint.restore</code> now report path-return, diff-output, raw-session-id, file-content, credential, and secret cleanup metadata. Focused validation passed with <code>117 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 312</time>
+            <div><strong>Cron run-history lifecycle summaries</strong><p><code>cron.run</code>, <code>cron.remove</code>, and <code>cron.runs</code> now report raw-id state, status counts, output/error byte counts, include flags, and cleanup summaries for operator-requested run-history payloads. Slice 330 later added sensitive output/error and optional metadata-internal redaction. Focused validation passed with <code>67 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>558 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 311</time>
+            <div><strong>Cron write lifecycle summaries</strong><p><code>cron.add</code>, <code>cron.update</code>, <code>cron.pause</code>, <code>cron.resume</code>, and <code>cron.abort</code> now report target byte counts, changed fields, raw-id state, lifecycle flags, and cleanup summaries. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>555 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 310</time>
+            <div><strong>Cron audit lifecycle summary</strong><p><code>cron.audit</code> now reports event/action/filter summaries plus raw-id and reason-text return flags while preserving sensitive cleanup guarantees. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>555 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 309</time>
+            <div><strong>Cron status cleanup summary</strong><p><code>cron.status</code> now reports scheduler-health counters plus cleanup flags confirming prompt, command, output, error, credential, and secret text are excluded. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>555 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 308</time>
+            <div><strong>Cron list target-text redaction summary</strong><p><code>cron.list</code> now redacts scheduled prompt/command text by default and reports byte-count cleanup summaries, with explicit <code>includeTargetText</code> opt-in. Focused validation passed with <code>64 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>555 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 307</time>
+            <div><strong>Goal continuation and loop cleanup summaries</strong><p><code>goal.continue</code> and the bounded goal loop methods now report objective-byte, verdict-byte, loop-status, and cleanup summaries. Focused validation passed with <code>54 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>542 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 306</time>
+            <div><strong>Goal clear cleanup summary</strong><p><code>goal.clear</code> now reports session, cleared-state, objective-return, and cleanup summaries. Focused validation passed with <code>54 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>542 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 305</time>
+            <div><strong>Goal objective redaction summaries</strong><p><code>goal.set</code>, <code>goal.status</code>, <code>goal.pause</code>, and <code>goal.resume</code> now report objective byte counts and cleanup summaries without echoing objective text. Focused validation passed with <code>54 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>542 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 304</time>
+            <div><strong>Chat send submission summary</strong><p><code>chat.send</code> now reports bounded run/session submission metadata and prompt cleanup flags. Focused validation passed with <code>108 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>539 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 303</time>
+            <div><strong>TTS provider catalog summary</strong><p><code>tts.providers</code> now reports provider and voice counts plus no-secret cleanup flags. Focused validation passed with <code>107 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>536 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 302</time>
+            <div><strong>Config read cleanup summary</strong><p><code>config.get</code> now reports key-count and sensitive-key cleanup metadata while preserving redacted config read behavior. Focused validation passed with <code>107 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>536 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 301</time>
+            <div><strong>Core agent submission and wait summaries</strong><p><code>agent</code> now reports prompt-cleanup submission metadata, and <code>agent.wait</code> reports bounded answer/error metadata with later sensitive answer/error redaction. Focused validation passed with <code>105 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>536 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 300</time>
+            <div><strong>Agent file operation summaries</strong><p><code>agents.files.list/get/set</code> now report bounded file metadata and cleanup flags. Focused validation passed with <code>99 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>530 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 299</time>
+            <div><strong>Agent progress polling summary</strong><p><code>agent.progress</code> now reports bounded harness progress metadata and cleanup flags without next-action content. Focused validation passed with <code>96 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>527 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 298</time>
+            <div><strong>Agent identity capability summary</strong><p><code>agent.identity.get</code> now reports bounded identity capability metadata and credential/secret cleanup flags. Focused validation passed with <code>93 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 297</time>
+            <div><strong>Agent inbox submission cleanup summary</strong><p><code>agent.inbox.send</code> now reports bounded submission metadata and prompt/message cleanup flags. Focused validation passed with <code>56 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 296</time>
+            <div><strong>Agent endpoint lifecycle summaries</strong><p><code>agent.endpoints.list</code>, <code>agent.endpoints.set</code>, and <code>agent.endpoints.delete</code> now report bounded endpoint lifecycle summaries and credential cleanup flags. Focused validation passed with <code>56 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 295</time>
+            <div><strong>Config schema property summary</strong><p><code>config.schema</code> now reports schema type and property metadata without runtime values. Focused validation passed with <code>107 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 294</time>
+            <div><strong>Config set cleanup summary</strong><p><code>config.set</code> now reports key/value sensitivity and cleanup flags while preserving compatible non-sensitive value echoes and redacting sensitive values. Focused validation passed with <code>107 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 293</time>
+            <div><strong>Secrets lifecycle no-value summaries</strong><p><code>secrets.list</code>, <code>secrets.set</code>, <code>secrets.delete</code>, and <code>secrets.exists</code> now report lifecycle metadata and no-value cleanup flags. Focused validation passed with <code>54 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 292</time>
+            <div><strong>Config patch value-cleanup summary</strong><p><code>config.patch</code> now reports applied-key and sensitive-key summaries without echoing patched values. Focused validation passed with <code>107 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>524 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 291</time>
+            <div><strong>Channel logout cleanup summary</strong><p><code>channels.logout</code> now reports logout completion and credential/token/adapter-state cleanup flags while preserving the success acknowledgement. Focused validation passed with <code>53 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>523 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 290</time>
+            <div><strong>Direct channel-send delivery summary</strong><p><code>send</code> now reports bounded delivery metadata and cleanup flags while preserving the delivery ref acknowledgement. Focused validation passed with <code>62 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>521 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 289</time>
+            <div><strong>Voicewake write cleanup summary</strong><p><code>voicewake.set</code> now reports enabled/backend/keyword/sensitivity summaries and cleanup flags while preserving explicit configuration values. Focused validation passed with <code>106 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>510 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 288</time>
+            <div><strong>TTS configuration write summaries</strong><p><code>tts.enable</code>, <code>tts.disable</code>, and <code>tts.set-provider</code> now report config-write summaries and cleanup flags while preserving existing acknowledgements. Focused validation passed with <code>106 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>510 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 287</time>
+            <div><strong>Talk-mode cleanup summaries</strong><p><code>talk.mode</code> now reports get/set summaries with audio, transcript, and secret cleanup flags while preserving the existing response shape. Focused validation passed with <code>93 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>509 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 286</time>
+            <div><strong>Chat-abort target and dispatch summaries</strong><p><code>chat.abort</code> now reports run/session target summaries, dispatch status, and cleanup flags while tolerating missing router registry state. Focused validation passed with <code>92 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>508 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 285</time>
+            <div><strong>Session reset/delete cleanup summaries</strong><p><code>sessions.reset</code> and <code>sessions.delete</code> now return cleanup summaries for run history/session records, chat state, and session policy without echoing messages, policy values, or secret values. Focused validation passed with <code>103 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>506 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 284</time>
+            <div><strong>Session-patch response summaries</strong><p><code>sessions.patch</code> now reports patched-key and patched-count summaries with cleanup flags without echoing tool policy, model values, or secret values. Focused validation passed with <code>101 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>504 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 283</time>
+            <div><strong>Approval policy write summaries</strong><p><code>exec.approvals.set</code> and <code>exec.approvals.node.set</code> now report policy/pre-approval mode summaries and cleanup flags without echoing raw action payloads or secret values. Focused validation passed with <code>150 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>493 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 282</time>
+            <div><strong>Approval request and resolve summaries</strong><p><code>exec.approval.request</code> and <code>exec.approval.resolve</code> now return bounded action/decision summaries and cleanup flags without echoing raw action payloads, rationales, or secret values. Focused validation passed with <code>150 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>493 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 281</time>
+            <div><strong>Device-pairing lifecycle response summaries</strong><p><code>device.pair.request</code>, <code>device.pair.approve</code>, and <code>device.pair.reject</code> now return bounded delivery/status summaries and cleanup flags while preserving required pairing-code, device-token, and challenge-token handoff. Focused validation passed with <code>133 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>492 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 280</time>
+            <div><strong>Connect-challenge token-delivery summaries</strong><p><code>connect.challenge</code> now returns bounded verified/identity/token TTL summaries and cleanup flags while preserving the required session token handoff. Focused validation passed with <code>157 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>491 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 279</time>
+            <div><strong>Node-pairing lifecycle response summaries</strong><p><code>node.pair.request</code>, <code>node.pair.approve</code>, <code>node.pair.reject</code>, and <code>node.pair.verify</code> now return bounded delivery/status summaries and cleanup flags while preserving required pairing-code, token, and challenge-token handoff. Focused validation passed with <code>126 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>464 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 278</time>
+            <div><strong>Node-rename response summaries</strong><p><code>node.rename</code> now returns bounded rename summaries for node id, renamed state, and name-changed status, with cleanup flags confirming previous names, capabilities, metadata, credentials, and secret values are omitted. Focused validation passed with <code>125 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>463 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 277</time>
+            <div><strong>Node-event acknowledgement summaries</strong><p><code>node.event</code> now validates payload object shape and returns bounded event/node/custom/payload-key summaries with cleanup flags, while preserving the raw event broadcast path. Focused validation passed with <code>142 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>462 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 276</time>
+            <div><strong>Node invocation response summaries</strong><p><code>node.invoke</code> and <code>node.invoke.result</code> now return bounded response summaries and cleanup flags while leaving the node transport's raw args/results path intact. Focused validation passed with <code>123 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>461 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 275</time>
+            <div><strong>Set-heartbeats summaries and prompt cleanup flags</strong><p><code>set-heartbeats</code> now reports stored-config summary metadata and cleanup flags while omitting heartbeat prompt text, credentials, and secret values from the write response. Focused validation passed with <code>63 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>461 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 274</time>
+            <div><strong>Last-heartbeat summaries and response redaction</strong><p><code>last-heartbeat</code> now reports configured state, enabled state, interval, last-run presence, status, suppression, response length, and cleanup flags, and redacts heartbeat response text that looks secret-bearing. Focused validation passed with <code>63 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>461 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 273</time>
+            <div><strong>Approval policy summaries and action-key redaction</strong><p><code>exec.approvals.get</code> now reports policy/pending summaries and redacts sensitive nested pending-action keys while keeping structured OAuth action metadata for operator clients. <code>exec.approvals.node.get</code> now adds node-policy summaries and cleanup flags. Focused validation passed with <code>76 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>449 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 272</time>
+            <div><strong>Node-pair-list summaries and reload safety</strong><p><code>node.pair.list</code> now supports string-keyed reload records, summarizes pending pairing requests by type and capability, and reports cleanup flags for pairing codes, tokens, credentials, and secret values. Focused validation passed with <code>123 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>424 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 271</time>
+            <div><strong>Node-describe metadata redaction and summaries</strong><p><code>node.describe</code> now redacts sensitive metadata keys recursively and adds status, type, capability-count, metadata-key-count, and cleanup summaries. Focused validation passed with <code>121 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>422 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 270</time>
+            <div><strong>Node-list summaries and cleanup flags</strong><p><code>node.list</code> now preserves the existing <code>nodes</code> array and adds compact node count, status count, type count, capability-key count, and cleanup summaries. Focused validation passed with <code>120 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>421 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 269</time>
+            <div><strong>System-presence summaries and cleanup flags</strong><p><code>system-presence</code> now preserves current presence/resource fields and adds compact connection, active-run, health, memory, process, scheduler, and cleanup summaries without exposing other connection ids, raw process state, message bodies, credentials, or secret values. Focused validation passed with <code>67 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>352 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 268</time>
+            <div><strong>Bounded admin system-event summaries</strong><p><code>system-event</code> now validates payload and target shape, supports <code>eventType</code> / <code>event_type</code> schema compatibility, and returns target/event/cleanup summaries without echoing payloads or sensitive values. Focused validation passed with <code>67 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>352 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 267</time>
+            <div><strong>Ingested metrics/log event fanout mapping</strong><p><code>EventBridge</code> now maps ingested metrics and log events, advertises both WebSocket event names, and preserves target-derived <code>runId</code> / <code>sessionKey</code> fields on ingested custom/metrics/log payloads. Focused validation passed with <code>41 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>350 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 266</time>
+            <div><strong>Event subscription schema compatibility</strong><p><code>events.subscribe.topics</code> and <code>events.unsubscribe.topics</code> now accept a single topic string or topic list at the protocol schema boundary, matching the runtime handlers. Focused validation passed with <code>56 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>332 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 265</time>
+            <div><strong>Bounded external event ingest summaries</strong><p><code>events.ingest</code> now validates payload and target shape, documents the request schema, and returns target/event/cleanup summaries without echoing payloads or sensitive values. Focused validation passed with <code>95 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>331 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 264</time>
+            <div><strong>WebSocket event subscription delivery filtering</strong><p>WebSocket event pushes now honor each connection's subscription state, including static event families plus <code>run:*</code> and <code>session:*</code> payload matches. New connections keep legacy all-event delivery until explicit subscription changes, and clear-all unsubscribe suppresses later frames. Focused validation passed with <code>80 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>328 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 263</time>
+            <div><strong>Control-plane event subscription state summaries</strong><p><code>events.subscribe</code>, <code>events.unsubscribe</code>, and <code>events.subscriptions.list</code> now update and read per-WebSocket subscription state, summarize topic/run/session counts, and report cleanup flags without returning event payloads or sensitive values. Focused event-subscription/schema validation passed with <code>60 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>308 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 262</time>
+            <div><strong>Control-plane log tail summaries</strong><p><code>logs.tail</code> now supports normalized <code>limit</code>/<code>level</code> and legacy <code>lines</code>/<code>filter</code> params, exposes total/filter/level-count summaries, and keeps an empty summarized fallback when no log ring is available. Slice 329 later added sensitive key and inline credential redaction. Focused logs/schema validation passed with <code>61 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>297 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 261</time>
+            <div><strong>Control-plane history preview summaries</strong><p><code>sessions.preview</code> now reports truncation and cleanup summaries for bounded previews. <code>chat.history</code> now reports role/count/truncation summaries, supports <code>includeFullText: false</code> preview mode, and honors <code>beforeId</code> pagination. Focused history/schema validation passed with <code>58 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>285 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 260</time>
+            <div><strong>Control-plane session summary and full-text opt-in</strong><p><code>sessions.list</code>, <code>sessions.active.list</code>, and <code>session.detail</code> now expose compact session/run summaries and cleanup flags. <code>session.detail</code> no longer returns <code>promptFull</code> or <code>answerFull</code> unless <code>includeFullText</code> is explicitly true, and default raw summaries truncate prompt/answer fields. Focused introspection validation passed with <code>9 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>285 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 259</time>
+            <div><strong>Control-plane run and task observability summaries</strong><p><code>runs.active.list</code>, <code>runs.recent.list</code>, <code>tasks.active.list</code>, and <code>tasks.recent.list</code> now report compact status, engine, agent/session/run, event, reasoning, duration, filter, and include/cleanup summaries. Focused monitoring validation passed with <code>78 tests, 0 failures</code>; the broader control-plane parity gate passed with <code>284 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 258</time>
+            <div><strong>Control-plane agent directory summaries</strong><p><code>agent.directory.list</code>, <code>agents.list</code>, and <code>agent.targets.list</code> now report compact agent/session/target summaries and cleanup flags. Focused agent-routing validation passed with <code>5 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 257</time>
+            <div><strong>Control-plane model catalog summary</strong><p><code>models.list</code> now reports catalog source, provider and capability counts, provider names, and cleanup flags while preserving explicit false model capability booleans. Focused validation passed with <code>1 test, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 256</time>
+            <div><strong>Control-plane config redaction</strong><p><code>config.get</code> now redacts sensitive stored config values for single-key and full-config reads, including nested maps, and <code>config.set</code> avoids echoing sensitive submitted values. Focused config/atom-safety validation passed with <code>72 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 255</time>
+            <div><strong>Control-plane voicewake status summary</strong><p><code>voicewake.get</code> now preserves explicit stored config values, reports configured/enabled/backend summaries, and exposes cleanup flags. <code>voicewake.set</code> now preserves string-keyed existing config and returns sensitivity, backend, and update timestamp. Focused validation passed with <code>52 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 254</time>
+            <div><strong>Control-plane usage summary consistency</strong><p><code>usage.status</code> now reads the current summary maintained by <code>usage.cost</code>, reports provider usage rows, quota state, remaining quota estimates, and cleanup flags. Focused optional-parity validation passed with <code>117 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 253</time>
+            <div><strong>Control-plane TTS provider readiness summary</strong><p><code>tts.status</code> now preserves explicit stored config values, reports active-provider known/available booleans, summarizes provider counts, and exposes cleanup flags. Focused control-plane validation passed with <code>50 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 252</time>
+            <div><strong>Control-plane transport registry health summary</strong><p><code>transports.status</code> now exposes registry loaded/running state, configured/enabled/disabled counts, module-loaded/missing counts, safe status, and cleanup flags. Focused control-plane validation passed with <code>8 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 251</time>
+            <div><strong>Root status BEAM VM capacity counters</strong><p><code>status</code> now exposes process, port, atom, and run-queue counters with limits, and missing optional router supervisors fail closed to zero run counts. Focused control-plane validation passed with <code>2 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 250</time>
+            <div><strong>Control-plane secrets-store health summary</strong><p><code>secrets.status</code> now exposes configured/healthy status, source/fallback booleans, safe keychain error kind, count, and cleanup flags without raw secrets or key material. Focused control-plane validation passed with <code>3 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 249</time>
+            <div><strong>Control-plane skill readiness summary</strong><p><code>skills.status</code> now preserves not-ready skill activation states and missing requirements, then reports activation/source/missing-requirement summaries. Focused control-plane validation passed with <code>66 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 248</time>
+            <div><strong>Control-plane memory-provider health summary</strong><p><code>memory.status</code> now exposes redacted provider health, readiness counts, loaded/missing module counts, searchable scopes, and per-scope provider counts without reading or returning memory contents. Broader control-plane validation passed with <code>113 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 247</time>
+            <div><strong>Control-plane channel proof status</strong><p><code>channels.status</code> now exposes recent redacted Telegram/Discord proof artifacts and latest channel proof checks alongside adapter status and support diagnostics. Focused control-plane validation passed with <code>64 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 246</time>
+            <div><strong>Control-plane provider fallback proof status</strong><p><code>providers.status</code> now exposes redacted live provider fallback proof state alongside credential readiness and route preview, matching Web <code>/ops</code> proof visibility for non-Web clients. Focused control-plane validation passed with <code>64 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 245</time>
+            <div><strong>Control-plane channel support diagnostics</strong><p><code>channels.status</code> now exposes redacted Telegram/Discord support diagnostics alongside adapter status, matching support-bundle and Web <code>/ops</code> visibility for non-Web clients. Focused control-plane validation passed with <code>63 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 244</time>
+            <div><strong>Control-plane checkpoint lifecycle event status</strong><p><code>checkpoint.status</code> now exposes redacted checkpoint create/restore/delete counts and recent lifecycle summaries filtered by run, session, or agent. Focused control-plane validation passed with <code>61 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 243</time>
+            <div><strong>Control-plane browser live proof status</strong><p><code>browser.status</code> now exposes redacted live browser proof state, latest browser proof checks, browser proof booleans, proof hashes, and cleanup flags without leaking raw paths, filenames, page data, screenshots, provider responses, or proof file contents. Broader control-plane validation passed with <code>107 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 242</time>
+            <div><strong>Control-plane media provider proof lanes</strong><p><code>media.status</code> now exposes redacted provider-backed media proof lane state for image, TTS, STT, vision, and video, including safe reason kinds and rerun commands. Broader control-plane validation passed with <code>107 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 241</time>
+            <div><strong>Control-plane LSP proof status visibility</strong><p><code>lsp.diagnostics.status</code> now exposes recent redacted LSP proof artifacts and latest LSP proof checks alongside checker/server/session metadata. Broader control-plane validation passed with <code>107 tests, 0 failures</code>, and docs/docs-lint keep the API contract visible.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 240</time>
+            <div><strong>Pagination-safe proof launch gates</strong><p><code>proofs.status</code> now computes <code>launchGates</code> from the full redacted proof set while still applying the requested <code>limit</code> to <code>recentProofs</code> and <code>latestChecks</code>. Focused control-plane validation passed with <code>60 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 239</time>
+            <div><strong>Control-plane proof launch-gate summaries</strong><p><code>proofs.status</code> now exposes redacted <code>launchGates</code> for Discord DM, Discord slash client-click, provider media, and terminal backends. Focused control-plane validation passed with <code>59 tests, 0 failures</code>, and docs/docs-lint keep the API contract visible.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 238</time>
+            <div><strong>Control-plane terminal backend live proof summary</strong><p><code>terminal.backends.status</code> now exposes redacted terminal backend live-proof status, per-backend proof counts, proof hashes/timestamps, and safe Docker hardening fields without leaking raw proof commands or output. Focused control-plane validation passed with <code>59 tests, 0 failures</code>, and docs/docs-lint keep the API contract visible.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 237</time>
+            <div><strong>Control-plane cron scheduler-health status</strong><p><code>cron.status</code> now exposes active lock, failed-run, retry-run, suppressed-slot, stale-recovery, scheduled-retry, status-count, trigger-count, and audit-action counters from the same durable scheduler stores used by Web <code>/ops</code> and support bundles. Focused control-plane validation passed with <code>59 tests, 0 failures</code>, and docs/docs-lint keep the API contract visible.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 236</time>
+            <div><strong>Web ops cron scheduler-health counters</strong><p>Web <code>/ops</code> now renders aggregate cron scheduler health from durable run and lifecycle audit stores: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps. Focused Web validation passed with <code>36 tests, 0 failures</code>, and the docs/docs-lint guard were updated so this BEAM-native scheduling visibility stays part of the support contract.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 235</time>
+            <div><strong>Docs lint guard for support-bundle media lanes</strong><p><code>scripts/lint_ci_docs.sh</code> now checks that support-bundle code, support-bundle tests, and support docs retain the redacted <code>provider_live</code> media lane summary and matching <code>--provider</code> rerun flag contract. Validation passed with support-bundle tests at <code>3 tests, 0 failures</code>, formatting, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 234</time>
+            <div><strong>Support bundle media provider lane summary</strong><p><code>media_diagnostics.json</code> now includes redacted provider-live image/TTS/STT/vision/video lane state plus target-provider rerun commands for failed/skipped multi-provider proofs. This makes support bundles self-contained for media launch-gate triage. Focused support-bundle validation passed with <code>3 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 233</time>
+            <div><strong>Media proof state stale-doc cleanup</strong><p>The scorecard and feature matrix no longer list STT as an open provider-media blocker. They now match doctor and support wording: Deepgram STT plus vision are current, while image, TTS, and video remain blocked by provider permission/payment/quota evidence. Stale-text search, docs lint, HTML lint, and diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 232</time>
+            <div><strong>Final audit targeted media provider reruns</strong><p><code>scripts/audit_1_0_readiness</code> now defines media reason hints inside the media verifier and prints a target-provider rerun command for failed/skipped multi-provider proof artifacts. This fixes the incomplete-proof path and keeps final audit guidance aligned with doctor and Web <code>/ops</code>. The extracted media verifier was exercised against the current failed image proof and emitted <code>--provider vertex_imagen</code> with sanitized permission-denied guidance.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 231</time>
+            <div><strong>Doctor targeted media provider reruns</strong><p><code>media.provider_live</code> remediation now appends target-provider <code>--provider</code> flags for failed or skipped multi-provider lanes when the redacted proof identifies the safe provider id. This avoids rerunning a lane's default provider when the current blocker is on an alternate provider. Focused doctor validation passed with <code>56 tests, 0 failures</code>, and live doctor output now points current image/TTS/video blockers at <code>vertex_imagen</code>, <code>google_tts</code>, and <code>vertex_veo</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 230</time>
+            <div><strong>Web ops visible media next actions</strong><p>The Web <code>/ops</code> media provider cards now render each lane's bounded <code>next_action</code> next to its safe <code>reason_kind</code>, proof path, and copy-ready rerun commands, so operators do not need to infer remediation from backend-only snapshot fields. Validation passed with focused Web/Core tests at <code>36</code> and <code>56</code> tests with zero failures, plus formatting, docs lint, HTML lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 229</time>
+            <div><strong>Final readiness media blocker hints</strong><p><code>scripts/audit_1_0_readiness</code> now prints bounded remediation hints for incomplete provider-media proof reasons such as permission denied, quota/billing, payment required, request shape, and provider HTTP failures. Shell lint, docs lint, and diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 228</time>
+            <div><strong>Web ops media provider blocker remediation</strong><p>Web <code>/ops</code> grouped media provider rows now surface bounded next actions from safe <code>reason_kind</code> classes without raw provider response text. Focused Web validation passed with <code>36 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 227</time>
+            <div><strong>Doctor media provider blocker remediation</strong><p><code>media.provider_live</code> now maps permission-denied, billing/quota, payment-required, request-shape, and provider HTTP reasons to operator hints. Current image/TTS/video blockers are correctly described as provider permission denials; focused doctor validation passed with <code>56 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 226</time>
+            <div><strong>Slash client-click stale-doc cleanup</strong><p>The channel command matrix, readiness plan, testing guide, and Hermes feature matrix now describe the wait-mode workflow as the primary operator path for Discord slash client-click promotion. Docs lint, HTML lint, and diff hygiene passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 225</time>
+            <div><strong>Doctor client-click wait-mode remediation</strong><p><code>LemonCore.Doctor.Checks.Channels</code> now points Discord slash client-click warnings at the wait-mode proof workflow and recognizes stale proof artifacts as a distinct warning path. Focused doctor validation passed with <code>55 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 224</time>
+            <div><strong>Final readiness audit client-click wait handoff</strong><p><code>scripts/audit_1_0_readiness</code> now prints the wait-mode workflow for real Discord slash client-click proof, and docs lint guards that command in both the audit and release checklist. Validation passed with shell lint, docs lint, and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 223</time>
+            <div><strong>CI guard for client-click wait-mode docs</strong><p><code>scripts/lint_ci_docs.sh</code> now checks that release docs preserve <code>--wait-slash-client-click-proof</code> alongside the one-shot validator. Validation passed with docs lint and diff hygiene.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 222</time>
+            <div><strong>Web ops DM proof handoff visibility</strong><p>Web <code>/ops</code> now shows a concrete <code>--wait-dm-inbound</code> command for Discord DM proof attempts and keeps closed-DM/bot-to-bot setup refusal classified as <code>discord_dm_setup_refused</code>. Focused validation passed with <code>35 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 221</time>
+            <div><strong>Web ops client-click handoff visibility</strong><p>Web <code>/ops</code> now surfaces the wait-mode proof command for missing Discord slash client-click proof, treats stale client-click artifacts as a distinct blocked reason, and keeps free-response Message Content Intent remediation explicit. Focused validation passed with <code>35 tests, 0 failures</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 220</time>
+            <div><strong>Discord slash client-click wait-mode handoff</strong><p><code>scripts/live_discord_matrix.py --wait-slash-client-click-proof</code> now posts or prints an operator request, recommends a real slash command such as <code>/media status</code>, polls the runtime's redacted client-click artifact, and refuses stale proof generated before the watcher started. Smoke validation produced sanitized missing-proof evidence; the gate still requires a real Discord client click before promotion.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 219</time>
+            <div><strong>Discord free-response live proof</strong><p>Transport trigger resolution now falls back from <code>{thread, nil}</code> to the stored <code>{thread, thread}</code> trigger key for Discord thread messages without parent context. The live matrix passed at <code>.lemon/proofs/discord-free-response-latest.json</code>; focused transport validation passed with 17 tests and zero failures, and the runner now preflights Discord Message Content Intent flags before waiting.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 218</time>
+            <div><strong>Vertex Veo video-provider lane</strong><p><code>media_generate_video</code> now supports <code>vertex_veo</code> with Lemon <code>providers.google_vertex</code> service-account credentials, Vertex AI Veo <code>:predictLongRunning</code> plus <code>:fetchPredictOperation</code>, managed MP4 artifacts, redacted job metadata, and final-readiness/doctor/Web ops proof recognition. The canonical proof at <code>.lemon/proofs/media-video-smoke-latest.json</code> currently records <code>vertex_veo_create_http_error:permission_denied</code>. Validation passed with focused coding-agent, doctor, and Web tests at 7, 55, and 35 tests with zero failures; <code>media.provider_live</code> remains a warning because media is still 2/5.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 217</time>
+            <div><strong>Web ops grouped media proof lanes</strong><p>Web <code>/ops</code> now models provider-backed media readiness as five launch lanes with acceptable provider alternatives, rather than assuming only OpenAI ids. The snapshot and LiveView keep the default command, secret-backed command, and provider-specific rerun commands visible; focused Web validation passed with 35 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 216</time>
+            <div><strong>Google TTS provider lane</strong><p><code>media_generate_speech</code> now supports <code>google_tts</code> with Lemon <code>providers.google_vertex</code> service-account credentials, Cloud Text-to-Speech <code>text:synthesize</code>, managed MP3 artifacts, redacted job metadata, and final-readiness/doctor proof recognition. The canonical proof at <code>.lemon/proofs/media-speech-smoke-latest.json</code> currently records <code>google_tts_http_error:permission_denied</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 215</time>
+            <div><strong>Vertex Imagen image-provider lane</strong><p><code>media_generate_image</code> now supports <code>vertex_imagen</code> with Lemon <code>providers.google_vertex</code> config/secrets, service-account JWT exchange, Vertex Imagen <code>:predict</code>, managed artifacts, redacted job metadata, and final-readiness/doctor proof recognition. The canonical proof at <code>.lemon/proofs/media-image-smoke-latest.json</code> currently records <code>vertex_imagen_http_error:permission_denied</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 214</time>
+            <div><strong>Provider media subreason diagnostics</strong><p><code>LemonCore.MediaJobWorker</code> now keeps bounded provider status/type labels such as <code>openai_image_http_error:billing_limit_user_error</code>, <code>openai_tts_http_error:invalid_request_error</code>, and <code>elevenlabs_tts_http_error:payment_required</code> in redacted media job metadata. Raw provider messages stay hashed only, while doctor, proof JSON, Web <code>/ops</code>, and final audit output get enough signal to distinguish auth, quota, and API-shape blockers.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 213</time>
+            <div><strong>Multi-provider voice media proof</strong><p><code>media_generate_speech</code> now supports <code>elevenlabs_tts</code> and <code>media_transcribe_audio</code> now supports <code>deepgram_transcribe</code> on the same BEAM-supervised media job path. The Deepgram live STT proof completed at <code>.lemon/proofs/media-transcription-smoke-latest.json</code>, so provider-backed media is now 2/5 with STT and vision current; ElevenLabs TTS reached the worker but remains blocked by a redacted provider HTTP error.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 212</time>
+            <div><strong>Provider-media model routing diagnostics</strong><p>Provider-prefixed OpenAI-compatible routing stays limited to the proven media vision path. The image, TTS, STT, and video proof scripts now skip <code>provider:model</code> values with the bounded <code>provider_prefixed_model_not_supported_for_media_type</code> reason, and docs/lint tell operators to use <code>--base-url</code> with an unprefixed model for OpenAI-shaped compatible media endpoint proof.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 211</time>
+            <div><strong>Discord message-content runtime intent diagnostics</strong><p><code>channel_diagnostics.json</code> now exposes <code>free_response.runtime_requests_message_content_intent: true</code>. Doctor remediation and Web <code>/ops</code> evidence distinguish Lemon's runtime-requested Discord <code>message_content</code> gateway intent from the operator's redacted Developer Portal declaration and from the live unmentioned-message proof still needed for promotion.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 210</time>
+            <div><strong>Final readiness Discord proof reason diagnostics</strong><p><code>scripts/audit_1_0_readiness</code> now prints bounded <code>reason_kind</code> labels for incomplete Discord DM, free-response, and real slash client-click proof artifacts. The extractor reads only explicit proof/check reason fields, redacts labels outside the safe pattern, and CI docs lint guards this contract alongside the existing Discord proof gates.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 209</time>
+            <div><strong>Final readiness provider-media reason diagnostics</strong><p><code>scripts/audit_1_0_readiness</code> now prints bounded <code>reason_kind</code> labels for incomplete provider-backed image, TTS, STT, vision, and video proof artifacts. The extractor reads only top-level, detail-level, or check-level reason fields, redacts labels outside the safe pattern, and docs plus CI lint guard this contract alongside the provider proof-path and secret-backed command checks.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 208</time>
+            <div><strong>JSON-RPC redaction key normalization</strong><p><code>proofs.status</code> now formats proof-level redaction map keys as lowerCamelCase for JSON-RPC clients. The control-plane fixture asserts <code>wasm_lifecycle_smoke</code> returns <code>containsRawCwd</code>, <code>containsRawSessionIds</code>, <code>containsRawToolNames</code>, and <code>containsRawParams</code> as false, refutes <code>contains_raw_cwd</code> leakage, and keeps cleanup empty; focused validation passed with 58 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 207</time>
+            <div><strong>Web ops proof redaction visibility</strong><p>Web <code>/ops</code> proof artifact rows now render a compact <code>redaction:</code> summary when a recent proof has proof-level redaction evidence. The Web fixture writes a <code>wasm_lifecycle_smoke</code> proof with private raw-looking details plus safe booleans, then asserts the snapshot exposes <code>contains_raw_cwd</code>, <code>contains_raw_session_ids</code>, <code>contains_raw_tool_names</code>, and <code>contains_raw_params</code> as false without leaking the raw fields; focused validation passed with 35 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 206</time>
+            <div><strong>JSON-RPC proof redaction visibility</strong><p><code>proofs.status</code> now includes proof-level <code>redaction</code> maps in formatted recent proofs, giving external clients the same extension/WASM redaction evidence as support bundles. The control-plane fixture asserts <code>wasm_lifecycle_smoke</code> reports <code>contains_raw_cwd</code>, <code>contains_raw_session_ids</code>, <code>contains_raw_tool_names</code>, and <code>contains_raw_params</code> as false while cleanup remains empty; focused validation passed with 58 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 205</time>
+            <div><strong>Media provider proof reason visibility</strong><p><code>media.provider_live</code> now carries redacted per-provider <code>reason_kind</code> labels for failed or skipped provider-backed media proof lanes. Focused coverage writes a failed image proof with a private raw provider response and asserts the doctor output includes only the safe <code>image=provider_http_error</code> reason; focused validation passed with 55 tests and zero failures. A broader validation agent also reported 57 doctor/support tests, compile, dashboard HTML, and docs lint passing.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 204</time>
+            <div><strong>Proof-bundle redaction visibility</strong><p><code>ProofDiagnostics</code> now exposes proof-level redaction maps in recent proof summaries alongside cleanup maps. The focused support-bundle fixture asserts <code>wasm_lifecycle_smoke</code> reports <code>contains_raw_cwd</code>, <code>contains_raw_session_ids</code>, <code>contains_raw_tool_names</code>, and <code>contains_raw_params</code> as false while cleanup stays empty; validation passed with 2 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 203</time>
+            <div><strong>Canonical provider vision proof refresh</strong><p>The canonical OpenRouter-backed vision smoke passed with <code>MIX_ENV=test mix run --no-start scripts/live_media_vision_smoke.exs --model openrouter:openai/gpt-4o-mini --api-key-secret OPENROUTER_API_KEY --proof-path .lemon/proofs/media-vision-smoke-latest.json</code>. <code>media.provider_live</code> now treats provider media as 1/5 complete with vision current, while image, TTS, STT, and video remain open.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 202</time>
+            <div><strong>Secret-backed provider-media proof command fix</strong><p>All five provider-media smoke scripts, doctor remediation, Web <code>/ops</code>, release audit, and release docs now use the <code>mix run --no-start</code> proof command shape so encrypted Lemon secrets are available before credentials resolve. Docs lint enforces that provider proof command contract.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 201</time>
+            <div><strong>Final readiness cron proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now treats cron diagnostics, runtime restart, and channel-origin proof artifacts as final release evidence. Defaults are <code>.lemon/proofs/cron-diagnostics-latest.json</code>, <code>.lemon/proofs/cron-runtime-restart-latest.json</code>, and <code>.lemon/proofs/cron-channel-origin-latest.json</code>, with <code>LEMON_CRON_DIAGNOSTICS_PROOF_JSON</code>, <code>LEMON_CRON_RUNTIME_RESTART_PROOF_JSON</code>, and <code>LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON</code> overrides. Release checklist and docs lint enforce the wiring.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 200</time>
+            <div><strong>Cron doctor proof gate</strong><p><code>mix lemon.doctor --verbose</code> now reports <code>cron.preview</code>, backed by redacted cron diagnostics, runtime restart, and channel-origin proof artifacts. It passes only when diagnostics rows, full-runtime restart persistence rows, and Telegram/Discord-shaped channel-origin delivery rows are complete with expected cleanup flags.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 199</time>
+            <div><strong>Final readiness browser proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now treats <code>.lemon/proofs/browser-smoke-latest.json</code> as final release evidence, with <code>LEMON_BROWSER_PROOF_JSON</code> as the override. The browser smoke now writes standardized status, proof scope, skipped count, cleanup, and per-tool completed rows; the rerun succeeded and the proof artifact scan found no local path, browser-artifact, inline HTML, selector, cookie, worker, or download-proof leakage.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 198</time>
+            <div><strong>Browser doctor proof gate</strong><p><code>ProofDiagnostics</code> now recognizes browser live smoke as <code>browser_smoke</code> and exposes only safe summaries: counts, completed feature booleans, safe tool names, progress counts, and cleanup flags. <code>mix lemon.doctor --verbose</code> reports <code>browser.preview</code>, and focused doctor validation passed with 51 tests, compile warnings-as-errors, and a passing doctor row.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 197</time>
+            <div><strong>Final readiness LSP proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now treats project-fixture and real-repo LSP editor-flow proofs as final release evidence. The default artifacts are <code>.lemon/proofs/lsp-project-fixtures-latest.json</code> and <code>.lemon/proofs/lsp-real-repo-fixtures-latest.json</code>, with <code>LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON</code> and <code>LEMON_LSP_REAL_REPO_PROOF_JSON</code> overrides. Validation passed with bash syntax checks, docs lint, and <code>git diff --check</code>.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 196</time>
+            <div><strong>LSP doctor proof gate</strong><p><code>mix lemon.doctor --verbose</code> now reports <code>lsp.preview</code>, backed by redacted LSP project-fixture and real-repo fixture proof artifacts. It passes only when both artifacts complete editor-flow rows for Pyright, gopls, clangd, rust-analyzer, TypeScript Language Server, and ElixirLS. Focused doctor validation passed with 47 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 195</time>
+            <div><strong>Final readiness extension and WASM proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now final-gates extension host, WASM telemetry, WASM policy, extension registry audit, and WASM lifecycle proof artifacts with <code>LEMON_EXTENSION_HOST_PROOF_JSON</code>, <code>LEMON_WASM_TELEMETRY_PROOF_JSON</code>, <code>LEMON_WASM_POLICY_PROOF_JSON</code>, <code>LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON</code>, and <code>LEMON_WASM_LIFECYCLE_PROOF_JSON</code> overrides. The release checklist and docs lint enforce the same proof requirement.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 194</time>
+            <div><strong>Final readiness MCP proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now validates <code>.lemon/proofs/mcp-stdio-latest.json</code>, <code>.lemon/proofs/mcp-http-latest.json</code>, and <code>.lemon/proofs/mcp-sse-latest.json</code>, or <code>LEMON_MCP_STDIO_PROOF_JSON</code>, <code>LEMON_MCP_HTTP_PROOF_JSON</code>, and <code>LEMON_MCP_SSE_PROOF_JSON</code>. The release checklist documents the overrides and docs lint enforces the same MCP proof requirement.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 193</time>
+            <div><strong>MCP doctor proof gate</strong><p><code>ProofDiagnostics</code> now classifies MCP smoke artifacts into <code>mcp_stdio</code>, <code>mcp_http</code>, and <code>mcp_sse</code> scopes while preserving the existing <code>proof: "mcp_*_smoke"</code> artifact shape. <code>mix lemon.doctor --verbose</code> now reports <code>mcp.preview</code>, and focused doctor validation passed with 43 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 192</time>
+            <div><strong>Final readiness ACP proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now validates the ACP stdio, external Node client, and official SDK proof artifacts, or <code>LEMON_ACP_STDIO_PROOF_JSON</code>, <code>LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON</code>, and <code>LEMON_ACP_OFFICIAL_SDK_PROOF_JSON</code>. The verifier requires completed rows, zero failures, client update/request counts, and cleanup flags excluding raw prompts, API keys, answers, events, session ids, child stderr, file contents, and file paths.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 191</time>
+            <div><strong>ACP doctor proof gate</strong><p><code>ProofDiagnostics</code> now classifies ACP stdio proof artifacts into <code>acp_stdio</code>, <code>acp_stdio_external_client</code>, and <code>acp_official_sdk_client</code> scopes with <code>acp_*</code> latest-check rows. <code>mix lemon.doctor --verbose</code> reports <code>acp.preview</code>, passing only when the deterministic stdio smoke, external Node stdio client, and official ACP SDK client proofs are complete.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 190</time>
+            <div><strong>Final readiness OpenAI-compatible API proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now validates <code>.lemon/proofs/openai-compat-smoke-latest.json</code> or <code>LEMON_OPENAI_COMPAT_PROOF_JSON</code>, requiring fourteen completed local <code>/v1</code> preview rows, zero failures, and cleanup flags that exclude raw prompts, API keys, answers, and run events. The release checklist documents the override and docs lint enforces the wiring.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 189</time>
+            <div><strong>OpenAI-compatible API doctor proof gate</strong><p><code>ProofDiagnostics</code> now classifies <code>scripts/live_openai_compat_smoke.exs</code> result rows into <code>openai_compat_api</code> scope and <code>openai_compat_*</code> checks. <code>mix lemon.doctor --verbose</code> reports <code>openai_compat.api_preview</code>, passing only when all fourteen local <code>/v1</code> preview rows complete.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 188</time>
+            <div><strong>Final readiness terminal backend proof gate</strong><p><code>scripts/audit_1_0_readiness</code> now validates <code>.lemon/proofs/terminal-backend-latest.json</code> or <code>LEMON_TERMINAL_BACKEND_PROOF_JSON</code>, requiring completed local, local PTY, Docker, and SSH rows, zero failures, and safe cleanup flags. The release checklist documents the override and docs lint enforces the audit/checklist wiring.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 187</time>
+            <div><strong>Terminal backend doctor readiness gate</strong><p><code>mix lemon.doctor --verbose</code> now reports <code>terminal.backends_live</code> from redacted terminal backend smoke proof rows, passing only when local, local PTY, Docker, and SSH preview rows are complete. The remediation points operators to <code>MIX_ENV=test mix run scripts/live_terminal_backend_smoke.exs</code> and the canonical redacted proof artifact.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 186</time>
+            <div><strong>Final readiness secret-backed provider-media handoff</strong><p>The readiness audit and release checklist now mention <code>--api-key-secret SECRET_NAME</code> for provider-media proof, and docs lint enforces that contract. Bash syntax and docs lint passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 185</time>
+            <div><strong>Web ops provider-media secret proof command</strong><p>Web <code>/ops</code> provider proof rows now expose both the normal command and the <code>--api-key-secret SECRET_NAME</code> variant. Focused Web tests passed with 34 tests and zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 184</time>
+            <div><strong>Provider media secret-name proof overrides</strong><p>Provider-media smoke scripts, doctor remediation, and support docs now accept or mention <code>--api-key-secret</code>, resolving encrypted Lemon secrets through the runtime credential boundary. Focused doctor tests passed, and missing-secret validation wrote redacted skipped proof artifacts with zero failures and no raw-key cleanup flags.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 183</time>
+            <div><strong>Provider media proof-path command contract</strong><p>All five provider media smoke scripts now accept <code>--proof-path</code>, matching doctor, Web <code>/ops</code>, release audit, and release checklist commands. A no-credential alias validation wrote redacted skipped proof artifacts with zero failures.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 182</time>
+            <div><strong>Live Telegram and Discord MEDIA directive proof</strong><p>Fresh main-runtime Telegram and Discord live matrices completed with marker evidence, delivered document/attachment proof, and no leaked <code>MEDIA:</code> directive. The readiness-audit verifier accepted both redacted artifacts.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 181</time>
+            <div><strong>Web ops MEDIA directive visibility</strong><p>Web <code>/ops</code> proof rows now render media directive delivery, marker, and leak status. A focused Web snapshot regression passed with 34 tests, and compile, doctor, docs lint, HTML parse, and whitespace checks stayed green.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 180</time>
+            <div><strong>Final readiness MEDIA directive gate</strong><p>The final readiness audit now blocks broad parity unless Telegram and Discord redacted MEDIA directive proof artifacts show coverage, completed checks, delivered attachments, marker evidence, and no leaked directive. Bash syntax, Discord Python compile, docs lint, and whitespace checks passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 179</time>
+            <div><strong>MEDIA directive proof diagnostics</strong><p>Doctor, support bundles, and <code>proofs.status</code> now surface MEDIA directive proof coverage, attachment-delivery status, and directive-leak status without raw paths or message bodies. Focused diagnostics validation passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 178</time>
+            <div><strong>Live MEDIA directive proof harnesses</strong><p>Telegram and Discord live matrices now include checks for final-answer <code>MEDIA:&lt;path&gt;</code> attachment delivery with directive-leak detection. Python compile and help validation passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 177</time>
+            <div><strong>Hermes-style MEDIA directive delivery</strong><p>Final-answer <code>MEDIA:&lt;path&gt;</code> lines now become safe explicit <code>auto_send_files</code> attachments and are stripped from channel text. Focused artifact, RunProcess, and widened router media lanes passed.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 176</time>
+            <div><strong>Provider-body rate-limit helper detection</strong><p><code>Ai.Error.rate_limit_error?/1</code> now recognizes non-429 provider-body rate-limit tuples through parsed classification. Focused AI validation passed with 116 tests; wider AI error validation passed with 303 tests.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 175</time>
+            <div><strong>Atom enum provider value normalization</strong><p>Symbolic atom provider values now normalize to strings without changing <code>nil</code> or booleans. Focused AI validation passed with 115 tests; wider AI error validation passed with 302 tests.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 173</time>
+            <div><strong>Atom-key provider error normalization</strong><p>Atom-key Elixir maps now normalize before extraction, classification, and retry hint parsing. Focused AI validation passed with 112 tests; wider AI error validation passed with 299 tests.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 172</time>
+            <div><strong>Provider error symbolic prefix normalization</strong><p>Symbolic <code>type</code> and string <code>code</code> prefixes now survive direct and nested effective messages. Focused AI validation passed with 108 tests; wider AI error validation passed with 295 tests.</p></div>
+          </div>
+          <div class="event">
+            <time>Slice 170</time>
+            <div><strong>Symbolic provider detail maps</strong><p>Top-level symbolic <code>type</code> or <code>code</code> no longer hides nested human-readable provider details.</p></div>
+          </div>
+          <div class="event">
+            <time>160-169</time>
+            <div><strong>Error and lifecycle metadata hardening</strong><p>Provider descriptions, JSON:API shapes, retry hints, tool exception metadata, command exit codes, and cross-boundary status metadata were locked down.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel grid">
+      <h2>Current Docs Snapshot</h2>
+      <table>
+        <thead><tr><th>Surface</th><th>Current documented state</th><th>Launch meaning</th></tr></thead>
+        <tbody>
+          <tr><td>Browser tools</td><td>Built-in external-content tools using a supervised local Node/Playwright helper, route policy, redacted artifacts, channel-safe progress, and proof lanes now have <code>browser_smoke</code> proof scope, <code>browser.preview</code> doctor readiness, and final readiness validation through <code>LEMON_BROWSER_PROOF_JSON</code>.</td><td>Useful preview with leak-scanned local proof; stable claim still waits on broader real-world browser automation confidence.</td></tr>
+          <tr><td>Memory providers</td><td>Read-only <code>memory.status</code> reports redacted provider registry rows plus aggregate health, enabled/disabled counts, loaded/missing module counts, searchable scopes, and per-scope provider counts.</td><td>Core memory is green; external provider adapters beyond local storage remain preview work.</td></tr>
+          <tr><td>Skills</td><td><code>skills.status</code> reports activation/readiness, platform compatibility, missing requirements, and aggregate counts. <code>skills.bins</code>, <code>skills.install</code>, and <code>skills.update</code> add lifecycle summaries; <code>skills.update</code> redacts sensitive env response values while preserving safe env keys.</td><td>Core skill lifecycle is green; ecosystem distribution and broader plugin hosting remain preview work.</td></tr>
+          <tr><td>Secrets</td><td>Read-only <code>secrets.status</code> reports configured/healthy state, safe source and fallback booleans, safe keychain error kind, owner, count, and cleanup flags.</td><td>Credential setup is easier to triage without exposing secrets; provider media proof still needs usable external quota/permissions.</td></tr>
+          <tr><td>BEAM runtime</td><td>Root <code>status</code> reports BEAM process, port, atom, and run-queue counters plus limits, while missing optional supervisors fail closed.</td><td>Operators can separate runtime pressure from provider/channel failures using native BEAM telemetry.</td></tr>
+          <tr><td>Legacy transports</td><td>Read-only <code>transports.status</code> reports registry loaded/running state, configured/enabled/disabled counts, module-loaded/missing counts, safe status, and cleanup flags.</td><td>Non-promoted gateway transports stay preview, but their BEAM registry health is visible without leaking config or credentials.</td></tr>
+          <tr><td>TTS control plane</td><td>Read-only <code>tts.status</code> reports explicit stored config values, active-provider known/available state, provider readiness counts, and cleanup flags.</td><td>Operators can distinguish disabled TTS, unknown providers, unavailable credentials, and ready state without exposing secrets or raw provider failures.</td></tr>
+          <tr><td>Usage</td><td>Read-only <code>usage.status</code> reports the same current usage summary maintained by <code>usage.cost</code>, with provider rows, quota status, remaining quota estimates, and cleanup flags.</td><td>Operators can inspect cost pressure and provider usage without exposing prompts, responses, or credential material.</td></tr>
+          <tr><td>Readiness summary</td><td><code>readiness_summary.json</code> in support bundles, Web <code>/ops</code>, and JSON-RPC <code>readiness.status</code> now expose the same compact launch-readiness rollup as <code>mix lemon.readiness</code> and <code>./bin/lemon readiness</code>, backed by <code>LemonCore.Doctor.ReadinessSummary</code> and shared <code>LemonCore.Doctor.ProofLaunchGates</code>.</td><td>Support triage and operator clients can inspect doctor, channel, proof-gate, provider-media, proof, unresolved-gate, and cleanup state from one redacted artifact/response.</td></tr>
+          <tr><td>Voicewake</td><td>Read-only <code>voicewake.get</code> reports explicit stored wake-word config, configured/enabled/backend summary, and cleanup flags.</td><td>Operators can distinguish disabled/configured wake-word state without exposing audio samples or secret values.</td></tr>
+          <tr><td>Config</td><td><code>config.get</code> redacts sensitive stored values by key name for single-key and full-config reads, and <code>config.set</code> redacts sensitive response echoes.</td><td>Operators can inspect config without accidentally dumping API keys, tokens, passwords, secrets, credentials, or private keys.</td></tr>
+          <tr><td>Models</td><td>Read-only <code>models.list</code> reports catalog source, model/provider totals, provider names, vision/thinking/streaming counts, and cleanup flags.</td><td>Operator clients can compare model capability coverage without exposing provider credentials or secret values.</td></tr>
+          <tr><td>Agent directory</td><td><code>agent.directory.list</code>, <code>agents.list</code>, and <code>agent.targets.list</code> report compact directory/target summaries and cleanup flags.</td><td>Operator clients can navigate agent/session/target state without exposing message bodies, credentials, or secret values.</td></tr>
+          <tr><td>Media tools</td><td>Preview BEAM-supervised media jobs with local, OpenAI-backed, Vertex Imagen, ElevenLabs TTS, Google TTS, Deepgram STT, and Vertex Veo providers, managed artifacts, redacted metadata, untrusted transcript/analysis wrapping, and channel send metadata. <code>media.provider_live</code> and Web <code>/ops</code> recognize the current canonical vision proof at <code>.lemon/proofs/media-vision-smoke-latest.json</code> and the current Deepgram STT proof at <code>.lemon/proofs/media-transcription-smoke-latest.json</code>. Image proof can be satisfied by either <code>openai_image</code> or <code>vertex_imagen</code>; TTS proof can be satisfied by <code>openai_tts</code>, <code>elevenlabs_tts</code>, or <code>google_tts</code>; STT proof can be satisfied by <code>openai_transcribe</code> or <code>deepgram_transcribe</code>; video proof can be satisfied by <code>openai_video</code> or <code>vertex_veo</code>.</td><td>Provider media is 2/5: STT and vision are current, while image, TTS, and video remain open with operator-visible safe failure reasons and grouped rerun commands. <code>./bin/lemon media</code> reports 29 jobs, 28 artifacts, and the current provider-proof blocker reasons.</td></tr>
+          <tr><td>Discord channels</td><td>Free-response diagnostics distinguish Lemon's runtime-requested Discord <code>message_content</code> gateway intent from the external Developer Portal declaration via <code>runtime_requests_message_content_intent</code> and <code>message_content_intent_declared</code>. The latest free-response proof is completed, and the slash client-click gate now has a fresh-proof wait mode.</td><td>DM and real client-click remain blocked pending external/live proof.</td></tr>
+          <tr><td>Cron jobs</td><td>Preview scheduled jobs now have <code>cron.preview</code> doctor readiness plus final readiness validation for diagnostics/support-bundle redaction, runtime restart persistence, and Telegram/Discord-shaped channel-origin proof through <code>LEMON_CRON_DIAGNOSTICS_PROOF_JSON</code>, <code>LEMON_CRON_RUNTIME_RESTART_PROOF_JSON</code>, and <code>LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON</code>.</td><td>Supportable preview with local channel-shaped proof; deployed external-channel proof remains separate from stable cron claims.</td></tr>
+          <tr><td>OpenAI-compatible API</td><td>Preview <code>/v1</code> surface for health, capabilities, models, Chat Completions, Responses, run status, cancellation, external fetch, and SDK clients now has <code>openai_compat_api</code> proof scope, <code>openai_compat.api_preview</code> doctor readiness, and final readiness validation through <code>LEMON_OPENAI_COMPAT_PROOF_JSON</code>.</td><td>Strong local API compatibility proof, still preview by docs contract.</td></tr>
+          <tr><td>ACP</td><td>Preview ACP bridge for sessions, prompts, updates, approvals, and filesystem client requests now has <code>acp_stdio</code>, <code>acp_stdio_external_client</code>, and <code>acp_official_sdk_client</code> proof scopes, <code>acp.preview</code> doctor readiness, and final readiness validation through <code>LEMON_ACP_STDIO_PROOF_JSON</code>, <code>LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON</code>, and <code>LEMON_ACP_OFFICIAL_SDK_PROOF_JSON</code>.</td><td>Editor/client integration proof is stronger; richer media/editor compatibility remains open.</td></tr>
+          <tr><td>MCP</td><td>Preview stdio, Streamable HTTP, and legacy SSE MCP support now has <code>mcp_stdio</code>, <code>mcp_http</code>, and <code>mcp_sse</code> proof scopes, <code>mcp.preview</code> doctor readiness, and final readiness validation through <code>LEMON_MCP_STDIO_PROOF_JSON</code>, <code>LEMON_MCP_HTTP_PROOF_JSON</code>, and <code>LEMON_MCP_SSE_PROOF_JSON</code>.</td><td>Local MCP compatibility proof is stronger; broader external-server compatibility remains open.</td></tr>
+          <tr><td>Extensions and WASM</td><td>Extension host, WASM telemetry, WASM policy, extension registry audit, and WASM lifecycle proof artifacts now have final readiness validation through <code>LEMON_EXTENSION_HOST_PROOF_JSON</code>, <code>LEMON_WASM_TELEMETRY_PROOF_JSON</code>, <code>LEMON_WASM_POLICY_PROOF_JSON</code>, <code>LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON</code>, and <code>LEMON_WASM_LIFECYCLE_PROOF_JSON</code>. Recent proof summaries preserve proof-level redaction maps, including <code>wasm_lifecycle_smoke</code> redaction flags; support bundles and Web <code>/ops</code> show redaction evidence, while <code>proofs.status</code> exposes lowerCamelCase JSON-RPC keys such as <code>containsRawCwd</code> without snake_case leakage.</td><td>Plugin execution support is release-gated as preview with support-bundle, normalized JSON-RPC, and Web ops redaction evidence visible; broader marketplace and sandbox parity remain open.</td></tr>
+          <tr><td>Terminal backends</td><td>Preview local, local PTY, Docker, and SSH terminal execution has redacted live smoke proof, the <code>terminal.backends_live</code> doctor gate, and final readiness validation through <code>LEMON_TERMINAL_BACKEND_PROOF_JSON</code>.</td><td>Local backend proof is supportable as preview; fleet/container backends and advanced sandbox profiles remain open.</td></tr>
+          <tr><td>LSP diagnostics</td><td>Preview model-facing and control-plane language-server paths now have <code>lsp.preview</code> doctor readiness plus final readiness validation for project-fixture and real-repo editor-flow proofs through <code>LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON</code> and <code>LEMON_LSP_REAL_REPO_PROOF_JSON</code>.</td><td>Strong six-server editor-flow proof lane, still preview for stable Hermes LSP parity.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      Data source: <code>docs/plans/lemon-hermes-agent-harness-parity-scorecard.md</code>, <code>docs/plans/lemon-1.0-mainstream-readiness.md</code>, and current tool docs. This file is standalone static HTML and can be refreshed directly in the browser.
+    </footer>
+  </main>
+  <script>
+    const refresh = document.getElementById("refresh");
+    refresh.addEventListener("click", () => window.location.reload());
+  </script>
+</body>
+</html>

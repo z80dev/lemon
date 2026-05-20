@@ -24,8 +24,19 @@ cd lemon
 mix local.hex --force
 mix deps.get
 mix compile
-mix lemon.setup
-mix lemon.doctor
+./bin/lemon setup
+./bin/lemon channels
+./bin/lemon config validate
+./bin/lemon doctor
+./bin/lemon media --limit 5
+./bin/lemon models --provider anthropic
+./bin/lemon providers --provider openai
+./bin/lemon policy list
+./bin/lemon proofs --limit 5
+./bin/lemon readiness --limit 5
+./bin/lemon secrets status
+./bin/lemon skill list
+./bin/lemon usage
 ```
 
 Start Lemon locally:
@@ -34,12 +45,54 @@ Start Lemon locally:
 ./bin/lemon-dev /path/to/your/project
 ```
 
+If you want a repeatable local proof of the source path after building, run:
+
+```bash
+scripts/verify_source_install --skip-compile
+```
+
+Without `--skip-compile`, the verifier also runs `MIX_ENV=test mix compile --warnings-as-errors`.
+It checks the BEAM toolchain, locked dependency resolution, non-interactive
+setup dispatch, promoted Telegram/Discord channel readiness, stage-1 local
+update dry-run dispatch, doctor JSON diagnostics, model catalog listing,
+provider readiness listing, model policy listing, redacted proof artifact
+listing, media diagnostics, readiness summary, secrets status, skill listing,
+usage diagnostics, plus redacted support-bundle generation.
+
+For source-checkout maintenance outside the verifier:
+
+```bash
+./bin/lemon update --check
+```
+
+This delegates to `mix lemon.update --check`. It is a local maintenance check,
+not a remote binary updater.
+
+For route-specific model defaults, use the source wrapper:
+
+```bash
+./bin/lemon models --provider anthropic
+./bin/lemon providers --provider openai
+./bin/lemon policy list
+./bin/lemon proofs --limit 5
+./bin/lemon media --limit 5
+./bin/lemon readiness --limit 5
+./bin/lemon channels
+./bin/lemon secrets status
+./bin/lemon skill list
+./bin/lemon usage
+./bin/lemon policy set telegram --account default --model anthropic:claude-sonnet-4-20250514
+```
+
+Use `./bin/lemon readiness --strict` when a script should fail unless all compact
+launch-readiness gates are ready.
+
 ## Configure One Provider
 
 Use the setup wizard when possible:
 
 ```bash
-mix lemon.setup provider
+./bin/lemon setup provider
 ```
 
 For manual setup, create `~/.lemon/config.toml` and reference secrets by name:
@@ -57,7 +110,7 @@ engine   = "lemon"
 Store the secret:
 
 ```bash
-mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
+./bin/lemon secrets set llm_anthropic_api_key_raw "sk-ant-..."
 ```
 
 ## Verify the Install
@@ -65,23 +118,29 @@ mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
 Run doctor after setup:
 
 ```bash
-mix lemon.doctor
+./bin/lemon doctor
 ```
 
 Generate a redacted support bundle if you need help:
 
 ```bash
-mix lemon.doctor --bundle
+./bin/lemon doctor --bundle
 ```
 
 The bundle is designed to exclude provider keys, tokens, passwords, private
 prompts, memory contents, and tool outputs. Review it before sharing.
 
+For release-candidate source installs, use the full source verifier:
+
+```bash
+scripts/verify_source_install
+```
+
 ## Release Artifacts
 
-Linux release profiles exist in the repository build system, but public 1.0
-release artifact installation is not the primary supported path yet. The launch
-ledger tracks this under [Lemon 1.0 Mainstream Readiness](plans/lemon-1.0-mainstream-readiness.md).
+Linux release profiles exist in the repository build system, but source install
+remains the primary supported path today. The product ledger tracks artifact and
+setup proof under [Hermes-on-BEAM Readiness](plans/lemon-1.0-mainstream-readiness.md).
 
 Stable 1.0 is scoped to source install plus Linux `x86_64` release tarballs. A
 one-line remote install script is not part of the initial support promise; add

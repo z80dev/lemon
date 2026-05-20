@@ -390,7 +390,7 @@ When a skill exists in both locations, the project version takes precedence.
 
 ## MCP (Model Context Protocol) Server Integration
 
-Lemon supports discovering and invoking tools from external MCP servers. This allows agents to use tools provided by external services that implement the Model Context Protocol.
+Lemon supports discovering tools from external stdio, Streamable HTTP, and legacy HTTP+SSE MCP servers, plus listing/reading resources and listing/getting prompts from capable MCP servers. Discovered tools are exposed to models through `CodingAgent.ToolRegistry` with `mcp_<server>_<tool>` names, while the original MCP tool names remain inside the supervised client call boundary. Resource and prompt access is exposed through explicit utility tools such as `mcp_<server>_resources_list`, `mcp_<server>_resource_read`, `mcp_<server>_prompts_list`, and `mcp_<server>_prompt_get` when the server supports those MCP methods. Streamable HTTP also discovers OAuth protected-resource metadata from `WWW-Authenticate` challenges, follows declared authorization servers to their metadata documents, can use configured OAuth client credentials to fetch a bearer token from a discovered token endpoint before retrying the protected MCP request, supports `:client_secret_post` and `:client_secret_basic` token endpoint authentication, can retry with `grant_type=refresh_token` when a token response supplies a refresh token, rotates replacement refresh tokens, can reacquire a client-credentials bearer once when no refresh token is available, can use an authorization-code PKCE callback to acquire public-client bearer tokens, and can resume from persisted OAuth token cache material before making the first initialized MCP request. Configured Streamable HTTP sources can store token cache payloads in `LemonCore.Secrets` through an explicit `oauth.token_secret`; when a configured PKCE source uses a local `redirect_uri`, `LemonSkills.McpSource` reuses LemonCore's localhost OAuth listener, routes the authorization URL through a structured `mcp_*_oauth` operator approval visible in Web `/ops`, and then returns matching `code`/`state` to the MCP client. Stdio clients can opt into `sampling/createMessage` through a raw callback or a `LemonMCP.Sampling` policy wrapper; configured `LemonSkills.McpSource` stdio servers can bridge reviewed sampling through the existing `LemonCore.ExecApprovals` pipeline so Web `/ops`, control-plane approval resolution, and channel approval surfaces see only redacted sampling summaries before an operator approves or denies the delegate call. Lemon only advertises the sampling capability when one of those handlers is configured. Broader external-server compatibility remains a preview gap.
 
 ### Configuration
 
@@ -406,13 +406,29 @@ config :lemon_skills, :mcp_servers, [
   {:stdio, "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]},
   
   # Stdio with uvx
-  {:stdio, "uvx", ["mcp-server-git", "--repository", "/path/to/repo"]},
+  {:stdio, "uvx", ["mcp-server-git", "--repository", "/path/to/repo"],
+   allow_tools: ["git_status", "git_diff"]},
   
-  # HTTP transport
+  # Streamable HTTP transport
   {:http, "http://localhost:3000/mcp"},
   
-  # HTTP with authentication headers
-  {:http, "https://api.example.com/mcp", [headers: [{"Authorization", "Bearer token"}]]}
+  # HTTP with authentication headers and exact tool filters
+  {:http, "https://api.example.com/mcp",
+   [headers: [{"Authorization", "Bearer token"}], allow_tools: ["search"]]},
+
+  # HTTP with OAuth client-credentials token acquisition
+  {:http, "https://oauth.example.com/mcp",
+   [
+     oauth: [
+       client_id: "client",
+       client_secret: "secret",
+       scopes: ["tools"],
+       token_auth_method: :client_secret_basic
+     ]
+   ]},
+
+  # Legacy HTTP+SSE transport
+  {:sse, "http://localhost:3001/sse"}
 ]
 ```
 
@@ -423,7 +439,8 @@ Set the `LEMON_MCP_SERVERS` environment variable with a JSON array:
 ```bash
 export LEMON_MCP_SERVERS='[
   {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]},
-  {"type": "http", "url": "http://localhost:3000/mcp"}
+  {"type": "stdio", "command": "uvx", "args": ["mcp-server-git", "--repository", "."]},
+  {"type": "sse", "url": "http://localhost:3001/sse"}
 ]'
 ```
 
@@ -453,7 +470,9 @@ Create MCP configuration files:
     {
       "type": "stdio", 
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "."]
+      "args": ["mcp-server-git", "--repository", "."],
+      "allow_tools": ["git_status", "git_diff"],
+      "block_prompts": ["unsafe_prompt"]
     }
   ]
 }
@@ -470,6 +489,41 @@ Project configuration takes precedence over global configuration.
 | `type` | string | Yes | Must be `"stdio"` |
 | `command` | string | Yes | The command to execute |
 | `args` | array | No | Command arguments (default: `[]`) |
+| `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
+| `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs or names to allow or block |
+| `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
+
+Stdio clients can also be started directly with a `sampling_policy` on
+`LemonMCP.Client.start_link/1`. `LemonMCP.Sampling` summarizes requests without
+raw prompt text, enforces max-token and model allowlist limits, and can require
+a reviewer approval before calling a model-backed delegate:
+
+```elixir
+sampling_policy: [
+  mode: :reviewed_model,
+  reviewer: :ops_approval,
+  delegate: fn params, summary -> call_model(params, summary) end,
+  max_tokens: 1_024,
+  allowed_models: ["lemon"],
+  approval_context: [
+    run_id: run_id,
+    session_key: session_key,
+    agent_id: agent_id
+  ]
+]
+```
+
+When `reviewer: :ops_approval` is configured through `LemonSkills.McpSource`,
+Lemon creates a pending `mcp_<server>_sampling` approval using only the redacted
+summary fields: request hash, message count, roles, content-kind counts, text
+character count, max tokens, and requested model. Web `/ops` renders those
+fields as structured approval metadata, and control-plane approval resolution,
+Telegram, and Discord reuse the normal execution approval flow. The raw
+sampling request only reaches the configured delegate after approval.
+
+The lower-level `sampling_handler` option is still available for integrations
+that already own review and policy checks. It receives raw `sampling/createMessage`
+params and must return either `{:ok, result_map}` or `{:error, reason}`.
 
 #### HTTP Transport
 
@@ -478,14 +532,39 @@ Project configuration takes precedence over global configuration.
 | `type` | string | Yes | Must be `"http"` |
 | `url` | string | Yes | The MCP server URL |
 | `headers` | object | No | Additional HTTP headers |
+| `oauth` | object | No | OAuth settings: client-credentials `client_id` / `client_secret`, `client_secret_secret`, optional `token_secret`, or `flow: "authorization_code_pkce"` with public `client_id`, local `redirect_uri`, optional `scope` / `scopes`, `token_secret`, `authorization_timeout_ms`, `authorization_approval` (defaults true for local PKCE), and an optional runtime callback provider |
+| `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
+| `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs to allow or block |
+| `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
+
+Streamable HTTP entries use supervised `LemonMCP.Client.HTTP` startup, perform the MCP initialize/initialized handshake, send the required `Accept: application/json, text/event-stream` header, retain server-issued `Mcp-Session-Id` values, include the negotiated `MCP-Protocol-Version` on later requests, decode JSON responses, decode per-request SSE `message` responses, discover OAuth protected-resource metadata from 401 `WWW-Authenticate` challenges, follow `authorization_servers` entries to OAuth authorization-server metadata documents, use configured OAuth client credentials to request a bearer token from discovered token endpoints with form-post or HTTP Basic client authentication, retain refresh tokens returned by token endpoints, prefer `grant_type=refresh_token` on later 401 challenges when possible, use authorization-code PKCE callbacks for public clients, auto-host local PKCE callback capture for configured sources with localhost `redirect_uri`, route those local authorization requests through structured `mcp_*_oauth` operator approvals with an `Open OAuth` action in Web `/ops`, persist and resume OAuth tokens through configured cache callbacks or `LemonSkills.McpSource` secret-backed `oauth.token_secret`, discover tools/resources/prompts, and call tools or access resources/prompts through the same `LemonSkills.McpSource` and `CodingAgent.ToolRegistry` path as stdio entries. Metadata discovery requests do not forward configured MCP headers or bearer tokens. HTTP resource/prompt utility tools are exposed when the server supports those methods.
+
+#### Legacy HTTP+SSE Transport
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Must be `"sse"` |
+| `url` | string | Yes | The MCP SSE endpoint URL |
+| `headers` | object | No | Additional HTTP headers |
+| `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
+| `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs to allow or block |
+| `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
+
+Legacy HTTP+SSE entries use supervised `LemonMCP.Client.SSE` startup, open the SSE stream, consume the server `endpoint` event, POST JSON-RPC messages to that endpoint, and receive JSON-RPC responses from SSE `message` events. They expose the same tool/resource/prompt utility path and exact filters as stdio and Streamable HTTP entries.
 
 ### Tool Discovery and Caching
 
-MCP tools are discovered automatically when the application starts and are cached for performance:
+MCP tools are discovered through `LemonSkills.McpSource`, cached for performance, and surfaced through `CodingAgent.ToolRegistry`:
 
 - **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`)
 - **Refresh Interval**: 1 minute (configurable via `:refresh_interval_ms`)
 - **Graceful Degradation**: If an MCP server is unavailable, tools from that server are skipped
+- **Model-facing names**: stdio, Streamable HTTP, and legacy HTTP+SSE tools are exposed as `mcp_<server>_<tool>` so they do not collide with built-in, WASM, or extension tools
+- **Resource/prompt utilities**: capable stdio, Streamable HTTP, and legacy HTTP+SSE servers also expose `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` through model-facing utility tools
+- **Exact filters**: stdio, Streamable HTTP, and legacy HTTP+SSE configs can constrain model-facing tools, resources, and prompts with exact allow/block lists before they enter the registry
+- **Current proof**: `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs --out .lemon/proofs/mcp-stdio-latest.json` proves stdio startup, discovery, registry exposure, success/error calls, resource/prompt list/read/get utilities, exact allow/block filtering, degraded missing-command startup, `notifications/initialized` compatibility, the opt-in `sampling/createMessage` callback wrapper, the reviewed model-backed sampling policy wrapper, and the `mcp_stdio_sampling_ops_approval_bridge` through redacted pending approvals
+- **HTTP proof**: `MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs --out .lemon/proofs/mcp-http-latest.json` proves 24 Streamable HTTP checks: initialize, JSON and per-request SSE responses, session/protocol headers, OAuth protected-resource and authorization-server metadata discovery, OAuth client-credentials token acquisition, `client_secret_post` and `client_secret_basic` token endpoint auth, protected-request retry, refresh-token grant retry after a later 401, one-shot client-credentials bearer reacquisition when no refresh token is available, authorization-code PKCE callback/token exchange, OAuth token cache resume without another metadata/token request, configured-source loopback OAuth callback capture with `mcp_*_oauth` operator approval routing, tool/resource/prompt discovery, success/error calls, source resource/prompt utility invocation, registry exposure, status capability shape, and exact HTTP filtering
+- **SSE proof**: `MIX_ENV=test mix run scripts/live_mcp_sse_smoke.exs --out .lemon/proofs/mcp-sse-latest.json` proves legacy HTTP+SSE endpoint discovery, tool/resource/prompt discovery, success/error calls, source resource/prompt utility invocation, registry exposure, status capability shape, and exact SSE filtering
 
 ### Disabling MCP
 
@@ -520,7 +599,8 @@ Once configured, MCP tools appear alongside native tools:
 # List all available tools including MCP tools
 tools = CodingAgent.ToolRegistry.get_tools("/path/to/project")
 
-# MCP tools are tagged with label "MCP: <tool_name>"
+# MCP tools are named like "mcp_elixir_echo" and tagged with label "MCP <tool_name>"
+# Resource/prompt utilities are named like "mcp_elixir_resource_read" and "mcp_elixir_prompt_get"
 Enum.each(tools, fn tool ->
   IO.puts("#{tool.name}: #{tool.label}")
 end)
@@ -536,8 +616,8 @@ LemonSkills.McpSource.status()
 # => %{
 #   disabled: false,
 #   servers: %{
-#     :abc123 => %{connected: true, tool_count: 5, last_error: nil},
-#     :def456 => %{connected: false, tool_count: 0, last_error: {:connection_failed, :econnrefused}}
+#     :abc123 => %{connected: true, tool_count: 5, resource_count: 2, prompt_count: 1, capabilities: %{tools: true, resources: true, prompts: true}, last_error: nil},
+#     :def456 => %{connected: false, tool_count: 0, resource_count: 0, prompt_count: 0, capabilities: %{}, last_error: {:connection_failed, :econnrefused}}
 #   },
 #   cached_tools: 5,
 #   cache_ttl_ms: 300000

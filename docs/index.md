@@ -50,10 +50,14 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Compare Lemon to adjacent tools | [Compare Lemon](compare.md) |
 | Configure providers, secrets, and Telegram | [Setup Guide](user-guide/setup.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
-| Track the 1.0 launch goal | [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
+| Track the Hermes-on-BEAM product goal | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
 | Check Hermes feature parity | [Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
 | Check channel command parity | [Command Parity Matrix](plans/lemon-channel-command-parity-matrix-2026-05-12.md) |
 | Check harness contract parity | [Harness Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
+| Configure LSP diagnostics | [LSP Diagnostics](tools/lsp.md) |
+| Generate and inspect media artifacts | [Media Tools](tools/media.md) |
+| Use OpenAI-compatible HTTP clients | [OpenAI-Compatible API Preview](tools/openai-compatible-api.md) |
+| Try ACP-shaped editor/client integration | [ACP Preview](tools/acp.md) |
 | Debug a local install | [Support](support.md) |
 
 ## Current Launch Stage

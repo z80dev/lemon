@@ -218,4 +218,4 @@ Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
 | [`docs/assistant_bootstrap_contract.md`](../assistant_bootstrap_contract.md) | Session bootstrap sequence |
 | `apps/*/README.md` | Per-application documentation |
 
-*Last reviewed: 2026-03-16*
+*Last reviewed: 2026-05-16*

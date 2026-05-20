@@ -66,12 +66,12 @@
 - [`docs/compare.md`](compare.md) - Lemon positioning against hosted assistants, single-engine CLIs, agent harnesses, and self-hosted automation
 - [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, Web operations, TUI, support bundles, and docs quality
 - [`docs/support.md`](support.md) - Public support policy landing page and issue-prep checklist
-- [`docs/plans/lemon-1.0-mainstream-readiness.md`](plans/lemon-1.0-mainstream-readiness.md) - Launch goal and readiness plan for Lemon 1.0 mainstream use
+- [`docs/plans/lemon-1.0-mainstream-readiness.md`](plans/lemon-1.0-mainstream-readiness.md) - Hermes-on-BEAM product goal, readiness plan, and parity execution ledger
 - [`docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md`](plans/lemon-1.0-fresh-install-proof-2026-05-11.md) - Source-dev fresh install proof for the Lemon 1.0 launch goal
 - [`docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md`](plans/lemon-1.0-release-artifact-proof-2026-05-11.md) - Local release-artifact proof for `lemon_runtime_full`
 - [`docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md`](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) - Interface supportability audit for Web, TUI, Telegram, Discord, and the control plane
 - [`docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`](plans/lemon-1.0-interface-proof-pack-2026-05-11.md) - Release-candidate proof pack for automated TUI, Web, and Telegram-adjacent interface coverage
-- [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and remaining external launch blockers
+- [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and product proof blockers
 - [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Source-grounded Lemon-vs-Hermes feature parity matrix and launch gap ledger
 - [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
 - [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](plans/lemon-sim-platform-mission-2026-05-12.md) - LemonSim mission for watchable Werewolf and Vending Bench 2.0
@@ -80,6 +80,10 @@
 - [`docs/skills_v2.md`](skills_v2.md) - Skill manifest v2 and newer skill-system direction
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
+- [`docs/tools/media.md`](tools/media.md)
+- [`docs/tools/lsp.md`](tools/lsp.md)
+- [`docs/tools/openai-compatible-api.md`](tools/openai-compatible-api.md)
+- [`docs/tools/acp.md`](tools/acp.md)
 - [`docs/tools/wasm.md`](tools/wasm.md)
 
 ## Architecture Diagrams

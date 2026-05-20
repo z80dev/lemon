@@ -5,16 +5,14 @@ readiness goal. It uses the same artifact shape as `.github/workflows/release.ym
 a tarball of the assembled release directory plus a manifest entry with size and
 SHA-256.
 
-This is not a public GitHub Release proof and not a clean OS/container proof. It
+This is not a clean OS/container proof. It
 proves that the current Linux `lemon_runtime_min` and `lemon_runtime_full`
 artifact shapes can be packaged, verified, extracted into a clean prefix, booted
 without Mix, and used to generate a release-runtime support bundle.
 
 This local artifact proof was refreshed on 2026-05-12 after upgrading the
 maintainer host to the supported 1.0 toolchain: Elixir 1.19.5 on Erlang/OTP
-28.5 (ERTS 16.4). The supported GitHub release workflow is pinned to the same
-Elixir/OTP pair, but this remains a local proof rather than public release
-evidence.
+28.5 (ERTS 16.4). The release workflow is pinned to the same Elixir/OTP pair.
 
 ## Scope
 
@@ -103,13 +101,4 @@ the Phoenix endpoint before the eval expression runs.
 
 ## Follow-Up
 
-- Run the same proof against artifacts downloaded from an actual GitHub Release
-  once public release publishing is enabled.
 - Decide whether stable 1.0 is Linux-only or expand the release matrix.
-
-## Public Release Check
-
-As of 2026-05-11 and again on 2026-05-12,
-`gh release list --limit 10` returned no public releases for this repository.
-The downloaded-public-artifact proof remains blocked until a release is
-published.

@@ -131,7 +131,14 @@ npm start
 ```
 
 The TUI connects to the control-plane at `http://localhost:4040` by default.
-Override with `LEMON_CONTROL_PLANE_URL`.
+Override with `LEMON_CONTROL_PLANE_URL`. Control-plane approval events surface
+as TUI notifications, including MCP OAuth `Open OAuth` links and resource,
+scope, and redirect context when a configured HTTP MCP source requests local
+PKCE authorization. Operators can resolve the same pending approvals from the
+terminal with `/approval approve|once|session|agent|global|deny <approval-id>`,
+which routes to the control-plane `exec.approval.resolve` method. Use
+`/approval` or `/approval list` to refresh the current pending approval
+snapshot from `exec.approvals.get`.
 
 ### Web client (`lemon-web`)
 

@@ -6,7 +6,15 @@ Extensions are the plugin system for Lemon. They allow you to add custom tools, 
 
 1. Create a file in `~/.lemon/agent/extensions/` (global) or `.lemon/extensions/` (project-local)
 2. Implement the `CodingAgent.Extensions.Extension` behaviour
-3. The extension will be automatically loaded on session start
+3. Trust the directory with `[runtime.extensions] auto_load_default_paths = true`, or add an explicit `[runtime] extension_paths = [...]` entry
+4. The extension will be loaded on session start
+
+By default, Lemon scans default extension directories for diagnostics and
+manifest metadata without executing third-party code. Code execution requires
+either explicit `extension_paths` configuration or
+`auto_load_default_paths = true` for the default global/project directories.
+Set `[runtime.extensions] enabled = false` to disable all extension code
+execution while keeping manifest diagnostics and support-bundle visibility.
 
 ## Extension Behaviour
 
@@ -194,7 +202,10 @@ The schema follows JSON Schema conventions with optional extensions:
 
 ## Registering Providers
 
-Extensions can register custom providers that integrate with the core system. Currently, `:model` type providers are supported, allowing extensions to add custom AI model backends.
+Extensions can register custom providers that integrate with the core system.
+Model providers add AI model backends. Memory providers implement
+`LemonCore.MemoryProvider` and can participate in safety-screened memory ingest
+and scoped `search_memory` fan-out through `LemonCore.MemoryProviders`.
 
 ```elixir
 @impl true
@@ -205,6 +216,11 @@ def providers do
       name: :my_custom_model,
       module: MyExtension.CustomModelProvider,
       config: %{api_key_env: "MY_API_KEY"}
+    },
+    %{
+      type: :memory,
+      name: :team_memory,
+      module: MyExtension.TeamMemoryProvider
     }
   ]
 end
@@ -214,14 +230,14 @@ end
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | atom | The provider type (currently only `:model` is supported) |
-| `name` | atom | Unique identifier for the provider |
+| `type` | atom or string | The provider type (`:model` / `"model"` or `:memory` / `"memory"`) |
+| `name` | atom or string | Unique identifier for the provider |
 | `module` | module | The module implementing the provider behaviour |
 | `config` | map | Optional configuration passed to the provider |
 
 ### Provider Registration Process
 
-1. **At session startup**: All extension providers are collected and registered into `Ai.ProviderRegistry`
+1. **At session startup**: Model providers are collected and registered into `Ai.ProviderRegistry`; memory providers are collected and registered into `LemonCore.MemoryProviders`
 2. **On extension reload**: Old providers are unregistered, extensions are reloaded, and new providers are registered
 3. **Conflict detection**: When multiple extensions register the same provider name, the first (alphabetically by module name) wins
 
@@ -229,7 +245,7 @@ end
 
 Similar to tools, providers follow a precedence order:
 
-1. **Built-in providers always win** - Core providers (anthropic, openai, etc.) take priority
+1. **Built-in providers always win** - Core model providers and the built-in local memory provider take priority
 2. **First loaded extension wins** - Extensions are sorted alphabetically by module name
 
 ### Provider Conflicts in Status Report
@@ -281,16 +297,214 @@ end
 
 See the `Ai.Provider` module documentation for full details on implementing providers.
 
+Memory providers must implement the `LemonCore.MemoryProvider` behaviour:
+
+```elixir
+defmodule MyExtension.TeamMemoryProvider do
+  @behaviour LemonCore.MemoryProvider
+
+  @impl true
+  def put(%LemonCore.MemoryDocument{} = doc, opts) do
+    # Store a safety-screened memory document in your backend.
+    :ok
+  end
+
+  @impl true
+  def search(query, opts) do
+    # Return a list of LemonCore.MemoryDocument structs.
+    []
+  end
+end
+```
+
+Memory provider `config` supports:
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Set to `false` to register but keep the provider disabled |
+| `scopes` | Optional list of `session`, `agent`, `workspace`, and `all` scopes |
+| `timeout_ms` | Per-provider search/ingest timeout |
+| `label` | Human-readable provider label for local diagnostics only |
+
+`LemonCore.MemoryProviders` always keeps local SQLite as the built-in provider,
+isolates provider failures, deduplicates search results by document id, and
+reports only redacted provider shape through `memory.status`, Web `/ops`, and
+support bundles.
+
 ## Extension Discovery
 
-Extensions are discovered from:
+Extension manifests are discovered from:
 
 1. **Global directory**: `~/.lemon/agent/extensions/`
 2. **Project-local directory**: `.lemon/extensions/` (relative to working directory)
 
+Extension code is loaded from:
+
+1. **Explicit runtime paths**: `[runtime] extension_paths = ["./trusted-extensions"]`
+2. **Default directories** only when `[runtime.extensions] auto_load_default_paths = true`
+
 Supported file patterns:
 - `*.ex` and `*.exs` files in the extensions directory
 - `*/lib/**/*.ex` files for complex extensions with subdirectories
+
+```toml
+[runtime]
+extension_paths = ["./trusted-extensions"]
+
+[runtime.extensions]
+enabled = true
+auto_load_default_paths = false
+```
+
+The same default-directory switch can be set with
+`LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS=true`. Set
+`LEMON_EXTENSIONS_ENABLED=false` as an emergency stop for extension code
+execution. Treat `extension_paths` as an explicit trust boundary: Lemon can
+compile and execute files in those directories when extensions are enabled.
+
+## Extension Manifests
+
+Extension packages may include `lemon_extension.json`, `extension.json`, or
+`.lemon-extension.json` at the extension root or one directory below an
+extension directory. Manifests are metadata only: Lemon support diagnostics read
+them as JSON without compiling or loading extension code.
+
+Supported manifest fields:
+
+```json
+{
+  "schema_version": 1,
+  "name": "my-extension",
+  "version": "1.0.0",
+  "capabilities": ["tools", "hooks", "memory_provider"],
+  "providers": [
+    {"type": "model", "name": "custom-model"},
+    {"type": "memory", "name": "team-memory"}
+  ],
+  "host": {"type": "beam"},
+  "distribution": {"source": "git", "url": "https://example.com/my-extension.git"},
+  "audit": {"status": "pending"}
+}
+```
+
+`extension_diagnostics.json` and Web `/ops` expose only aggregate manifest
+shape: valid/invalid counts, capability counts, provider-type counts, host-type
+counts, distribution source counts, audit-status counts, and a redacted
+host-runtime summary. The host-runtime summary distinguishes BEAM extension
+loading, WASM sidecar configuration, and manifest-only MCP/external hosts, and
+reports degraded or manifest-only counts without starting default-directory
+plugin code. Raw manifest contents, source paths, plugin names, provider names,
+distribution URLs, load-error messages, and file contents are not included in
+support diagnostics.
+
+Validate manifests before publishing or installing a package:
+
+```bash
+mix lemon.extension.validate path/to/extension
+mix lemon.extension.validate --json path/to/extension
+```
+
+The validator accepts a manifest path or an extension directory, does not load
+extension code, and fails if required package fields are missing or unsupported
+capability-hosting metadata is declared.
+
+## BEAM Host Proof
+
+The local BEAM extension-host proof exercises the runtime trust boundary without
+starting channel adapters or loading default directories implicitly:
+
+```bash
+mix run --no-start scripts/live_extension_host_smoke.exs
+```
+
+The proof creates a temporary project, confirms the default `.lemon/extensions`
+directory is not executed without trust, loads an explicitly configured
+extension path, executes an extension tool through `CodingAgent.ToolRegistry`,
+verifies redacted extension tool execution telemetry, and confirms built-in
+tools win namespace conflicts. It also proves `[runtime.extensions] enabled =
+false` blocks explicit-path extension execution without loading extension code.
+It writes the redacted artifact
+`.lemon/proofs/extension-host-smoke-latest.json` with aggregate counts only.
+This is BEAM extension-host proof, not public registry, WASM, MCP, or sandbox
+execution proof.
+
+## WASM Host Telemetry Proof
+
+The WASM tool boundary also has a focused telemetry proof for the wrapper that
+invokes discovered WASM tools through the sidecar session:
+
+```bash
+MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
+```
+
+The proof exercises successful execution, returned sidecar errors, and a dead
+sidecar exit. It verifies `[:coding_agent, :wasm, :tool, :start]`,
+`[:coding_agent, :wasm, :tool, :stop]`, and
+`[:coding_agent, :wasm, :tool, :exception]` events with hashed WASM paths and
+tool-call ids. The proof artifact is
+`.lemon/proofs/wasm-tool-telemetry-latest.json` and records only aggregate
+counts, host-boundary flags, and redaction booleans.
+`extensions.status` and Web `/ops` expose the same proof status, check status,
+host-boundary flags, proof hash, and redaction summary.
+
+This is wrapper telemetry proof for the WASM execution boundary. It is not
+public registry, broad sandbox policy, MCP, or marketplace parity proof.
+
+## WASM Policy Proof
+
+The WASM policy proof exercises the default approval boundary for discovered
+WASM tools:
+
+```bash
+MIX_ENV=test mix run scripts/live_wasm_policy_smoke.exs
+```
+
+The proof verifies that WASM tools declaring `http`, `tool_invoke`, or `exec`
+capabilities require approval by default, that tools without those risky
+capabilities execute without approval, and that an explicit
+`approvals.<tool> = never` policy can override the default. It writes
+`.lemon/proofs/wasm-policy-latest.json` with aggregate counts, policy-boundary
+flags, and redaction booleans.
+
+This is a policy-wrapper proof. It does not prove full WASM runtime sandboxing,
+public registry review, or marketplace install/update flows.
+
+## WASM Lifecycle Proof
+
+The WASM sidecar lifecycle proof exercises the lower-level supervised sidecar
+session boundary:
+
+```bash
+MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
+```
+
+The proof starts a temporary sidecar, discovers a tool, invokes it, reads
+running status, stops the sidecar, and verifies discover/invoke telemetry uses
+hashed session, cwd, and tool metadata. It writes
+`.lemon/proofs/wasm-lifecycle-latest.json` with aggregate counts,
+lifecycle-boundary flags, and redaction booleans.
+
+This is per-session sidecar lifecycle proof. It does not prove full runtime
+sandboxing, public marketplace hosting, or broad WASM tool-package parity.
+
+## Registry Audit Proof
+
+The registry audit proof exercises Lemon's code-free install/update review
+boundary for extension packages:
+
+```bash
+MIX_ENV=test mix run scripts/live_extension_registry_audit_smoke.exs
+```
+
+The proof validates a temporary extension registry index, classifies audited
+packages as installable, blocks unaudited or blocked packages, detects a newer
+audited update candidate, and verifies the registry audit does not execute
+extension code. It writes
+`.lemon/proofs/extension-registry-audit-latest.json` with aggregate counts,
+registry-boundary flags, and redaction booleans.
+
+This proves the registry metadata review workflow, not full marketplace
+distribution, sandboxed non-BEAM execution, or bundled plugin breadth.
 
 ## Example Extension
 
@@ -445,6 +659,84 @@ This is useful for:
 - Building UIs that show plugin health/status
 - Detecting extension conflicts before they cause issues
 - Identifying broken extensions that failed to compile or load
+
+Extension tool execution also emits redacted telemetry through
+`[:coding_agent, :extension, :tool, :start]`,
+`[:coding_agent, :extension, :tool, :stop]`, and
+`[:coding_agent, :extension, :tool, :exception]`. Event metadata includes the
+BEAM host label, tool name, hashed extension identity, hashed tool-call id,
+status, duration, and redacted exception type. It does not include raw params,
+raw call ids, source paths, or extension file contents.
+
+WASM tool wrappers emit the matching redacted host telemetry through
+`[:coding_agent, :wasm, :tool, :start]`,
+`[:coding_agent, :wasm, :tool, :stop]`, and
+`[:coding_agent, :wasm, :tool, :exception]`. Metadata is bounded to the WASM
+host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
+and redacted exception type.
+
+## Control-Plane Status
+
+Operators can inspect extension/plugin health without entering an agent session
+through the read-only `extensions.status` control-plane method:
+
+```json
+{
+  "method": "extensions.status",
+  "params": {
+    "cwd": "/path/to/project"
+  }
+}
+```
+
+The method loads project/global extensions, reports loaded extension names,
+versions, capabilities, config-schema presence, load/validation error counts,
+tool-conflict resolution, extension-provided provider names, extension-host
+execution telemetry proof shape, WASM wrapper telemetry proof shape, and WASM
+status shape when available. It redacts raw source paths, load-error messages,
+config schemas, provider modules, and path-like WASM metadata, replacing
+sensitive path fields with hashes.
+
+Web `/ops` also shows a code-free extension/plugin directory panel backed by
+`LemonCore.Doctor.ExtensionDiagnostics`. That panel reports global, project,
+and configured extension directory existence, extension-file counts, manifest
+counts and aggregate manifest shape, nested library-file counts, and file/path
+hashes without loading plugin code or exposing raw source paths, file contents,
+manifest contents, distribution URLs, or load-error messages. When
+`.lemon/proofs/extension-host-smoke-latest.json` exists, the same diagnostics
+surface includes a redacted `execution_telemetry` summary with proof status,
+proof hash, completed/failed counts, telemetry-check status, config/env
+disabled-check status, disabled explicit-path block status, and redaction
+booleans. When `.lemon/proofs/wasm-tool-telemetry-latest.json` exists, the
+diagnostics also include a redacted `wasm_telemetry` summary with proof status,
+proof hash, success/error/exception/redaction check status, host-boundary flags,
+and redaction booleans. When `.lemon/proofs/wasm-policy-latest.json` exists,
+diagnostics include a redacted `wasm_policy` summary with proof status,
+approval-default check status, override status, policy-boundary flags, and
+redaction booleans. When
+`.lemon/proofs/extension-registry-audit-latest.json` exists, diagnostics include
+a redacted `registry_audit` summary with install/update proof status,
+installable/blocked/update counts, no-code-load status, proof hash, and
+redaction booleans. When `.lemon/proofs/wasm-lifecycle-latest.json` exists,
+diagnostics include a redacted `wasm_lifecycle` summary with discover/invoke,
+status, stop, proof hash, lifecycle-boundary flags, and redaction booleans.
+
+`mix lemon.doctor --verbose` includes `extensions.telemetry`,
+`extensions.wasm_telemetry`, `extensions.wasm_policy`, and
+`extensions.registry_audit`, and `extensions.wasm_lifecycle` checks backed by
+these redacted summaries.
+`extensions.telemetry` passes only when the latest extension-host smoke proof
+completed the redacted start/stop/exception telemetry check and the config/env
+disabled-mode execution block checks. `extensions.wasm_telemetry` passes only
+when the latest WASM smoke proof completed success, sidecar-error,
+sidecar-exit, and redaction checks. `extensions.wasm_policy` passes only when
+the latest WASM policy proof completed risky-capability approval-default and
+explicit-override checks. `extensions.registry_audit` passes only when the
+latest registry audit proof validates the code-free index, blocks unaudited
+installs, detects an audited update candidate, avoids code loading, and keeps
+sensitive registry values redacted. `extensions.wasm_lifecycle` passes only
+when the latest lifecycle proof completed discover/invoke telemetry, running
+status, stop termination, and redaction checks.
 
 ## Extension Status Report
 

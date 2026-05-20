@@ -81,6 +81,16 @@ model = "gpt-4.1"
 [runtime.cli.claude]
 # dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
 
+[runtime]
+# Explicitly trusted extension directories. Files here can be compiled and executed.
+extension_paths = []
+
+[runtime.extensions]
+# Disable all extension code execution while keeping manifest diagnostics available.
+enabled = true
+# Keep default global/project extension directories diagnostics-only unless trusted.
+auto_load_default_paths = false
+
 [runtime.tools.web.search]
 provider = "brave" # "brave" | "perplexity"
 cache_ttl_minutes = 15
@@ -133,6 +143,9 @@ enable_xmtp = false
 [gateway.telegram]
 bot_token = "123456:token"
 allowed_chat_ids = [12345678]
+default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
+default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
+default_thread_id = 35           # optional forum topic/thread
 
 [gateway.xmtp]
 env = "production"                  # production | dev | local
@@ -182,13 +195,25 @@ agent_id = "default"
 Environment variables override file values. Common overrides:
 
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
+- `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
+- `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
+- `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
+- `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
+- `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
+- `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
+
+Terminal backend policy validates Docker image/network/resource settings and
+SSH port/timeout/host-key settings before `exec` launches a backend. Invalid
+Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
+SSH connect timeouts, and unsupported strict-host-key values fail closed at the
+policy boundary instead of reaching Docker or OpenSSH.
 
 `[tui].thinking` controls whether assistant reasoning/thinking blocks are shown in the
 Python CLI. It is loaded at startup and can be toggled for the current process with
@@ -345,6 +370,71 @@ All onboarding flows:
 - Store credentials in encrypted secrets with provider metadata
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
+
+Provider readiness is visible through the read-only control-plane
+`providers.status` method and the Web `/ops` provider panel. It uses the same
+`LemonAiRuntime` credential resolver as model execution, so env keys, encrypted
+secret references, OAuth/default-secret paths, and provider-specific credential
+shapes are checked the same way runtime calls check them. The response reports
+booleans such as `credentialReady`, `apiKeyConfigured`,
+`apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
+`envConfigured`; it does not return raw API keys, secret names, base URLs, or
+env var names.
+
+Memory-provider readiness is visible through read-only `memory.status`, Web
+`/ops`, and support-bundle `memory_diagnostics.json`. These surfaces expose
+provider ids, enabled state, source labels, scopes, timeout shape, and module
+load state without memory document contents, raw provider config, secret values,
+prompts, tool output, or provider error payloads.
+
+Doctor support bundles include a core-owned `provider_diagnostics.json` snapshot
+for offline support. That snapshot reports provider setup shape, credential
+reference counts, ambient-provider booleans, and routing/pool/profile shape
+without depending on runtime provider modules. It intentionally omits raw API
+keys, secret names, raw base URLs, env var names, model prompts, and provider
+responses.
+
+Provider route previews are controlled by `runtime.provider_routing`:
+
+```toml
+[runtime.provider_routing]
+enabled = true
+fallback_providers = ["zai", "anthropic"]
+default_pool = "burst"
+default_profile = "ops"
+require_credentials = true
+
+[runtime.provider_routing.credential_pools.burst]
+providers = ["openai", "zai", "anthropic"]
+strategy = "round_robin" # priority | round_robin
+
+[runtime.provider_routing.profiles.ops]
+fallback_providers = ["zai"]
+credential_pool = "burst"
+distribution = { openai = 70, zai = 20, anthropic = 10 }
+```
+
+`providers.status` includes a redacted `routing` block with the requested
+provider/model, selected provider/model, fallback candidates, candidate
+readiness booleans, selected routing profile, selected credential pool,
+profile distribution weights, pool provider names, pool strategy, and
+credential-reference counts. Pool/profile names and provider names are visible;
+raw API keys, secret names, base URLs, and env var names are not.
+
+Coding-agent default model resolution consumes the same routing policy
+conservatively: if the default provider is not credential-ready and a configured
+fallback/profile/pool provider is credential-ready with the same model id in
+`Ai.Models`, Lemon selects that fallback before starting the supervised agent
+loop. Pools default to priority order; `strategy = "round_robin"` rotates the
+pool's starting provider through `LemonCore.ProviderPoolRotator`, a supervised
+BEAM process. Explicit user model specs are not rewritten.
+
+The supervised coding-agent loop also wraps default-model streams with the same
+fallback ordering. If a provider returns a terminal stream error before useful
+assistant content or tool calls are emitted, Lemon retries the same turn against
+the next credential-ready fallback provider with the same model id. Once visible
+content or a tool call has started, the error is surfaced instead of replayed so
+the transcript cannot duplicate partial output.
 
 Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `Ai.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
 
@@ -624,6 +714,7 @@ If enabled, Telegram voice notes are transcribed and the transcript is routed as
 ```toml
 [gateway.telegram]
 voice_transcription = true
+voice_transcription_provider = "openai_transcribe"       # "openai_transcribe" | "local_transcript"
 voice_transcription_model = "gpt-4o-mini-transcribe"  # optional
 voice_max_bytes = 10485760                            # optional (default: 10MB)
 
@@ -631,6 +722,23 @@ voice_max_bytes = 10485760                            # optional (default: 10MB)
 voice_transcription_base_url = "https://api.openai.com/v1"
 voice_transcription_api_key = "sk-..."
 ```
+
+Use `voice_transcription_provider = "local_transcript"` for deterministic
+no-credential voice-note proof. It routes a local transcript preview through the
+normal Telegram inbound path and does not require an API key. Use
+`openai_transcribe` for real speech-to-text.
+
+The deterministic local proof runner writes a redacted artifact under
+`.lemon/proofs/`:
+
+```bash
+MIX_ENV=test mix run scripts/live_telegram_voice_local_smoke.exs
+```
+
+When that artifact is present, `mix lemon.doctor --verbose` reports
+`channels.telegram.voice_transcription` as a passing readiness check. If voice
+transcription is enabled with `local_transcript` and the proof is missing,
+doctor tells the operator to run the local smoke.
 
 ## Telegram File Transfer
 
@@ -641,8 +749,8 @@ Enable `/file put` and `/file get` (and optional auto-save for plain document up
 enabled = true
 auto_put = true
 auto_put_mode = "upload"  # "upload" | "prompt"
-auto_send_generated_images = true      # optional: send generated images automatically after a run
-auto_send_generated_max_files = 3      # optional: max images auto-sent per run (default: 3)
+auto_send_generated_files = true       # optional: send generated files automatically after a run
+auto_send_generated_max_files = 3      # optional: max generated files auto-sent per run (default: 3)
 uploads_dir = "incoming"
 media_group_debounce_ms = 1000  # optional (default: 1000ms)
 
@@ -660,9 +768,55 @@ Commands:
 
 If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or `~/`).
 
-When `auto_send_generated_images = true`, Lemon tracks image files created/changed during the run and sends up to
+When `auto_send_generated_files = true`, Lemon tracks generated files requested
+by browser/media tools and sends up to
 `auto_send_generated_max_files` files back to Telegram automatically at completion (using the same `max_download_bytes`
-limit as `/file get`).
+limit as `/file get`). `auto_send_generated_images` remains accepted as a
+backward-compatible alias. SVG outputs are uploaded as Telegram documents
+instead of photos because Telegram rejects SVG photo processing.
+
+## Discord File Transfer
+
+Enable Discord file transfer and optional generated-file auto-send.
+
+```toml
+[gateway.discord.files]
+enabled = true
+auto_put = true
+auto_send_generated_files = true       # optional: send generated files automatically after a run
+auto_send_generated_max_files = 3      # optional: max generated files auto-sent per run (default: 3)
+
+# Optional safety rails
+max_upload_bytes = 26214400            # optional (default: 25MB)
+max_download_bytes = 26214400          # optional (default: 25MB)
+```
+
+When `auto_send_generated_files = true`, Lemon tracks generated files requested
+by browser/media tools and sends up to `auto_send_generated_max_files` files
+back to Discord automatically at completion. Generated files must fit within
+`max_download_bytes`; explicit file-send requests are still delivered through
+the normal attachment path. `auto_send_generated_images` remains accepted as a
+backward-compatible alias.
+
+## Discord Trigger Mode and Message Content Intent
+
+Discord defaults to mention-gated routing in group channels and public threads.
+Use `/trigger all` to opt a channel or thread into free-response routing for
+unmentioned messages, and `/trigger mentions` to restore the default behavior.
+
+```toml
+[gateway.discord]
+message_content_intent_enabled = true  # diagnostics declaration only
+default_account_id = "default"          # optional account for ./bin/lemon send account-scoped lookups
+default_channel_id = "1475727416549969980"  # optional default for ./bin/lemon send --to discord
+default_thread_id = "1475727416549969991"   # optional thread
+```
+
+`message_content_intent_enabled` does not change Discord application settings.
+It lets `channel_diagnostics.json` record that the operator has enabled the
+privileged Message Content Intent in the Discord Developer Portal. Free-response
+Discord support requires that portal setting plus a passing live external-sender
+proof; mention-triggered Discord prompts do not depend on this declaration.
 
 ## Telegram Context Compaction
 

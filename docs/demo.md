@@ -152,11 +152,9 @@ Expected result:
 These demos do not prove final 1.0 readiness by themselves. The launch ledger
 still tracks:
 
-- downloaded public GitHub Release artifact proof
 - final launch screenshots and video assets
-- final public release install copy
 - broader adversarial safety-depth variants beyond the launch-focused web,
   email, skill, and extension-style tool coverage
 
-Use the [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) for
-the current source of truth.
+Use the [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md)
+for the current source of truth.

@@ -458,6 +458,6 @@ G11 is no longer unknown. For the initial 1.0 support surface, it is closed:
   documented for text-first 1.0 support
 
 The remaining 1.0 blockers now move back to the broader readiness ledger:
-fresh install/public artifact proof and safety-depth work. Lower-priority Web
+fresh install/artifact proof and safety-depth work. Lower-priority Web
 config panels should stay post-1.0 unless Lemon is marketed as a full admin
 console at launch.

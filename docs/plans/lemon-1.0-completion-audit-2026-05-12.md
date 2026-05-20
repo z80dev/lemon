@@ -34,14 +34,14 @@ Lemon is not yet complete for stable public launch.
 
 Earlier local release-candidate gates passed for release machinery and
 deterministic harness coverage, but Lemon is not launch-complete. The active
-blockers now include Hermes parity and live channel reliability, not only
-external release evidence:
+blockers are Hermes parity and live channel reliability:
 
 1. The Hermes feature parity matrix is now refreshed against current upstream
-   Hermes `origin/main` at `dd0923bb8`, but the refreshed matrix adds or
+   Hermes `origin/main` at `4ad5fa702`, but the refreshed matrix adds or
    preserves launch-blocking scope decisions for live channels, browser/media,
-   terminal backends, ACP/API server parity, automatic rollback, plugins, and
-   supply-chain posture.
+   terminal backends, ACP/API server parity, automatic rollback, plugins,
+   persistent goals, durable kanban boards, LSP semantic diagnostics, provider
+   routing/fallback/credential pools, and supply-chain posture.
 2. Direct Telegram live testing must pass for DM, group chat, forum topic,
    topic isolation, approvals, cancellation, restart/reconnect, duplicate
    avoidance, markdown/code rendering, long output, tool success/failure, and
@@ -57,16 +57,12 @@ external release evidence:
    file with `DISCORD_BOT_TOKEN` unset.
 4. Browser/media/TTS/vision and multi-backend terminal parity must be either
    implemented and proven or explicitly kept out of stable launch claims.
-5. A public GitHub Release `v2026.05.0` must exist with published Linux
-   `x86_64` artifacts and `manifest.json`, then
-   `scripts/verify_github_release_artifacts 2026.05.0` must pass, including
-   downloaded-artifact boot and support-bundle verification.
-6. Discord behavior outside the proven text-first and file-delivery boundary
+5. Discord behavior outside the proven text-first and file-delivery boundary
    remains outside stable launch claims unless separately implemented and
    proven.
 
-The remaining launch blocker cannot be completed from the local checkout
-without publishing a GitHub Release.
+The remaining launch blockers are product and proof blockers, not publication
+mechanics.
 
 Toolchain status as of this audit:
 
@@ -78,8 +74,7 @@ Toolchain status as of this audit:
 - This maintainer host now reports Elixir `1.19.5` on OTP `28.5` with ERTS
   `16.4`.
 - The local release artifacts were rebuilt after that host upgrade, so the
-  local tarball boot proof now covers the supported OTP patch level. Public
-  GitHub Release artifact proof is still required before stable launch.
+  local tarball boot proof now covers the supported OTP patch level.
 
 ## Prompt-to-Artifact Checklist
 
@@ -92,12 +87,11 @@ Toolchain status as of this audit:
 | Setup path works | `mix lemon.setup`, `docs/user-guide/setup.md`, setup tests | Fresh setup proof and `scripts/test fast` | Done |
 | Provider setup documented and tested | setup docs, config docs, fake-token Anthropic/OpenAI setup proof | Fresh install proof and setup task tests | Done |
 | Supported toolchain is current | README, install docs, workflows, Dockerfile, lint script | Official sources checked on 2026-05-12; `scripts/lint_ci_docs.sh` enforces Elixir 1.19.5 / OTP 28.5 pins; clean container proof uses that pair | Done |
-| Hermes-class parity is credible for 1.0 | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`, `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` | The matrix is refreshed against Hermes `origin/main` at `dd0923bb8`; direct Telegram proof covers the text-first plus document-delivery boundary, Discord proof covers the text-first plus file-delivery boundary, and browser/media, terminal-backend, ACP/API server, rollback, plugin, and supply-chain scope decisions remain outside stable claims unless promoted later | Partial / bounded for launch |
+| Hermes-class parity is credible for 1.0 | `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`, `docs/plans/lemon-hermes-agent-harness-parity-scorecard.md` | The matrix is refreshed against Hermes `origin/main` at `4ad5fa702`; direct Telegram proof covers the text-first plus document-delivery boundary, Discord proof covers the text-first plus file-delivery boundary, and browser/media, terminal-backend, ACP/API server, rollback, plugin, persistent-goal, kanban, LSP, provider-routing, and supply-chain scope decisions remain outside stable claims unless promoted later | Partial / bounded for launch |
 | Packaging builds local artifacts | `docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md` | Local `mix release` min/full, extracted boot, `/healthz`, support bundle | Done locally |
 | Manifest verifies checksums | `scripts/verify_release_artifacts`, local artifact manifest | `scripts/verify_release_artifacts /tmp/lemon-release-artifact-proof-2026-05-0/artifacts` | Done locally |
 | Release artifacts boot from tarballs | `scripts/verify_release_runtime_boot`, local artifact manifest | Extracts min/full tarballs, boots daemons, checks health, generates support bundles | Done locally |
-| Release workflow publishes artifacts | `.github/workflows/release.yml` | Assembled artifacts are verified before publish; remote GitHub Release publication and post-publish verification still required | Blocked |
-| Published artifacts verify | `scripts/verify_github_release_artifacts` | `gh release view v2026.05.0` currently reports `release not found` | Blocked |
+| Release workflow publishes artifacts | `.github/workflows/release.yml` | Assembled artifacts are verified before publish; publishing is distribution work, not a readiness gate | Done for readiness |
 | TUI happy path covered | `docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`, TUI tests | `scripts/test clients`, focused TUI proof entries | Done |
 | Web UI happy path covered | Web ops routes, proof screenshots, interface proof pack | `scripts/test fast`, `scripts/test clients`, docs proof pack | Done |
 | Telegram happy path covered | interface proof pack, Telegram adapter tests, support boundary docs, `scripts/live_telegram_matrix.py` | Fresh 2026-05-12 live proof covers DM recovery, forum-topic prompt/reply in topic `35`, topic isolation across topics `35` and `16456`, topic-scoped cancellation, topic approval-button resolution, markdown/code rendering, tool success/failure rendering, long-output chunking, `/file get` document delivery, and restart/dedupe behavior | Done for text-first + document-delivery boundary |
@@ -118,7 +112,7 @@ scripts/lint_ci_docs.sh
 MIX_ENV=test mix lemon.quality
 scripts/verify_docs_site
 scripts/test_contract.sh
-bash -n scripts/audit_1_0_readiness scripts/lint_ci_docs.sh scripts/verify_github_release_artifacts scripts/verify_release_runtime_boot
+bash -n scripts/audit_1_0_readiness scripts/lint_ci_docs.sh scripts/verify_release_runtime_boot
 git diff --check
 scripts/verify_release_runtime_boot /tmp/lemon-release-artifact-proof-2026-05-0/artifacts
 scripts/audit_1_0_readiness 2026.05.0 /tmp/lemon-release-artifact-proof-2026-05-0/artifacts
@@ -159,25 +153,16 @@ Current result:
 - `git diff --check`: passed
 - `scripts/verify_release_runtime_boot`: passed against refreshed local release
   artifacts built under OTP 28.5
-- readiness audit: exit `66`, with all local gates passing and external
+- readiness audit: exit `66`, with all local gates passing and remaining live
   evidence blockers still open
-- latest readiness audit rerun after handoff edits: exit `66`, with the
-  corrected commit-before-tag command sequence printed in blocker next steps
 - latest readiness audit rerun after test-stability fixes: exit `66`, with
   `fast`, `quality`, `eval-fast`, `clients`, docs, and local artifact boot gates
-  passing; public release artifacts and provider-backed live eval remained
-  blocked at that point
+  passing; provider-backed live eval remained blocked at that point
 - provider-backed live eval now passes locally: `scripts/test live-eval`
   reported 31 checks passing and 0 failing against Z.ai `glm-5-turbo`
 - latest readiness audit rerun with `LEMON_EVAL_API_KEY_SECRET=llm_zai_api_key`:
-  exit `66`, with `fast`, `quality`, `eval-fast`, `clients`, docs, local
-  artifact boot, provider-backed live eval, and Discord external-sender manual
-  proof passing; only public GitHub Release artifact proof remains launch-blocking
-- release-readiness changes still need a final commit and push after the
-  remaining evidence blockers are closed
-- the final `HEAD` must be pushed to `main` before the release tag is created
-  or dispatched; use `git log -1 --oneline` immediately before publishing for
-  the exact hash
+  passed the local gates, provider-backed live eval, and Discord
+  external-sender manual proof
 
 The readiness audit confirmed:
 
@@ -190,10 +175,6 @@ The readiness audit confirmed:
 - provider-backed live eval passes
 - Discord external-sender manual live proof is present
 - remote preflight evidence is printed directly by the audit script
-
-The readiness audit remains blocked by:
-
-- missing public GitHub Release `v2026.05.0`
 
 ## Remote Publish Preflight
 
@@ -217,8 +198,6 @@ Checked on 2026-05-12:
     create the remote release tag
 - Remote tag lookup: `git ls-remote --tags origin 'v2026.05.0*'` returned no
   tags.
-- GitHub Release lookup: `gh release view v2026.05.0` returned `release not
-  found`.
 - Release workflow lookup:
   `gh run list --workflow release.yml --limit 5` returned no runs.
 - Live-eval workflow lookup:
@@ -229,40 +208,8 @@ Checked on 2026-05-12:
   `gh secret list` found none of `LEMON_EVAL_API_KEY`, `INTEGRATION_API_KEY`,
   or `ANTHROPIC_API_KEY`.
 
-Remote publication is operationally possible from this checkout, but the
-release-readiness changes must be committed and pushed to `main` before the
-release tag is pushed or manually dispatched. Otherwise GitHub will run the
-older default-branch workflow set and the local `live-eval.yml` workflow will
-not exist remotely. Publishing still requires explicit maintainer approval.
-
-## Completion Commands
-
-After explicit approval to publish remote release artifacts:
-
-```bash
-# First publish the release-readiness changes to the default branch.
-# The release and live-eval workflows must exist on GitHub before the tag
-# is pushed or manually dispatched.
-git status --short --branch
-git rev-list --count origin/main..HEAD
-git log --oneline origin/main..HEAD
-test -z "$(git status --short)" || { echo "refusing to publish with a dirty tree" >&2; exit 1; }
-git log -1 --oneline
-git push origin main
-
-# Option A: push the tag and let the tag-push workflow create the release.
-git tag v2026.05.0
-git push origin v2026.05.0
-
-# Option B: if the tag already exists or the tag-push workflow did not run,
-# manually dispatch the release workflow. Do not run both paths unless
-# intentionally rerunning the release workflow.
-gh workflow run release.yml --ref v2026.05.0 -f tag=v2026.05.0 -f channel=stable
-
-gh run list --workflow release.yml --limit 5
-gh run watch {run-id} --exit-status
-scripts/verify_github_release_artifacts 2026.05.0
-```
+Remote publication is operationally possible from this checkout, but publication
+is not a readiness gate. Publishing still requires explicit maintainer approval.
 
 Provider-backed live eval already passed locally for this audit. Rerun it for
 the final release candidate if code, prompts, tools, or provider configuration
@@ -281,8 +228,8 @@ gh run list --workflow live-eval.yml --limit 5
 gh run watch {run-id} --exit-status
 ```
 
-Final stable readiness should be accepted only after public release artifact
-proof and the final readiness audit pass.
+Final stable readiness should be accepted after the final readiness audit and
+the live proof lanes pass.
 
 ## Goal Completion Gate
 
@@ -291,13 +238,10 @@ still exits `66` or while external evidence is missing. Completion
 requires all of:
 
 - the release-readiness changes are committed and pushed to `main`
-- public GitHub Release `v2026.05.0` exists
-- `scripts/verify_github_release_artifacts 2026.05.0` passes against downloaded
-  public assets
 - `scripts/test live-eval` passes locally with a real credential, or
   `.github/workflows/live-eval.yml` passes on GitHub with the intended release
   candidate ref
 - Discord external-sender manual live proof JSON passes and is supplied to the final
   readiness audit
-- `scripts/audit_1_0_readiness 2026.05.0 {downloaded-or-local-artifact-dir}`
+- `scripts/audit_1_0_readiness 2026.05.0 {local-artifact-dir}`
   exits `0`

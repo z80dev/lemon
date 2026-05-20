@@ -52,8 +52,24 @@ artifacts are future release-matrix work unless the release workflow is expanded
 
 ## Update flow (`mix lemon.update`)
 
-`mix lemon.update` is currently a stage-1 local maintenance task, not a remote
-binary updater.
+`mix lemon.update` and the source wrapper `./bin/lemon update` are currently
+stage-1 local maintenance tasks, not remote binary updaters. The same source
+wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
+delegates for the setup and diagnostics Mix tasks, plus
+`./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
+`./bin/lemon config ...` for config inspection and validation,
+`./bin/lemon models ...` for model catalog discovery,
+`./bin/lemon providers ...` for redacted provider readiness, and
+`./bin/lemon policy ...` for route-specific model policy management. It also
+exposes `./bin/lemon proofs ...` for redacted local proof artifact inventory,
+`./bin/lemon media ...` for redacted generated-media job, artifact, and
+provider-proof readiness,
+`./bin/lemon readiness ...` for compact launch-gate readiness summaries and
+`./bin/lemon readiness --strict` for scripts that should fail unless the
+compact readiness status is fully ready,
+`./bin/lemon secrets ...` as an allowlisted dispatcher for the existing
+secret-store tasks, `./bin/lemon skill ...` for the existing skill lifecycle
+task, and `./bin/lemon usage ...` for redacted usage/cost diagnostics.
 
 It runs:
 
@@ -87,4 +103,4 @@ Treat this as forward-looking until remote update checks are implemented.
 
 - `docs/release/deployment_flows.md` — supported runtime/deployment modes
 - `apps/lemon_core/lib/mix/tasks/lemon.update.ex` — current stage-1 update task
-- `docs/plans/lemon-1.0-mainstream-readiness.md` — launch readiness plan
+- `docs/plans/lemon-1.0-mainstream-readiness.md` — Hermes-on-BEAM readiness plan

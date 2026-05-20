@@ -39,10 +39,10 @@ Canonical files:
 - `SOUL.md`
 - `TOOLS.md`
 - `IDENTITY.md`
-- `USER.md`
+- `USER.md` (bounded profile and preference notes about the human)
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md`
-- `MEMORY.md` (long-term memory, main sessions only)
+- `MEMORY.md` (bounded curated quick facts and topic index, main sessions only)
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
 
@@ -72,8 +72,10 @@ Subagent scope is inferred from `:parent_session` when present, or can be set ex
 
 Main-session prompt policy requires the assistant to:
 
-- Inspect `MEMORY.md` and relevant daily memory files before answering memory-dependent questions.
-- Use `read` for recall, `write` to create daily files, and `edit` for curated updates.
-- Persist user-requested memories to files, not ephemeral reasoning.
+- Inspect `USER.md`, `MEMORY.md`, and relevant daily memory files before answering memory-dependent questions.
+- Use `memory` for bounded `USER.md` and `MEMORY.md` read/add/replace/remove operations.
+- Use `memory_topic` for longer structured notes under `memory/topics/`.
+- Use `read` / `grep` for recall and `write` for new daily files.
+- Persist user-requested memories to durable files, not ephemeral reasoning.
 
 Subagent prompt policy forbids reading/updating `MEMORY.md` unless explicitly requested by the parent task.

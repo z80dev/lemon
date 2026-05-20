@@ -58,8 +58,8 @@ Expected warnings/skips for an unconfigured fresh home:
 
 ## Follow-Up
 
-- Add a release-artifact install proof after the public artifact naming and
-  support matrix are finalized.
+- Keep release-artifact install proof aligned with the supported artifact naming
+  and support matrix.
 - Keep `docs/user-guide/setup.md` aligned with real `mix lemon.setup` and
   `mix lemon.secrets.*` commands.
 

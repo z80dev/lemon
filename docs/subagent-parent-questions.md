@@ -2,7 +2,7 @@
 
 Design note for adding a structured child-to-parent clarification path for Lemon subagents.
 
-Last reviewed: 2026-03-13
+Last reviewed: 2026-05-15
 Owner: @z80
 
 ---
