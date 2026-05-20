@@ -78,7 +78,7 @@ Usage: scripts/test <lane> [args]
 Canonical test lanes:
   fast       MIX_ENV=test compile with warnings as errors, then ExUnit excluding integration
   quality    Lemon quality gates: CI/docs lint, skill lint, architecture quality, duplicate tests, focused quality tests
-  clients    Node client CI parity checks for lemon-web, lemon-tui, and lemon-browser-node
+  clients    Client CI parity checks for lemon-web, lemon-tui, lemon-browser-node, and lemon-cli
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
   live-eval  Opt-in provider-backed eval run: mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}
   smoke      Local product-smoke pointer; CI-only release smoke is in .github/workflows/product-smoke.yml
@@ -197,6 +197,14 @@ run_npm_ci_if_needed() {
 
 run_clients() {
   ensure_repo_root
+
+  (cd clients/lemon-cli &&
+    uv sync --locked --dev &&
+    uv run ruff check src tests &&
+    uv run pytest &&
+    tmpdir="$(mktemp -d)" &&
+    trap 'rm -rf "$tmpdir"' EXIT &&
+    uv build --sdist --wheel --out-dir "$tmpdir")
 
   run_npm_ci_if_needed clients/lemon-web
   (cd clients/lemon-web && npm run typecheck && npm --workspace web run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)

@@ -320,6 +320,58 @@ defmodule DebugAgentRPC do
     {:ok, state}
   end
 
+  defp handle_command(state, %{"type" => "goal"} = cmd) do
+    session_id =
+      cmd["session_id"] || state.active_session_id || state.primary_session_id || "agent:tui:main"
+
+    message =
+      case cmd["action"] || "status" do
+        "set" ->
+          objective = to_string(cmd["objective"] || "")
+
+          case LemonCore.GoalStore.set(session_id, objective, agent_id: "tui") do
+            {:ok, goal} -> goal_transition_text("Goal Set", goal)
+            {:error, :empty_objective} -> "Usage: /goal set <objective>"
+            {:error, reason} -> "Goal update failed: #{inspect(reason)}"
+          end
+
+        "pause" ->
+          case LemonCore.GoalStore.pause(session_id) do
+            {:ok, goal} -> goal_transition_text("Goal Paused", goal)
+            {:error, :not_found} -> "No goal is set for this session."
+            {:error, reason} -> "Goal pause failed: #{inspect(reason)}"
+          end
+
+        "resume" ->
+          case LemonCore.GoalStore.resume(session_id) do
+            {:ok, goal} -> goal_transition_text("Goal Resumed", goal)
+            {:error, :not_found} -> "No goal is set for this session."
+            {:error, reason} -> "Goal resume failed: #{inspect(reason)}"
+          end
+
+        "continue" ->
+          "Goal continuation requires the Lemon control-plane WebSocket runtime."
+
+        "loop_once" ->
+          "Goal loop ticks require the Lemon control-plane WebSocket runtime."
+
+        "clear" ->
+          case LemonCore.GoalStore.clear(session_id) do
+            :ok -> "Goal cleared."
+            {:error, reason} -> "Goal clear failed: #{inspect(reason)}"
+          end
+
+        _ ->
+          case LemonCore.GoalStore.get(session_id) do
+            %{} = goal when map_size(goal) == 0 -> "Goal Status\nState: none"
+            goal -> goal_transition_text("Goal Status", goal)
+          end
+      end
+
+    send_json(%{type: "ui_notify", params: %{message: message, notify_type: "info"}})
+    {:ok, state}
+  end
+
   defp handle_command(state, %{"type" => "abort"} = cmd) do
     session_id = cmd["session_id"]
 
@@ -617,6 +669,17 @@ defmodule DebugAgentRPC do
   defp handle_command(state, _cmd) do
     send_json(%{type: "error", message: "unknown command"})
     {:ok, state}
+  end
+
+  defp goal_transition_text(title, goal) do
+    [
+      title,
+      "Status: #{goal.status}",
+      "Goal id: #{goal.id}",
+      "Objective bytes: #{byte_size(goal.objective || "")}",
+      "Continuations: #{goal.continuation_count || 0}"
+    ]
+    |> Enum.join("\n")
   end
 
   defp send_config_state do

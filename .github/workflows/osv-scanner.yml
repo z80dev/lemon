@@ -1,0 +1,56 @@
+name: OSV Scanner
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "mix.exs"
+      - "mix.lock"
+      - "apps/*/mix.exs"
+      - "clients/*/package.json"
+      - "clients/*/package-lock.json"
+      - "clients/lemon-cli/pyproject.toml"
+      - "clients/lemon-cli/uv.lock"
+      - "apps/lemon_gateway/priv/package.json"
+      - "apps/lemon_gateway/priv/package-lock.json"
+      - "tools/diagrams/package.json"
+      - "tools/diagrams/package-lock.json"
+      - ".github/workflows/osv-scanner.yml"
+  push:
+    branches: [main]
+    paths:
+      - "mix.exs"
+      - "mix.lock"
+      - "apps/*/mix.exs"
+      - "clients/*/package.json"
+      - "clients/*/package-lock.json"
+      - "clients/lemon-cli/pyproject.toml"
+      - "clients/lemon-cli/uv.lock"
+      - "apps/lemon_gateway/priv/package.json"
+      - "apps/lemon_gateway/priv/package-lock.json"
+      - "tools/diagrams/package.json"
+      - "tools/diagrams/package-lock.json"
+      - ".github/workflows/osv-scanner.yml"
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan lockfiles
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5
+    with:
+      scan-args: |-
+        --lockfile=mix.lock
+        --lockfile=clients/lemon-web/package-lock.json
+        --lockfile=clients/lemon-tui/package-lock.json
+        --lockfile=clients/lemon-browser-node/package-lock.json
+        --lockfile=clients/lemon-cli/uv.lock
+        --lockfile=apps/lemon_gateway/priv/package-lock.json
+        --lockfile=tools/diagrams/package-lock.json
+      fail-on-vuln: false

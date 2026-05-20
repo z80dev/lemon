@@ -13,11 +13,23 @@ The audit checks:
   - CI/docs policy lint passes
   - canonical local release-candidate test lanes pass
   - public docs site builds, has no high advisory, and has no broken markdown links
-  - optional local artifact directory passes manifest and runtime boot verification
-  - remote publication preflight reports tag, workflow, and eval secret state
-  - public GitHub Release artifacts can be downloaded, verified, and booted
+  - local artifact directory passes manifest and runtime boot verification
   - provider-backed live eval runs when release eval credentials are present
   - Discord external-sender manual live proof is present when promoting Hermes-channel parity
+  - Discord external-sender redacted proof artifact is present for support/doctor surfaces
+  - Discord DM, free-response, and real slash client-click proof artifacts are completed
+  - Discord media and rollback slash redacted proof artifacts are present for support/doctor surfaces
+  - Discord all-command slash registration proof artifacts are present before broad command claims
+  - Telegram and Discord final-answer MEDIA directive delivery proof artifacts are completed
+  - Browser local-driver, CDP attach, interaction, state, and redaction proof is completed
+  - OpenAI-compatible API local /v1 smoke proof is completed
+  - ACP deterministic stdio, external client, and official SDK proofs are completed
+  - MCP stdio, Streamable HTTP, and legacy SSE proofs are completed
+  - LSP project-fixture and real-repo fixture proofs are completed
+  - extension host, WASM telemetry/policy/lifecycle, and registry audit proofs are completed
+  - cron diagnostics, runtime restart, and channel-origin proofs are completed
+  - provider-backed image, TTS, STT, vision, and video media proofs are completed
+  - terminal backend local, local PTY, Docker, and SSH preview proofs are completed
   - public support and comparison docs keep unresolved Hermes-only surfaces
     outside the stable 1.0 support boundary
   - channel command parity is inventoried and bounded before launch
@@ -26,7 +38,7 @@ Exit codes:
   0   all audited gates passed
   1   local readiness failure
   2   usage or tool error
-  66  launch-blocking external evidence is missing
+  66  launch-blocking live evidence is missing
 EOF
   exit 2
 }
@@ -63,30 +75,7 @@ block() {
 print_blocker_next_steps() {
   cat >&2 <<EOF
 
-Next commands after maintainer approval and required credentials:
-
-  # First publish the release-readiness changes to the default branch.
-  # The release and live-eval workflows must exist on GitHub before the tag
-  # is pushed or manually dispatched.
-  git status --short --branch
-  git rev-list --count origin/main..HEAD
-  git log --oneline origin/main..HEAD
-  test -z "\$(git status --short)" || { echo "refusing to publish with a dirty tree" >&2; exit 1; }
-  git log -1 --oneline
-  git push origin main
-
-  # Option A: push the tag and let the tag-push workflow create the release.
-  git tag v$VERSION
-  git push origin v$VERSION
-
-  # Option B: if the tag already exists or the tag-push workflow did not run,
-  # manually dispatch the release workflow. Do not run both paths unless
-  # intentionally rerunning the release workflow.
-  gh workflow run release.yml --ref v$VERSION -f tag=v$VERSION -f channel=stable
-
-  gh run list --workflow release.yml --limit 5
-  gh run watch {run-id} --exit-status
-  scripts/verify_github_release_artifacts $VERSION
+Next commands after required credentials:
 
   scripts/test live-eval
   # or:
@@ -102,10 +91,150 @@ Next commands after maintainer approval and required credentials:
     --manual-matrix \\
     --reset-session-between-checks \\
     --timeout 300 \\
-    --result-path tmp/discord-live-proof.json
+    --result-path tmp/discord-live-proof.json \\
+    --proof-path .lemon/proofs/discord-live-matrix-latest.json
+
+  scripts/live_discord_matrix.py --bot-token-index 0 \\
+    --check-media-slash-registration \\
+    --result-path tmp/discord-media-slash-proof-check.json \\
+    --proof-path .lemon/proofs/discord-media-slash-registration-latest.json
+  scripts/live_discord_matrix.py --bot-token-index 0 \\
+    --check-rollback-slash-registration \\
+    --result-path tmp/discord-rollback-slash-proof-check.json \\
+    --proof-path .lemon/proofs/discord-rollback-slash-registration-latest.json
+  scripts/live_discord_matrix.py --bot-token-index 0 \\
+    --check-all-slash-registration \\
+    --result-path tmp/discord-all-slash-proof-check.json \\
+    --proof-path .lemon/proofs/discord-all-slash-registration-latest.json
+  scripts/live_telegram_matrix.py --skip-dm --skip-topic \\
+    --topic-media-directive-delivery \\
+    --media-directive-topic-id 35 \\
+    --timeout 120 \\
+    --result-path tmp/telegram-media-directive-proof.json \\
+    --proof-path .lemon/proofs/telegram-media-directive-latest.json
+  scripts/live_discord_matrix.py --channel-id 1475727417372049419 \\
+    --bot-token-index 0 \\
+    --sender-bot-token-index 1 \\
+    --wait-media-directive-delivery \\
+    --reset-session-between-checks \\
+    --timeout 120 \\
+    --result-path tmp/discord-media-directive-proof.json \\
+    --proof-path .lemon/proofs/discord-media-directive-latest.json
+  scripts/live_discord_matrix.py --bot-token-index 0 \\
+    --wait-dm-inbound \\
+    --dm-recipient-id {human-open-dm-discord-user-id} \\
+    --result-path tmp/discord-dm-proof.json \\
+    --proof-path .lemon/proofs/discord-dm-latest.json \\
+    --timeout 120
+  scripts/live_discord_matrix.py --bot-token-index 0 \\
+    --wait-free-response-trigger \\
+    --per-check-thread \\
+    --sender-bot-token-index 1 \\
+    --reset-session-between-checks \\
+    --channel-id 1475727417372049419 \\
+    --result-path tmp/discord-free-response-proof.json \\
+    --proof-path .lemon/proofs/discord-free-response-latest.json \\
+    --timeout 120
+
+  # Start the watcher, click the requested real Discord slash command, then keep
+  # the redacted proof artifact for the audit.
+  scripts/live_discord_matrix.py --wait-slash-client-click-proof \\
+    --channel-id {discord-proof-channel-id} \\
+    --slash-client-click-proof-path .lemon/proofs/discord-slash-client-click-proof-latest.json \\
+    --result-path tmp/discord-slash-client-click-proof-wait.json \\
+    --proof-path .lemon/proofs/discord-slash-client-click-check-latest.json
+
+  # Required before claiming provider-backed media parity.
+  LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_image_smoke.exs \\
+    --proof-path .lemon/proofs/media-image-smoke-latest.json
+  LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_speech_smoke.exs \\
+    --proof-path .lemon/proofs/media-speech-smoke-latest.json
+  LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_transcription_smoke.exs \\
+    --proof-path .lemon/proofs/media-transcription-smoke-latest.json
+  LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_vision_smoke.exs \\
+    --proof-path .lemon/proofs/media-vision-smoke-latest.json
+  LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_video_smoke.exs \\
+    --proof-path .lemon/proofs/media-video-smoke-latest.json
+  # If provider keys live in Lemon's encrypted secret store, append:
+  #   --api-key-secret SECRET_NAME
+
+  # Required before claiming browser preview support.
+  MIX_ENV=test mix run scripts/live_browser_smoke.exs
+
+  # Required before claiming OpenAI-compatible API preview support.
+  MIX_ENV=test mix run scripts/live_openai_compat_smoke.exs
+
+  # Required before claiming ACP preview support.
+  MIX_ENV=test mix run scripts/live_acp_stdio_smoke.exs
+  node scripts/live_acp_stdio_external_client.mjs
+  node scripts/live_acp_official_sdk_client.mjs
+
+  # Required before claiming MCP preview support.
+  MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs
+  MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs
+  MIX_ENV=test mix run scripts/live_mcp_sse_smoke.exs
+
+  # Required before claiming LSP diagnostics preview support.
+  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \\
+    --project-fixtures --editor-flow \\
+    --out .lemon/proofs/lsp-project-fixtures-latest.json
+  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \\
+    --real-repo-fixtures --editor-flow \\
+    --out .lemon/proofs/lsp-real-repo-fixtures-latest.json
+
+  # Required before claiming plugin/extension host preview support.
+  MIX_ENV=test mix run scripts/live_extension_host_smoke.exs
+  MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
+  MIX_ENV=test mix run scripts/live_wasm_policy_smoke.exs
+  MIX_ENV=test mix run scripts/live_extension_registry_audit_smoke.exs
+  MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
+
+  # Required before claiming cron/background-job preview support.
+  MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs
+  MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs
+  MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
+
+  # Required before claiming terminal backend support beyond preview.
+  MIX_ENV=test mix run scripts/live_terminal_backend_smoke.exs
 
   LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json \\
-    scripts/audit_1_0_readiness $VERSION {downloaded-or-local-artifact-directory}
+  LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json \\
+  LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json \\
+  LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-slash-registration-latest.json \\
+  LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON=tmp/discord-rollback-slash-proof-check.json \\
+  LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-rollback-slash-registration-latest.json \\
+  LEMON_DISCORD_ALL_SLASH_PROOF_JSON=tmp/discord-all-slash-proof-check.json \\
+  LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-all-slash-registration-latest.json \\
+  LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/telegram-media-directive-latest.json \\
+  LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-directive-latest.json \\
+  LEMON_DISCORD_DM_REDACTED_PROOF_JSON=.lemon/proofs/discord-dm-latest.json \\
+  LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON=.lemon/proofs/discord-free-response-latest.json \\
+  LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON=.lemon/proofs/discord-slash-client-click-proof-latest.json \\
+  LEMON_MEDIA_IMAGE_PROOF_JSON=.lemon/proofs/media-image-smoke-latest.json \\
+  LEMON_MEDIA_SPEECH_PROOF_JSON=.lemon/proofs/media-speech-smoke-latest.json \\
+  LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON=.lemon/proofs/media-transcription-smoke-latest.json \\
+  LEMON_MEDIA_VISION_PROOF_JSON=.lemon/proofs/media-vision-smoke-latest.json \\
+  LEMON_MEDIA_VIDEO_PROOF_JSON=.lemon/proofs/media-video-smoke-latest.json \\
+  LEMON_BROWSER_PROOF_JSON=.lemon/proofs/browser-smoke-latest.json \\
+  LEMON_OPENAI_COMPAT_PROOF_JSON=.lemon/proofs/openai-compat-smoke-latest.json \\
+  LEMON_ACP_STDIO_PROOF_JSON=.lemon/proofs/acp-stdio-smoke-latest.json \\
+  LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON=.lemon/proofs/acp-stdio-external-client-latest.json \\
+  LEMON_ACP_OFFICIAL_SDK_PROOF_JSON=.lemon/proofs/acp-official-sdk-client-latest.json \\
+  LEMON_MCP_STDIO_PROOF_JSON=.lemon/proofs/mcp-stdio-latest.json \\
+  LEMON_MCP_HTTP_PROOF_JSON=.lemon/proofs/mcp-http-latest.json \\
+  LEMON_MCP_SSE_PROOF_JSON=.lemon/proofs/mcp-sse-latest.json \\
+  LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON=.lemon/proofs/lsp-project-fixtures-latest.json \\
+  LEMON_LSP_REAL_REPO_PROOF_JSON=.lemon/proofs/lsp-real-repo-fixtures-latest.json \\
+  LEMON_EXTENSION_HOST_PROOF_JSON=.lemon/proofs/extension-host-smoke-latest.json \\
+  LEMON_WASM_TELEMETRY_PROOF_JSON=.lemon/proofs/wasm-tool-telemetry-latest.json \\
+  LEMON_WASM_POLICY_PROOF_JSON=.lemon/proofs/wasm-policy-latest.json \\
+  LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON=.lemon/proofs/extension-registry-audit-latest.json \\
+  LEMON_WASM_LIFECYCLE_PROOF_JSON=.lemon/proofs/wasm-lifecycle-latest.json \\
+  LEMON_CRON_DIAGNOSTICS_PROOF_JSON=.lemon/proofs/cron-diagnostics-latest.json \\
+  LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json \\
+  LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json \\
+  LEMON_TERMINAL_BACKEND_PROOF_JSON=.lemon/proofs/terminal-backend-latest.json \\
+    scripts/audit_1_0_readiness $VERSION {local-artifact-directory}
 EOF
 }
 
@@ -125,58 +254,6 @@ run_or_fail() {
   rm -f "$output"
 }
 
-remote_preflight() {
-  local tag="v$VERSION"
-  local output
-
-  if git ls-remote --tags origin "$tag*" | grep -q .; then
-    pass "remote tag exists for $tag"
-  else
-    info "remote tag $tag is not present on origin"
-  fi
-
-  if ! command -v gh >/dev/null 2>&1; then
-    info "gh CLI is unavailable; skipping remote workflow and secret preflight"
-    return
-  fi
-
-  output="$(mktemp)"
-
-  if gh run list --workflow release.yml --limit 1 >"$output" 2>&1; then
-    if [ -s "$output" ]; then
-      info "release.yml has remote workflow run history"
-    else
-      info "release.yml has no remote workflow runs"
-    fi
-  else
-    info "release.yml remote workflow lookup failed: $(tr '\n' ' ' <"$output")"
-  fi
-
-  : >"$output"
-  if gh run list --workflow live-eval.yml --limit 1 >"$output" 2>&1; then
-    if [ -s "$output" ]; then
-      info "live-eval.yml has remote workflow run history"
-    else
-      info "live-eval.yml has no remote workflow runs"
-    fi
-  else
-    info "live-eval.yml remote workflow lookup failed: $(tr '\n' ' ' <"$output")"
-  fi
-
-  : >"$output"
-  if gh secret list --json name --jq '.[].name' >"$output" 2>&1; then
-    if grep -qE '^(LEMON_EVAL_API_KEY|LEMON_EVAL_API_KEY_SECRET|INTEGRATION_API_KEY|INTEGRATION_API_KEY_SECRET|ANTHROPIC_API_KEY)$' "$output"; then
-      pass "release-eval repository secret is configured"
-    else
-      info "no release-eval repository secret found under LEMON_EVAL_API_KEY, LEMON_EVAL_API_KEY_SECRET, INTEGRATION_API_KEY, INTEGRATION_API_KEY_SECRET, or ANTHROPIC_API_KEY"
-    fi
-  else
-    info "release-eval repository secret lookup failed: $(tr '\n' ' ' <"$output")"
-  fi
-
-  rm -f "$output"
-}
-
 verify_public_support_boundaries() {
   if python3 - <<'PY'
 from pathlib import Path
@@ -187,7 +264,7 @@ requirements = {
         "Discord support is bounded to the live-proven path",
         "OpenAI-compatible API server behavior",
         "ACP editor integration",
-        "automatic filesystem checkpointing or rollback",
+        "checkpointing for destructive shell commands",
         "first-class browser automation",
         "generated media, image analysis, or TTS/voice",
         "production support for third-party plugins",
@@ -195,7 +272,7 @@ requirements = {
     "docs/compare.md": [
         "stable Telegram and Discord text-first support",
         "ACP editor integration or OpenAI-compatible Chat Completions/Responses API",
-        "automatic filesystem checkpointing or rollback",
+        "stable checkpoint/rollback beyond the preview file-tool boundary",
         "first-class browser automation, media generation, image analysis, or voice/TTS",
         "Discord behavior beyond the live-proven text-first and file-delivery boundary",
         "production support for third-party plugins",
@@ -306,6 +383,1854 @@ PY
   fi
 }
 
+verify_discord_media_slash_proof() {
+  local proof_path="${LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord /media status slash schema not verified; set LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON to a passing result JSON"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord /media status slash schema result file is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+media = next((check for check in checks if check.get("name") == "discord_media_slash_registration"), None)
+
+if data.get("ok") is not True or not media or media.get("ok") is not True:
+    print("Discord /media slash proof is missing or failed", file=sys.stderr)
+    sys.exit(66)
+
+subcommands = set(((media.get("summary") or {}).get("subcommands")) or [])
+missing = sorted({"status"} - subcommands)
+
+if missing:
+    print(f"Discord /media slash proof missing subcommands: {', '.join(missing)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord /media status slash schema proof is present"
+  else
+    case "$?" in
+      66) block "Discord /media status slash schema result does not prove required checks" ;;
+      *) fail "Discord /media status slash schema result is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_rollback_slash_proof() {
+  local proof_path="${LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord /rollback slash schema not verified; set LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON to a passing result JSON"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord /rollback slash schema result file is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+rollback = next((check for check in checks if check.get("name") == "discord_rollback_slash_registration"), None)
+
+if data.get("ok") is not True or not rollback or rollback.get("ok") is not True:
+    print("Discord /rollback slash proof is missing or failed", file=sys.stderr)
+    sys.exit(66)
+
+summary = rollback.get("summary") or {}
+subcommands = set(summary.get("subcommands") or [])
+missing_subcommands = sorted({"status", "events", "diff", "restore"} - subcommands)
+missing_options = summary.get("missing_options") or {}
+wrong_option_types = summary.get("wrong_option_types") or {}
+
+if missing_subcommands or missing_options or wrong_option_types:
+    if missing_subcommands:
+        print(f"Discord /rollback slash proof missing subcommands: {', '.join(missing_subcommands)}", file=sys.stderr)
+    if missing_options:
+        print(f"Discord /rollback slash proof missing options: {json.dumps(missing_options, sort_keys=True)}", file=sys.stderr)
+    if wrong_option_types:
+        print(f"Discord /rollback slash proof has wrong option types: {json.dumps(wrong_option_types, sort_keys=True)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord /rollback slash schema proof is present"
+  else
+    case "$?" in
+      66) block "Discord /rollback slash schema result does not prove required checks" ;;
+      *) fail "Discord /rollback slash schema result is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_live_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord redacted live proof not verified; set LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON to a passing .lemon/proofs artifact"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord redacted live proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+required = {
+    "discord_user_inbound_prompt_round_trip",
+    "discord_markdown_code_rendering",
+    "discord_long_output_chunking",
+    "discord_tool_success_failure_rendering",
+    "discord_file_delivery",
+}
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+missing = sorted(required - passed)
+cleanup = data.get("cleanup") or {}
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or missing
+    or bad_cleanup
+):
+    if missing:
+        print(f"missing redacted Discord live checks: {', '.join(missing)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"redacted Discord live proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"redacted Discord live proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"redacted Discord live proof_object is {data.get('proof_object')}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord redacted live matrix proof is present"
+  else
+    case "$?" in
+      66) block "Discord redacted live matrix proof does not prove required checks and cleanup" ;;
+      *) fail "Discord redacted live matrix proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_media_slash_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord /media slash redacted proof not verified; set LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON to a passing .lemon/proofs artifact"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord /media slash redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or "discord_media_slash_registration" not in passed
+    or coverage.get("contains_media_slash_registration") is not True
+    or bad_cleanup
+):
+    if "discord_media_slash_registration" not in passed:
+        print("redacted Discord /media slash proof is missing completed check", file=sys.stderr)
+    if coverage.get("contains_media_slash_registration") is not True:
+        print("redacted Discord /media slash proof is missing media registration coverage", file=sys.stderr)
+    if bad_cleanup:
+        print(f"redacted Discord /media slash proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"redacted Discord /media slash proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"redacted Discord /media slash proof_object is {data.get('proof_object')}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord /media slash redacted proof is present"
+  else
+    case "$?" in
+      66) block "Discord /media slash redacted proof does not prove required checks and cleanup" ;;
+      *) fail "Discord /media slash redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_rollback_slash_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord /rollback slash redacted proof not verified; set LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON to a passing .lemon/proofs artifact"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord /rollback slash redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or "discord_rollback_slash_registration" not in passed
+    or coverage.get("contains_rollback_slash_registration") is not True
+    or bad_cleanup
+):
+    if "discord_rollback_slash_registration" not in passed:
+        print("redacted Discord /rollback slash proof is missing completed check", file=sys.stderr)
+    if coverage.get("contains_rollback_slash_registration") is not True:
+        print("redacted Discord /rollback slash proof is missing rollback registration coverage", file=sys.stderr)
+    if bad_cleanup:
+        print(f"redacted Discord /rollback slash proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"redacted Discord /rollback slash proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"redacted Discord /rollback slash proof_object is {data.get('proof_object')}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord /rollback slash redacted proof is present"
+  else
+    case "$?" in
+      66) block "Discord /rollback slash redacted proof does not prove required checks and cleanup" ;;
+      *) fail "Discord /rollback slash redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_all_slash_proof() {
+  local proof_path="${LEMON_DISCORD_ALL_SLASH_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord all-command slash schema not verified; set LEMON_DISCORD_ALL_SLASH_PROOF_JSON to a passing result JSON"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord all-command slash schema result file is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+check = next((row for row in checks if row.get("name") == "discord_all_slash_registration"), None)
+
+if data.get("ok") is not True or not check or check.get("ok") is not True:
+    print("Discord all-command slash proof is missing or failed", file=sys.stderr)
+    sys.exit(66)
+
+expected = check.get("expected_command_count")
+registered = check.get("registered_command_count")
+missing = check.get("missing_commands") or []
+
+if expected != 16 or registered < expected or missing:
+    print("Discord all-command slash proof does not show all expected command names", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord all-command slash schema proof is present"
+  else
+    case "$?" in
+      66) block "Discord all-command slash schema result does not prove required checks" ;;
+      *) fail "Discord all-command slash schema result is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_all_slash_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON:-}"
+
+  if [ -z "$proof_path" ]; then
+    block "Discord all-command slash redacted proof not verified; set LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON to a passing .lemon/proofs artifact"
+    return
+  fi
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord all-command slash redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or "discord_all_slash_registration" not in passed
+    or coverage.get("contains_all_slash_registration") is not True
+    or bad_cleanup
+):
+    if "discord_all_slash_registration" not in passed:
+        print("redacted Discord all-command slash proof is missing completed check", file=sys.stderr)
+    if coverage.get("contains_all_slash_registration") is not True:
+        print("redacted Discord all-command slash proof is missing all-registration coverage", file=sys.stderr)
+    if bad_cleanup:
+        print(f"redacted Discord all-command slash proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"redacted Discord all-command slash proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"redacted Discord all-command slash proof_object is {data.get('proof_object')}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord all-command slash redacted proof is present"
+  else
+    case "$?" in
+      66) block "Discord all-command slash redacted proof does not prove required checks and cleanup" ;;
+      *) fail "Discord all-command slash redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_dm_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_DM_REDACTED_PROOF_JSON:-.lemon/proofs/discord-dm-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord DM redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+safe_reason_label = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def reason_kind(value):
+    if not isinstance(value, str) or not value:
+        return None
+
+    if safe_reason_label.match(value):
+        return value
+
+    return "unsafe_reason_kind_redacted"
+
+
+def reason_hint(kind):
+    if not kind:
+        return None
+
+    if "permission_denied" in kind:
+        return "provider permissions were denied; enable the API and grant IAM/billing access for the configured provider account"
+    if "billing_limit" in kind:
+        return "provider billing or quota limit was hit; use a funded project/key or raise quota"
+    if "payment_required" in kind:
+        return "provider payment is required; fund or upgrade the account"
+    if "invalid_request_error" in kind:
+        return "provider rejected the request; verify model, voice, output format, and provider options"
+    if "provider_http_error" in kind:
+        return "provider returned an HTTP error; inspect the sanitized reason and rerun the target provider lane"
+
+    return None
+
+
+reason_kinds = sorted(
+    {
+        kind
+        for kind in (
+            [reason_kind(data.get("reason_kind"))]
+            + [reason_kind(check.get("reason_kind")) for check in checks]
+        )
+        if kind
+    }
+)
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or "discord_dm_prompt_round_trip" not in passed
+    or coverage.get("contains_dm") is not True
+    or "discord_dm_setup_refused" in reason_kinds
+    or bad_cleanup
+):
+    if "discord_dm_prompt_round_trip" not in passed:
+        print("Discord DM proof is missing completed round-trip check", file=sys.stderr)
+    if coverage.get("contains_dm") is not True:
+        print("Discord DM proof is missing DM coverage", file=sys.stderr)
+    if "discord_dm_setup_refused" in reason_kinds:
+        print("Discord DM proof is a setup refusal, not promotable evidence", file=sys.stderr)
+    if bad_cleanup:
+        print(f"Discord DM proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"Discord DM proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"Discord DM proof_object is {data.get('proof_object')}", file=sys.stderr)
+    if reason_kinds:
+        print(f"Discord DM proof reason_kind: {', '.join(reason_kinds)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord DM redacted proof is present"
+  else
+    case "$?" in
+      66) block "Discord DM redacted proof does not prove a successful DM round trip" ;;
+      *) fail "Discord DM redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_free_response_redacted_proof() {
+  local proof_path="${LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON:-.lemon/proofs/discord-free-response-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord free-response redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+check = next((row for row in checks if row.get("name") == "discord_free_response_trigger_round_trip"), None)
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+    "includes_secret_names",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+diagnostics = (check or {}).get("local_channel_diagnostics") or {}
+free_response = diagnostics.get("free_response") or {}
+trigger_mode = (check or {}).get("trigger_mode") or {}
+trigger_cleanup = trigger_mode.get("cleanup") or {}
+safe_reason_label = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def reason_kind(value):
+    if not isinstance(value, str) or not value:
+        return None
+
+    if safe_reason_label.match(value):
+        return value
+
+    return "unsafe_reason_kind_redacted"
+
+
+check_details = check.get("details") if isinstance(check, dict) and isinstance(check.get("details"), dict) else {}
+reason_kinds = sorted(
+    {
+        kind
+        for kind in (
+            reason_kind(data.get("reason_kind")),
+            reason_kind((check or {}).get("reason_kind")),
+            reason_kind(check_details.get("reason_kind")),
+        )
+        if kind
+    }
+)
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_live_matrix"
+    or not check
+    or check.get("status") != "completed"
+    or coverage.get("contains_free_response") is not True
+    or free_response.get("message_content_intent_declared") is not True
+    or trigger_mode.get("mode") != "all"
+    or trigger_cleanup.get("mode") != "clear"
+    or bad_cleanup
+):
+    if not check or check.get("status") != "completed":
+        print("Discord free-response proof is missing completed trigger round-trip check", file=sys.stderr)
+    if coverage.get("contains_free_response") is not True:
+        print("Discord free-response proof is missing free-response coverage", file=sys.stderr)
+    if free_response.get("message_content_intent_declared") is not True:
+        print("Discord free-response proof does not declare Message Content Intent readiness", file=sys.stderr)
+    if trigger_mode.get("mode") != "all" or trigger_cleanup.get("mode") != "clear":
+        print("Discord free-response proof does not show trigger all with cleanup clear", file=sys.stderr)
+    if bad_cleanup:
+        print(f"Discord free-response proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"Discord free-response proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_live_matrix":
+        print(f"Discord free-response proof_object is {data.get('proof_object')}", file=sys.stderr)
+    if reason_kinds:
+        print(f"Discord free-response proof reason_kind: {', '.join(reason_kinds)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord free-response redacted proof is present"
+  else
+    case "$?" in
+      66) block "Discord free-response redacted proof does not prove unmentioned-message delivery with Message Content Intent declared" ;;
+      *) fail "Discord free-response redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_discord_slash_client_click_proof() {
+  local proof_path="${LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON:-.lemon/proofs/discord-slash-client-click-proof-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "Discord slash client-click proof artifact is missing: $proof_path (run scripts/live_discord_matrix.py --wait-slash-client-click-proof while clicking a real Discord slash command)"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+passed = {check.get("name") for check in checks if check.get("status") == "completed"}
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+safe_reason_label = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def reason_kind(value):
+    if not isinstance(value, str) or not value:
+        return None
+
+    if safe_reason_label.match(value):
+        return value
+
+    return "unsafe_reason_kind_redacted"
+
+
+reason_kinds = sorted(
+    {
+        kind
+        for kind in (
+            [reason_kind(data.get("reason_kind"))]
+            + [reason_kind(check.get("reason_kind")) for check in checks]
+        )
+        if kind
+    }
+)
+required_cleanup = [
+    "includes_raw_bot_tokens",
+    "includes_raw_interaction_tokens",
+    "includes_raw_application_ids",
+    "includes_raw_channel_ids",
+    "includes_raw_user_ids",
+    "includes_raw_message_bodies",
+]
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != "lemon.discord_slash_client_click"
+    or data.get("proof_scope") != "discord_slash_client_click_observed"
+    or coverage.get("real_client_click_proof") is not True
+    or (coverage.get("client_click_command_count") or 0) < 1
+    or "discord_slash_client_click_observed" not in passed
+    or "discord_slash_client_click_safe_mentions" not in passed
+    or bad_cleanup
+):
+    if data.get("status") != "completed":
+        print(f"Discord slash client-click proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != "lemon.discord_slash_client_click":
+        print(f"Discord slash client-click proof_object is {data.get('proof_object')}", file=sys.stderr)
+    if data.get("proof_scope") != "discord_slash_client_click_observed":
+        print(f"Discord slash client-click proof_scope is {data.get('proof_scope')}", file=sys.stderr)
+    if coverage.get("real_client_click_proof") is not True:
+        print("Discord slash client-click proof is not marked as real client-click evidence", file=sys.stderr)
+    if (coverage.get("client_click_command_count") or 0) < 1:
+        print("Discord slash client-click proof has no clicked command count", file=sys.stderr)
+    if "discord_slash_client_click_observed" not in passed:
+        print("Discord slash client-click observed check is missing", file=sys.stderr)
+    if "discord_slash_client_click_safe_mentions" not in passed:
+        print("Discord slash client-click safe-mentions check is missing", file=sys.stderr)
+    if bad_cleanup:
+        print(f"Discord slash client-click proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if reason_kinds:
+        print(f"Discord slash client-click proof reason_kind: {', '.join(reason_kinds)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Discord slash client-click proof is present"
+  else
+    case "$?" in
+      66) block "Discord slash client-click proof does not prove a real safe client click" ;;
+      *) fail "Discord slash client-click proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_media_directive_redacted_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local proof_object="$3"
+  local check_name="$4"
+  local required_cleanup_csv="$5"
+
+  if [ ! -f "$proof_path" ]; then
+    block "$label MEDIA directive redacted proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$proof_object" "$check_name" "$required_cleanup_csv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+proof_object = sys.argv[2]
+check_name = sys.argv[3]
+required_cleanup = [key for key in sys.argv[4].split(",") if key]
+
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+check = next((row for row in checks if row.get("name") == check_name), None)
+coverage = data.get("coverage") or {}
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
+
+attachment_ok = False
+
+if check:
+    marker_seen = check.get("marker_seen") is True
+    if check.get("telegram_has_document") is True:
+        attachment_ok = True
+    if (check.get("attachment_count") or 0) >= 1:
+        attachment_ok = True
+
+if (
+    data.get("status") != "completed"
+    or data.get("proof_object") != proof_object
+    or not check
+    or check.get("status") != "completed"
+    or coverage.get("contains_media_directive") is not True
+    or check.get("directive_leaked") is not False
+    or not marker_seen
+    or not attachment_ok
+    or bad_cleanup
+):
+    if data.get("status") != "completed":
+        print(f"MEDIA directive proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("proof_object") != proof_object:
+        print(f"MEDIA directive proof_object is {data.get('proof_object')}", file=sys.stderr)
+    if not check or check.get("status") != "completed":
+        print(f"MEDIA directive check {check_name} is missing or not completed", file=sys.stderr)
+    if coverage.get("contains_media_directive") is not True:
+        print("MEDIA directive proof is missing contains_media_directive coverage", file=sys.stderr)
+    if check and check.get("directive_leaked") is not False:
+        print("MEDIA directive proof did not prove directive leak suppression", file=sys.stderr)
+    if not marker_seen:
+        print("MEDIA directive proof marker was not observed", file=sys.stderr)
+    if not attachment_ok:
+        print("MEDIA directive proof did not show a delivered document or attachment", file=sys.stderr)
+    if bad_cleanup:
+        print(f"MEDIA directive proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "$label MEDIA directive redacted proof is present"
+  else
+    case "$?" in
+      66) block "$label MEDIA directive redacted proof does not prove final-answer attachment delivery" ;;
+      *) fail "$label MEDIA directive redacted proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_media_directive_redacted_proofs() {
+  verify_media_directive_redacted_proof \
+    "Telegram" \
+    "${LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON:-.lemon/proofs/telegram-media-directive-latest.json}" \
+    "lemon.telegram_live_matrix" \
+    "telegram_forum_topic_media_directive_delivery" \
+    "includes_raw_bot_tokens,includes_raw_chat_ids,includes_raw_user_ids,includes_raw_message_bodies,includes_secret_names"
+
+  verify_media_directive_redacted_proof \
+    "Discord" \
+    "${LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON:-.lemon/proofs/discord-media-directive-latest.json}" \
+    "lemon.discord_live_matrix" \
+    "discord_media_directive_delivery" \
+    "includes_raw_bot_tokens,includes_raw_interaction_tokens,includes_raw_application_ids,includes_raw_channel_ids,includes_raw_user_ids,includes_raw_message_bodies,includes_secret_names"
+}
+
+verify_media_provider_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local provider="$3"
+  local proof_object="$4"
+  local check_name="$5"
+
+  if [ ! -f "$proof_path" ]; then
+    block "provider-backed $label media proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$provider" "$proof_object" "$check_name" "$label" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+providers = [item for item in sys.argv[2].split("|") if item]
+proof_object = sys.argv[3]
+check_names = [item for item in sys.argv[4].split("|") if item]
+label = sys.argv[5]
+data = json.loads(path.read_text(encoding="utf-8"))
+details = data.get("details") or {}
+checks = data.get("checks") or []
+cleanup = data.get("cleanup") or {}
+check = next((row for row in checks if row.get("name") in check_names), None)
+bad_cleanup = [key for key, value in cleanup.items() if key.startswith("includes_raw_") and value is not False]
+safe_reason_label = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def reason_kind(value):
+    if not isinstance(value, str) or not value:
+        return None
+
+    if safe_reason_label.match(value):
+        return value
+
+    return "unsafe_reason_kind_redacted"
+
+
+def reason_hint(kind):
+    if not kind:
+        return None
+
+    if "permission_denied" in kind:
+        return "provider permissions were denied; enable the API and grant IAM/billing access for the configured provider account"
+    if "billing_limit" in kind:
+        return "provider billing or quota limit was hit; use a funded project/key or raise quota"
+    if "payment_required" in kind:
+        return "provider payment is required; fund or upgrade the account"
+    if "invalid_request_error" in kind:
+        return "provider rejected the request; verify model, voice, output format, and provider options"
+    if "provider_http_error" in kind:
+        return "provider returned an HTTP error; inspect the sanitized reason and rerun the target provider lane"
+
+    return None
+
+
+def script_for_label(value):
+    return {
+        "image": "scripts/live_media_image_smoke.exs",
+        "TTS": "scripts/live_media_speech_smoke.exs",
+        "STT": "scripts/live_media_transcription_smoke.exs",
+        "vision": "scripts/live_media_vision_smoke.exs",
+        "video": "scripts/live_media_video_smoke.exs",
+    }.get(value)
+
+
+check_details = check.get("details") if isinstance(check, dict) and isinstance(check.get("details"), dict) else {}
+reason_kinds = sorted(
+    {
+        kind
+        for kind in (
+            reason_kind(data.get("reason_kind")),
+            reason_kind(details.get("reason_kind")),
+            reason_kind(check.get("reason_kind")) if isinstance(check, dict) else None,
+            reason_kind(check_details.get("reason_kind")),
+        )
+        if kind
+    }
+)
+
+if (
+    data.get("status") != "completed"
+    or data.get("completed_count") != 1
+    or data.get("failed_count") != 0
+    or data.get("proof_object") != proof_object
+    or data.get("proof_scope") != "media_provider"
+    or details.get("provider") not in providers
+    or not check
+    or check.get("status") != "completed"
+    or check.get("proof_scope") != "media_provider"
+    or bad_cleanup
+):
+    if data.get("status") != "completed":
+        print(f"media proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("completed_count") != 1 or data.get("failed_count") != 0:
+        print("media proof count shape is not completed_count=1 failed_count=0", file=sys.stderr)
+    if data.get("proof_object") != proof_object:
+        print(f"media proof_object is {data.get('proof_object')}", file=sys.stderr)
+    if data.get("proof_scope") != "media_provider":
+        print(f"media proof_scope is {data.get('proof_scope')}", file=sys.stderr)
+    if details.get("provider") not in providers:
+        print(f"media proof provider is {details.get('provider')}", file=sys.stderr)
+    if not check or check.get("status") != "completed" or check.get("proof_scope") != "media_provider":
+        print(f"media proof check {' or '.join(check_names)} is missing or not completed", file=sys.stderr)
+    if bad_cleanup:
+        print(f"media proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if reason_kinds:
+        print(f"media proof reason_kind: {', '.join(reason_kinds)}", file=sys.stderr)
+        hints = sorted({hint for hint in map(reason_hint, reason_kinds) if hint})
+        if hints:
+            print(f"media proof remediation hint: {'; '.join(hints)}", file=sys.stderr)
+    provider = details.get("provider")
+    script = script_for_label(label)
+    if script and provider in providers and len(providers) > 1:
+        print(
+            f"media proof rerun command: LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start {script} --proof-path {path} --provider {provider}",
+            file=sys.stderr,
+        )
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "provider-backed $label media proof is present"
+  else
+    case "$?" in
+      66) block "provider-backed $label media proof is missing completed live evidence" ;;
+      *) fail "provider-backed $label media proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_media_provider_proofs() {
+  verify_media_provider_proof \
+    "image" \
+    "${LEMON_MEDIA_IMAGE_PROOF_JSON:-.lemon/proofs/media-image-smoke-latest.json}" \
+    "openai_image|vertex_imagen" \
+    "lemon.media_image_smoke" \
+    "media_provider_openai_image|media_provider_vertex_imagen"
+
+  verify_media_provider_proof \
+    "TTS" \
+    "${LEMON_MEDIA_SPEECH_PROOF_JSON:-.lemon/proofs/media-speech-smoke-latest.json}" \
+    "openai_tts|elevenlabs_tts|google_tts" \
+    "lemon.media_speech_smoke" \
+    "media_provider_openai_tts|media_provider_elevenlabs_tts|media_provider_google_tts"
+
+  verify_media_provider_proof \
+    "STT" \
+    "${LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON:-.lemon/proofs/media-transcription-smoke-latest.json}" \
+    "openai_transcribe|deepgram_transcribe" \
+    "lemon.media_transcription_smoke" \
+    "media_provider_openai_transcribe|media_provider_deepgram_transcribe"
+
+  verify_media_provider_proof \
+    "vision" \
+    "${LEMON_MEDIA_VISION_PROOF_JSON:-.lemon/proofs/media-vision-smoke-latest.json}" \
+    "openai_vision" \
+    "lemon.media_vision_smoke" \
+    "media_provider_openai_vision"
+
+  verify_media_provider_proof \
+    "video" \
+    "${LEMON_MEDIA_VIDEO_PROOF_JSON:-.lemon/proofs/media-video-smoke-latest.json}" \
+    "openai_video|vertex_veo" \
+    "lemon.media_video_smoke" \
+    "media_provider_openai_video|media_provider_vertex_veo"
+}
+
+verify_browser_proof() {
+  local proof_path="${LEMON_BROWSER_PROOF_JSON:-.lemon/proofs/browser-smoke-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "Browser proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+required_tools = {
+    "browser_navigate",
+    "browser_wait_for_selector",
+    "browser_evaluate",
+    "browser_hover",
+    "browser_select_option",
+    "browser_upload_file",
+    "browser_download",
+    "browser_snapshot",
+    "browser_type",
+    "browser_click",
+    "browser_screenshot",
+    "browser_screenshot_include_image",
+    "media_analyze_image_local_vision",
+    "browser_analyze_local_vision",
+    "browser_get_content",
+    "browser_events",
+    "browser_set_cookies",
+    "browser_get_cookies",
+    "browser_clear_state",
+    "browser_cdp_attach_mode",
+}
+required_flags = (
+    "model_visible_image_included",
+    "browser_to_media_vision_completed",
+    "browser_wait_for_selector_completed",
+    "browser_evaluate_completed",
+    "browser_hover_completed",
+    "browser_select_option_completed",
+    "browser_upload_file_completed",
+    "browser_download_completed",
+    "browser_analyze_completed",
+    "browser_analyze_model_visible_image_included",
+    "browser_cdp_attach_completed",
+    "browser_navigation_metadata_blocked",
+    "browser_navigation_public_route_guarded",
+)
+cleanup_keys = (
+    "contains_raw_sensitive_values",
+    "includes_raw_urls",
+    "includes_selectors",
+    "includes_typed_text",
+    "includes_cookie_values",
+    "includes_page_text",
+    "includes_artifact_paths",
+    "includes_raw_paths",
+    "includes_screenshot_bytes",
+)
+tools = set(data.get("exercised_tools") or [])
+missing_tools = sorted(required_tools - tools)
+false_flags = [key for key in required_flags if data.get(key) is not True]
+cleanup = data.get("cleanup") or data.get("progress_cleanup") or {}
+bad_cleanup = [key for key in cleanup_keys if cleanup.get(key) is not False]
+status = data.get("status") or ("completed" if data.get("result") == "passed" else data.get("result"))
+proof = data.get("proof")
+proof_scope = data.get("proof_scope")
+completed_count = data.get("completed_count") or 0
+failed_count = data.get("failed_count") or 0
+skipped_count = data.get("skipped_count") or 0
+progress_update_count = data.get("progress_update_count") or 0
+progress_browser_child_action_count = data.get("progress_browser_child_action_count") or 0
+
+if (
+    status != "completed"
+    or completed_count < len(required_tools)
+    or failed_count != 0
+    or skipped_count != 0
+    or progress_update_count < len(required_tools) * 2
+    or progress_browser_child_action_count < len(required_tools)
+    or (proof is not None and proof != "browser_smoke")
+    or (proof_scope is not None and proof_scope != "browser_smoke")
+    or missing_tools
+    or false_flags
+    or bad_cleanup
+):
+    if status != "completed":
+        print(f"browser proof status is {status}", file=sys.stderr)
+    if completed_count < len(required_tools) or failed_count != 0 or skipped_count != 0:
+        print(
+            f"browser proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')} skipped_count={data.get('skipped_count')}",
+            file=sys.stderr,
+        )
+    if progress_update_count < len(required_tools) * 2 or progress_browser_child_action_count < len(required_tools):
+        print(
+            f"browser progress counts are progress_update_count={data.get('progress_update_count')} progress_browser_child_action_count={data.get('progress_browser_child_action_count')}",
+            file=sys.stderr,
+        )
+    if proof is not None and proof != "browser_smoke":
+        print(f"browser proof name is {proof}", file=sys.stderr)
+    if proof_scope is not None and proof_scope != "browser_smoke":
+        print(f"browser proof_scope is {proof_scope}", file=sys.stderr)
+    if missing_tools:
+        print(f"browser proof missing tools: {', '.join(missing_tools)}", file=sys.stderr)
+    if false_flags:
+        print(f"browser proof incomplete flags: {', '.join(false_flags)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"browser proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "Browser proof is present"
+  else
+    case "$?" in
+      66) block "Browser proof is missing completed local evidence" ;;
+      *) fail "Browser proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_openai_compat_proof() {
+  local proof_path="${LEMON_OPENAI_COMPAT_PROOF_JSON:-.lemon/proofs/openai-compat-smoke-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "OpenAI-compatible API proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+results = data.get("results") or []
+by_name = {
+    row.get("name"): row
+    for row in results
+    if isinstance(row, dict) and row.get("name")
+}
+required = {
+    "health_and_capabilities",
+    "chat_wait",
+    "image_input_metadata",
+    "data_url_image_pass_through",
+    "non_vision_image_rejection",
+    "remote_image_url_fetch_policy",
+    "external_fetch_client",
+    "external_openai_sdk_client",
+    "external_python_sdk_client",
+    "response_continuation",
+    "stored_response",
+    "chat_stream",
+    "run_status_redaction",
+    "run_cancel",
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [
+    key
+    for key in ("includes_raw_prompts", "includes_raw_api_keys", "includes_raw_answers", "includes_raw_events")
+    if cleanup.get(key) is not False
+]
+
+if (
+    data.get("completed_count") != 14
+    or data.get("failed_count") != 0
+    or missing
+    or failed
+    or bad_cleanup
+):
+    if data.get("completed_count") != 14 or data.get("failed_count") != 0:
+        print(
+            f"OpenAI-compatible proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"OpenAI-compatible proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"OpenAI-compatible proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"OpenAI-compatible proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "OpenAI-compatible API proof is present"
+  else
+    case "$?" in
+      66) block "OpenAI-compatible API proof is missing completed local evidence" ;;
+      *) fail "OpenAI-compatible API proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_acp_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local object="$3"
+  local required_count="$4"
+  local required_rows_csv="$5"
+  local expected_updates="${6:-}"
+  local expected_client_requests="${7:-}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "ACP $label proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$object" "$required_count" "$required_rows_csv" "$expected_updates" "$expected_client_requests" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_object = sys.argv[2]
+required_count = int(sys.argv[3])
+required = {item for item in sys.argv[4].split(",") if item}
+expected_updates = sys.argv[5]
+expected_client_requests = sys.argv[6]
+data = json.loads(path.read_text(encoding="utf-8"))
+results = data.get("results") or []
+by_name = {
+    row.get("name"): row
+    for row in results
+    if isinstance(row, dict) and row.get("name")
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [
+    key
+    for key in (
+        "includes_raw_prompts",
+        "includes_raw_api_keys",
+        "includes_raw_answers",
+        "includes_raw_events",
+        "includes_raw_session_ids",
+        "includes_child_stderr",
+        "includes_raw_file_contents",
+        "includes_raw_file_paths",
+    )
+    if key in cleanup and cleanup.get(key) is not False
+]
+bad_updates = expected_updates and data.get("update_count") != int(expected_updates)
+bad_client_requests = expected_client_requests and data.get("client_request_count") != int(expected_client_requests)
+
+if (
+    data.get("object") != expected_object
+    or data.get("completed_count") != required_count
+    or data.get("failed_count") != 0
+    or missing
+    or failed
+    or bad_cleanup
+    or bad_updates
+    or bad_client_requests
+):
+    if data.get("object") != expected_object:
+        print(f"ACP proof object is {data.get('object')}", file=sys.stderr)
+    if data.get("completed_count") != required_count or data.get("failed_count") != 0:
+        print(
+            f"ACP proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"ACP proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"ACP proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"ACP proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    if bad_updates:
+        print(f"ACP proof update_count is {data.get('update_count')}", file=sys.stderr)
+    if bad_client_requests:
+        print(f"ACP proof client_request_count is {data.get('client_request_count')}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "ACP $label proof is present"
+  else
+    case "$?" in
+      66) block "ACP $label proof is missing completed local evidence" ;;
+      *) fail "ACP $label proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_acp_proofs() {
+  verify_acp_proof \
+    "deterministic stdio" \
+    "${LEMON_ACP_STDIO_PROOF_JSON:-.lemon/proofs/acp-stdio-smoke-latest.json}" \
+    "lemon.acp_stdio_smoke" \
+    6 \
+    "initialize,session_new,queued_prompt,wait_prompt_updates,session_list_resume_close,parse_error"
+
+  verify_acp_proof \
+    "external Node client" \
+    "${LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON:-.lemon/proofs/acp-stdio-external-client-latest.json}" \
+    "lemon.acp_stdio_external_client_smoke" \
+    9 \
+    "initialize,session_new,queued_prompt,wait_prompt_updates,client_file_and_permission_requests,approval_bus_permission_bridge,list_resume_close,unsupported_image_block,parse_error" \
+    2 \
+    6
+
+  verify_acp_proof \
+    "official SDK client" \
+    "${LEMON_ACP_OFFICIAL_SDK_PROOF_JSON:-.lemon/proofs/acp-official-sdk-client-latest.json}" \
+    "lemon.acp_official_sdk_client_smoke" \
+    8 \
+    "initialize,session_new,queued_prompt,wait_prompt_updates,client_file_and_permission_requests,approval_bus_permission_bridge,load_cancel,unsupported_image_block" \
+    2 \
+    4
+}
+
+verify_mcp_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local proof_name="$3"
+  local required_count="$4"
+  local required_rows_csv="$5"
+
+  if [ ! -f "$proof_path" ]; then
+    block "MCP $label proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$proof_name" "$required_count" "$required_rows_csv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_proof = sys.argv[2]
+required_count = int(sys.argv[3])
+required = set(filter(None, sys.argv[4].split(",")))
+
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+by_name = {
+    row.get("name"): row
+    for row in checks
+    if isinstance(row, dict) and row.get("name")
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [
+    key
+    for key in (
+        "includes_raw_paths",
+        "includes_raw_filenames",
+        "includes_raw_prompts",
+        "includes_raw_provider_responses",
+        "includes_raw_tool_arguments",
+        "includes_raw_tool_results",
+        "includes_server_io",
+    )
+    if cleanup.get(key) is not False
+]
+
+if (
+    data.get("proof") != expected_proof
+    or data.get("status") != "completed"
+    or data.get("completed_count") != required_count
+    or data.get("failed_count") != 0
+    or data.get("skipped_count") != 0
+    or missing
+    or failed
+    or bad_cleanup
+):
+    if data.get("proof") != expected_proof:
+        print(f"MCP proof name is {data.get('proof')}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"MCP proof status is {data.get('status')}", file=sys.stderr)
+    if (
+        data.get("completed_count") != required_count
+        or data.get("failed_count") != 0
+        or data.get("skipped_count") != 0
+    ):
+        print(
+            f"MCP proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')} skipped_count={data.get('skipped_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"MCP proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"MCP proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"MCP proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "MCP $label proof is present"
+  else
+    case "$?" in
+      66) block "MCP $label proof is missing completed local evidence" ;;
+      *) fail "MCP $label proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_mcp_proofs() {
+  verify_mcp_proof \
+    "stdio" \
+    "${LEMON_MCP_STDIO_PROOF_JSON:-.lemon/proofs/mcp-stdio-latest.json}" \
+    "mcp_stdio_smoke" \
+    17 \
+    "mcp_stdio_degraded_startup_missing_command,mcp_stdio_client_initializes,mcp_stdio_lists_tools,mcp_stdio_lists_resources,mcp_stdio_reads_resource,mcp_stdio_lists_prompts,mcp_stdio_gets_prompt,mcp_stdio_calls_tool_success,mcp_stdio_calls_tool_error,mcp_source_discovers_prefixed_stdio_tools,mcp_source_invokes_resource_and_prompt_utilities,mcp_registry_exposes_prefixed_stdio_tools,mcp_source_applies_stdio_filters,mcp_server_accepts_spec_initialized_notification,mcp_stdio_sampling_callback_wrapper,mcp_stdio_sampling_reviewed_model_policy,mcp_stdio_sampling_ops_approval_bridge"
+
+  verify_mcp_proof \
+    "Streamable HTTP" \
+    "${LEMON_MCP_HTTP_PROOF_JSON:-.lemon/proofs/mcp-http-latest.json}" \
+    "mcp_http_smoke" \
+    24 \
+    "mcp_http_client_initializes,mcp_http_lists_tools,mcp_http_calls_tool_success,mcp_http_calls_tool_error,mcp_http_lists_resources,mcp_http_reads_resource,mcp_http_lists_prompts,mcp_http_gets_prompt,mcp_http_streamable_sse_response_and_session_headers,mcp_http_oauth_protected_resource_metadata,mcp_http_oauth_authorization_server_metadata,mcp_http_oauth_client_credentials_token_acquisition,mcp_http_oauth_client_credentials_token_refresh,mcp_http_oauth_refresh_token_grant,mcp_http_oauth_client_secret_basic_token_auth,mcp_http_oauth_pkce_authorization_code,mcp_http_oauth_token_cache_resume,mcp_source_discovers_prefixed_http_tools,mcp_source_invokes_http_tool,mcp_source_invokes_http_resource_and_prompt_utilities,mcp_registry_exposes_prefixed_http_tools,mcp_source_status_reports_http_capabilities,mcp_source_applies_http_filters,mcp_source_http_oauth_loopback_callback"
+
+  verify_mcp_proof \
+    "SSE" \
+    "${LEMON_MCP_SSE_PROOF_JSON:-.lemon/proofs/mcp-sse-latest.json}" \
+    "mcp_sse_smoke" \
+    14 \
+    "mcp_sse_client_initializes,mcp_sse_lists_tools,mcp_sse_calls_tool_success,mcp_sse_calls_tool_error,mcp_sse_lists_resources,mcp_sse_reads_resource,mcp_sse_lists_prompts,mcp_sse_gets_prompt,mcp_source_discovers_prefixed_sse_tools,mcp_source_invokes_sse_tool,mcp_source_invokes_sse_resource_and_prompt_utilities,mcp_registry_exposes_prefixed_sse_tools,mcp_source_status_reports_sse_capabilities,mcp_source_applies_sse_filters"
+}
+
+verify_lsp_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local proof_name="$3"
+
+  if [ ! -f "$proof_path" ]; then
+    block "LSP $label proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$proof_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_proof = sys.argv[2]
+servers = {
+    "pyright",
+    "gopls",
+    "clangd",
+    "rust_analyzer",
+    "typescript_language_server",
+    "elixir_ls",
+}
+required = {f"{expected_proof}_{server}_editor_flow" for server in servers}
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+by_name = {
+    row.get("name"): row
+    for row in checks
+    if isinstance(row, dict) and row.get("name")
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [
+    key
+    for key in (
+        "includes_raw_paths",
+        "includes_file_contents",
+        "includes_diagnostics_output",
+        "includes_raw_session_ids",
+        "includes_server_io",
+    )
+    if cleanup.get(key) is not False
+]
+
+if (
+    data.get("proof") != expected_proof
+    or data.get("status") != "completed"
+    or data.get("completed_count") != len(servers)
+    or data.get("failed_count") != 0
+    or data.get("skipped_count") != 0
+    or missing
+    or failed
+    or bad_cleanup
+):
+    if data.get("proof") != expected_proof:
+        print(f"LSP proof name is {data.get('proof')}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"LSP proof status is {data.get('status')}", file=sys.stderr)
+    if (
+        data.get("completed_count") != len(servers)
+        or data.get("failed_count") != 0
+        or data.get("skipped_count") != 0
+    ):
+        print(
+            f"LSP proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')} skipped_count={data.get('skipped_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"LSP proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"LSP proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"LSP proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "LSP $label proof is present"
+  else
+    case "$?" in
+      66) block "LSP $label proof is missing completed local evidence" ;;
+      *) fail "LSP $label proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_lsp_proofs() {
+  verify_lsp_proof \
+    "project fixtures" \
+    "${LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON:-.lemon/proofs/lsp-project-fixtures-latest.json}" \
+    "lsp_project_fixtures_smoke"
+
+  verify_lsp_proof \
+    "real repo fixtures" \
+    "${LEMON_LSP_REAL_REPO_PROOF_JSON:-.lemon/proofs/lsp-real-repo-fixtures-latest.json}" \
+    "lsp_real_repo_fixtures_smoke"
+}
+
+verify_extension_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local proof_name="$3"
+  local required_count="$4"
+  local required_rows_csv="$5"
+  local redaction_keys_csv="$6"
+
+  if [ ! -f "$proof_path" ]; then
+    block "$label proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$proof_name" "$required_count" "$required_rows_csv" "$redaction_keys_csv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_proof = sys.argv[2]
+required_count = int(sys.argv[3])
+required = set(filter(None, sys.argv[4].split(",")))
+redaction_keys = tuple(filter(None, sys.argv[5].split(",")))
+
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+by_name = {
+    row.get("name"): row
+    for row in checks
+    if isinstance(row, dict) and row.get("name")
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+redaction = data.get("redaction") or {}
+bad_redaction = [
+    key
+    for key in redaction_keys
+    if redaction.get(key) is not False
+]
+skipped_count = data.get("skipped_count") or 0
+
+if (
+    data.get("proof") != expected_proof
+    or data.get("status") != "completed"
+    or data.get("completed_count") != required_count
+    or data.get("failed_count") != 0
+    or skipped_count != 0
+    or missing
+    or failed
+    or bad_redaction
+):
+    if data.get("proof") != expected_proof:
+        print(f"proof name is {data.get('proof')}", file=sys.stderr)
+    if data.get("status") != "completed":
+        print(f"proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("completed_count") != required_count or data.get("failed_count") != 0 or skipped_count != 0:
+        print(
+            f"proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')} skipped_count={data.get('skipped_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_redaction:
+        print(f"proof has bad redaction flags: {', '.join(bad_redaction)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "$label proof is present"
+  else
+    case "$?" in
+      66) block "$label proof is missing completed local evidence" ;;
+      *) fail "$label proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_extension_proofs() {
+  verify_extension_proof \
+    "extension host" \
+    "${LEMON_EXTENSION_HOST_PROOF_JSON:-.lemon/proofs/extension-host-smoke-latest.json}" \
+    "extension_host_smoke" \
+    7 \
+    "default_extension_directory_does_not_execute_without_trust,explicit_extension_path_loads_beam_tool,extension_tool_executes_through_registry,extension_tool_execution_emits_redacted_telemetry,builtin_tool_wins_extension_conflict,extensions_disabled_blocks_explicit_path_execution,extensions_env_disabled_blocks_explicit_path_execution" \
+    "contains_raw_paths,contains_file_contents,contains_load_error_messages,contains_tool_result_payload"
+
+  verify_extension_proof \
+    "WASM telemetry" \
+    "${LEMON_WASM_TELEMETRY_PROOF_JSON:-.lemon/proofs/wasm-tool-telemetry-latest.json}" \
+    "wasm_tool_telemetry_smoke" \
+    4 \
+    "wasm_tool_success_emits_redacted_start_stop_telemetry,wasm_tool_error_emits_redacted_error_status,wasm_tool_exit_emits_redacted_exception_telemetry,wasm_tool_telemetry_omits_raw_sensitive_values" \
+    "contains_raw_params,contains_raw_paths,contains_raw_tool_call_ids,contains_sidecar_error_text,contains_tool_result_payload"
+
+  verify_extension_proof \
+    "WASM policy" \
+    "${LEMON_WASM_POLICY_PROOF_JSON:-.lemon/proofs/wasm-policy-latest.json}" \
+    "wasm_policy_smoke" \
+    5 \
+    "wasm_policy_http_requires_approval,wasm_policy_tool_invoke_requires_approval,wasm_policy_exec_requires_approval,wasm_policy_safe_capabilities_execute_without_approval,wasm_policy_explicit_never_overrides_default_approval" \
+    "contains_raw_params,contains_raw_paths,contains_raw_tool_call_ids"
+
+  verify_extension_proof \
+    "extension registry audit" \
+    "${LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON:-.lemon/proofs/extension-registry-audit-latest.json}" \
+    "extension_registry_audit_smoke" \
+    5 \
+    "extension_registry_validates_code_free_index,extension_registry_blocks_unaudited_install,extension_registry_detects_audited_update,extension_registry_audit_does_not_load_code,extension_registry_audit_redacts_sensitive_values" \
+    "contains_raw_registry_paths,contains_package_names,contains_distribution_urls,contains_manifest_contents"
+
+  verify_extension_proof \
+    "WASM lifecycle" \
+    "${LEMON_WASM_LIFECYCLE_PROOF_JSON:-.lemon/proofs/wasm-lifecycle-latest.json}" \
+    "wasm_lifecycle_smoke" \
+    5 \
+    "wasm_lifecycle_discover_emits_redacted_start_stop,wasm_lifecycle_invoke_emits_redacted_start_stop,wasm_lifecycle_status_tracks_running_sidecar,wasm_lifecycle_stop_terminates_sidecar,wasm_lifecycle_telemetry_omits_raw_sensitive_values" \
+    "contains_raw_cwd,contains_raw_params,contains_raw_session_ids,contains_raw_tool_names"
+}
+
+verify_cron_proof() {
+  local label="$1"
+  local proof_path="$2"
+  local expected_object="$3"
+  local object_key="$4"
+  local required_count="$5"
+  local required_rows_csv="$6"
+  local cleanup_keys_csv="$7"
+
+  if [ ! -f "$proof_path" ]; then
+    block "cron $label proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" "$expected_object" "$object_key" "$required_count" "$required_rows_csv" "$cleanup_keys_csv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected_object = sys.argv[2]
+object_key = sys.argv[3]
+required_count = int(sys.argv[4])
+required = set(filter(None, sys.argv[5].split(",")))
+cleanup_keys = tuple(filter(None, sys.argv[6].split(",")))
+
+data = json.loads(path.read_text(encoding="utf-8"))
+checks = data.get("checks") or []
+by_name = {
+    row.get("name"): row
+    for row in checks
+    if isinstance(row, dict) and row.get("name")
+}
+missing = sorted(required - set(by_name))
+failed = sorted(
+    name
+    for name in required & set(by_name)
+    if by_name[name].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [key for key in cleanup_keys if cleanup.get(key) is not False]
+actual_object = data.get(object_key)
+proof_status = data.get("status")
+checks_completed = not missing and not failed
+status_ok = proof_status == "completed" or (proof_status is None and checks_completed)
+
+if (
+    actual_object != expected_object
+    or not status_ok
+    or data.get("completed_count") != required_count
+    or data.get("failed_count") != 0
+    or (data.get("skipped_count") or 0) != 0
+    or missing
+    or failed
+    or bad_cleanup
+):
+    if actual_object != expected_object:
+        print(f"cron proof object is {actual_object}", file=sys.stderr)
+    if not status_ok:
+        print(f"cron proof status is {proof_status}", file=sys.stderr)
+    if data.get("completed_count") != required_count or data.get("failed_count") != 0 or (data.get("skipped_count") or 0) != 0:
+        print(
+            f"cron proof counts are completed_count={data.get('completed_count')} failed_count={data.get('failed_count')} skipped_count={data.get('skipped_count')}",
+            file=sys.stderr,
+        )
+    if missing:
+        print(f"cron proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"cron proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"cron proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "cron $label proof is present"
+  else
+    case "$?" in
+      66) block "cron $label proof is missing completed local evidence" ;;
+      *) fail "cron $label proof is unreadable" ;;
+    esac
+  fi
+}
+
+verify_cron_proofs() {
+  verify_cron_proof \
+    "diagnostics" \
+    "${LEMON_CRON_DIAGNOSTICS_PROOF_JSON:-.lemon/proofs/cron-diagnostics-latest.json}" \
+    "lemon.cron_diagnostics_smoke" \
+    "proof_object" \
+    4 \
+    "cron_diagnostics_counts,cron_diagnostics_retry_policy,cron_diagnostics_redaction,cron_support_bundle_entry" \
+    "includes_raw_session_ids,includes_prompts,includes_outputs,includes_errors,includes_raw_agent_ids,includes_raw_memory_paths,includes_meta_values"
+
+  verify_cron_proof \
+    "runtime restart" \
+    "${LEMON_CRON_RUNTIME_RESTART_PROOF_JSON:-.lemon/proofs/cron-runtime-restart-latest.json}" \
+    "lemon.cron_runtime_restart_smoke" \
+    "object" \
+    7 \
+    "runtime_booted,cron_api_ready,pre_restart_scheduled_run_observed,runtime_restarted,persisted_cron_state_loaded,post_restart_scheduled_run_observed,cleanup_complete" \
+    "includes_raw_prompts,includes_raw_session_ids,includes_raw_outputs,includes_raw_store_path"
+
+  verify_cron_proof \
+    "channel origin" \
+    "${LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON:-.lemon/proofs/cron-channel-origin-latest.json}" \
+    "lemon.cron_channel_origin_smoke" \
+    "proof_object" \
+    2 \
+    "telegram_channel_origin_cron_delivery,discord_channel_origin_cron_delivery" \
+    "includes_raw_session_ids,includes_prompts,includes_outputs,includes_raw_channel_ids,includes_raw_peer_ids,includes_raw_cron_ids"
+}
+
+verify_terminal_backend_proof() {
+  local proof_path="${LEMON_TERMINAL_BACKEND_PROOF_JSON:-.lemon/proofs/terminal-backend-latest.json}"
+
+  if [ ! -f "$proof_path" ]; then
+    block "terminal backend proof artifact is missing: $proof_path"
+    return
+  fi
+
+  if python3 - "$proof_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+results = data.get("results") or []
+by_backend = {
+    row.get("backend"): row
+    for row in results
+    if isinstance(row, dict) and row.get("backend")
+}
+required = {"local", "local_pty", "docker", "ssh"}
+missing = sorted(required - set(by_backend))
+failed = sorted(
+    backend
+    for backend in required & set(by_backend)
+    if by_backend[backend].get("status") != "completed"
+)
+cleanup = data.get("cleanup") or {}
+bad_cleanup = [
+    key
+    for key in ("includes_commands", "includes_environment", "includes_process_output")
+    if cleanup.get(key) is not False
+]
+
+if (
+    data.get("status") != "completed"
+    or data.get("failed_count") != 0
+    or missing
+    or failed
+    or bad_cleanup
+):
+    if data.get("status") != "completed":
+        print(f"terminal backend proof status is {data.get('status')}", file=sys.stderr)
+    if data.get("failed_count") != 0:
+        print(f"terminal backend proof failed_count is {data.get('failed_count')}", file=sys.stderr)
+    if missing:
+        print(f"terminal backend proof missing rows: {', '.join(missing)}", file=sys.stderr)
+    if failed:
+        print(f"terminal backend proof incomplete rows: {', '.join(failed)}", file=sys.stderr)
+    if bad_cleanup:
+        print(f"terminal backend proof has bad cleanup flags: {', '.join(bad_cleanup)}", file=sys.stderr)
+    sys.exit(66)
+
+print("ok")
+PY
+  then
+    pass "terminal backend proof is present"
+  else
+    case "$?" in
+      66) block "terminal backend proof is missing completed live evidence" ;;
+      *) fail "terminal backend proof is unreadable" ;;
+    esac
+  fi
+}
+
 cd "$ROOT"
 
 if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
@@ -360,25 +2285,6 @@ else
   block "local artifact verification not run; pass the artifact directory as the second argument"
 fi
 
-remote_preflight
-
-if command -v gh >/dev/null 2>&1; then
-  github_output="$(mktemp)"
-  if scripts/verify_github_release_artifacts "$VERSION" >"$github_output" 2>&1; then
-    pass "public GitHub Release artifacts verify and boot for v$VERSION"
-  else
-    github_status="$?"
-    cat "$github_output" >&2
-    case "$github_status" in
-      66) block "public GitHub Release artifacts are not available for v$VERSION" ;;
-      *) fail "public GitHub Release artifact verification failed for v$VERSION" ;;
-    esac
-  fi
-  rm -f "$github_output"
-else
-  block "gh CLI is not available; public GitHub Release artifact verification not run"
-fi
-
 if [ -n "${LEMON_EVAL_API_KEY:-}" ] ||
    [ -n "${LEMON_EVAL_API_KEY_SECRET:-}" ] ||
    [ -n "${INTEGRATION_API_KEY:-}" ] ||
@@ -391,6 +2297,26 @@ else
 fi
 
 verify_discord_live_proof
+verify_discord_live_redacted_proof
+verify_discord_media_slash_proof
+verify_discord_media_slash_redacted_proof
+verify_discord_rollback_slash_proof
+verify_discord_rollback_slash_redacted_proof
+verify_discord_all_slash_proof
+verify_discord_all_slash_redacted_proof
+verify_discord_dm_redacted_proof
+verify_discord_free_response_redacted_proof
+verify_discord_slash_client_click_proof
+verify_media_directive_redacted_proofs
+verify_media_provider_proofs
+verify_browser_proof
+verify_openai_compat_proof
+verify_acp_proofs
+verify_mcp_proofs
+verify_lsp_proofs
+verify_extension_proofs
+verify_cron_proofs
+verify_terminal_backend_proof
 
 echo ""
 

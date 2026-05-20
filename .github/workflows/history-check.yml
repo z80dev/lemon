@@ -1,0 +1,40 @@
+name: History Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check-common-ancestor:
+    name: Reject unrelated history
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      - name: Require a common ancestor with base
+        run: |
+          if ! BASE=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+            echo "::error::This PR has no common ancestor with ${GITHUB_BASE_REF}."
+            echo ""
+            echo "The branch history is disconnected from the target branch."
+            echo "Merging it would graft an unrelated root into Lemon's main history"
+            echo "and can collapse blame for the entire repository snapshot."
+            echo ""
+            echo "Recreate the branch from the current target branch, then"
+            echo "cherry-pick or re-apply the intended changes."
+            exit 1
+          fi
+
+          echo "::notice::Common ancestor with ${GITHUB_BASE_REF}: $BASE"

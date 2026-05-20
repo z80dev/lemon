@@ -101,6 +101,9 @@ drop = "oldest"
 [gateway.telegram]
 bot_token = "123456:token"
 allowed_chat_ids = [12345678]
+# default_account_id = "default"
+# default_chat_id = 12345678
+# default_thread_id = 35
 poll_interval_ms = 1000
 edit_throttle_ms = 1000
 debounce_ms = 1000
@@ -192,6 +195,9 @@ enabled = true
 # bot_token = ""
 # allowed_guild_ids = []
 # allowed_channel_ids = []
+# default_account_id = "default"
+# default_channel_id = ""
+# default_thread_id = ""
 # deny_unbound_channels = false
 
 # --- Profiles ---

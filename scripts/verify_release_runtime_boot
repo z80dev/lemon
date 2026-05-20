@@ -120,6 +120,96 @@ wait_for_health() {
   return 1
 }
 
+verify_support_bundle() {
+  local profile="$1"
+  local bundle_path="$2"
+
+  python3 - "$profile" "$bundle_path" <<'PY'
+import json
+import sys
+import zipfile
+
+profile, bundle_path = sys.argv[1:]
+required_entries = {
+    "README.txt",
+    "doctor_report.json",
+    "channel_diagnostics.json",
+    "channel_readiness.json",
+    "readiness_summary.json",
+    "proof_diagnostics.json",
+}
+
+try:
+    with zipfile.ZipFile(bundle_path) as archive:
+        names = set(archive.namelist())
+        missing = sorted(required_entries - names)
+except zipfile.BadZipFile:
+    print(f"{profile}: support bundle is not a valid zip: {bundle_path}", file=sys.stderr)
+    sys.exit(1)
+
+if missing:
+    print(
+        f"{profile}: support bundle missing required entries: {', '.join(missing)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+with zipfile.ZipFile(bundle_path) as archive:
+    readiness_summary = json.loads(archive.read("readiness_summary.json").decode("utf-8"))
+
+proof_gates = readiness_summary.get("proof_gates", {})
+proof_gate_summary = readiness_summary.get("proof_gate_summary", {})
+provider_media = proof_gates.get("providerMedia", {})
+required_gates = {
+    "discordDm",
+    "discordSlashClientClick",
+    "discordSlashRegistration",
+    "providerMedia",
+    "terminalBackends",
+}
+
+if provider_media.get("status") not in {"passed", "warning"}:
+    print(
+        f"{profile}: readiness_summary.json missing providerMedia proof gate status",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if proof_gate_summary.get("gateCount") != 5:
+    print(
+        f"{profile}: readiness_summary.json proof_gate_summary gateCount is not 5",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if not isinstance(proof_gate_summary.get("statuses"), dict):
+    print(
+        f"{profile}: readiness_summary.json proof_gate_summary statuses is not an object",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+missing_gate_ids = sorted(required_gates - set(proof_gates))
+missing_status_ids = sorted(required_gates - set(proof_gate_summary["statuses"]))
+
+if missing_gate_ids:
+    print(
+        f"{profile}: readiness_summary.json proof_gates missing gate ids: "
+        + ", ".join(missing_gate_ids),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if missing_status_ids:
+    print(
+        f"{profile}: readiness_summary.json proof_gate_summary statuses missing gate ids: "
+        + ", ".join(missing_status_ids),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+}
+
 verified_profiles=0
 
 while IFS=$'\t' read -r profile filename; do
@@ -171,6 +261,8 @@ while IFS=$'\t' read -r profile filename; do
     echo "$profile: support bundle was not created at $bundle_path" >&2
     exit 1
   fi
+
+  verify_support_bundle "$profile" "$bundle_path"
 
   echo "ok $profile booted, health checked, and generated support bundle"
   verified_profiles=$((verified_profiles + 1))

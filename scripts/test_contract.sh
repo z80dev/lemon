@@ -138,4 +138,40 @@ grep -q "missing required release artifact profile" /tmp/lemon-artifact-contract
 
 rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
 
+[ -x "$ROOT/scripts/verify_source_install" ] || fail "source install verifier must be executable"
+bash -n "$ROOT/scripts/verify_source_install"
+grep -q './bin/lemon setup runtime --profile runtime_min --non-interactive' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon setup wrapper"
+grep -q './bin/lemon channels --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon channels wrapper"
+grep -q './bin/lemon config validate --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon config wrapper"
+grep -q './bin/lemon doctor --json' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon doctor wrapper"
+grep -q './bin/lemon media --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon media wrapper"
+grep -q './bin/lemon models --provider anthropic --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon models wrapper"
+grep -q './bin/lemon providers --provider anthropic --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon providers wrapper"
+grep -q './bin/lemon policy list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon policy wrapper"
+grep -q './bin/lemon proofs --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon proofs wrapper"
+grep -q './bin/lemon readiness --project-dir' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon readiness wrapper"
+grep -q './bin/lemon secrets status' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon secrets wrapper"
+grep -q './bin/lemon skill list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon skill wrapper"
+grep -q './bin/lemon usage' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon usage wrapper"
+grep -q './bin/lemon update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise the ./bin/lemon update wrapper"
+"$ROOT/scripts/verify_source_install" --help >/tmp/lemon-source-install-help.out 2>&1 &&
+  fail "source install verifier help should exit 2 like other usage paths"
+[ "$?" -eq 2 ] || fail "source install verifier help should exit 2"
+grep -q "Verifies the supported source-install path" /tmp/lemon-source-install-help.out ||
+  fail "source install verifier help should describe its contract"
+
 echo "test runner contract ok"

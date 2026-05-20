@@ -63,6 +63,24 @@ if is_binary(control_plane_port) and control_plane_port != "" do
   config :lemon_control_plane, :port, String.to_integer(control_plane_port)
 end
 
+gateway_health_port = System.get_env("LEMON_GATEWAY_HEALTH_PORT")
+
+if is_binary(gateway_health_port) and gateway_health_port != "" do
+  config :lemon_gateway, :health_port, String.to_integer(gateway_health_port)
+end
+
+router_health_port = System.get_env("LEMON_ROUTER_HEALTH_PORT")
+
+if is_binary(router_health_port) and router_health_port != "" do
+  config :lemon_router, :health_port, String.to_integer(router_health_port)
+end
+
+goal_judge_model = System.get_env("LEMON_GOAL_JUDGE_MODEL")
+
+if is_binary(goal_judge_model) and String.trim(goal_judge_model) != "" do
+  config :lemon_automation, :goal_judge_model, String.trim(goal_judge_model)
+end
+
 # Auto-loop: automatically start and restart games
 if System.get_env("LEMON_SIM_AUTO_LOOP") in ["1", "true", "TRUE"] do
   werewolf_players =

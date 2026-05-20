@@ -13,6 +13,9 @@ config :lemon_core, LemonCore.Store,
 # In dev, if no browser node is paired/online, allow browser.request to use the local driver.
 config :lemon_control_plane, :browser_local_fallback, true
 
+config :lemon_automation,
+  goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
+
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4080],
   check_origin: false,

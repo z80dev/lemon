@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_source_install [--project-dir PATH] [--skip-compile] [--skip-doctor]
+
+Verifies the supported source-install path:
+  - checks Elixir and Erlang/OTP toolchain availability
+  - checks source-wrapper help advertises setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
+  - checks locked dependency resolution
+  - compiles with warnings as errors unless --skip-compile is set
+  - checks source-wrapper non-interactive setup runtime dispatch
+  - checks source-wrapper promoted channel readiness
+  - checks source-wrapper config validation
+  - checks source-wrapper media diagnostics
+  - checks source-wrapper model catalog listing
+  - checks source-wrapper provider readiness listing
+  - checks source-wrapper model policy listing
+  - checks source-wrapper proof artifact listing
+  - checks source-wrapper readiness summary
+  - checks source-wrapper secrets status
+  - checks source-wrapper skill listing
+  - checks source-wrapper usage diagnostics
+  - checks stage-1 local update dry-run dispatch
+  - runs source-wrapper doctor JSON diagnostics and support-bundle generation unless --skip-doctor is set
+EOF
+  exit 2
+}
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_DIR="$ROOT"
+SKIP_COMPILE=false
+SKIP_DOCTOR=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project-dir)
+      [ "$#" -ge 2 ] || usage
+      PROJECT_DIR="$2"
+      shift 2
+      ;;
+    --skip-compile)
+      SKIP_COMPILE=true
+      shift
+      ;;
+    --skip-doctor)
+      SKIP_DOCTOR=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+cd "$ROOT"
+
+fail() {
+  echo "error $*" >&2
+  exit 1
+}
+
+ok() {
+  echo "ok $*"
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "$1 not found on PATH"
+  fi
+
+  ok "$1 found: $(command -v "$1")"
+}
+
+require_command elixir
+require_command mix
+
+help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
+./bin/lemon --help >"$help_output"
+for subcommand in setup channels config doctor send media models providers policy proofs readiness secrets skill usage update; do
+  if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
+    fail "source wrapper help did not advertise ./bin/lemon $subcommand"
+  fi
+done
+rm -f "$help_output"
+ok "source-wrapper help advertises setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
+
+elixir -e '
+required = Version.parse!("1.19.5")
+current = Version.parse!(System.version())
+if Version.compare(current, required) == :lt do
+  IO.puts(:stderr, "error Elixir #{System.version()} is below required 1.19.5")
+  System.halt(1)
+end
+IO.puts("ok Elixir #{System.version()} >= 1.19.5")
+'
+
+elixir -e '
+otp =
+  :erlang.system_info(:otp_release)
+  |> List.to_string()
+  |> String.to_integer()
+
+if otp < 28 do
+  IO.puts(:stderr, "error Erlang/OTP #{otp} is below required major 28")
+  System.halt(1)
+end
+
+IO.puts("ok Erlang/OTP #{otp} >= 28")
+'
+
+mix deps.get --check-locked
+ok "dependencies resolve without lockfile drift"
+
+if ! $SKIP_COMPILE; then
+  MIX_ENV=test mix compile --warnings-as-errors
+  ok "test compile passes with warnings as errors"
+fi
+
+setup_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-runtime.XXXXXX")"
+channels_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-channels.XXXXXX")"
+config_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-config.XXXXXX")"
+media_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-media.XXXXXX")"
+models_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-models.XXXXXX")"
+providers_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-providers.XXXXXX")"
+policy_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-policy.XXXXXX")"
+proofs_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-proofs.XXXXXX")"
+readiness_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-readiness.XXXXXX")"
+secrets_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-secrets.XXXXXX")"
+skill_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-skill.XXXXXX")"
+usage_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-usage.XXXXXX")"
+update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
+cleanup_setup_output() {
+  rm -f "$setup_output"
+  rm -f "$channels_output"
+  rm -f "$config_output"
+  rm -f "$media_output"
+  rm -f "$models_output"
+  rm -f "$providers_output"
+  rm -f "$policy_output"
+  rm -f "$proofs_output"
+  rm -f "$readiness_output"
+  rm -f "$secrets_output"
+  rm -f "$skill_output"
+  rm -f "$usage_output"
+  rm -f "$update_output"
+}
+trap cleanup_setup_output EXIT
+
+MIX_ENV=test ./bin/lemon setup runtime --profile runtime_min --non-interactive >"$setup_output"
+grep -q "mix release lemon_runtime_min" "$setup_output" ||
+  fail "setup runtime output did not include lemon_runtime_min release command"
+ok "non-interactive setup runtime dispatch works"
+
+MIX_ENV=test ./bin/lemon channels --project-dir "$PROJECT_DIR" >"$channels_output"
+grep -q "Lemon Channels" "$channels_output" ||
+  fail "channels output did not include readiness heading"
+grep -q "Promoted platforms: telegram, discord" "$channels_output" ||
+  fail "channels output did not document promoted platforms"
+grep -q "Includes raw bot tokens: false" "$channels_output" ||
+  fail "channels output did not document bot token cleanup"
+grep -q "Includes raw proof details: false" "$channels_output" ||
+  fail "channels output did not document proof-detail cleanup"
+ok "source-wrapper promoted channel readiness works"
+
+MIX_ENV=test ./bin/lemon config validate --project-dir "$PROJECT_DIR" >"$config_output"
+grep -q "Configuration is valid" "$config_output" ||
+  fail "config validation output did not report a valid configuration"
+ok "source-wrapper config validation works"
+
+MIX_ENV=test ./bin/lemon media --project-dir "$PROJECT_DIR" --limit 1 >"$media_output"
+grep -q "Lemon Media" "$media_output" ||
+  fail "media output did not include media heading"
+grep -q "Provider proofs:" "$media_output" ||
+  fail "media output did not include provider proof state"
+grep -q "Includes prompts: false" "$media_output" ||
+  fail "media output did not document prompt cleanup"
+grep -q "Includes provider responses: false" "$media_output" ||
+  fail "media output did not document provider-response cleanup"
+ok "source-wrapper media diagnostics work"
+
+MIX_ENV=test ./bin/lemon models --provider anthropic --limit 1 >"$models_output"
+grep -q "Lemon Models" "$models_output" ||
+  fail "models output did not include catalog heading"
+grep -q "Includes credentials: false" "$models_output" ||
+  fail "models output did not document credential cleanup"
+ok "source-wrapper model catalog listing works"
+
+MIX_ENV=test ./bin/lemon providers --provider anthropic --project-dir "$PROJECT_DIR" >"$providers_output"
+grep -q "Lemon Providers" "$providers_output" ||
+  fail "providers output did not include readiness heading"
+grep -q "Includes raw API keys: false" "$providers_output" ||
+  fail "providers output did not document API key cleanup"
+ok "source-wrapper provider readiness listing works"
+
+MIX_ENV=test ./bin/lemon policy list >"$policy_output"
+grep -Eq "No model policies set\.|Model Policies:" "$policy_output" ||
+  fail "policy list output did not report model policy state"
+ok "source-wrapper model policy listing works"
+
+MIX_ENV=test ./bin/lemon proofs --project-dir "$PROJECT_DIR" --limit 1 >"$proofs_output"
+grep -q "Lemon Proofs" "$proofs_output" ||
+  fail "proofs output did not include proof heading"
+grep -q "Includes raw paths: false" "$proofs_output" ||
+  fail "proofs output did not document raw path cleanup"
+grep -q "Includes raw filenames: false" "$proofs_output" ||
+  fail "proofs output did not document raw filename cleanup"
+ok "source-wrapper proof artifact listing works"
+
+MIX_ENV=test ./bin/lemon readiness --project-dir "$PROJECT_DIR" --limit 1 >"$readiness_output"
+grep -q "Lemon Readiness" "$readiness_output" ||
+  fail "readiness output did not include readiness heading"
+grep -q "Provider media:" "$readiness_output" ||
+  fail "readiness output did not include provider media state"
+grep -q "Proof gates:" "$readiness_output" ||
+  fail "readiness output did not include proof gate state"
+grep -q "Includes raw proof paths: false" "$readiness_output" ||
+  fail "readiness output did not document raw proof path cleanup"
+grep -q "Includes raw provider responses: false" "$readiness_output" ||
+  fail "readiness output did not document provider-response cleanup"
+ok "source-wrapper readiness summary works"
+
+MIX_ENV=test ./bin/lemon secrets status >"$secrets_output"
+grep -q "configured:" "$secrets_output" ||
+  fail "secrets status output did not include configured state"
+grep -q "count:" "$secrets_output" ||
+  fail "secrets status output did not include secret count"
+ok "source-wrapper secrets status works"
+
+MIX_ENV=test ./bin/lemon skill list >"$skill_output"
+grep -Eq "KEY|No skills installed" "$skill_output" ||
+  fail "skill list output did not report installed skill state"
+ok "source-wrapper skill listing works"
+
+MIX_ENV=test ./bin/lemon usage >"$usage_output"
+grep -q "Lemon Usage" "$usage_output" ||
+  fail "usage output did not include usage heading"
+grep -q "Includes prompts: false" "$usage_output" ||
+  fail "usage output did not document prompt cleanup"
+grep -q "Includes credentials: false" "$usage_output" ||
+  fail "usage output did not document credential cleanup"
+ok "source-wrapper usage diagnostics work"
+
+MIX_ENV=test ./bin/lemon update --check --no-skill-sync --verbose >"$update_output"
+grep -q "Version:" "$update_output" ||
+  fail "update check output did not include current version"
+grep -q "Remote update check: not yet available" "$update_output" ||
+  fail "update check output did not document the stage-1 remote-update boundary"
+ok "stage-1 update dry-run dispatch works"
+
+if ! $SKIP_DOCTOR; then
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install.XXXXXX")"
+  cleanup() {
+    rm -rf "$work_dir"
+    cleanup_setup_output
+  }
+  trap cleanup EXIT
+
+  doctor_json="$work_dir/doctor.json"
+  doctor_err="$work_dir/doctor.err"
+  bundle_path="$work_dir/support-bundle.zip"
+
+  set +e
+  MIX_ENV=test ./bin/lemon doctor --json --project-dir "$PROJECT_DIR" --bundle --bundle-path "$bundle_path" >"$doctor_json" 2>"$doctor_err"
+  doctor_status=$?
+  set -e
+
+  python3 - "$doctor_json" "$doctor_status" <<'PY'
+import json
+import sys
+
+path, status = sys.argv[1], int(sys.argv[2])
+text = open(path, encoding="utf-8").read()
+start = text.find("{")
+if start < 0:
+    print("error doctor did not emit JSON", file=sys.stderr)
+    raise SystemExit(1)
+
+data = json.loads(text[start:])
+summary = data.get("summary", {})
+overall = data.get("overall")
+failures = int(summary.get("fail", 0))
+
+if status != 0 or failures:
+    print(
+        f"error doctor reported failures: status={status} overall={overall} fail={failures}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print(
+    "ok doctor JSON diagnostics completed "
+    f"overall={overall} pass={summary.get('pass', 0)} warn={summary.get('warn', 0)} skip={summary.get('skip', 0)}"
+)
+PY
+
+  python3 - "$bundle_path" <<'PY'
+import json
+import sys
+import zipfile
+
+required = {
+    "README.txt",
+    "doctor_report.json",
+    "channel_diagnostics.json",
+    "channel_readiness.json",
+    "readiness_summary.json",
+    "proof_diagnostics.json",
+}
+path = sys.argv[1]
+
+try:
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+except zipfile.BadZipFile:
+    print(f"error support bundle is not a valid zip: {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+missing = sorted(required - names)
+if missing:
+    print(
+        "error support bundle missing required entries: " + ", ".join(missing),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+with zipfile.ZipFile(path) as archive:
+    readiness_summary = json.loads(archive.read("readiness_summary.json").decode("utf-8"))
+
+proof_gates = readiness_summary.get("proof_gates", {})
+proof_gate_summary = readiness_summary.get("proof_gate_summary", {})
+provider_media = proof_gates.get("providerMedia", {})
+required_gates = {
+    "discordDm",
+    "discordSlashClientClick",
+    "discordSlashRegistration",
+    "providerMedia",
+    "terminalBackends",
+}
+
+if provider_media.get("status") not in {"passed", "warning"}:
+    print(
+        "error readiness_summary.json missing providerMedia proof gate status",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if proof_gate_summary.get("gateCount") != 5:
+    print(
+        "error readiness_summary.json proof_gate_summary gateCount is not 5",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if not isinstance(proof_gate_summary.get("statuses"), dict):
+    print(
+        "error readiness_summary.json proof_gate_summary statuses is not an object",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+missing_gate_ids = sorted(required_gates - set(proof_gates))
+missing_status_ids = sorted(required_gates - set(proof_gate_summary["statuses"]))
+
+if missing_gate_ids:
+    print(
+        "error readiness_summary.json proof_gates missing gate ids: "
+        + ", ".join(missing_gate_ids),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if missing_status_ids:
+    print(
+        "error readiness_summary.json proof_gate_summary statuses missing gate ids: "
+        + ", ".join(missing_status_ids),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print("ok support bundle contains required redacted readiness diagnostics")
+PY
+fi
+
+echo "verified source install path"

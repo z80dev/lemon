@@ -5,8 +5,12 @@
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
+import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -83,6 +87,86 @@ def message_row(msg):
         "has_photo": bool(getattr(msg, "photo", None)),
         "file_name": getattr(getattr(msg, "file", None), "name", None),
     }
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def safe_hash(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+
+def safe_scope(value):
+    if not value:
+        return None
+
+    scope = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value)).strip("_")
+    return scope[:80] or None
+
+
+def sanitized_live_proof(result):
+    checks = [sanitized_check(check) for check in result.get("checks", [])]
+    completed_count = sum(1 for check in checks if check["status"] == "completed")
+    failed_count = sum(1 for check in checks if check["status"] == "failed")
+
+    return {
+        "generated_at": now_iso(),
+        "status": "completed" if failed_count == 0 else "failed",
+        "proof": "telegram_live_matrix",
+        "proof_object": "lemon.telegram_live_matrix",
+        "proof_scope": "telegram_live_matrix",
+        "checks": checks,
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "skipped_count": 0,
+        "coverage": sanitized_coverage(checks),
+        "cleanup": {
+            "includes_raw_bot_tokens": False,
+            "includes_raw_chat_ids": False,
+            "includes_raw_user_ids": False,
+            "includes_raw_message_bodies": False,
+            "includes_secret_names": False,
+        },
+    }
+
+
+def sanitized_coverage(checks):
+    names = [check["name"] for check in checks]
+
+    return {
+        "check_count": len(checks),
+        "contains_generated_media": "telegram_forum_topic_generated_media_delivery" in names,
+        "contains_generated_audio": "telegram_forum_topic_generated_audio_delivery" in names,
+        "contains_media_directive": "telegram_forum_topic_media_directive_delivery" in names,
+        "contains_file_delivery": "telegram_forum_topic_file_get_document" in names,
+    }
+
+
+def sanitized_check(check):
+    sanitized = {
+        "name": check.get("name") or "telegram_live_matrix_check",
+        "status": "completed" if check.get("ok") else "failed",
+        "proof_scope": safe_scope(check.get("proof_scope") or check.get("name")),
+    }
+
+    if check.get("nonce"):
+        sanitized["nonce_hash"] = safe_hash(check["nonce"])
+
+    if check.get("topic_id") is not None:
+        sanitized["topic_hash"] = safe_hash(check["topic_id"])
+
+    if check.get("marker_seen") is not None:
+        sanitized["marker_seen"] = check.get("marker_seen")
+
+    if check.get("directive_leaked") is not None:
+        sanitized["directive_leaked"] = check.get("directive_leaked")
+
+    document = check.get("document")
+    if isinstance(document, dict):
+        sanitized["telegram_has_document"] = document.get("has_document")
+
+    return {key: value for key, value in sanitized.items() if value is not None}
 
 
 async def wait_for_reply(
@@ -556,6 +640,441 @@ async def run_topic_file_get(client, group, topic_id, timeout_s, workdir):
     }
 
 
+async def run_topic_generated_media_delivery(client, group, topic_id, timeout_s, bot_username):
+    nonce = f"lemon-generated-media-{topic_id}-{int(time.time())}"
+    filename = f"telegram-generated-media-{nonce}.svg"
+    mention = f"@{str(bot_username).lstrip('@')}"
+    prompt = (
+        f"{mention} {nonce} generated media delivery probe: use the media_generate_image tool with "
+        f"provider local_svg, filename telegram-generated-media-{nonce}, and sendToChannel true. "
+        f"After the tool completes, reply with GENERATED_MEDIA_SENT {nonce}."
+    )
+
+    sent = await client.send_message(group, prompt, reply_to=topic_id)
+    deadline = time.time() + timeout_s
+    matched = []
+    document = None
+    marker_seen = False
+
+    while time.time() < deadline:
+        matched = await collect_matching_messages(
+            client,
+            group,
+            sent.id,
+            nonce,
+            limit=100,
+            expected_topic_id=topic_id,
+        )
+
+        marker_seen = any(
+            not row["out"] and f"GENERATED_MEDIA_SENT {nonce}" in row["text"]
+            for row in matched
+        )
+
+        document = next(
+            (
+                row
+                for row in matched
+                if not row["out"]
+                and row["has_document"]
+                and (row["file_name"] == filename or nonce in str(row["file_name"] or ""))
+            ),
+            None,
+        )
+
+        if marker_seen and document:
+            break
+
+        await asyncio.sleep(2)
+
+    return {
+        "name": "telegram_forum_topic_generated_media_delivery",
+        "ok": marker_seen and document is not None and row_in_topic(document, topic_id),
+        "topic_id": topic_id,
+        "nonce": nonce,
+        "sent_id": sent.id,
+        "expected_filename": filename,
+        "marker_seen": marker_seen,
+        "document": document,
+        "matched": matched[:10],
+    }
+
+
+async def run_topic_generated_audio_delivery(client, group, topic_id, timeout_s, bot_username):
+    nonce = f"lemon-generated-audio-{topic_id}-{int(time.time())}"
+    filename = f"telegram-generated-audio-{nonce}.wav"
+    mention = f"@{str(bot_username).lstrip('@')}"
+    prompt = (
+        f"{mention} {nonce} generated audio delivery probe: use the media_generate_speech tool "
+        f"with provider local_wav, text 'Lemon generated audio proof {nonce}', "
+        f"filename telegram-generated-audio-{nonce}, and sendToChannel true. "
+        f"After the tool completes, reply with GENERATED_AUDIO_SENT {nonce}."
+    )
+
+    sent = await client.send_message(group, prompt, reply_to=topic_id)
+    deadline = time.time() + timeout_s
+    matched = []
+    document = None
+    marker_seen = False
+
+    while time.time() < deadline:
+        matched = await collect_matching_messages(
+            client,
+            group,
+            sent.id,
+            nonce,
+            limit=100,
+            expected_topic_id=topic_id,
+        )
+
+        marker_seen = any(
+            not row["out"] and f"GENERATED_AUDIO_SENT {nonce}" in row["text"]
+            for row in matched
+        )
+
+        document = next(
+            (
+                row
+                for row in matched
+                if not row["out"]
+                and row["has_document"]
+                and (row["file_name"] == filename or nonce in str(row["file_name"] or ""))
+            ),
+            None,
+        )
+
+        if marker_seen and document:
+            break
+
+        await asyncio.sleep(2)
+
+    return {
+        "name": "telegram_forum_topic_generated_audio_delivery",
+        "ok": marker_seen and document is not None and row_in_topic(document, topic_id),
+        "topic_id": topic_id,
+        "nonce": nonce,
+        "sent_id": sent.id,
+        "expected_filename": filename,
+        "marker_seen": marker_seen,
+        "document": document,
+        "matched": matched[:10],
+    }
+
+
+async def run_topic_media_directive_delivery(client, group, topic_id, timeout_s, bot_username):
+    nonce = f"lemon-media-directive-{topic_id}-{int(time.time())}"
+    rel_path = f"tmp/telegram-media-directive-{nonce}.txt"
+    filename = Path(rel_path).name
+    mention = f"@{str(bot_username).lstrip('@')}"
+    prompt = (
+        f"{mention} {nonce} MEDIA directive delivery probe: create a text file at {rel_path} "
+        f"containing MEDIA_DIRECTIVE {nonce}. Finish with a final answer that includes "
+        f"MEDIA_DIRECTIVE_SENT {nonce} and a separate line exactly MEDIA:{rel_path}. "
+        f"Do not use a send-file tool or sendToChannel; rely on the final-answer MEDIA line."
+    )
+
+    sent = await client.send_message(group, prompt, reply_to=topic_id)
+    deadline = time.time() + timeout_s
+    matched = []
+    document = None
+    marker_seen = False
+    directive_leaked = False
+
+    while time.time() < deadline:
+        matched = await collect_matching_messages(
+            client,
+            group,
+            sent.id,
+            nonce,
+            limit=100,
+            expected_topic_id=topic_id,
+        )
+
+        marker_seen = any(
+            not row["out"] and f"MEDIA_DIRECTIVE_SENT {nonce}" in row["text"]
+            for row in matched
+        )
+        directive_leaked = any(not row["out"] and "MEDIA:" in row["text"] for row in matched)
+
+        document = next(
+            (
+                row
+                for row in matched
+                if not row["out"]
+                and row["has_document"]
+                and (row["file_name"] == filename or nonce in str(row["file_name"] or ""))
+            ),
+            None,
+        )
+
+        if marker_seen and document and not directive_leaked:
+            break
+
+        await asyncio.sleep(2)
+
+    return {
+        "name": "telegram_forum_topic_media_directive_delivery",
+        "ok": (
+            marker_seen
+            and document is not None
+            and row_in_topic(document, topic_id)
+            and not directive_leaked
+        ),
+        "topic_id": topic_id,
+        "nonce": nonce,
+        "sent_id": sent.id,
+        "expected_filename": filename,
+        "marker_seen": marker_seen,
+        "directive_leaked": directive_leaked,
+        "document": document,
+        "matched": matched[:10],
+    }
+
+
+def parse_status_id(text, label):
+    match = re.search(rf"^{re.escape(label)}: (\S+)$", text or "", re.MULTILINE)
+    return match.group(1) if match else None
+
+
+async def run_topic_kanban(client, group, topic_id, timeout_s):
+    nonce = f"lemon-kanban-{topic_id}-{int(time.time())}"
+    board_name = f"private board {nonce}"
+    task_title = f"private task {nonce}"
+    comment_body = f"private comment {nonce}"
+
+    create_board = await client.send_message(
+        group,
+        f"/kanban create {board_name}",
+        reply_to=topic_id,
+    )
+    board_reply = await wait_for_reply(client, group, create_board.id, nonce, timeout_s, topic_id)
+    board_id = parse_status_id(board_reply.get("text"), "Board id")
+
+    if not board_id:
+        return {
+            "name": "telegram_forum_topic_kanban_controls",
+            "ok": False,
+            "topic_id": topic_id,
+            "nonce": nonce,
+            "sent_id": create_board.id,
+            "error": "board id not observed",
+            "board_reply": board_reply,
+        }
+
+    create_task = await client.send_message(
+        group,
+        f"/kanban task create {board_id} --priority high {task_title}",
+        reply_to=topic_id,
+    )
+    task_reply = await wait_for_reply(client, group, create_task.id, nonce, timeout_s, topic_id)
+    task_id = parse_status_id(task_reply.get("text"), "Task id")
+
+    comment = await client.send_message(
+        group,
+        f"/kanban comment {task_id or 'missing-task'} {comment_body}",
+        reply_to=topic_id,
+    )
+    comment_reply = await wait_for_reply(client, group, comment.id, nonce, timeout_s, topic_id)
+
+    show = await client.send_message(group, f"/kanban show {board_id}", reply_to=topic_id)
+    show_reply = await wait_for_reply(client, group, show.id, nonce, timeout_s, topic_id)
+
+    archive = await client.send_message(group, f"/kanban archive {board_id}", reply_to=topic_id)
+    archive_reply = await wait_for_reply(client, group, archive.id, nonce, timeout_s, topic_id)
+
+    replies = [board_reply, task_reply, comment_reply, show_reply, archive_reply]
+    reply_text = "\n".join(row.get("text") or "" for row in replies)
+    leaked_private_text = any(value in reply_text for value in [board_name, task_title, comment_body])
+
+    ok = (
+        board_reply.get("text", "").startswith("Kanban Board Created")
+        and task_reply.get("text", "").startswith("Kanban Task Created")
+        and comment_reply.get("text", "").startswith("Kanban Task Commented")
+        and show_reply.get("text", "").startswith("Kanban Board")
+        and archive_reply.get("text", "").startswith("Kanban Board Archived")
+        and bool(board_id)
+        and bool(task_id)
+        and not leaked_private_text
+        and all(row_in_topic(row, topic_id) for row in replies)
+    )
+
+    return {
+        "name": "telegram_forum_topic_kanban_controls",
+        "ok": ok,
+        "topic_id": topic_id,
+        "nonce": nonce,
+        "board_id": board_id,
+        "task_id": task_id,
+        "sent_ids": [create_board.id, create_task.id, comment.id, show.id, archive.id],
+        "leaked_private_text": leaked_private_text,
+        "replies": replies,
+    }
+
+
+def create_local_checkpoint(workdir, nonce):
+    proof_dir = Path(workdir) / "tmp" / "telegram-checkpoint-proof"
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    target = proof_dir / f"{nonce}.txt"
+    session_id = f"live-telegram-checkpoint-{nonce}"
+    before = f"private-before-{nonce}\n"
+    after = f"private-after-{nonce}\n"
+
+    target.write_text(before, encoding="utf-8")
+
+    env = os.environ.copy()
+    env["LEMON_LIVE_CHECKPOINT_PATH"] = str(target)
+    env["LEMON_LIVE_CHECKPOINT_SESSION"] = session_id
+    env["LEMON_LOG_LEVEL"] = "error"
+
+    command = [
+        "mix",
+        "run",
+        "--no-start",
+        "--no-compile",
+        "-e",
+        """
+        path = System.fetch_env!("LEMON_LIVE_CHECKPOINT_PATH")
+        session = System.fetch_env!("LEMON_LIVE_CHECKPOINT_SESSION")
+        {:ok, checkpoint} = LemonCore.Checkpoint.create_filesystem(session, [path], cwd: File.cwd!(), tool: "live-telegram-matrix")
+        IO.write(checkpoint.id)
+        """,
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+
+    target.write_text(after, encoding="utf-8")
+
+    match = re.search(r"chk_[a-f0-9]+", result.stdout)
+
+    if not match:
+        raise RuntimeError(f"checkpoint id missing from output: {result.stdout.strip()}")
+
+    return {
+        "checkpoint_id": match.group(0),
+        "target": target,
+        "session_id": session_id,
+        "before": before,
+        "after": after,
+    }
+
+
+def delete_local_checkpoint(checkpoint_id):
+    command = [
+        "mix",
+        "run",
+        "--no-start",
+        "--no-compile",
+        "-e",
+        f'LemonCore.Checkpoint.delete("{checkpoint_id}")',
+    ]
+
+    subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+
+async def run_topic_checkpoint(client, group, topic_id, timeout_s, workdir):
+    nonce = f"lemon-checkpoint-{topic_id}-{int(time.time())}"
+    fixture = create_local_checkpoint(workdir, nonce)
+    checkpoint_id = fixture["checkpoint_id"]
+
+    try:
+        diff = await client.send_message(
+            group,
+            f"/checkpoint diff {checkpoint_id}",
+            reply_to=topic_id,
+        )
+        expected_diff = (
+            f"Checkpoint Diff\n{checkpoint_id}\nChanged paths: 1\n"
+            "Output is redacted in chat. Use TUI /checkpoint diff or control-plane checkpoint.diff for full content."
+        )
+        diff_reply = await wait_for_reply(
+            client,
+            group,
+            diff.id,
+            checkpoint_id,
+            timeout_s,
+            topic_id,
+            expected_diff,
+        )
+
+        restore = await client.send_message(
+            group,
+            f"/checkpoint restore {checkpoint_id} confirm",
+            reply_to=topic_id,
+        )
+        expected_restore = (
+            f"Checkpoint Restored\n{checkpoint_id}\nRestored paths: 1\n"
+            "Output is redacted in chat."
+        )
+        restore_reply = await wait_for_reply(
+            client,
+            group,
+            restore.id,
+            checkpoint_id,
+            timeout_s,
+            topic_id,
+            expected_restore,
+        )
+
+        reply_text = "\n".join(
+            [diff_reply.get("text") or "", restore_reply.get("text") or ""]
+        )
+        leaked_private_text = any(
+            value in reply_text
+            for value in [
+                str(fixture["target"]),
+                fixture["before"].strip(),
+                fixture["after"].strip(),
+                fixture["session_id"],
+            ]
+        )
+        restored = fixture["target"].read_text(encoding="utf-8") == fixture["before"]
+
+        ok = (
+            diff_reply.get("text", "").startswith("Checkpoint Diff")
+            and "Changed paths: 1" in diff_reply.get("text", "")
+            and "redacted" in diff_reply.get("text", "").lower()
+            and restore_reply.get("text", "").startswith("Checkpoint Restored")
+            and "Restored paths: 1" in restore_reply.get("text", "")
+            and restored
+            and not leaked_private_text
+            and row_in_topic(diff_reply, topic_id)
+            and row_in_topic(restore_reply, topic_id)
+        )
+
+        return {
+            "name": "telegram_forum_topic_checkpoint_restore",
+            "ok": ok,
+            "topic_id": topic_id,
+            "nonce": nonce,
+            "checkpoint_id": checkpoint_id,
+            "sent_ids": [diff.id, restore.id],
+            "restored": restored,
+            "leaked_private_text": leaked_private_text,
+            "diff_reply": diff_reply,
+            "restore_reply": restore_reply,
+        }
+    finally:
+        delete_local_checkpoint(checkpoint_id)
+        try:
+            fixture["target"].unlink()
+        except FileNotFoundError:
+            pass
+
+
 async def run_topic_restart_seed(client, group, topic_id, timeout_s):
     nonce = f"lemon-restart-seed-{topic_id}-{int(time.time())}"
     prompt = f"/echo {nonce} restart dedupe seed"
@@ -747,6 +1266,53 @@ async def run(args):
                 )
             )
 
+        if args.topic_generated_media_delivery:
+            checks.append(
+                await run_topic_generated_media_delivery(
+                    client,
+                    group,
+                    args.generated_media_topic_id,
+                    args.timeout,
+                    args.bot,
+                )
+            )
+
+        if args.topic_generated_audio_delivery:
+            checks.append(
+                await run_topic_generated_audio_delivery(
+                    client,
+                    group,
+                    args.generated_audio_topic_id,
+                    args.timeout,
+                    args.bot,
+                )
+            )
+
+        if args.topic_media_directive_delivery:
+            checks.append(
+                await run_topic_media_directive_delivery(
+                    client,
+                    group,
+                    args.media_directive_topic_id,
+                    args.timeout,
+                    args.bot,
+                )
+            )
+
+        if args.topic_kanban:
+            checks.append(await run_topic_kanban(client, group, args.kanban_topic_id, args.timeout))
+
+        if args.topic_checkpoint:
+            checks.append(
+                await run_topic_checkpoint(
+                    client,
+                    group,
+                    args.checkpoint_topic_id,
+                    args.timeout,
+                    args.workdir,
+                )
+            )
+
         if args.topic_restart_seed:
             checks.append(
                 await run_topic_restart_seed(
@@ -801,12 +1367,24 @@ def parser():
     root.add_argument("--long-output-topic-id", type=int, default=DEFAULT_TOPIC)
     root.add_argument("--topic-file-get", action="store_true")
     root.add_argument("--file-get-topic-id", type=int, default=DEFAULT_TOPIC)
+    root.add_argument("--topic-generated-media-delivery", action="store_true")
+    root.add_argument("--generated-media-topic-id", type=int, default=DEFAULT_TOPIC)
+    root.add_argument("--topic-generated-audio-delivery", action="store_true")
+    root.add_argument("--generated-audio-topic-id", type=int, default=DEFAULT_TOPIC)
+    root.add_argument("--topic-media-directive-delivery", action="store_true")
+    root.add_argument("--media-directive-topic-id", type=int, default=DEFAULT_TOPIC)
     root.add_argument("--workdir", type=Path, default=Path.cwd())
+    root.add_argument("--topic-kanban", action="store_true")
+    root.add_argument("--kanban-topic-id", type=int, default=DEFAULT_TOPIC)
+    root.add_argument("--topic-checkpoint", action="store_true")
+    root.add_argument("--checkpoint-topic-id", type=int, default=DEFAULT_TOPIC)
     root.add_argument("--topic-restart-seed", action="store_true")
     root.add_argument("--topic-restart-verify", action="store_true")
     root.add_argument("--restart-topic-id", type=int, default=DEFAULT_TOPIC)
     root.add_argument("--restart-nonce")
     root.add_argument("--restart-reply-id", type=int)
+    root.add_argument("--result-path", type=Path)
+    root.add_argument("--proof-path", type=Path)
     root.add_argument("--timeout", type=int, default=90)
     root.add_argument("--skip-dm", action="store_true")
     return root
@@ -815,6 +1393,15 @@ def parser():
 def main():
     args = parser().parse_args()
     result = asyncio.run(run(args))
+
+    if args.result_path:
+        args.result_path.parent.mkdir(parents=True, exist_ok=True)
+        args.result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+
+    if args.proof_path:
+        args.proof_path.parent.mkdir(parents=True, exist_ok=True)
+        args.proof_path.write_text(json.dumps(sanitized_live_proof(result), indent=2) + "\n")
+
     print(json.dumps(result, indent=2, ensure_ascii=False))
     raise SystemExit(0 if result["ok"] else 1)
 

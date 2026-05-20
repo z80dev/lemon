@@ -1,0 +1,88 @@
+name: Python CLI
+
+on:
+  pull_request:
+    paths:
+      - "clients/lemon-cli/**"
+      - ".github/workflows/python-cli.yml"
+      - "scripts/test"
+  push:
+    branches:
+      - main
+    paths:
+      - "clients/lemon-cli/**"
+      - ".github/workflows/python-cli.yml"
+      - "scripts/test"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-check:
+    name: Lint, test, and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        working-directory: clients/lemon-cli
+        run: uv sync --locked --dev
+
+      - name: Lint
+        working-directory: clients/lemon-cli
+        run: uv run ruff check src tests
+
+      - name: Test
+        working-directory: clients/lemon-cli
+        run: uv run pytest
+
+      - name: Build wheel and source distribution
+        working-directory: clients/lemon-cli
+        run: uv build --sdist --wheel --out-dir "$RUNNER_TEMP/lemon-cli-dist"
+
+      - name: Verify distribution artifacts
+        run: |
+          test -f "$RUNNER_TEMP"/lemon-cli-dist/*.whl
+          test -f "$RUNNER_TEMP"/lemon-cli-dist/*.tar.gz
+          python - "$RUNNER_TEMP/lemon-cli-dist" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          dist = pathlib.Path(sys.argv[1])
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(f"expected one wheel and one sdist, got {wheels} {sdists}")
+
+          with zipfile.ZipFile(wheels[0]) as zf:
+              metadata_names = [name for name in zf.namelist() if name.endswith("METADATA")]
+              if len(metadata_names) != 1:
+                  raise SystemExit(f"expected one METADATA file, got {metadata_names}")
+              metadata = zf.read(metadata_names[0]).decode("utf-8")
+
+          if "Name: lemon-cli\n" not in metadata:
+              raise SystemExit("wheel metadata is missing Name: lemon-cli")
+          if "Version: 2026." not in metadata:
+              raise SystemExit("wheel metadata is missing CalVer version")
+          PY
+
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemon-cli-distributions
+          path: |
+            ${{ runner.temp }}/lemon-cli-dist/*.whl
+            ${{ runner.temp }}/lemon-cli-dist/*.tar.gz
+          retention-days: 7

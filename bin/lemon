@@ -8,6 +8,21 @@
 # Usage:
 #   ./bin/lemon [--daemon] [--debug] [--port <control_plane_port>] [--web-port <lemon_web_port>]
 #               [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
+#   ./bin/lemon setup runtime --non-interactive
+#   ./bin/lemon channels
+#   ./bin/lemon config validate
+#   ./bin/lemon doctor --json
+#   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
+#   ./bin/lemon media
+#   ./bin/lemon models --provider anthropic
+#   ./bin/lemon providers --provider openai
+#   ./bin/lemon policy list
+#   ./bin/lemon proofs --limit 5
+#   ./bin/lemon readiness
+#   ./bin/lemon secrets status
+#   ./bin/lemon skill list
+#   ./bin/lemon usage
+#   ./bin/lemon update --check
 #
 
 set -euo pipefail
@@ -28,6 +43,21 @@ export LEMON_PATH="$LEMON_ROOT"
 show_help() {
   cat << 'EOF'
 Usage: ./bin/lemon [options]
+       ./bin/lemon setup runtime --non-interactive
+       ./bin/lemon channels
+       ./bin/lemon config validate
+       ./bin/lemon doctor --json
+       ./bin/lemon send --to telegram:<chat_id> "message"
+       ./bin/lemon media
+       ./bin/lemon models --provider anthropic
+       ./bin/lemon providers --provider openai
+       ./bin/lemon policy list
+       ./bin/lemon proofs --limit 5
+       ./bin/lemon readiness
+       ./bin/lemon secrets status
+       ./bin/lemon skill list
+       ./bin/lemon usage
+       ./bin/lemon update --check
 
 Options:
   --daemon                Run in background and print PID
@@ -45,10 +75,14 @@ Environment fallbacks:
   LEMON_CONTROL_PLANE_PORT
   LEMON_WEB_PORT
   LEMON_SIM_UI_PORT
+  LEMON_GATEWAY_HEALTH_PORT
+  LEMON_ROUTER_HEALTH_PORT
   LEMON_GATEWAY_NODE_NAME
   LEMON_GATEWAY_NODE_COOKIE
   LEMON_GATEWAY_COOKIE
   LEMON_DOTENV_DIR
+  LEMON_TELEGRAM_DEFAULT_CHAT_ID
+  LEMON_DISCORD_DEFAULT_CHANNEL_ID
 EOF
 }
 
@@ -68,6 +102,122 @@ warn() {
 error() {
   echo -e "${RED}[lemon]${NC} $1" >&2
 }
+
+if [[ "${1:-}" == "send" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.send "$@"
+fi
+
+if [[ "${1:-}" == "setup" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.setup "$@"
+fi
+
+if [[ "${1:-}" == "channels" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.channels "$@"
+fi
+
+if [[ "${1:-}" == "config" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.config "$@"
+fi
+
+if [[ "${1:-}" == "doctor" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.doctor "$@"
+fi
+
+if [[ "${1:-}" == "media" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.media "$@"
+fi
+
+if [[ "${1:-}" == "models" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.models "$@"
+fi
+
+if [[ "${1:-}" == "providers" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.providers "$@"
+fi
+
+if [[ "${1:-}" == "policy" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.policy "$@"
+fi
+
+if [[ "${1:-}" == "proofs" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.proofs "$@"
+fi
+
+if [[ "${1:-}" == "readiness" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.readiness "$@"
+fi
+
+if [[ "${1:-}" == "secrets" ]]; then
+  shift
+  subcommand="${1:-}"
+  case "$subcommand" in
+    check|delete|import-env|init|list|set|status)
+      shift
+      cd "$LEMON_ROOT"
+      mix_task="lemon.secrets.${subcommand//-/_}"
+      exec mix "$mix_task" "$@"
+      ;;
+    ""|help|--help|-h)
+      cat << 'EOF'
+Usage: ./bin/lemon secrets <command> [args]
+
+Commands:
+  status
+  init
+  set <name> <value>
+  list
+  delete <name>
+  check <name>
+  import-env
+EOF
+      exit 0
+      ;;
+    *)
+      error "Unknown secrets command: $subcommand"
+      exit 2
+      ;;
+  esac
+fi
+
+if [[ "${1:-}" == "skill" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.skill "$@"
+fi
+
+if [[ "${1:-}" == "usage" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.usage "$@"
+fi
+
+if [[ "${1:-}" == "update" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix lemon.update "$@"
+fi
 
 DEBUG=""
 DAEMON=0

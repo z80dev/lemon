@@ -92,7 +92,7 @@ No unreleased changes yet.
 - Root README condensed from 3127 lines to 184 lines (deep content moved to `docs/`)
 - CI and docs now target Elixir 1.19.5, Erlang/OTP 28.5, and Node.js 24 LTS.
 - Setup docs and config examples now include an OpenAI-compatible endpoint path.
-- Public docs now clearly distinguish source install, local release proof, and the still-blocked public GitHub Release artifact proof.
+- Public docs now clearly distinguish source install, local artifact proof, and bounded 1.0 support claims.
 
 ### Fixed
 
