@@ -40,6 +40,12 @@ defmodule LemonCore.Store.SqliteBackend do
     updated_at_ms = excluded.updated_at_ms
   """
 
+  @put_new_sql """
+  INSERT INTO lemon_store_kv (table_name, key_blob, value_blob, updated_at_ms)
+  VALUES (?1, ?2, ?3, ?4)
+  ON CONFLICT(table_name, key_blob) DO NOTHING
+  """
+
   @get_sql """
   SELECT value_blob
   FROM lemon_store_kv
@@ -117,6 +123,44 @@ defmodule LemonCore.Store.SqliteBackend do
         :busy -> {:error, :sqlite_busy}
         {:error, reason} -> {:error, reason}
         other -> {:error, {:sqlite_put_failed, other}}
+      end
+    end
+  end
+
+  @impl true
+  def put_new(state, table, key, value) do
+    if ephemeral_table?(state, table) do
+      {table_ets, state} = ensure_ephemeral_table(state, table)
+
+      if :ets.insert_new(table_ets, {key, value}) do
+        {:ok, state}
+      else
+        {:exists, state}
+      end
+    else
+      table_name = normalize_table_name(table)
+      encoded_key = encode(key)
+      encoded_value = encode(value)
+      now_ms = System.system_time(:millisecond)
+
+      with :ok <-
+             bind_statement(state.statements.put_new, [
+               table_name,
+               {:blob, encoded_key},
+               {:blob, encoded_value},
+               now_ms
+             ]),
+           :done <- Sqlite3.step(state.conn, state.statements.put_new),
+           {:ok, changes} <- Sqlite3.changes(state.conn) do
+        if changes == 1 do
+          {:ok, state}
+        else
+          {:exists, state}
+        end
+      else
+        :busy -> {:error, :sqlite_busy}
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:sqlite_put_new_failed, other}}
       end
     end
   end
@@ -213,7 +257,8 @@ defmodule LemonCore.Store.SqliteBackend do
   Returns `{:ok, [{key, value}], state}`.
   """
   @impl true
-  @spec list_recent(map(), atom(), pos_integer()) :: {:ok, [{term(), term()}], map()} | {:error, term()}
+  @spec list_recent(map(), atom(), pos_integer()) ::
+          {:ok, [{term(), term()}], map()} | {:error, term()}
   def list_recent(state, table, limit) when is_integer(limit) and limit > 0 do
     if ephemeral_table?(state, table) do
       # Ephemeral tables are in ETS — no SQL available, fall back to full scan + sort + take
@@ -289,6 +334,7 @@ defmodule LemonCore.Store.SqliteBackend do
 
   defp prepare_statements(conn) do
     with {:ok, put_stmt} <- Sqlite3.prepare(conn, @put_sql),
+         {:ok, put_new_stmt} <- Sqlite3.prepare(conn, @put_new_sql),
          {:ok, get_stmt} <- Sqlite3.prepare(conn, @get_sql),
          {:ok, delete_stmt} <- Sqlite3.prepare(conn, @delete_sql),
          {:ok, list_stmt} <- Sqlite3.prepare(conn, @list_sql),
@@ -297,6 +343,7 @@ defmodule LemonCore.Store.SqliteBackend do
       {:ok,
        %{
          put: put_stmt,
+         put_new: put_new_stmt,
          get: get_stmt,
          delete: delete_stmt,
          list: list_stmt,

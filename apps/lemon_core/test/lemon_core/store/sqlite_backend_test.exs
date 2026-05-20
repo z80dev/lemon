@@ -61,7 +61,9 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
 
     test "uses custom ephemeral_tables option", %{tmp_dir: tmp_dir} do
-      assert {:ok, state} = SqliteBackend.init(path: tmp_dir, ephemeral_tables: [:temp_table, :cache])
+      assert {:ok, state} =
+               SqliteBackend.init(path: tmp_dir, ephemeral_tables: [:temp_table, :cache])
+
       assert :temp_table in state.ephemeral_tables
       assert :cache in state.ephemeral_tables
       refute :runs in state.ephemeral_tables
@@ -78,7 +80,9 @@ defmodule LemonCore.Store.SqliteBackendTest do
 
       # Path gets normalized to include store.sqlite3
       normalized_invalid_path = Path.join(invalid_path, "store.sqlite3")
-      assert {:error, {:sqlite_init_failed, ^normalized_invalid_path, _}} = SqliteBackend.init(path: invalid_path)
+
+      assert {:error, {:sqlite_init_failed, ^normalized_invalid_path, _}} =
+               SqliteBackend.init(path: invalid_path)
     end
 
     test "statements are prepared correctly", %{tmp_dir: tmp_dir} do
@@ -152,6 +156,12 @@ defmodule LemonCore.Store.SqliteBackendTest do
       assert {:ok, state} = SqliteBackend.put(state, :mytable, "key", "original")
       assert {:ok, state} = SqliteBackend.put(state, :mytable, "key", "updated")
       assert {:ok, "updated", _} = SqliteBackend.get(state, :mytable, "key")
+    end
+
+    test "put_new does not overwrite an existing persistent value", %{state: state} do
+      assert {:ok, state} = SqliteBackend.put_new(state, :mytable, "claim", "first")
+      assert {:exists, state} = SqliteBackend.put_new(state, :mytable, "claim", "second")
+      assert {:ok, "first", _} = SqliteBackend.get(state, :mytable, "claim")
     end
 
     test "returns nil for missing keys", %{state: state} do
@@ -255,7 +265,9 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
 
     test "multiple ephemeral tables can be configured", %{tmp_dir: tmp_dir} do
-      {:ok, state} = SqliteBackend.init(path: tmp_dir, ephemeral_tables: [:cache, :temp, :session])
+      {:ok, state} =
+        SqliteBackend.init(path: tmp_dir, ephemeral_tables: [:cache, :temp, :session])
+
       on_exit(fn -> SqliteBackend.close(state) end)
 
       assert {:ok, state} = SqliteBackend.put(state, :cache, "key1", "cached")
@@ -609,7 +621,9 @@ defmodule LemonCore.Store.SqliteBackendTest do
       {:ok, state} = SqliteBackend.put(state, :users, "user1", %{name: "Alice", age: 30})
       {:ok, state} = SqliteBackend.put(state, :users, "user2", %{name: "Bob", age: 25})
       {:ok, state} = SqliteBackend.put(state, :products, "prod1", %{name: "Widget", price: 10.99})
-      {:ok, state} = SqliteBackend.put(state, :orders, "order1", %{user: "user1", items: ["prod1"]})
+
+      {:ok, state} =
+        SqliteBackend.put(state, :orders, "order1", %{user: "user1", items: ["prod1"]})
 
       # List all tables
       {:ok, users, _} = SqliteBackend.list(state, :users)

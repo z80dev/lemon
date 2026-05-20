@@ -18,6 +18,9 @@ defmodule LemonCore.StoreTest do
     def put(_state, _table, _key, _value), do: {:error, :sqlite_busy}
 
     @impl true
+    def put_new(_state, _table, _key, _value), do: {:error, :sqlite_busy}
+
+    @impl true
     def get(_state, _table, _key), do: {:error, :sqlite_busy}
 
     @impl true
@@ -410,6 +413,37 @@ defmodule LemonCore.StoreTest do
                Store.put(:cron_runs, "run_busy_#{unique_token()}", %{status: :pending})
 
       assert Process.alive?(Process.whereis(Store))
+    end
+
+    test "generic put_new claims a key without overwriting the first value" do
+      token = unique_token()
+      key = "claim_#{token}"
+
+      assert :ok = Store.put_new(:cron_runs, key, %{owner: :first})
+      assert {:error, :exists} = Store.put_new(:cron_runs, key, %{owner: :second})
+      assert Store.get(:cron_runs, key) == %{owner: :first}
+    end
+
+    test "generic put_new allows exactly one concurrent claimant" do
+      token = unique_token()
+      key = "concurrent_claim_#{token}"
+      parent = self()
+
+      tasks =
+        for index <- 1..12 do
+          Task.async(fn ->
+            result = Store.put_new(:cron_runs, key, %{owner: index})
+            send(parent, {:put_new_result, result})
+            result
+          end)
+        end
+
+      results = Enum.map(tasks, &Task.await(&1, 2_000))
+
+      assert Enum.count(results, &(&1 == :ok)) == 1
+      assert Enum.count(results, &(&1 == {:error, :exists})) == 11
+      assert %{owner: owner} = Store.get(:cron_runs, key)
+      assert owner in 1..12
     end
 
     test "finalize_run writes history to RunHistoryStore" do

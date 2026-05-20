@@ -86,6 +86,14 @@ defmodule LemonCore.Store.EtsBackendTest do
     end
   end
 
+  describe "put_new/4" do
+    test "stores only the first value for a key", %{state: state} do
+      assert {:ok, state} = EtsBackend.put_new(state, :chat, "key1", "value1")
+      assert {:exists, state} = EtsBackend.put_new(state, :chat, "key1", "value2")
+      assert :ets.lookup(state.chat, "key1") == [{"key1", "value1"}]
+    end
+  end
+
   describe "get/3" do
     test "retrieves stored values", %{state: state} do
       # Store a value first
@@ -390,7 +398,12 @@ defmodule LemonCore.Store.EtsBackendTest do
       {:ok, items, _} = EtsBackend.list(state, :run_history)
 
       keys = Enum.map(items, &elem(&1, 0))
-      assert keys == [{"session1", 100, "run1"}, {"session1", 200, "run2"}, {"session1", 300, "run3"}]
+
+      assert keys == [
+               {"session1", 100, "run1"},
+               {"session1", 200, "run2"},
+               {"session1", 300, "run3"}
+             ]
     end
   end
 

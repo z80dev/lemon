@@ -28,6 +28,17 @@ defmodule LemonCore.Store.EtsBackend do
   end
 
   @impl true
+  def put_new(state, table, key, value) do
+    state = ensure_table(state, table)
+
+    if :ets.insert_new(state[table], {key, value}) do
+      {:ok, state}
+    else
+      {:exists, state}
+    end
+  end
+
+  @impl true
   def get(state, table, key) do
     state = ensure_table(state, table)
 

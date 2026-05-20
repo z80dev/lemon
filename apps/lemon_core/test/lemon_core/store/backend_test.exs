@@ -21,9 +21,10 @@ defmodule LemonCore.Store.BackendTest do
   describe "callbacks" do
     test "defines all required callbacks" do
       callbacks = Backend.behaviour_info(:callbacks)
-      
+
       assert {:init, 1} in callbacks
       assert {:put, 4} in callbacks
+      assert {:put_new, 4} in callbacks
       assert {:get, 3} in callbacks
       assert {:delete, 3} in callbacks
       assert {:list, 2} in callbacks
@@ -33,8 +34,8 @@ defmodule LemonCore.Store.BackendTest do
       callbacks = Backend.behaviour_info(:callbacks)
       optional = Backend.behaviour_info(:optional_callbacks)
 
-      # init/1, put/4, get/3, delete/3, list/2 (required) + list_recent/3 (optional)
-      assert length(callbacks) == 6
+      # init/1, put/4, put_new/4, get/3, delete/3, list/2 (required) + list_recent/3 (optional)
+      assert length(callbacks) == 7
       assert {:list_recent, 3} in optional
     end
   end
@@ -70,6 +71,17 @@ defmodule LemonCore.Store.BackendTest do
         new_table_data = Map.put(table_data, key, value)
         new_state = Map.put(state, table, new_table_data)
         {:ok, new_state}
+      end
+
+      @impl true
+      def put_new(state, table, key, value) do
+        table_data = Map.get(state, table, %{})
+
+        if Map.has_key?(table_data, key) do
+          {:exists, state}
+        else
+          put(state, table, key, value)
+        end
       end
 
       @impl true
@@ -109,39 +121,39 @@ defmodule LemonCore.Store.BackendTest do
 
     test "put and get operations work correctly" do
       {:ok, state} = MemoryBackend.init([])
-      
+
       {:ok, state} = MemoryBackend.put(state, :users, "user1", %{name: "Alice"})
       {:ok, value, _state} = MemoryBackend.get(state, :users, "user1")
-      
+
       assert value == %{name: "Alice"}
     end
 
     test "get returns nil for non-existent key" do
       {:ok, state} = MemoryBackend.init([])
-      
+
       {:ok, value, _state} = MemoryBackend.get(state, :users, "nonexistent")
-      
+
       assert value == nil
     end
 
     test "delete removes key" do
       {:ok, state} = MemoryBackend.init([])
-      
+
       {:ok, state} = MemoryBackend.put(state, :users, "user1", %{name: "Alice"})
       {:ok, state} = MemoryBackend.delete(state, :users, "user1")
       {:ok, value, _state} = MemoryBackend.get(state, :users, "user1")
-      
+
       assert value == nil
     end
 
     test "list returns all entries in table" do
       {:ok, state} = MemoryBackend.init([])
-      
+
       {:ok, state} = MemoryBackend.put(state, :users, "user1", %{name: "Alice"})
       {:ok, state} = MemoryBackend.put(state, :users, "user2", %{name: "Bob"})
-      
+
       {:ok, entries, _state} = MemoryBackend.list(state, :users)
-      
+
       assert length(entries) == 2
       assert {"user1", %{name: "Alice"}} in entries
       assert {"user2", %{name: "Bob"}} in entries
@@ -149,13 +161,13 @@ defmodule LemonCore.Store.BackendTest do
 
     test "multiple tables are isolated" do
       {:ok, state} = MemoryBackend.init([])
-      
+
       {:ok, state} = MemoryBackend.put(state, :users, "key1", "user_value")
       {:ok, state} = MemoryBackend.put(state, :items, "key1", "item_value")
-      
+
       {:ok, user_value, _state} = MemoryBackend.get(state, :users, "key1")
       {:ok, item_value, _state} = MemoryBackend.get(state, :items, "key1")
-      
+
       assert user_value == "user_value"
       assert item_value == "item_value"
     end
@@ -176,6 +188,17 @@ defmodule LemonCore.Store.BackendTest do
         new_table_data = Map.put(table_data, key, value)
         new_state = Map.put(state, table, new_table_data)
         {:ok, new_state}
+      end
+
+      @impl true
+      def put_new(state, table, key, value) do
+        table_data = Map.get(state, table, %{})
+
+        if Map.has_key?(table_data, key) do
+          {:exists, state}
+        else
+          put(state, table, key, value)
+        end
       end
 
       @impl true
@@ -201,9 +224,9 @@ defmodule LemonCore.Store.BackendTest do
 
     test "operations return new state without modifying original" do
       {:ok, original_state} = ImmutableBackend.init([])
-      
+
       {:ok, new_state} = ImmutableBackend.put(original_state, :test, "key", "value")
-      
+
       # Original state should be unchanged
       assert original_state == %{}
       assert new_state == %{test: %{"key" => "value"}}
@@ -222,6 +245,17 @@ defmodule LemonCore.Store.BackendTest do
         table_data = Map.get(data, table, %{})
         new_data = Map.put(data, table, Map.put(table_data, key, value))
         {:ok, %{state | data: new_data}}
+      end
+
+      @impl true
+      def put_new(%{data: data} = state, table, key, value) do
+        table_data = Map.get(data, table, %{})
+
+        if Map.has_key?(table_data, key) do
+          {:exists, state}
+        else
+          put(state, table, key, value)
+        end
       end
 
       @impl true
@@ -246,26 +280,26 @@ defmodule LemonCore.Store.BackendTest do
 
     test "handles nil values" do
       {:ok, state} = EdgeCaseBackend.init([])
-      
+
       {:ok, state} = EdgeCaseBackend.put(state, :test, "key", nil)
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, "key")
-      
+
       assert value == nil
     end
 
     test "handles complex key types" do
       {:ok, state} = EdgeCaseBackend.init([])
-      
+
       # Test with atom keys
       {:ok, state} = EdgeCaseBackend.put(state, :test, :atom_key, "value1")
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, :atom_key)
       assert value == "value1"
-      
+
       # Test with integer keys
       {:ok, state} = EdgeCaseBackend.put(state, :test, 123, "value2")
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, 123)
       assert value == "value2"
-      
+
       # Test with tuple keys
       {:ok, state} = EdgeCaseBackend.put(state, :test, {:composite, "key"}, "value3")
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, {:composite, "key"})
@@ -274,12 +308,12 @@ defmodule LemonCore.Store.BackendTest do
 
     test "handles complex value types" do
       {:ok, state} = EdgeCaseBackend.init([])
-      
+
       # Nested map
       {:ok, state} = EdgeCaseBackend.put(state, :test, "map", %{a: %{b: %{c: 1}}})
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, "map")
       assert value == %{a: %{b: %{c: 1}}}
-      
+
       # List
       {:ok, state} = EdgeCaseBackend.put(state, :test, "list", [1, 2, [3, 4]])
       {:ok, value, _state} = EdgeCaseBackend.get(state, :test, "list")
@@ -288,14 +322,14 @@ defmodule LemonCore.Store.BackendTest do
 
     test "delete on non-existent key succeeds silently" do
       {:ok, state} = EdgeCaseBackend.init([])
-      
+
       # Should not raise
       {:ok, _new_state} = EdgeCaseBackend.delete(state, :test, "nonexistent")
     end
 
     test "list on empty table returns empty list" do
       {:ok, state} = EdgeCaseBackend.init([])
-      
+
       {:ok, entries, _state} = EdgeCaseBackend.list(state, :nonexistent_table)
       assert entries == []
     end

@@ -9,10 +9,14 @@ defmodule LemonCore.Application do
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
   - LemonCore.MemoryStore - Durable memory document store (separate SQLite DB)
+  - LemonCore.MemoryProviders - Memory-provider registry and fan-out boundary
   - LemonCore.MemoryIngest - Async run ingest pipeline for memory documents
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
   - LemonCore.Browser.LocalServer - Local browser automation server
+  - LemonCore.MediaJobSupervisor - Dynamic supervisor for media job workers
+  - LemonCore.LspServerManager - Language-server registry/status manager
+  - LemonCore.ProviderPoolRotator - In-memory provider pool rotation state
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
   crashes, only that process will be restarted.
@@ -49,10 +53,14 @@ defmodule LemonCore.Application do
       LemonCore.Store,
       LemonCore.RunHistoryStore,
       LemonCore.MemoryStore,
+      LemonCore.MemoryProviders,
       LemonCore.MemoryIngest,
       LemonCore.ConfigReloader,
       LemonCore.ConfigReloader.Watcher,
-      LemonCore.Browser.LocalServer
+      LemonCore.Browser.LocalServer,
+      LemonCore.MediaJobSupervisor,
+      LemonCore.LspServerManager,
+      LemonCore.ProviderPoolRotator
     ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]

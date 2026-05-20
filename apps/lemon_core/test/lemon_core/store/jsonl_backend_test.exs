@@ -26,11 +26,18 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
     test "loads existing tables from jsonl files", %{tmp_dir: tmp_dir} do
       # Create pre-existing jsonl files
-      File.write!(Path.join(tmp_dir, "users.jsonl"), ~s({"op":"put","key":"user1","value":"Alice","ts":1000}\n))
-      File.write!(Path.join(tmp_dir, "products.jsonl"), ~s({"op":"put","key":"prod1","value":"Widget","ts":2000}\n))
+      File.write!(
+        Path.join(tmp_dir, "users.jsonl"),
+        ~s({"op":"put","key":"user1","value":"Alice","ts":1000}\n)
+      )
+
+      File.write!(
+        Path.join(tmp_dir, "products.jsonl"),
+        ~s({"op":"put","key":"prod1","value":"Widget","ts":2000}\n)
+      )
 
       assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
-      
+
       # Both tables should be loaded
       tables = JsonlBackend.list_tables(state) |> Enum.sort()
       assert :users in tables
@@ -54,11 +61,18 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
     test "skips tables specified in skip_tables option", %{tmp_dir: tmp_dir} do
       # Create pre-existing jsonl files
-      File.write!(Path.join(tmp_dir, "users.jsonl"), ~s({"op":"put","key":"user1","value":"Alice","ts":1000}\n))
-      File.write!(Path.join(tmp_dir, "logs.jsonl"), ~s({"op":"put","key":"log1","value":"Entry","ts":2000}\n))
+      File.write!(
+        Path.join(tmp_dir, "users.jsonl"),
+        ~s({"op":"put","key":"user1","value":"Alice","ts":1000}\n)
+      )
+
+      File.write!(
+        Path.join(tmp_dir, "logs.jsonl"),
+        ~s({"op":"put","key":"log1","value":"Entry","ts":2000}\n)
+      )
 
       assert {:ok, state} = JsonlBackend.init(path: tmp_dir, skip_tables: [:logs])
-      
+
       tables = JsonlBackend.list_tables(state)
       assert :users in tables
       refute :logs in tables
@@ -70,10 +84,10 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
 
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key1", "value1")
-      
+
       # Check in-memory state
       assert {:ok, "value1", _} = JsonlBackend.get(state, :mytable, "key1")
-      
+
       # Check file was created
       assert File.exists?(Path.join(tmp_dir, "mytable.jsonl"))
     end
@@ -83,8 +97,16 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key1", "original")
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key1", "updated")
-      
+
       assert {:ok, "updated", _} = JsonlBackend.get(state, :mytable, "key1")
+    end
+
+    test "put_new does not overwrite existing values", %{tmp_dir: tmp_dir} do
+      {:ok, state} = JsonlBackend.init(path: tmp_dir)
+
+      assert {:ok, state} = JsonlBackend.put_new(state, :mytable, "key1", "original")
+      assert {:exists, state} = JsonlBackend.put_new(state, :mytable, "key1", "updated")
+      assert {:ok, "original", _} = JsonlBackend.get(state, :mytable, "key1")
     end
 
     test "stores complex data types", %{tmp_dir: tmp_dir} do
@@ -146,9 +168,9 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       file_content = File.read!(Path.join(tmp_dir, "mytable.jsonl"))
       lines = String.split(file_content, "\n", trim: true)
-      
+
       assert length(lines) == 3
-      
+
       # Each line should be valid JSON
       for line <- lines do
         assert {:ok, _} = Jason.decode(line)
@@ -212,9 +234,9 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       file_content = File.read!(Path.join(tmp_dir, "mytable.jsonl"))
       lines = String.split(file_content, "\n", trim: true)
-      
+
       assert length(lines) == 2
-      
+
       # Last line should be a delete operation
       {:ok, last_entry} = Jason.decode(List.last(lines))
       assert last_entry["op"] == "delete"
@@ -243,10 +265,10 @@ defmodule LemonCore.Store.JsonlBackendTest do
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key3", "value3")
 
       assert {:ok, items, _} = JsonlBackend.list(state, :mytable)
-      
+
       # Convert to map for easier assertion
       items_map = Map.new(items)
-      
+
       assert items_map["key1"] == "value1"
       assert items_map["key2"] == "value2"
       assert items_map["key3"] == "value3"
@@ -261,7 +283,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       assert {:ok, state} = JsonlBackend.delete(state, :mytable, "key1")
 
       assert {:ok, items, _} = JsonlBackend.list(state, :mytable)
-      
+
       items_map = Map.new(items)
       refute Map.has_key?(items_map, "key1")
       assert items_map["key2"] == "value2"
@@ -301,7 +323,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       assert {:ok, state} = JsonlBackend.put(state, :custom_products, "p1", "Widget")
 
       tables = JsonlBackend.list_tables(state) |> MapSet.new()
-      
+
       # Should include both pre-loaded and new tables
       assert MapSet.member?(tables, :custom_users)
       assert MapSet.member?(tables, :custom_products)
@@ -331,7 +353,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       # Second session: read data from new init
       {:ok, state2} = JsonlBackend.init(path: tmp_dir)
-      
+
       assert {:ok, "value1", _} = JsonlBackend.get(state2, :mytable, "key1")
       assert {:ok, %{nested: "data"}, _} = JsonlBackend.get(state2, :mytable, "key2")
       assert {:ok, "other_value", _} = JsonlBackend.get(state2, :other_table, "key")
@@ -346,7 +368,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       # Second session: verify delete persisted
       {:ok, state2} = JsonlBackend.init(path: tmp_dir)
-      
+
       assert {:ok, nil, _} = JsonlBackend.get(state2, :mytable, "key1")
       assert {:ok, "value2", _} = JsonlBackend.get(state2, :mytable, "key2")
     end
@@ -360,7 +382,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       # Second session: verify final value
       {:ok, state2} = JsonlBackend.init(path: tmp_dir)
-      
+
       assert {:ok, "final", _} = JsonlBackend.get(state2, :mytable, "key")
     end
 
@@ -441,7 +463,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
 
       binary_string = "Hello\nWorld\t\"Quoted\""
-      
+
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key", binary_string)
       assert {:ok, ^binary_string, _} = JsonlBackend.get(state, :mytable, "key")
     end
@@ -450,7 +472,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
 
       unicode = "Hello 🌍 世界 Привет"
-      
+
       assert {:ok, state} = JsonlBackend.put(state, :mytable, "key", unicode)
       assert {:ok, ^unicode, _} = JsonlBackend.get(state, :mytable, "key")
     end
@@ -501,11 +523,12 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
 
       tables = [:users, :products, :orders, :inventory, :categories]
-      
-      state = Enum.reduce(tables, state, fn table, acc_state ->
-        {:ok, new_state} = JsonlBackend.put(acc_state, table, "key", "value_#{table}")
-        new_state
-      end)
+
+      state =
+        Enum.reduce(tables, state, fn table, acc_state ->
+          {:ok, new_state} = JsonlBackend.put(acc_state, table, "key", "value_#{table}")
+          new_state
+        end)
 
       # Verify all tables have data
       for table <- tables do
@@ -584,7 +607,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
 
       assert {:ok, new_state} = JsonlBackend.put(state, :mytable, "key", "value")
-      
+
       # New state should reflect the change
       assert {:ok, "value", _} = JsonlBackend.get(new_state, :mytable, "key")
     end
@@ -600,10 +623,10 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
     test "delete returns updated state", %{tmp_dir: tmp_dir} do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
-      
+
       assert {:ok, _state} = JsonlBackend.put(state, :mytable, "key", "value")
       assert {:ok, new_state} = JsonlBackend.delete(state, :mytable, "key")
-      
+
       assert {:ok, nil, _} = JsonlBackend.get(new_state, :mytable, "key")
     end
 
@@ -620,11 +643,14 @@ defmodule LemonCore.Store.JsonlBackendTest do
   describe "ensure_table_loaded" do
     test "lazily loads tables on first access", %{tmp_dir: tmp_dir} do
       # Create a file before init
-      File.write!(Path.join(tmp_dir, "lazy_table.jsonl"), ~s({"op":"put","key":"lazy_key","value":"lazy_value","ts":1000}\n))
+      File.write!(
+        Path.join(tmp_dir, "lazy_table.jsonl"),
+        ~s({"op":"put","key":"lazy_key","value":"lazy_value","ts":1000}\n)
+      )
 
       # Init - will discover and load lazy_table since file exists
       {:ok, state} = JsonlBackend.init(path: tmp_dir)
-      
+
       # lazy_table should be discovered and loaded
       assert :lazy_table in JsonlBackend.list_tables(state)
 
@@ -637,7 +663,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
 
       # Access a non-existent table
       assert {:ok, nil, new_state} = JsonlBackend.get(state, :nonexistent, "key")
-      
+
       # Table should be marked as loaded even though file doesn't exist
       assert :nonexistent in JsonlBackend.list_tables(new_state)
     end

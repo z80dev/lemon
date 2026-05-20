@@ -80,6 +80,11 @@ defmodule LemonCore.ApplicationTest do
       assert Process.whereis(LemonCore.Browser.LocalServer) != nil
       assert Process.alive?(Process.whereis(LemonCore.Browser.LocalServer))
     end
+
+    test "LspServerManager is started" do
+      assert Process.whereis(LemonCore.LspServerManager) != nil
+      assert Process.alive?(Process.whereis(LemonCore.LspServerManager))
+    end
   end
 
   describe "supervisor children specification" do
@@ -96,17 +101,21 @@ defmodule LemonCore.ApplicationTest do
       assert LemonCore.Store in child_ids
       assert LemonCore.RunHistoryStore in child_ids
       assert LemonCore.MemoryStore in child_ids
+      assert LemonCore.MemoryProviders in child_ids
       assert LemonCore.MemoryIngest in child_ids
       assert LemonCore.ConfigReloader in child_ids
       assert LemonCore.ConfigReloader.Watcher in child_ids
       assert LemonCore.Browser.LocalServer in child_ids
+      assert LemonCore.MediaJobSupervisor in child_ids
+      assert LemonCore.LspServerManager in child_ids
+      assert LemonCore.ProviderPoolRotator in child_ids
     end
 
-    test "supervisor has exactly 9 children" do
+    test "supervisor has exactly 13 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 9
+      assert length(children) == 13
     end
 
     test "children include both workers and supervisors" do
@@ -141,10 +150,13 @@ defmodule LemonCore.ApplicationTest do
       assert {_, :worker} = child_map[LemonCore.Store]
       assert {_, :worker} = child_map[LemonCore.RunHistoryStore]
       assert {_, :worker} = child_map[LemonCore.MemoryStore]
+      assert {_, :worker} = child_map[LemonCore.MemoryProviders]
       assert {_, :worker} = child_map[LemonCore.MemoryIngest]
       assert {_, :worker} = child_map[LemonCore.ConfigReloader]
       assert {_, :worker} = child_map[LemonCore.ConfigReloader.Watcher]
       assert {_, :worker} = child_map[LemonCore.Browser.LocalServer]
+      assert {_, :supervisor} = child_map[LemonCore.MediaJobSupervisor]
+      assert {_, :worker} = child_map[LemonCore.LspServerManager]
     end
   end
 
@@ -184,6 +196,18 @@ defmodule LemonCore.ApplicationTest do
 
       # Verify LocalServer was restarted
       new_pid = wait_for_pid(LemonCore.Browser.LocalServer, original_pid)
+      assert new_pid != nil
+      assert new_pid != original_pid
+      assert Process.alive?(new_pid)
+    end
+
+    test "supervisor restarts LspServerManager after crash" do
+      original_pid = Process.whereis(LemonCore.LspServerManager)
+      assert original_pid != nil
+
+      Process.exit(original_pid, :kill)
+
+      new_pid = wait_for_pid(LemonCore.LspServerManager, original_pid)
       assert new_pid != nil
       assert new_pid != original_pid
       assert Process.alive?(new_pid)

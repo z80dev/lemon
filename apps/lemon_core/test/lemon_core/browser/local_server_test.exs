@@ -17,11 +17,7 @@ defmodule LemonCore.Browser.LocalServerTest do
 
     on_exit(fn ->
       if Process.alive?(pid) do
-        try do
-          GenServer.stop(pid, :normal, 1_000)
-        catch
-          :exit, _ -> :ok
-        end
+        LocalServer.stop(name)
       end
     end)
 
@@ -45,6 +41,38 @@ defmodule LemonCore.Browser.LocalServerTest do
       assert state.port == nil
       assert state.buffer == ""
       assert state.pending == %{}
+    end
+
+    test "reports local server status", %{server: server} do
+      status = LocalServer.status(server)
+
+      assert status.available == true
+      assert status.running == false
+      assert status.pending_requests == 0
+      assert status.request_count == 0
+      assert status.completed_count == 0
+      assert status.failed_count == 0
+      assert status.last_error == nil
+      assert status.driver_config.mode == "local_cdp"
+      assert status.driver_config.launches_browser == true
+      assert status.driver_config.attach_only == false
+      assert status.driver_config.cdp_endpoint_configured == false
+    end
+
+    test "reports remote CDP driver shape without exposing the endpoint", %{server: server} do
+      endpoint = "wss://user:secret@example.browser.test/devtools/browser/session"
+
+      with_env("LEMON_BROWSER_CDP_ENDPOINT", endpoint, fn ->
+        status = LocalServer.status(server)
+
+        assert status.driver_config.mode == "remote_cdp"
+        assert status.driver_config.launches_browser == false
+        assert status.driver_config.attach_only == true
+        assert status.driver_config.cdp_endpoint_configured == true
+        assert is_binary(status.driver_config.cdp_endpoint_hash)
+        refute inspect(status.driver_config) =~ endpoint
+        refute inspect(status.driver_config) =~ "secret"
+      end)
     end
   end
 
@@ -77,6 +105,9 @@ defmodule LemonCore.Browser.LocalServerTest do
                  )
 
         assert message =~ "LEMON_BROWSER_DRIVER_PATH does not exist"
+        status = LocalServer.status(server)
+        assert status.failed_count == 0
+        assert status.last_error =~ "LEMON_BROWSER_DRIVER_PATH does not exist"
       end)
     end
 

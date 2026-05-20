@@ -11,6 +11,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 - **Session key management** - Canonical session key formats for routing
 - **Idempotency** - Deduplication for at-most-once operations
 - **Execution approvals** - Tool execution gating with scope-based persistence
+- **Checkpoints and rollback** - Shared checkpoint store, filesystem diff/restore, and lifecycle events
 - **Quality checks** - Docs catalog and architecture boundary validation
 - **Telemetry** - Consistent event emission across the umbrella
 - **HTTP client** - Thin wrapper around Erlang's `:httpc`
@@ -29,11 +30,11 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
-| `LemonCore.Store` | Storage GenServer with pluggable backends |
+| `LemonCore.Store` | Storage GenServer with pluggable backends and `put_new/3` insert-if-absent claims |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, `:telegram_known_targets`) |
-| `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) |
-| `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) |
-| `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) |
+| `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
+| `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
+| `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
@@ -48,11 +49,15 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
 | `LemonCore.IdempotencyStore` | Typed wrapper for persisted idempotency entries |
+| `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters used by control-plane and Web `/ops` surfaces |
+| `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
+| `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
 | `LemonCore.MemorySafety` | Shared durable-memory secret screening used before ingest and skill synthesis |
+| `LemonCore.MemoryProvider` / `MemoryProviders` | Searchable/storable memory-provider contract, supervised registry, fan-out, and redacted diagnostics |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
@@ -61,12 +66,58 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
 | `LemonCore.GatewayConfig` | Unified gateway config access from canonical TOML gateway section only (test-mode full-replacement via app env is allowed for test isolation) |
 | `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
+| `LemonCore.ProviderPoolRotator` | Supervised in-memory round-robin state for provider credential pools |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
-| `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
+| `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Node/Playwright (line-delimited JSON protocol) |
+| `LemonCore.Browser.Artifacts` | Browser screenshot artifact metadata and 14-day / 100-file retention cleanup |
+| `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
+| `LemonCore.LspServers` / `LspServerManager` | Language-server registry plus supervised redacted stdio session, initialize, document-sync, JSON-RPC, and diagnostic-notification manager |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
+
+Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
+proof commands copy-ready and include the default redacted
+`.lemon/proofs/media-*-smoke-latest.json` proof paths. Local deterministic
+media smoke artifacts do not promote the provider-backed live gate. Image proof
+can be satisfied by either `openai_image` or `vertex_imagen`; TTS proof can be
+satisfied by `openai_tts`, `elevenlabs_tts`, or `google_tts`; video proof can
+be satisfied by `openai_video` or `vertex_veo`. Media job
+failures may expose a bounded provider status/type suffix in `error_kind`, but
+raw provider messages remain hashed-only metadata. Doctor remediation may map
+safe `reason_kind` labels to operator hints for permission, quota/billing,
+payment, request-shape, and generic provider HTTP failures, but it must not
+include raw provider response bodies. When a failed or skipped proof identifies
+a safe provider id for a multi-provider lane, remediation should include the
+matching `--provider` rerun flag instead of sending the operator back to the
+lane default.
+
+Support-bundle `media_diagnostics.json` should mirror those same
+provider-backed media launch lanes with safe status, reason kind, proof path,
+and target-provider rerun command fields. Keep it redacted: no raw prompts,
+provider responses, artifact bytes, API keys, or secret names.
+
+Support-bundle `usage_diagnostics.json` should mirror the shared usage summary
+from `LemonCore.UsageStore` with cost, request, token, provider, daily, and
+quota aggregates only. Keep it redacted: no prompts, responses, message bodies,
+credentials, or secret values.
+
+Doctor `usage.status` should use `LemonCore.UsageDiagnostics` and report only
+aggregate usage/quota pressure. Do not include prompt text, response text,
+message bodies, credentials, or secret values in check messages/remediation.
+
+Support-bundle `channel_readiness.json` and control-plane `channels.status`
+should use `LemonCore.Doctor.ChannelReadiness` for the shared Telegram/Discord
+launch-gate summary. Keep gate evidence and next actions redacted and
+copy-ready, especially Discord slash client-click wait mode. Do not include bot
+tokens, secret names, chat/channel/guild ids, message bodies, raw proof paths,
+or raw proof details.
+
+Doctor `channels.readiness` should summarize the same
+`LemonCore.Doctor.ChannelReadiness` launch-gate counts and point at the first
+unresolved gate's safe next action without duplicating or leaking proof
+contents.
 
 Use `LemonCore.Event` constructors for structured run-event contracts when available.
 `engine_action/2` validates tool/status action payloads before broadcast, and
@@ -119,7 +170,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 ### Config Sections (valid top-level TOML sections)
 
 - `[defaults]` - Default provider, model, thinking level, engine
-- `[runtime]` - Runtime behavior (compaction, retry, shell, tools, cli, extensions, theme, budget_defaults)
+- `[runtime]` - Runtime behavior (compaction, retry, shell, provider_routing, tools, cli, extensions, theme, budget_defaults)
 - `[profiles.<id>]` - Per-agent profiles with tool policies
 - `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
 - `[gateway]` - Max concurrent runs, engine bindings, transport settings (Telegram, Discord, XMTP, SMS, Voice), projects. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
@@ -138,6 +189,9 @@ Config provides defaults; runtime state provides the current effective value. Cu
 |---------|-----------|
 | `LEMON_DEFAULT_PROVIDER` | `defaults.provider` |
 | `LEMON_DEFAULT_MODEL` | `defaults.model` |
+| `LEMON_PROVIDER_ROUTING_ENABLED` | `runtime.provider_routing.enabled` |
+| `LEMON_PROVIDER_FALLBACK_PROVIDERS` | `runtime.provider_routing.fallback_providers` |
+| `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | `runtime.provider_routing.require_credentials` |
 | `LEMON_DEBUG` | `tui.debug` |
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
@@ -236,7 +290,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, and `LemonCore.ExecApprovalStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`.
 
 ### Specialized APIs
 
@@ -365,6 +419,24 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 1. Create `lib/lemon_core/quality/my_check.ex` with `run/1` returning `{:ok, report} | {:error, report}`
 2. Register in `lib/mix/tasks/lemon.quality.ex` checks list
 3. Add tests in `test/lemon_core/quality/my_check_test.exs`
+
+### Doctor Channel Checks
+
+`LemonCore.Doctor.Checks.Channels` must stay redacted. Discord DM,
+free-response, reconnect, slash registration, deterministic slash, and real
+client-click gates should use `ChannelDiagnostics` plus sanitized
+`ProofDiagnostics` status/reason kinds, not raw Discord IDs, message bodies,
+bot tokens, or secret names. Free-response checks distinguish missing local
+Message Content Intent declaration from proof artifacts that still report
+Message Content Intent or unmentioned-message delivery drift after declaration.
+Slash client-click checks should preserve stable reason kinds for missing,
+invalid, non-promotable, and stale proof artifacts so doctor, support bundles,
+and Web `/ops` can point operators at the exact wait-mode proof step.
+Shared proof launch-gate summaries should live in
+`LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
+support bundles, `proofs.status`, `readiness.status`, and Web `/ops` stay
+aligned on Discord DM, slash registration, slash client-click, provider media,
+and terminal backend gate state without raw proof details.
 
 ## How to Add Quality Checks
 
@@ -624,6 +696,13 @@ end
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :deny)
 ```
 
+Approval requests, resolutions, and timeouts write redacted
+`approval_requested`, `approval_resolved`, and `approval_timed_out`
+introspection events. Keep these events to approval id, tool, action type/hash,
+decision/scope, and booleans; do not persist raw action payloads or prompt text.
+Timeouts also broadcast `:approval_resolved` with `decision: :timeout` so
+operator clients can clear stale pending requests live.
+
 ### Telemetry Spans
 
 ```elixir
@@ -796,9 +875,16 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 1. `Phoenix.PubSub` (name: `LemonCore.PubSub`) - PubSub backbone
 2. `LemonCore.ConfigCache` - ETS-backed config cache
 3. `LemonCore.Store` - Storage GenServer
-4. `LemonCore.ConfigReloader` - Reload orchestrator
-5. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
-6. `LemonCore.Browser.LocalServer` - Local browser driver
+4. `LemonCore.RunHistoryStore` - Run history persistence
+5. `LemonCore.MemoryStore` - Durable memory document store
+6. `LemonCore.MemoryProviders` - Memory-provider registry and fan-out boundary
+7. `LemonCore.MemoryIngest` - Async run ingest pipeline
+8. `LemonCore.ConfigReloader` - Reload orchestrator
+9. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
+10. `LemonCore.Browser.LocalServer` - Local browser driver
+11. `LemonCore.MediaJobSupervisor` - generated-media job worker boundary
+12. `LemonCore.LspServerManager` - Language-server registry/status/session/document-sync/diagnostic notification manager
+13. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
 
 ## Important Notes
 

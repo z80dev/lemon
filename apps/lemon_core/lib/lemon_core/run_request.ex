@@ -22,6 +22,7 @@ defmodule LemonCore.RunRequest do
           queue_mode: queue_mode(),
           engine_id: term(),
           model: term(),
+          images: [map()],
           resume: ResumeToken.t() | nil,
           meta: map(),
           cwd: term(),
@@ -36,6 +37,7 @@ defmodule LemonCore.RunRequest do
             queue_mode: :collect,
             engine_id: nil,
             model: nil,
+            images: [],
             resume: nil,
             meta: %{},
             cwd: nil,
@@ -72,6 +74,7 @@ defmodule LemonCore.RunRequest do
       queue_mode: normalize_queue_mode(field(params, :queue_mode)),
       engine_id: normalize_engine_id(field(params, :engine_id)),
       model: normalize_model(field(params, :model)),
+      images: normalize_images(field(params, :images)),
       resume: normalize_resume(field(params, :resume)),
       meta: normalize_meta(field(params, :meta)),
       cwd: normalize_cwd(field(params, :cwd)),
@@ -112,6 +115,13 @@ defmodule LemonCore.RunRequest do
   def normalize_model(model) when model in [nil, false], do: nil
   def normalize_model(model), do: model
 
+  @spec normalize_images(term()) :: [map()]
+  def normalize_images(images) when is_list(images) do
+    Enum.filter(images, &image?/1)
+  end
+
+  def normalize_images(_), do: []
+
   @spec normalize_resume(term()) :: ResumeToken.t() | nil
   def normalize_resume(%ResumeToken{} = resume), do: resume
   def normalize_resume(_), do: nil
@@ -139,4 +149,12 @@ defmodule LemonCore.RunRequest do
     do: SessionKey.agent_id(session_key)
 
   defp session_agent_id(_), do: nil
+
+  defp image?(image) when is_map(image) do
+    data = MapHelpers.get_key(image, :data)
+    mime_type = MapHelpers.get_key(image, :mime_type)
+    is_binary(data) and data != "" and is_binary(mime_type) and mime_type != ""
+  end
+
+  defp image?(_), do: false
 end

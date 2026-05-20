@@ -52,9 +52,16 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`) | PubSub backbone for the Bus |
 | 2 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 3 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 4 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 5 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
-| 6 | `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright |
+| 4 | `LemonCore.RunHistoryStore` | Run history persistence |
+| 5 | `LemonCore.MemoryStore` | Durable memory document store |
+| 6 | `LemonCore.MemoryProviders` | Supervised memory-provider registry and fan-out boundary |
+| 7 | `LemonCore.MemoryIngest` | Async run ingest pipeline for memory documents |
+| 8 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 9 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 10 | `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Node/Playwright |
+| 11 | `LemonCore.MediaJobSupervisor` | Supervised generated-media job worker boundary |
+| 12 | `LemonCore.LspServerManager` | Supervised language-server registry/status/session/document-sync/diagnostic notification manager |
+| 13 | `LemonCore.ProviderPoolRotator` | Provider credential-pool round-robin state |
 
 ## Module Inventory
 
@@ -82,7 +89,45 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
+
+### Doctor and Support
+
+| Module | Purpose |
+|--------|---------|
+| `LemonCore.Doctor.SupportBundle` | Redacted doctor report, runtime metadata, config, and diagnostics ZIP writer |
+| `LemonCore.Doctor.ProviderDiagnostics` | Provider setup/routing diagnostics for support bundles without raw API keys, secret names, base URLs, env var names, prompts, or provider responses |
+| `LemonCore.Doctor.ChannelReadiness` | Redacted Telegram/Discord launch-gate readiness summary shared by support bundles and `channels.status`, including Discord DM, free-response, reconnect, slash registration, deterministic slash, and real slash client-click gates |
+| `LemonCore.Doctor.Checks.Channels` | Telegram/Discord readiness checks using redacted channel diagnostics, shared launch-gate readiness, and proof reason kinds, including Discord Message Content Intent drift and slash client-click missing/non-promotable/stale proof reasons with wait-mode remediation |
+| `LemonCore.Doctor.Checks.Media` | Media readiness checks for generated Telegram/Discord delivery and provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
+| `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
 | `LemonCore.LoggerSetup` | Logger configuration helpers |
+
+`media_diagnostics.json` in support bundles mirrors the provider-backed media
+launch lanes with redacted image/TTS/STT/vision/video status, safe reason
+kinds, proof paths, and target-provider rerun commands. It must not include raw
+prompts, provider responses, artifact bytes, API keys, or secret names.
+
+`usage_diagnostics.json` in support bundles mirrors the shared usage summary
+used by control-plane usage methods and Web `/ops`: current cost, request and
+token totals, provider rows, today totals, configured quota limits, and cleanup
+flags. It must not include raw prompts, responses, channel message bodies,
+credentials, or secret values.
+
+`channel_readiness.json` in support bundles mirrors the shared Telegram/Discord
+launch-gate summary used by `channels.status`: promoted platform list, gate
+counts, redacted gate evidence, safe reason kinds, and copy-ready next actions
+for live proof gates such as Discord slash client-click wait mode. It must not
+include bot tokens, secret names, chat/channel/guild ids, message bodies, raw
+proof paths, or raw proof details.
+
+`mix lemon.doctor` includes `usage.status`, which reads the same redacted
+aggregate usage diagnostics and warns when configured run, token, or cost
+limits are exceeded.
+
+`mix lemon.doctor` includes `channels.readiness`, which summarizes the shared
+Telegram/Discord launch-gate counts from `LemonCore.Doctor.ChannelReadiness`
+and points remediation at the first unresolved gate without exposing channel
+ids, message bodies, proof details, credentials, or secret names.
 
 ### Secrets
 
@@ -98,11 +143,23 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | Module | Purpose |
 |--------|---------|
 | `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
-| `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/get/delete/list) |
+| `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
+
+### Memory
+
+| Module | Purpose |
+|--------|---------|
+| `LemonCore.MemoryDocument` | Normalized compact summary of a finalized run |
+| `LemonCore.MemoryStore` | Built-in SQLite/FTS durable memory store |
+| `LemonCore.MemoryProvider` | Behaviour for external searchable/storable memory providers |
+| `LemonCore.MemoryProviders` | Supervised registry, ingest fan-out, search fan-out, and redacted provider diagnostics |
+| `LemonCore.MemoryProviders.Local` | Built-in provider backed by `LemonCore.MemoryStore` |
+| `LemonCore.MemoryIngest` | Async run-finalization ingest pipeline with safety screening |
+| `LemonCore.SessionSearch` | Feature-gated public search API used by `search_memory` |
 
 ### Event System
 
@@ -132,7 +189,10 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 |--------|---------|
 | `LemonCore.Idempotency` | At-most-once deduplication backed by Store with 24h TTL |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
+| `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
 | `LemonCore.Introspection` | Canonical introspection event builder and persistence |
+| `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters |
+| `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication |
 
 ### Utilities
@@ -147,7 +207,12 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |
 | `LemonCore.Reload` | Runtime BEAM/extension reload orchestration |
 | `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
-| `LemonCore.Browser.LocalServer` | Local browser automation via Playwright |
+| `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Playwright |
+| `LemonCore.Browser.Artifacts` | Browser screenshot artifact metadata and 14-day / 100-file retention cleanup |
+| `LemonCore.MediaJobs` | Redacted generated-media job metadata, artifact summaries, safe provider error-kind labels, and 30-day / 500-job cleanup policy |
+| `LemonCore.MediaJobSupervisor` / `MediaJobWorker` | Dynamic OTP supervision for queued/running/completed/failed media job workers with PubSub lifecycle events and hashed raw error details |
+| `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
+| `LemonCore.LspServers` / `LspServerManager` | Language-server registry plus supervised redacted stdio session, initialize, document-sync, JSON-RPC, and diagnostic-notification manager |
 
 ### Quality
 
@@ -245,6 +310,9 @@ LemonCore.ConfigReloader.reload/1
 |---------|-----------|
 | `LEMON_DEFAULT_PROVIDER` | `defaults.provider` |
 | `LEMON_DEFAULT_MODEL` | `defaults.model` |
+| `LEMON_PROVIDER_ROUTING_ENABLED` | `runtime.provider_routing.enabled` |
+| `LEMON_PROVIDER_FALLBACK_PROVIDERS` | `runtime.provider_routing.fallback_providers` |
+| `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | `runtime.provider_routing.require_credentials` |
 | `LEMON_DEBUG` | `tui.debug` |
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
@@ -336,12 +404,15 @@ config :lemon_core, LemonCore.Store,
 ```elixir
 defmodule MyApp.WidgetStore do
   def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
+  def claim(id, widget), do: LemonCore.Store.put_new(:widgets, id, widget)
   def get(id), do: LemonCore.Store.get(:widgets, id)
 end
 
 MyApp.WidgetStore.put(id, widget)
 widget = MyApp.WidgetStore.get(id)
 ```
+
+`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
 
@@ -361,6 +432,7 @@ Shared-domain callers should prefer typed wrappers:
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Heartbeats**: `LemonCore.HeartbeatStore.get_config/1`, `put_config/2`, `get_last/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
+- **Goals and boards**: `LemonCore.GoalStore` for durable standing objectives and `LemonCore.KanbanStore` for durable BEAM-native board/task state
 
 ### ReadCache
 
@@ -373,6 +445,7 @@ Implementing a new backend requires the `LemonCore.Store.Backend` behaviour:
 ```elixir
 @callback init(opts()) :: {:ok, state()} | {:error, term()}
 @callback put(state(), table(), key(), value()) :: {:ok, state()}
+@callback put_new(state(), table(), key(), value()) :: {:ok, state()} | {:exists, state()} | {:error, term()}
 @callback get(state(), table(), key()) :: {:ok, value() | nil, state()}
 @callback delete(state(), table(), key()) :: {:ok, state()}
 @callback list(state(), table()) :: {:ok, [{key(), value()}], state()}
@@ -470,6 +543,12 @@ end
 # Resolve (called by UI/admin)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
 ```
+
+Approval requests, resolutions, and timeouts also write redacted
+`approval_*` introspection events with approval id, tool, action type/hash, and
+decision/scope metadata. Raw action payloads, prompts, and secrets are not
+stored in the timeline. Timeouts also broadcast `:approval_resolved` with
+`decision: :timeout` so operator clients can clear stale pending requests live.
 
 ## Idempotency
 

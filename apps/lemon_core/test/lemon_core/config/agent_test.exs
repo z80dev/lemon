@@ -22,9 +22,16 @@ defmodule LemonCore.Config.AgentTest do
         "LEMON_RETRY_ENABLED",
         "LEMON_MAX_RETRIES",
         "LEMON_BASE_DELAY_MS",
+        "LEMON_PROVIDER_ROUTING_ENABLED",
+        "LEMON_PROVIDER_FALLBACK_PROVIDERS",
+        "LEMON_PROVIDER_ROUTING_DEFAULT_POOL",
+        "LEMON_PROVIDER_ROUTING_DEFAULT_PROFILE",
+        "LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS",
         "LEMON_SHELL_PATH",
         "LEMON_SHELL_COMMAND_PREFIX",
         "LEMON_EXTENSION_PATHS",
+        "LEMON_EXTENSIONS_ENABLED",
+        "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS",
         "LEMON_THEME"
       ]
       |> Enum.each(&System.delete_env/1)
@@ -48,6 +55,7 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_thinking_level == "medium"
       assert config.theme == "lemon"
       assert config.extension_paths == []
+      assert config.extensions.auto_load_default_paths == false
     end
 
     test "uses settings from config map" do
@@ -109,6 +117,84 @@ defmodule LemonCore.Config.AgentTest do
       assert config.default_model == "llama3"
       assert config.default_thinking_level == "low"
       assert config.theme == "dark"
+    end
+  end
+
+  describe "provider routing configuration" do
+    test "uses provider routing defaults" do
+      config = Agent.resolve(%{})
+
+      assert config.provider_routing.enabled == true
+      assert config.provider_routing.fallback_providers == []
+      assert config.provider_routing.default_pool == nil
+      assert config.provider_routing.default_profile == nil
+      assert config.provider_routing.credential_pools == %{}
+      assert config.provider_routing.profiles == %{}
+      assert config.provider_routing.require_credentials == true
+    end
+
+    test "uses runtime provider routing settings" do
+      settings = %{
+        "runtime" => %{
+          "provider_routing" => %{
+            "enabled" => false,
+            "fallback_providers" => ["zai", "anthropic"],
+            "default_pool" => "burst",
+            "default_profile" => "ops",
+            "credential_pools" => %{
+              "burst" => %{
+                "providers" => ["openai", "zai"],
+                "strategy" => "round_robin"
+              }
+            },
+            "profiles" => %{
+              "ops" => %{
+                "fallback_providers" => ["anthropic"],
+                "credential_pool" => "burst",
+                "distribution" => %{"openai" => 70, "zai" => 30}
+              }
+            },
+            "require_credentials" => false
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.provider_routing.enabled == false
+      assert config.provider_routing.fallback_providers == ["zai", "anthropic"]
+      assert config.provider_routing.default_pool == "burst"
+      assert config.provider_routing.default_profile == "ops"
+
+      assert config.provider_routing.credential_pools == %{
+               "burst" => %{providers: ["openai", "zai"], strategy: "round_robin"}
+             }
+
+      assert config.provider_routing.profiles == %{
+               "ops" => %{
+                 fallback_providers: ["anthropic"],
+                 credential_pool: "burst",
+                 distribution: %{"openai" => 70, "zai" => 30}
+               }
+             }
+
+      assert config.provider_routing.require_credentials == false
+    end
+
+    test "provider routing env vars override settings" do
+      System.put_env("LEMON_PROVIDER_ROUTING_ENABLED", "false")
+      System.put_env("LEMON_PROVIDER_FALLBACK_PROVIDERS", "openai,zai")
+      System.put_env("LEMON_PROVIDER_ROUTING_DEFAULT_POOL", "burst")
+      System.put_env("LEMON_PROVIDER_ROUTING_DEFAULT_PROFILE", "ops")
+      System.put_env("LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS", "false")
+
+      config = Agent.resolve(%{})
+
+      assert config.provider_routing.enabled == false
+      assert config.provider_routing.fallback_providers == ["openai", "zai"]
+      assert config.provider_routing.default_pool == "burst"
+      assert config.provider_routing.default_profile == "ops"
+      assert config.provider_routing.require_credentials == false
     end
   end
 
@@ -278,6 +364,71 @@ defmodule LemonCore.Config.AgentTest do
 
       assert config.extension_paths == ["/path/one", "/path/two"]
     end
+
+    test "default extension directories require explicit trust" do
+      config = Agent.resolve(%{})
+
+      assert config.extensions.enabled == true
+      assert config.extensions.auto_load_default_paths == false
+    end
+
+    test "uses extension enabled setting from config" do
+      settings = %{
+        "runtime" => %{
+          "extensions" => %{
+            "enabled" => false
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.extensions.enabled == false
+    end
+
+    test "environment variable overrides extension enabled setting" do
+      System.put_env("LEMON_EXTENSIONS_ENABLED", "false")
+
+      config =
+        Agent.resolve(%{
+          "runtime" => %{
+            "extensions" => %{
+              "enabled" => true
+            }
+          }
+        })
+
+      assert config.extensions.enabled == false
+    end
+
+    test "uses default extension auto-load setting from config" do
+      settings = %{
+        "runtime" => %{
+          "extensions" => %{
+            "auto_load_default_paths" => true
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.extensions.auto_load_default_paths == true
+    end
+
+    test "environment variable overrides default extension auto-load setting" do
+      System.put_env("LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS", "true")
+
+      config =
+        Agent.resolve(%{
+          "runtime" => %{
+            "extensions" => %{
+              "auto_load_default_paths" => false
+            }
+          }
+        })
+
+      assert config.extensions.auto_load_default_paths == true
+    end
   end
 
   describe "defaults/0" do
@@ -289,8 +440,12 @@ defmodule LemonCore.Config.AgentTest do
       assert defaults["default_thinking_level"] == "medium"
       assert defaults["theme"] == "lemon"
       assert defaults["extension_paths"] == []
+      assert defaults["extensions"]["enabled"] == true
+      assert defaults["extensions"]["auto_load_default_paths"] == false
       assert defaults["compaction"]["enabled"] == true
       assert defaults["retry"]["max_retries"] == 3
+      assert defaults["provider_routing"]["enabled"] == true
+      assert defaults["provider_routing"]["fallback_providers"] == []
     end
   end
 
@@ -303,6 +458,7 @@ defmodule LemonCore.Config.AgentTest do
       assert is_binary(config.default_model)
       assert is_map(config.compaction)
       assert is_map(config.retry)
+      assert is_map(config.provider_routing)
       assert is_map(config.shell)
       assert is_list(config.extension_paths)
       assert is_binary(config.theme)

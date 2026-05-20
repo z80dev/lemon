@@ -26,6 +26,7 @@ defmodule LemonCore.MemoryIngest do
   require Logger
 
   alias LemonCore.MemoryDocument
+  alias LemonCore.MemoryProviders
   alias LemonCore.MemorySafety
   alias LemonCore.MemoryStore
   alias LemonCore.RoutingFeedbackStore
@@ -140,6 +141,10 @@ defmodule LemonCore.MemoryIngest do
 
   defp put_memory_doc(memory_store, %MemoryDocument{} = doc) when is_pid(memory_store) do
     MemoryStore.put(memory_store, doc)
+  end
+
+  defp put_memory_doc(MemoryStore, %MemoryDocument{} = doc) do
+    MemoryProviders.put(doc)
   end
 
   defp put_memory_doc(memory_store, %MemoryDocument{} = doc) when is_atom(memory_store) do

@@ -84,6 +84,19 @@ defmodule LemonCore.Store.JsonlBackend do
   end
 
   @impl true
+  def put_new(state, table, key, value) do
+    state = ensure_table_loaded(state, table)
+
+    table_data = Map.get(state.data, table, %{})
+
+    if Map.has_key?(table_data, key) do
+      {:exists, state}
+    else
+      put(state, table, key, value)
+    end
+  end
+
+  @impl true
   def get(state, table, key) do
     # Ensure table is loaded (for dynamic tables)
     state = ensure_table_loaded(state, table)

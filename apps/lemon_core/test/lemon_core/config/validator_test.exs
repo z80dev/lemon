@@ -277,24 +277,21 @@ defmodule LemonCore.Config.ValidatorTest do
       refute Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
     end
 
-    test "accepts api_key as anthropic auth_source value" do
-      errors =
+    test "accepts valid anthropic auth_source values" do
+      api_key_errors =
         Validator.validate_providers(
           %{providers: %{"anthropic" => %{auth_source: "api_key"}}},
           []
         )
 
-      refute Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
-    end
-
-    test "rejects oauth anthropic auth_source value" do
-      errors =
+      oauth_errors =
         Validator.validate_providers(
           %{providers: %{"anthropic" => %{auth_source: "oauth"}}},
           []
         )
 
-      assert Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
+      refute Enum.any?(api_key_errors, &String.contains?(&1, "anthropic.auth_source"))
+      refute Enum.any?(oauth_errors, &String.contains?(&1, "anthropic.auth_source"))
     end
 
     test "rejects invalid anthropic auth_source value" do
@@ -572,6 +569,22 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "deny_unbound_channels"))
     end
 
+    test "validates discord message_content_intent_enabled" do
+      errors =
+        Validator.validate_discord_config([], %{
+          message_content_intent_enabled: true
+        })
+
+      assert errors == []
+
+      errors =
+        Validator.validate_discord_config([], %{
+          message_content_intent_enabled: "yes"
+        })
+
+      assert Enum.any?(errors, &String.contains?(&1, "message_content_intent_enabled"))
+    end
+
     test "accepts nil discord config" do
       errors = Validator.validate_discord_config([], nil)
       assert errors == []
@@ -583,7 +596,8 @@ defmodule LemonCore.Config.ValidatorTest do
           bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456",
           allowed_guild_ids: [123_456_789],
           allowed_channel_ids: [987_654_321],
-          deny_unbound_channels: true
+          deny_unbound_channels: true,
+          message_content_intent_enabled: true
         })
 
       assert errors == []

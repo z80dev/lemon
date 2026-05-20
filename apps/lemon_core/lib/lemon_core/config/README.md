@@ -34,19 +34,19 @@ Each config module follows a consistent pattern:
 ```elixir
 defmodule LemonCore.Config.Example do
   @moduledoc """Documentation with configuration examples."""
-  
+
   alias LemonCore.Config.Helpers
-  
+
   defstruct [:field1, :field2]
-  
+
   @type t :: %__MODULE__{field1: type1(), field2: type2()}
-  
+
   @doc "Resolves configuration from settings and environment variables."
   @spec resolve(map()) :: t()
   def resolve(settings) do
     # Resolution logic using Helpers
   end
-  
+
   @doc "Returns the default configuration as a map."
   @spec defaults() :: map()
   def defaults do
@@ -137,12 +137,15 @@ Preferred source sections:
 - `compaction` - Context compaction settings
 - `retry` - Retry behavior
 - `shell` - Shell configuration
-- `extension_paths` - List of extension directories
+- `extension_paths` - Explicitly trusted extension directories
+- `extensions.enabled` - Global switch for extension code execution
+- `extensions.auto_load_default_paths` - Trust default global/project extension directories
 - `theme` - Agent theme
 
 Environment variables:
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
 - `LEMON_DEFAULT_THINKING_LEVEL`
+- `LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS`
 - `LEMON_COMPACTION_ENABLED`, `LEMON_COMPACTION_RESERVE_TOKENS`
 - `LEMON_RETRY_ENABLED`, `LEMON_MAX_RETRIES`
 - `LEMON_EXTENSION_PATHS`, `LEMON_THEME`

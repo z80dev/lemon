@@ -166,6 +166,18 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Put a value into a named table only if the key does not already exist.
+  """
+  @spec put_new(table :: atom(), key :: term(), value :: term()) :: :ok | {:error, term()}
+  def put_new(table, key, value) do
+    safe_store_call({:generic_put_new, table, key, value}, {:error, :store_unavailable},
+      op: :put_new,
+      table: table,
+      key: key
+    )
+  end
+
+  @doc """
   Get a value from a named table.
 
   Returns `nil` if the key doesn't exist.
@@ -677,6 +689,28 @@ defmodule LemonCore.Store do
 
       other ->
         log_backend_unexpected(:put, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  def handle_call({:generic_put_new, table, key, value}, _from, state) do
+    case state.backend.put_new(state.backend_state, table, key, value) do
+      {:ok, backend_state} ->
+        if table in @generic_cached_tables do
+          ReadCache.put(table, key, value)
+        end
+
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:exists, backend_state} ->
+        {:reply, {:error, :exists}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put_new, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:put_new, table, key, other)
         {:reply, {:error, {:unexpected_backend_response, other}}, state}
     end
   end

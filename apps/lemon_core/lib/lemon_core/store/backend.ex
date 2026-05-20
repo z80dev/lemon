@@ -23,6 +23,12 @@ defmodule LemonCore.Store.Backend do
   @callback put(state(), table(), key(), value()) :: {:ok, state()}
 
   @doc """
+  Store a value only if the table/key does not already exist.
+  """
+  @callback put_new(state(), table(), key(), value()) ::
+              {:ok, state()} | {:exists, state()} | {:error, term()}
+
+  @doc """
   Retrieve a value by table and key.
   Returns `{:ok, value, state}` where value is `nil` if not found.
   """

@@ -81,7 +81,6 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-
   @doc """
   Validates settings for deprecated sections, returning an ok/error tuple.
 
@@ -90,16 +89,20 @@ defmodule LemonCore.Config.Validator do
   @spec validate_deprecated_sections(map()) :: :ok | {:error, [String.t()]}
   def validate_deprecated_sections(settings) when is_map(settings) do
     []
-    |> check_deprecated(is_map(settings["agent"]),
+    |> check_deprecated(
+      is_map(settings["agent"]),
       "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
     )
-    |> check_deprecated(is_map(settings["agents"]),
+    |> check_deprecated(
+      is_map(settings["agents"]),
       "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
     )
-    |> check_deprecated(is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
+    |> check_deprecated(
+      is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
       "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
     )
-    |> check_deprecated(is_map(settings["tools"]),
+    |> check_deprecated(
+      is_map(settings["tools"]),
       "[tools.*] is deprecated. Use [runtime.tools.*] instead."
     )
     |> errors_to_result()
@@ -226,6 +229,10 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(
       Map.get(discord, :deny_unbound_channels),
       "gateway.discord.deny_unbound_channels"
+    )
+    |> validate_boolean(
+      Map.get(discord, :message_content_intent_enabled),
+      "gateway.discord.message_content_intent_enabled"
     )
   end
 
@@ -1072,11 +1079,11 @@ defmodule LemonCore.Config.Validator do
         source when is_binary(source) ->
           normalized = source |> String.trim() |> String.downcase()
 
-          if normalized in ["api_key"] do
+          if normalized in ["api_key", "oauth"] do
             errors
           else
             [
-              "#{path_prefix}.anthropic.auth_source: invalid value '#{source}' (expected api_key)"
+              "#{path_prefix}.anthropic.auth_source: invalid value '#{source}' (expected oauth | api_key)"
               | errors
             ]
           end

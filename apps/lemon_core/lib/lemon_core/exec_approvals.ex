@@ -101,6 +101,15 @@ defmodule LemonCore.ExecApprovals do
           agent_id: agent_id
         })
 
+        record_approval_event(:approval_requested, pending, %{
+          approval_id: approval_id,
+          tool: tool,
+          action_type: action_type(action),
+          action_hash: hash_action(action),
+          rationale_present?: is_binary(rationale) and rationale != "",
+          expires_at_ms: expires_at_ms
+        })
+
         LemonCore.Bus.broadcast(
           "exec_approvals",
           LemonCore.Event.new(
@@ -145,6 +154,14 @@ defmodule LemonCore.ExecApprovals do
           run_id: pending.run_id
         })
 
+        record_approval_event(:approval_resolved, pending, %{
+          approval_id: approval_id,
+          tool: pending.tool,
+          decision: to_string(decision),
+          scope: decision_scope(decision),
+          approved?: decision != :deny
+        })
+
         LemonCore.Bus.broadcast(
           "exec_approvals",
           LemonCore.Event.new(
@@ -185,7 +202,9 @@ defmodule LemonCore.ExecApprovals do
 
   defp check_approval_level(scope, exact_fn, wildcard_fn) do
     case exact_fn.() do
-      %{approved: true} -> {:approved, scope}
+      %{approved: true} ->
+        {:approved, scope}
+
       _ ->
         case wildcard_fn.() do
           %{approved: true} -> {:approved, scope}
@@ -262,8 +281,36 @@ defmodule LemonCore.ExecApprovals do
     end
   end
 
-  defp wait_for_resolution(approval_id, timeout_ms) do
+  defp wait_for_resolution(approval_id, :infinity) do
+    wait_for_resolution_until(approval_id, :infinity)
+  end
+
+  defp wait_for_resolution(approval_id, timeout_ms)
+       when is_integer(timeout_ms) and timeout_ms >= 0 do
+    wait_for_resolution_until(
+      approval_id,
+      System.monotonic_time(:millisecond) + timeout_ms
+    )
+  end
+
+  defp wait_for_resolution(approval_id, _timeout_ms) do
+    wait_for_resolution_until(approval_id, :infinity)
+  end
+
+  defp wait_for_resolution_until(approval_id, deadline_or_infinity) do
     receive do
+      %LemonCore.Event{
+        type: :approval_requested,
+        payload: %{approval_id: ^approval_id}
+      } ->
+        wait_for_resolution_until(approval_id, deadline_or_infinity)
+
+      %LemonCore.Event{
+        type: :approval_requested,
+        payload: %{pending: %{id: ^approval_id}}
+      } ->
+        wait_for_resolution_until(approval_id, deadline_or_infinity)
+
       %LemonCore.Event{
         type: :approval_resolved,
         payload: %{approval_id: ^approval_id, decision: decision}
@@ -279,10 +326,70 @@ defmodule LemonCore.ExecApprovals do
             {:ok, :approved, scope}
         end
     after
-      timeout_ms ->
+      wait_remaining(deadline_or_infinity) ->
         LemonCore.Bus.unsubscribe("exec_approvals")
+        pending = ExecApprovalStore.get_pending(approval_id)
+        emit_approval_timeout(approval_id, pending)
         ExecApprovalStore.delete_pending(approval_id)
         {:error, :timeout}
     end
   end
+
+  defp wait_remaining(:infinity), do: :infinity
+
+  defp wait_remaining(deadline) when is_integer(deadline) do
+    max(deadline - System.monotonic_time(:millisecond), 0)
+  end
+
+  defp record_approval_timeout(_approval_id, nil), do: :ok
+
+  defp record_approval_timeout(approval_id, pending) do
+    record_approval_event(:approval_timed_out, pending, %{
+      approval_id: approval_id,
+      tool: pending.tool,
+      action_type: action_type(pending.action),
+      action_hash: hash_action(pending.action)
+    })
+  end
+
+  defp emit_approval_timeout(_approval_id, nil), do: :ok
+
+  defp emit_approval_timeout(approval_id, pending) do
+    record_approval_timeout(approval_id, pending)
+
+    LemonCore.Telemetry.approval_resolved(approval_id, :timeout, %{
+      tool: pending.tool,
+      run_id: pending.run_id
+    })
+
+    LemonCore.Bus.broadcast(
+      "exec_approvals",
+      LemonCore.Event.new(
+        :approval_resolved,
+        %{approval_id: approval_id, decision: :timeout, pending: pending},
+        %{run_id: pending.run_id, session_key: pending.session_key}
+      )
+    )
+  end
+
+  defp record_approval_event(event_type, pending, payload) do
+    LemonCore.Introspection.record(event_type, payload,
+      run_id: pending.run_id,
+      session_key: pending.session_key,
+      agent_id: pending.agent_id
+    )
+  end
+
+  defp action_type(action) when is_map(action) do
+    action[:type] || action["type"]
+  end
+
+  defp action_type(_), do: nil
+
+  defp decision_scope(:approve_once), do: "once"
+  defp decision_scope(:approve_session), do: "session"
+  defp decision_scope(:approve_agent), do: "agent"
+  defp decision_scope(:approve_global), do: "global"
+  defp decision_scope(:deny), do: "deny"
+  defp decision_scope(decision), do: to_string(decision)
 end

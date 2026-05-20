@@ -98,6 +98,10 @@ defmodule LemonCore.Config.Gateway do
   @type telegram_config :: %{
           token: String.t() | nil,
           bot_token_secret: String.t() | nil,
+          default_account_id: String.t() | nil,
+          default_chat_id: String.t() | integer() | nil,
+          default_thread_id: String.t() | integer() | nil,
+          default_topic_id: String.t() | integer() | nil,
           compaction: telegram_compaction()
         }
 
@@ -369,9 +373,15 @@ defmodule LemonCore.Config.Gateway do
     base = %{
       bot_token: normalize_optional_string(discord["bot_token"]),
       bot_token_secret: normalize_optional_string(discord["bot_token_secret"]),
+      default_account_id: normalize_optional_string(discord["default_account_id"]),
+      default_channel_id: normalize_optional_string_or_integer(discord["default_channel_id"]),
+      default_thread_id: normalize_optional_string_or_integer(discord["default_thread_id"]),
       allowed_guild_ids: discord["allowed_guild_ids"],
       allowed_channel_ids: discord["allowed_channel_ids"],
-      deny_unbound_channels: resolve_bool_field(discord["deny_unbound_channels"], false)
+      deny_unbound_channels: resolve_bool_field(discord["deny_unbound_channels"], false),
+      message_content_intent_enabled:
+        resolve_bool_field(discord["message_content_intent_enabled"], false),
+      files: discord["files"]
     }
 
     reject_nil_values(base)
@@ -446,6 +456,10 @@ defmodule LemonCore.Config.Gateway do
   defp normalize_optional_string(""), do: nil
   defp normalize_optional_string(str) when is_binary(str), do: str
   defp normalize_optional_string(_), do: nil
+
+  defp normalize_optional_string_or_integer(nil), do: nil
+  defp normalize_optional_string_or_integer(value) when is_integer(value), do: value
+  defp normalize_optional_string_or_integer(value), do: normalize_optional_string(value)
 
   defp reject_nil_values(map) do
     map

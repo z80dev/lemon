@@ -23,7 +23,7 @@ defmodule LemonCore.SessionSearch do
       )
   """
 
-  alias LemonCore.MemoryStore
+  alias LemonCore.MemoryProviders
 
   @default_limit 5
   @max_limit 20
@@ -51,7 +51,7 @@ defmodule LemonCore.SessionSearch do
 
       true ->
         limit = min(Keyword.get(opts, :limit, @default_limit), @max_limit)
-        MemoryStore.search(query, Keyword.put(opts, :limit, limit))
+        MemoryProviders.search(query, Keyword.put(opts, :limit, limit))
     end
   end
 

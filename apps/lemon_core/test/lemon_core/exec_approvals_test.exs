@@ -29,7 +29,8 @@ defmodule LemonCore.ExecApprovalsTest do
       :exec_approvals_policy,
       :exec_approvals_policy_agent,
       :exec_approvals_policy_session,
-      :exec_approvals_policy_node
+      :exec_approvals_policy_node,
+      :introspection_log
     ]
     |> Enum.each(fn table ->
       Store.list(table)
@@ -172,19 +173,123 @@ defmodule LemonCore.ExecApprovalsTest do
       assert {:ok, :denied} = Task.await(task, 1000)
     end
 
+    test "records redacted approval lifecycle introspection events" do
+      action = %{type: "mcp_sampling", prompt: "secret prompt"}
+      run_id = "run_approval_introspection"
+
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            run_id: run_id,
+            session_key: "agent:test:main",
+            agent_id: "test",
+            tool: "mcp_elixir_sampling",
+            action: action,
+            rationale: "needs review",
+            expires_in_ms: 5000
+          })
+        end)
+
+      Process.sleep(100)
+
+      {_key, pending} = hd(Store.list(:exec_approvals_pending))
+      :ok = ExecApprovals.resolve(pending.id, :deny)
+
+      assert {:ok, :denied} = Task.await(task, 1000)
+
+      events = LemonCore.Introspection.list(run_id: run_id, limit: 10)
+      requested = Enum.find(events, &(&1.event_type == :approval_requested))
+      resolved = Enum.find(events, &(&1.event_type == :approval_resolved))
+
+      assert requested.payload.approval_id == pending.id
+      assert requested.payload.tool == "mcp_elixir_sampling"
+      assert requested.payload.action_type == "mcp_sampling"
+      assert is_binary(requested.payload.action_hash)
+      assert Map.fetch!(requested.payload, :rationale_present?) == true
+
+      assert resolved.payload.approval_id == pending.id
+      assert resolved.payload.decision == "deny"
+      assert resolved.payload.scope == "deny"
+      assert Map.fetch!(resolved.payload, :approved?) == false
+
+      refute inspect(events) =~ "secret prompt"
+    end
+
     test "returns timeout when approval times out" do
       action = %{command: "ls"}
+      LemonCore.Bus.subscribe("exec_approvals")
 
-      result =
-        ExecApprovals.request(%{
-          run_id: "run_123",
-          session_key: "agent:test:main",
-          tool: "bash",
-          action: action,
-          expires_in_ms: 50
-        })
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            run_id: "run_123",
+            session_key: "agent:test:main",
+            tool: "bash",
+            action: action,
+            expires_in_ms: 50
+          })
+        end)
 
-      assert {:error, :timeout} = result
+      assert_receive %LemonCore.Event{
+                       type: :approval_requested,
+                       payload: %{pending: %{tool: "bash"}}
+                     },
+                     1_000
+
+      assert_receive %LemonCore.Event{
+                       type: :approval_resolved,
+                       payload: %{decision: :timeout, pending: %{tool: "bash"}}
+                     },
+                     1_000
+
+      assert {:error, :timeout} = Task.await(task, 1_000)
+
+      event =
+        LemonCore.Introspection.list(run_id: "run_123", event_type: :approval_timed_out, limit: 1)
+        |> List.first()
+
+      assert event.payload.tool == "bash"
+      assert is_binary(event.payload.action_hash)
+    end
+
+    test "broadcasts approval timeout with pending metadata" do
+      LemonCore.Bus.subscribe("exec_approvals")
+
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            run_id: "run_timeout_broadcast",
+            session_key: "agent:test:timeout",
+            agent_id: "test",
+            tool: "bash",
+            action: %{command: "sleep"},
+            expires_in_ms: 50
+          })
+        end)
+
+      assert_receive %LemonCore.Event{
+                       type: :approval_requested,
+                       payload: %{pending: %{id: approval_id}}
+                     },
+                     1_000
+
+      assert_receive %LemonCore.Event{
+                       type: :approval_resolved,
+                       payload: %{
+                         approval_id: ^approval_id,
+                         decision: :timeout,
+                         pending: %{
+                           run_id: "run_timeout_broadcast",
+                           session_key: "agent:test:timeout",
+                           agent_id: "test",
+                           tool: "bash"
+                         }
+                       },
+                       meta: %{run_id: "run_timeout_broadcast", session_key: "agent:test:timeout"}
+                     },
+                     1_000
+
+      assert {:error, :timeout} = Task.await(task, 1_000)
     end
   end
 
@@ -278,7 +383,9 @@ defmodule LemonCore.ExecApprovalsTest do
       action_hash = hash_action(pending.action)
       assert Store.get(:exec_approvals_policy, {"bash", action_hash}) == nil
       assert Store.get(:exec_approvals_policy_agent, {"test", "bash", action_hash}) == nil
-      assert Store.get(:exec_approvals_policy_session, {"agent:test:main", "bash", action_hash}) == nil
+
+      assert Store.get(:exec_approvals_policy_session, {"agent:test:main", "bash", action_hash}) ==
+               nil
     end
 
     test "deletes pending approval after resolution" do

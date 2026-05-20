@@ -550,6 +550,12 @@ defmodule LemonCore.ConfigTest do
     [gateway]
     enable_telegram = true
 
+    [gateway.telegram]
+    default_account_id = "tg-work"
+    default_chat_id = -100123
+    default_thread_id = 77
+    default_topic_id = 88
+
     [gateway.telegram.compaction]
     enabled = true
     context_window_tokens = 400000
@@ -563,6 +569,10 @@ defmodule LemonCore.ConfigTest do
     assert config.gateway.telegram.compaction.context_window_tokens == 400_000
     assert config.gateway.telegram.compaction.reserve_tokens == 16_384
     assert config.gateway.telegram.compaction.trigger_ratio == 0.9
+    assert config.gateway.telegram.default_chat_id == -100_123
+    assert config.gateway.telegram.default_account_id == "tg-work"
+    assert config.gateway.telegram.default_thread_id == 77
+    assert config.gateway.telegram.default_topic_id == 88
   end
 
   test "parses gateway discord settings", %{home: home} do
@@ -575,15 +585,41 @@ defmodule LemonCore.ConfigTest do
 
     [gateway.discord]
     bot_token = "discord-token"
+    default_account_id = "dc-work"
+    default_channel_id = "123456"
+    default_thread_id = "789"
     allowed_guild_ids = [1475727416549969980]
     deny_unbound_channels = false
+    message_content_intent_enabled = true
     """)
 
     config = Config.load()
 
     assert config.gateway.enable_discord == true
     assert config.gateway.discord.bot_token == "discord-token"
+    assert config.gateway.discord.default_account_id == "dc-work"
+    assert config.gateway.discord.default_channel_id == "123456"
+    assert config.gateway.discord.default_thread_id == "789"
     assert config.gateway.discord.allowed_guild_ids == [1_475_727_416_549_969_980]
     assert config.gateway.discord.deny_unbound_channels == false
+    assert config.gateway.discord.message_content_intent_enabled == true
+  end
+
+  test "preserves gateway discord file settings", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [gateway.discord.files]
+    enabled = true
+    auto_send_generated_files = true
+    auto_send_generated_max_files = 2
+    """)
+
+    config = Config.load()
+
+    assert config.gateway.discord.files["enabled"] == true
+    assert config.gateway.discord.files["auto_send_generated_files"] == true
+    assert config.gateway.discord.files["auto_send_generated_max_files"] == 2
   end
 end

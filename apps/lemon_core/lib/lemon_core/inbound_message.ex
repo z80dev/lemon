@@ -17,6 +17,7 @@ defmodule LemonCore.InboundMessage do
         }
 
   @type sender :: %{
+          optional(:bot) => boolean(),
           id: binary(),
           username: binary() | nil,
           display_name: binary() | nil
@@ -86,7 +87,8 @@ defmodule LemonCore.InboundMessage do
         id: message["message_id"] && to_string(message["message_id"]),
         text: message["text"] || "",
         timestamp: message["date"],
-        reply_to_id: message["reply_to_message"] && to_string(message["reply_to_message"]["message_id"])
+        reply_to_id:
+          message["reply_to_message"] && to_string(message["reply_to_message"]["message_id"])
       },
       raw: message,
       meta: %{
@@ -96,4 +98,3 @@ defmodule LemonCore.InboundMessage do
     }
   end
 end
-
