@@ -1,7 +1,6 @@
 from prompt_toolkit.widgets import TextArea
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.filters import has_completions, is_done
-from prompt_toolkit.keys import Keys
+from prompt_toolkit.filters import has_completions
 
 
 def build_input_area(completer=None) -> TextArea:

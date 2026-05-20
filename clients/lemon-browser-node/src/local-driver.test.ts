@@ -9,15 +9,16 @@ describe('resolveLocalDriverConfig', () => {
       args: parseCliArgs([]),
       env: {
         LEMON_BROWSER_CDP_PORT: '19900',
+        LEMON_BROWSER_CDP_ENDPOINT: 'http://remote.example.test:9222',
         LEMON_BROWSER_HEADLESS: 'true',
         LEMON_BROWSER_NO_SANDBOX: 'yes',
-        LEMON_BROWSER_ATTACH_ONLY: 'on',
         LEMON_BROWSER_EXECUTABLE: '/env/chrome',
         LEMON_BROWSER_USER_DATA_DIR: '/env/profile',
       } as NodeJS.ProcessEnv,
     });
 
     expect(config.cdpPort).toBe(19900);
+    expect(config.cdpEndpoint).toBe('http://remote.example.test:9222');
     expect(config.headless).toBe(true);
     expect(config.noSandbox).toBe(true);
     expect(config.attachOnly).toBe(true);
@@ -29,20 +30,22 @@ describe('resolveLocalDriverConfig', () => {
     const config = resolveLocalDriverConfig({
       args: parseCliArgs([
         '--cdp-port', '20001',
+        '--cdp-endpoint', 'http://arg.example.test:9333',
         '--headless',
         '--no-sandbox',
-        '--attach-only',
         '--executable-path', '/arg/chrome',
         '--user-data-dir', '/arg/profile',
       ]),
       env: {
         LEMON_BROWSER_CDP_PORT: '19900',
+        LEMON_BROWSER_CDP_ENDPOINT: 'http://env.example.test:9222',
         LEMON_BROWSER_EXECUTABLE: '/env/chrome',
         LEMON_BROWSER_USER_DATA_DIR: '/env/profile',
       } as NodeJS.ProcessEnv,
     });
 
     expect(config.cdpPort).toBe(20001);
+    expect(config.cdpEndpoint).toBe('http://arg.example.test:9333');
     expect(config.headless).toBe(true);
     expect(config.noSandbox).toBe(true);
     expect(config.attachOnly).toBe(true);

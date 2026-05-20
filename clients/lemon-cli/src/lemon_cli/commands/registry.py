@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
-from lemon_cli.constants import SLASH_COMMANDS, COMMAND_ALIASES
+from lemon_cli.constants import COMMAND_ALIASES
 
 
 @dataclass

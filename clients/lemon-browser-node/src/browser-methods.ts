@@ -1,10 +1,26 @@
-import type { Page } from 'playwright-core';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import type { ConsoleMessage, Dialog, Page } from 'playwright-core';
 
 export async function handleBrowserMethod(page: Page, method: string, args: any): Promise<unknown> {
   const m = method.startsWith('browser.') ? method : `browser.${method}`;
   const a = args ?? {};
+  const eventBuffer = ensureEventBuffer(page);
 
   switch (m) {
+    case 'browser.events': {
+      const limit = Math.min(normalizePositiveInt(a.limit, 50), MAX_BROWSER_EVENTS);
+      const events = eventBuffer.events.slice(-limit);
+      const count = eventBuffer.events.length;
+      const cleared = a.clear === true;
+
+      if (cleared) {
+        eventBuffer.events.length = 0;
+      }
+
+      return { events, count, cleared };
+    }
     case 'browser.navigate': {
       const url = String(a.url ?? '');
       if (!url) throw new Error('navigate requires args.url');
@@ -46,6 +62,120 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
         await page.type(selector, text, { timeout, delay });
       }
       return { typed: true, length: text.length };
+    }
+    case 'browser.hover': {
+      const selector = String(a.selector ?? '');
+      if (!selector) throw new Error('hover requires args.selector');
+      const timeout = normalizeTimeout(a.timeoutMs);
+      await page.hover(selector, { timeout });
+      return { hovered: true };
+    }
+    case 'browser.selectOption': {
+      const selector = String(a.selector ?? '');
+      if (!selector) throw new Error('selectOption requires args.selector');
+      const rawValues: unknown[] = Array.isArray(a.values)
+        ? a.values
+        : [a.value ?? a.values].filter((value: unknown) => value != null);
+      const values = rawValues.map((value: unknown) => String(value)).filter((value: string) => value.trim() !== '');
+      if (values.length === 0) throw new Error('selectOption requires args.value or args.values');
+      const timeout = normalizeTimeout(a.timeoutMs);
+      const selected = await page.selectOption(selector, values.length === 1 ? values[0] : values, { timeout });
+      return { selected, count: selected.length };
+    }
+    case 'browser.setInputFiles': {
+      const selector = String(a.selector ?? '');
+      if (!selector) throw new Error('setInputFiles requires args.selector');
+      const rawPaths: unknown[] = Array.isArray(a.paths)
+        ? a.paths
+        : [a.path ?? a.paths].filter((path: unknown) => path != null);
+      const paths = rawPaths.map((path: unknown) => String(path)).filter((path: string) => path.trim() !== '');
+      if (paths.length === 0) throw new Error('setInputFiles requires args.path or args.paths');
+      const timeout = normalizeTimeout(a.timeoutMs);
+      await page.setInputFiles(selector, paths.length === 1 ? paths[0] : paths, { timeout });
+      return { uploaded: true, count: paths.length };
+    }
+    case 'browser.download': {
+      const selector = String(a.selector ?? '');
+      const timeout = normalizeTimeout(a.timeoutMs);
+      const explicitPath = typeof a.path === 'string' && a.path.trim() !== '' ? a.path.trim() : '';
+      const downloadDir = typeof a.dir === 'string' && a.dir.trim() !== '' ? a.dir.trim() : process.cwd();
+      const waitForDownload = page.waitForEvent('download', { timeout });
+
+      const download = selector
+        ? await Promise.all([waitForDownload, page.click(selector, { timeout })]).then(([download]) => download)
+        : await waitForDownload;
+
+      const suggestedFilename = download.suggestedFilename();
+      const targetPath = explicitPath || (await uniqueDownloadPath(downloadDir, suggestedFilename));
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await download.saveAs(targetPath);
+
+      const stat = await fs.stat(targetPath).catch(() => null);
+
+      return {
+        downloaded: true,
+        path: targetPath,
+        suggestedFilename,
+        bytes: stat?.size ?? null,
+      };
+    }
+    case 'browser.press': {
+      const key = String(a.key ?? '');
+      if (!key) throw new Error('press requires args.key');
+      const selector = String(a.selector ?? '');
+      const timeout = normalizeTimeout(a.timeoutMs);
+      if (selector) {
+        await page.press(selector, key, { timeout });
+      } else {
+        await page.keyboard.press(key);
+      }
+      return { pressed: true, key };
+    }
+    case 'browser.scroll': {
+      const selector = String(a.selector ?? '');
+      const x = normalizeNumber(a.x, normalizeNumber(a.deltaX, 0));
+      const y = normalizeNumber(a.y, normalizeNumber(a.deltaY, 600));
+
+      if (selector) {
+        const timeout = normalizeTimeout(a.timeoutMs);
+        const locator = page.locator(selector).first();
+        await locator.waitFor({ timeout, state: 'visible' });
+        await locator.evaluate((el: any) => {
+          el.scrollIntoView({ block: 'center', inline: 'center' });
+        });
+      } else if (a.absolute === true || a.to === true) {
+        await page.evaluate(
+          ({ x, y }) => {
+            (globalThis as any).window?.scrollTo(x, y);
+          },
+          { x, y },
+        );
+      } else {
+        await page.evaluate(
+          ({ x, y }) => {
+            (globalThis as any).window?.scrollBy(x, y);
+          },
+          { x, y },
+        );
+      }
+
+      const position = await page.evaluate(() => {
+        const win = (globalThis as any).window;
+        return {
+          x: Number(win?.scrollX ?? 0),
+          y: Number(win?.scrollY ?? 0),
+        };
+      });
+
+      return { scrolled: true, position };
+    }
+    case 'browser.back': {
+      const resp = await page.goBack({ waitUntil: 'domcontentloaded' });
+      return {
+        url: page.url(),
+        status: resp?.status() ?? null,
+        title: await page.title().catch(() => null),
+      };
     }
     case 'browser.evaluate': {
       const expression = String(a.expression ?? a.script ?? '');
@@ -288,8 +418,129 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
       await ctx.addCookies(cookies);
       return { set: cookies.length };
     }
+    case 'browser.clearState': {
+      const clearCookies = a.clearCookies !== false;
+      const clearStorage = a.clearStorage !== false;
+      const clearEvents = a.clearEvents !== false;
+      const result: Record<string, unknown> = {
+        cookiesCleared: false,
+        storageCleared: false,
+        eventsCleared: false,
+        url: page.url(),
+      };
+
+      if (clearCookies) {
+        await page.context().clearCookies();
+        result.cookiesCleared = true;
+      }
+
+      if (clearStorage) {
+        try {
+          await page.evaluate(() => {
+            const win = globalThis as any;
+            win.localStorage?.clear?.();
+            win.sessionStorage?.clear?.();
+          });
+          result.storageCleared = true;
+        } catch (err) {
+          result.storageError = err instanceof Error ? err.message : String(err);
+        }
+      }
+
+      if (clearEvents) {
+        eventBuffer.events.length = 0;
+        result.eventsCleared = true;
+      }
+
+      return result;
+    }
     default:
       throw new Error(`Unsupported browser method: ${m}`);
+  }
+}
+
+type BufferedBrowserEvent = Record<string, unknown> & {
+  type: string;
+  timestamp: string;
+};
+
+type BrowserEventBuffer = {
+  events: BufferedBrowserEvent[];
+};
+
+const MAX_BROWSER_EVENTS = 100;
+const browserEventBuffers = new WeakMap<Page, BrowserEventBuffer>();
+
+function ensureEventBuffer(page: Page): BrowserEventBuffer {
+  const existing = browserEventBuffers.get(page);
+  if (existing) return existing;
+
+  const buffer: BrowserEventBuffer = { events: [] };
+  browserEventBuffers.set(page, buffer);
+
+  const target = page as any;
+  if (typeof target.on !== 'function') return buffer;
+
+  target.on('console', (message: ConsoleMessage) => {
+    pushBrowserEvent(buffer, {
+      type: 'console',
+      level: safeCall(() => message.type(), 'log'),
+      text: safeCall(() => message.text(), ''),
+      location: safeCall(() => message.location(), null),
+    });
+  });
+
+  target.on('dialog', (dialog: Dialog) => {
+    pushBrowserEvent(buffer, {
+      type: 'dialog',
+      dialogType: safeCall(() => dialog.type(), ''),
+      message: safeCall(() => dialog.message(), ''),
+      defaultValue: safeCall(() => dialog.defaultValue(), ''),
+    });
+
+    void dialog.dismiss().catch(() => undefined);
+  });
+
+  target.on('pageerror', (error: Error) => {
+    pushBrowserEvent(buffer, {
+      type: 'pageerror',
+      name: error?.name ?? 'Error',
+      message: error?.message ?? String(error),
+      stack: error?.stack ?? null,
+    });
+  });
+
+  target.on('requestfailed', (request: any) => {
+    pushBrowserEvent(buffer, {
+      type: 'requestfailed',
+      url: safeCall(() => request.url(), ''),
+      method: safeCall(() => request.method(), ''),
+      errorText: safeCall(() => request.failure()?.errorText ?? '', ''),
+    });
+  });
+
+  return buffer;
+}
+
+function pushBrowserEvent(
+  buffer: BrowserEventBuffer,
+  event: Record<string, unknown> & { type: string },
+): void {
+  buffer.events.push({
+    ...event,
+    timestamp: new Date().toISOString(),
+  });
+
+  if (buffer.events.length > MAX_BROWSER_EVENTS) {
+    buffer.events.splice(0, buffer.events.length - MAX_BROWSER_EVENTS);
+  }
+}
+
+function safeCall<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch {
+    return fallback;
   }
 }
 
@@ -304,6 +555,38 @@ function normalizeDelay(v: any): number | undefined {
   if (v == null) return undefined;
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return undefined;
+  return n;
+}
+
+async function uniqueDownloadPath(dir: string, suggestedFilename: string): Promise<string> {
+  const name = sanitizeDownloadFilename(suggestedFilename || 'download');
+  const parsed = path.parse(name);
+  const root = parsed.name || 'download';
+  const ext = parsed.ext || '';
+
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index === 0 ? '' : `-${index}`;
+    const candidate = path.join(dir, `${root}${suffix}${ext}`);
+
+    try {
+      await fs.access(candidate);
+    } catch {
+      return candidate;
+    }
+  }
+
+  return path.join(dir, `${root}-${Date.now()}${ext}`);
+}
+
+function sanitizeDownloadFilename(value: string): string {
+  const basename = path.basename(value || 'download');
+  const safe = basename.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
+  return safe && safe !== '.' && safe !== '..' ? safe.slice(0, 160) : 'download';
+}
+
+function normalizeNumber(v: any, fallback: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
   return n;
 }
 

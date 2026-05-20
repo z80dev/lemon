@@ -7,6 +7,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 
 export type ChromeConfig = {
   cdpPort: number;
+  cdpEndpoint?: string;
   userDataDir: string;
   executablePath?: string;
   headless: boolean;
@@ -25,12 +26,12 @@ export class ChromeSession {
   }
 
   async start(): Promise<void> {
-    const endpoint = `http://127.0.0.1:${this.cfg.cdpPort}`;
+    const endpoint = this.cfg.cdpEndpoint || `http://127.0.0.1:${this.cfg.cdpPort}`;
 
     const reachable = await isCdpReachable(endpoint, 600);
     if (!reachable) {
-      if (this.cfg.attachOnly) {
-        throw new Error(`CDP not reachable at ${endpoint} (attachOnly=true)`);
+      if (this.cfg.attachOnly || this.cfg.cdpEndpoint) {
+        throw new Error(`CDP not reachable at ${redactEndpoint(endpoint)} (attachOnly=true)`);
       }
       await this.launchChrome();
       await waitForCdp(endpoint, 15_000);
@@ -177,7 +178,20 @@ async function waitForCdp(endpoint: string, timeoutMs: number): Promise<void> {
     if (await isCdpReachable(endpoint, 500)) return;
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Timed out waiting for CDP at ${endpoint}`);
+  throw new Error(`Timed out waiting for CDP at ${redactEndpoint(endpoint)}`);
+}
+
+function redactEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (url.username || url.password) {
+      url.username = url.username ? '[redacted]' : '';
+      url.password = url.password ? '[redacted]' : '';
+    }
+    return url.toString();
+  } catch {
+    return endpoint.replace(/(wss?:\/\/[^:/\s]+:)[^@\s]+@/i, '$1[redacted]@');
+  }
 }
 
 function defaultChromeExecutable(): string | null {

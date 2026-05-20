@@ -1,6 +1,6 @@
 from prompt_toolkit.layout import (
     HSplit, Window, ConditionalContainer, FormattedTextControl,
-    FloatContainer, Float, Layout, ScrollablePane,
+    FloatContainer, Float, Layout,
 )
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.widgets import TextArea

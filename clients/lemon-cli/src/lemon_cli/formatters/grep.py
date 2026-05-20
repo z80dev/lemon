@@ -6,7 +6,7 @@ def format_result(content: str) -> FormattedResult:
     if not content:
         return FormattedResult(summary="no matches found")
 
-    lines = [l for l in content.splitlines() if l.strip()]
+    lines = [line for line in content.splitlines() if line.strip()]
     match_count = len(lines)
     summary = f"{match_count} match{'es' if match_count != 1 else ''}"
     detail = content if match_count > 0 else None

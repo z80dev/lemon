@@ -13,6 +13,21 @@ defmodule LemonWeb.OpsRunLive do
     {:noreply, assign_detail(socket, socket.assigns.run_id)}
   end
 
+  def handle_event("resolve-approval", %{"id" => approval_id, "decision" => decision}, socket) do
+    socket =
+      case LemonWeb.OpsDashboard.resolve_approval(approval_id, decision) do
+        :ok ->
+          socket
+          |> put_flash(:info, "Approval resolved.")
+          |> assign_detail(socket.assigns.run_id)
+
+        {:error, _reason} ->
+          put_flash(socket, :error, "Approval could not be resolved.")
+      end
+
+    {:noreply, socket}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -64,7 +79,69 @@ defmodule LemonWeb.OpsRunLive do
                     <%= if approval.rationale do %>
                       <p class="mt-1 text-xs text-amber-800">{approval.rationale}</p>
                     <% end %>
+                    <%= if oauth_authorization_url(approval) do %>
+                      <div class="mt-3 rounded-md border border-amber-200 bg-white px-2 py-2">
+                        <a
+                          href={oauth_authorization_url(approval)}
+                          target="_blank"
+                          rel="noreferrer"
+                          class="inline-flex rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-sm"
+                        >
+                          Open OAuth
+                        </a>
+                        <p class="mt-2 break-all text-xs text-amber-900">
+                          resource: {approval_action_value(approval, :resource) || "unknown"}
+                        </p>
+                        <p class="mt-1 break-all text-xs text-amber-900">
+                          redirect: {approval_action_value(approval, :redirect_uri) || "unknown"}
+                        </p>
+                        <p class="mt-1 text-xs text-amber-900">
+                          scope: {approval_action_value(approval, :scope) || "unspecified"}
+                        </p>
+                      </div>
+                    <% end %>
+                    <%= if sampling_approval?(approval) do %>
+                      <div class="mt-3 rounded-md border border-amber-200 bg-white px-2 py-2">
+                        <p class="text-xs font-semibold text-amber-950">MCP sampling request</p>
+                        <p class="mt-1 text-xs text-amber-900">
+                          model: {approval_action_value(approval, :requested_model) || "unspecified"}
+                          · max tokens: {format_value(approval_action_value(approval, :max_tokens))}
+                        </p>
+                        <p class="mt-1 text-xs text-amber-900">
+                          messages: {format_value(approval_action_value(approval, :message_count))}
+                          · text chars: {format_value(approval_action_value(approval, :text_char_count))}
+                        </p>
+                        <p class="mt-1 text-xs text-amber-900">
+                          roles: {format_inline_list(approval_action_value(approval, :roles))}
+                        </p>
+                        <p class="mt-1 text-xs text-amber-900">
+                          content: {format_action_map(approval_action_value(approval, :content_kinds))}
+                        </p>
+                        <p class="mt-1 break-all text-xs text-amber-900">
+                          request: {approval_action_value(approval, :request_hash) || "unknown"}
+                        </p>
+                      </div>
+                    <% end %>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <.approval_button approval={approval} decision="approve_once" label="Approve Once" />
+                      <.approval_button approval={approval} decision="approve_session" label="Session" />
+                      <.approval_button approval={approval} decision="approve_agent" label="Agent" />
+                      <.approval_button approval={approval} decision="approve_global" label="Global" />
+                      <.approval_button approval={approval} decision="deny" label="Deny" tone="danger" />
+                    </div>
                   </div>
+                <% end %>
+              </div>
+            <% end %>
+          </.panel>
+
+          <.panel title="Approval Events">
+            <%= if @detail.approval_events == [] do %>
+              <.empty text="No approval lifecycle events recorded for this run." />
+            <% else %>
+              <div class="space-y-3">
+                <%= for event <- @detail.approval_events do %>
+                  <.event_card event={event} tone="approval" />
                 <% end %>
               </div>
             <% end %>
@@ -77,6 +154,54 @@ defmodule LemonWeb.OpsRunLive do
               <div class="space-y-3">
                 <%= for event <- @detail.failures do %>
                   <.event_card event={event} tone="error" />
+                <% end %>
+              </div>
+            <% end %>
+          </.panel>
+
+          <.panel title="Learning Events">
+            <%= if @detail.learning_events == [] do %>
+              <.empty text="No skill or memory events recorded for this run." />
+            <% else %>
+              <div class="space-y-3">
+                <%= for event <- @detail.learning_events do %>
+                  <.event_card event={event} tone="learning" />
+                <% end %>
+              </div>
+            <% end %>
+          </.panel>
+
+          <.panel title="Channel Events">
+            <%= if @detail.channel_events == [] do %>
+              <.empty text="No Telegram or Discord channel events recorded for this run." />
+            <% else %>
+              <div class="space-y-3">
+                <%= for event <- @detail.channel_events do %>
+                  <.event_card event={event} tone="channel" />
+                <% end %>
+              </div>
+            <% end %>
+          </.panel>
+
+          <.panel title="Cron Events">
+            <%= if @detail.cron_events == [] do %>
+              <.empty text="No cron lifecycle events recorded for this run." />
+            <% else %>
+              <div class="space-y-3">
+                <%= for event <- @detail.cron_events do %>
+                  <.event_card event={event} tone="cron" />
+                <% end %>
+              </div>
+            <% end %>
+          </.panel>
+
+          <.panel title="Subagent Events">
+            <%= if @detail.subagent_events == [] do %>
+              <.empty text="No delegation or subagent events recorded for this run." />
+            <% else %>
+              <div class="space-y-3">
+                <%= for event <- @detail.subagent_events do %>
+                  <.event_card event={event} tone="subagent" />
                 <% end %>
               </div>
             <% end %>
@@ -261,6 +386,25 @@ defmodule LemonWeb.OpsRunLive do
     """
   end
 
+  attr(:approval, :map, required: true)
+  attr(:decision, :string, required: true)
+  attr(:label, :string, required: true)
+  attr(:tone, :string, default: "default")
+
+  defp approval_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="resolve-approval"
+      phx-value-id={@approval.id}
+      phx-value-decision={@decision}
+      class={approval_button_class(@tone)}
+    >
+      {@label}
+    </button>
+    """
+  end
+
   defp assign_detail(socket, run_id) do
     socket
     |> assign(:page_title, "Lemon Run #{run_id}")
@@ -295,6 +439,21 @@ defmodule LemonWeb.OpsRunLive do
   defp event_card_class("tool", _event),
     do: "rounded-lg border border-sky-200 bg-sky-50 px-3 py-2"
 
+  defp event_card_class("approval", _event),
+    do: "rounded-lg border border-amber-200 bg-amber-50 px-3 py-2"
+
+  defp event_card_class("learning", _event),
+    do: "rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2"
+
+  defp event_card_class("channel", _event),
+    do: "rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2"
+
+  defp event_card_class("cron", _event),
+    do: "rounded-lg border border-violet-200 bg-violet-50 px-3 py-2"
+
+  defp event_card_class("subagent", _event),
+    do: "rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2"
+
   defp event_card_class(_tone, %{error: error}) when not is_nil(error),
     do: "rounded-lg border border-rose-200 bg-rose-50 px-3 py-2"
 
@@ -313,6 +472,14 @@ defmodule LemonWeb.OpsRunLive do
   defp status_badge_class(_),
     do: "rounded-full bg-rose-100 px-2 py-1 text-xs font-medium text-rose-700"
 
+  defp approval_button_class("danger") do
+    "rounded-md bg-rose-700 px-2 py-1 text-xs font-medium text-white shadow-sm"
+  end
+
+  defp approval_button_class(_) do
+    "rounded-md bg-amber-700 px-2 py-1 text-xs font-medium text-white shadow-sm"
+  end
+
   defp format_ts(nil), do: "timestamp unavailable"
 
   defp format_ts(ts_ms) when is_integer(ts_ms) do
@@ -327,6 +494,40 @@ defmodule LemonWeb.OpsRunLive do
 
   defp format_value(value) when is_binary(value), do: value
   defp format_value(value), do: inspect(value, pretty: true, limit: 50, printable_limit: 1_000)
+
+  defp oauth_authorization_url(approval) do
+    approval_action_value(approval, :authorization_url)
+  end
+
+  defp sampling_approval?(approval) do
+    approval_action_value(approval, :type) == "mcp_sampling"
+  end
+
+  defp approval_action_value(%{action: action}, key) when is_map(action) do
+    Map.get(action, key) || Map.get(action, Atom.to_string(key))
+  end
+
+  defp approval_action_value(_, _), do: nil
+
+  defp format_inline_list(values) when is_list(values) do
+    values
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] -> "none"
+      values -> Enum.join(values, ", ")
+    end
+  end
+
+  defp format_inline_list(_), do: "none"
+
+  defp format_action_map(values) when is_map(values) and map_size(values) > 0 do
+    values
+    |> Enum.map(fn {key, value} -> "#{key}: #{value}" end)
+    |> Enum.join(", ")
+  end
+
+  defp format_action_map(_), do: "none"
 
   defp shorten(nil), do: "unknown"
 

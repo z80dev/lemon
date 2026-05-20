@@ -5,7 +5,6 @@ Run lemon-cli --help from the repo root and expect:
   - usage text in stdout
 """
 import subprocess
-import sys
 from pathlib import Path
 
 

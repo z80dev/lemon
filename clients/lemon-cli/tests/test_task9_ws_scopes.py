@@ -4,7 +4,6 @@ ws_scopes may arrive as a list (from TOML) or string (from env/CLI).
 The code must handle both without crashing.
 """
 import argparse
-import pytest
 
 
 def _make_namespace(**kwargs) -> argparse.Namespace:

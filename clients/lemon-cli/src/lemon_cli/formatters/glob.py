@@ -6,7 +6,7 @@ def format_result(content: str) -> FormattedResult:
     if not content:
         return FormattedResult(summary="no files found")
 
-    files = [l for l in content.splitlines() if l.strip()]
+    files = [line for line in content.splitlines() if line.strip()]
     file_count = len(files)
     summary = f"{file_count} file{'s' if file_count != 1 else ''}"
     return FormattedResult(summary=summary, detail=None)

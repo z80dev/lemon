@@ -3,7 +3,6 @@
 --ws-token, --ws-role, --ws-scopes, --ws-client-id must win over config defaults.
 """
 import argparse
-import pytest
 from unittest.mock import patch
 
 

@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any
 import websockets
 from lemon_cli.connection.base import AgentConnection
-from lemon_cli.connection.protocol import parse_server_message
 from lemon_cli.types import (
     ErrorMessage,
     EventMessage,
@@ -18,8 +17,6 @@ from lemon_cli.types import (
     SessionsListMessage,
     RunningSessionsMessage,
     ModelsListMessage,
-    StatsMessage,
-    SaveResultMessage,
     ModelInfo,
 )
 

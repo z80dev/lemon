@@ -14,6 +14,7 @@ import type {
   ServerMessage,
   ClientCommand,
   ReadyMessage,
+  ApprovalDecision,
 } from './types.js';
 
 export const AGENT_RESTART_EXIT_CODE = 75;
@@ -112,6 +113,34 @@ type OpenClawPendingRequest = {
   meta?: Record<string, unknown>;
 };
 
+type GoalCommandOptions = {
+  maxContinuations?: number;
+  maxTicks?: number;
+  intervalMs?: number;
+  waitTimeoutMs?: number;
+  judgeModel?: string;
+  judgeFailurePolicy?: string;
+  model?: string;
+  auto?: boolean;
+};
+
+type KanbanCommandOptions = {
+  status?: string;
+  owner?: string;
+  workspace?: string;
+  priority?: string;
+  assignee?: string;
+  workerProfile?: string;
+  sessionKey?: string;
+  runId?: string;
+  author?: string;
+  limit?: number;
+  intervalMs?: number;
+  maxConcurrency?: number;
+  leaseMs?: number;
+  workerId?: string;
+};
+
 const WS_RECONNECT_BASE_DELAY_MS = 500;
 const WS_RECONNECT_MAX_DELAY_MS = 10_000;
 const WS_COMMAND_QUEUE_LIMIT = 200;
@@ -156,6 +185,11 @@ type ParsedOpenClawEventAction =
       name: string;
       result: unknown;
       isError: boolean;
+    }
+  | {
+      kind: 'ui_notify';
+      message: string;
+      notifyType: 'info' | 'warning' | 'success' | 'error';
     };
 
 function readNonEmptyString(value: unknown): string | null {
@@ -171,6 +205,105 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function formatInlineList(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return 'none';
+  }
+
+  const values = value
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0);
+
+  return values.length > 0 ? values.join(', ') : 'none';
+}
+
+function formatActionMap(value: unknown): string {
+  const record = asRecord(value);
+  const entries = Object.entries(record)
+    .map(([key, item]) => `${key}: ${String(item)}`)
+    .filter((item) => item.length > 0);
+
+  return entries.length > 0 ? entries.join(', ') : 'none';
+}
+
+function formatSamplingApprovalLines(action: Record<string, unknown>): string[] {
+  if (readNonEmptyString(action.type) !== 'mcp_sampling') {
+    return [];
+  }
+
+  const model = readNonEmptyString(action.requested_model) || 'unspecified';
+  const maxTokens = readFiniteNumber(action.max_tokens);
+  const messageCount = readFiniteNumber(action.message_count);
+  const textChars = readFiniteNumber(action.text_char_count);
+  const requestHash = readNonEmptyString(action.request_hash) || 'unknown';
+
+  return [
+    `MCP sampling: model ${model} | max tokens ${maxTokens ?? 'unknown'} | messages ${messageCount ?? 'unknown'} | text chars ${textChars ?? 'unknown'}`,
+    `roles: ${formatInlineList(action.roles)} | content: ${formatActionMap(action.content_kinds)} | request: ${requestHash}`,
+  ];
+}
+
+function formatApprovalRequestedNotification(payload: Record<string, unknown>): string {
+  const tool = readNonEmptyString(payload.tool) || 'tool';
+  const rationale = readNonEmptyString(payload.rationale);
+  const action = asRecord(payload.action);
+  const authorizationUrl = readNonEmptyString(action.authorization_url);
+
+  if (authorizationUrl) {
+    const resource = readNonEmptyString(action.resource);
+    const scope = readNonEmptyString(action.scope);
+    const redirectUri = readNonEmptyString(action.redirect_uri);
+    const context = [
+      resource ? `resource: ${resource}` : null,
+      scope ? `scope: ${scope}` : null,
+      redirectUri ? `redirect: ${redirectUri}` : null,
+    ].filter(Boolean);
+
+    return [
+      `Approval required for ${tool}.`,
+      rationale,
+      `Open OAuth: ${authorizationUrl}`,
+      context.length > 0 ? context.join(' | ') : null,
+    ].filter(Boolean).join(' ');
+  }
+
+  return [
+    `Approval required for ${tool}.`,
+    rationale,
+    ...formatSamplingApprovalLines(action),
+  ].filter(Boolean).join(' ');
+}
+
+function copyGoalOption(params: Record<string, unknown>, key: string, value: unknown): void {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      params[key] = trimmed;
+    }
+    return;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    params[key] = value;
+    return;
+  }
+
+  if (typeof value === 'boolean') {
+    params[key] = value;
+  }
+}
+
+function copyKanbanOption(params: Record<string, unknown>, key: string, value: unknown): void {
+  copyGoalOption(params, key, value);
 }
 
 function parseSessionCwd(payload: Record<string, unknown>): string {
@@ -234,6 +367,258 @@ function parseSessionModel(payload: Record<string, unknown>): { provider: string
     provider: provider || 'unknown',
     id: modelId,
   };
+}
+
+function formatGoalResponse(method: string, payload: Record<string, unknown>): string {
+  if (method === 'goal.clear') {
+    return 'Goal cleared.';
+  }
+
+  if (
+    (method === 'goal.loop.start' || method === 'goal.loop.stop' || method === 'goal.loop.status')
+    && payload.loop
+  ) {
+    const loop = asRecord(payload.loop);
+    const goal = asRecord(payload.goal);
+    const lines = [
+      method === 'goal.loop.start'
+        ? 'Goal Loop Started'
+        : method === 'goal.loop.stop'
+          ? 'Goal Loop Stopped'
+          : 'Goal Loop Status',
+      `Loop status: ${readNonEmptyString(loop.status) || 'unknown'}`,
+      `Session: ${readNonEmptyString(loop.sessionKey || loop.session_key) || 'unknown'}`,
+    ];
+
+    const maxTicks = Number(loop.maxTicks || loop.max_ticks || 0) || 0;
+    if (maxTicks > 0) {
+      lines.push(`Max ticks: ${maxTicks}`);
+    }
+
+    const goalStatus = readNonEmptyString(goal.status);
+    if (goalStatus) {
+      lines.push(`Goal status: ${goalStatus}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  const goal = asRecord(payload.goal || payload);
+  if (Object.keys(goal).length === 0) {
+    return 'Goal Status\nState: none';
+  }
+
+  const status = readNonEmptyString(goal.status) || 'unknown';
+  const id = readNonEmptyString(goal.id) || 'unknown';
+  const objective = readNonEmptyString(goal.objective);
+  const objectiveBytes =
+    (objective ? Buffer.byteLength(objective, 'utf8') : 0)
+    || Number(goal.objectiveBytes || goal.objective_bytes || 0)
+    || 0;
+  const continuations = Number(goal.continuationCount || goal.continuation_count || 0) || 0;
+
+  const title =
+    method === 'goal.set'
+      ? 'Goal Set'
+      : method === 'goal.pause'
+        ? 'Goal Paused'
+        : method === 'goal.resume'
+          ? 'Goal Resumed'
+          : method === 'goal.continue'
+            ? 'Goal Continuation Submitted'
+            : method === 'goal.loop.once'
+              ? 'Goal Loop Tick'
+              : method === 'goal.loop.start'
+                ? 'Goal Loop Started'
+                : method === 'goal.loop.stop'
+                  ? 'Goal Loop Stopped'
+                  : method === 'goal.loop.status'
+                    ? 'Goal Loop Status'
+              : 'Goal Status';
+
+  const runId = readNonEmptyString(payload.runId || payload.run_id);
+  const verdict = asRecord(payload.verdict);
+  const verdictAction = readNonEmptyString(verdict.action);
+  const verdictReason = readNonEmptyString(verdict.reason);
+
+  const lines = [
+    title,
+    `Status: ${status}`,
+    `Goal id: ${id}`,
+    `Objective bytes: ${objectiveBytes}`,
+    `Continuations: ${continuations}`,
+  ];
+
+  if (runId) {
+    lines.push(`Run id: ${runId}`);
+  }
+
+  if (verdictAction) {
+    lines.push(`Verdict: ${verdictAction}`);
+  }
+
+  if (verdictReason) {
+    lines.push(`Reason: ${verdictReason}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatKanbanResponse(method: string, payload: Record<string, unknown>): string {
+  if (method === 'kanban.board.list') {
+    const boards = Array.isArray(payload.boards) ? payload.boards : [];
+    const total = Number(payload.total || boards.length) || 0;
+    const lines = [`Kanban Boards: ${total}`];
+    boards.slice(0, 8).forEach((rawBoard) => {
+      const board = asRecord(rawBoard);
+      const id = readNonEmptyString(board.id) || 'unknown';
+      const status = readNonEmptyString(board.status) || 'unknown';
+      const owner = readNonEmptyString(board.owner);
+      lines.push(`${id} - ${status}${owner ? ` - ${owner}` : ''}`);
+    });
+    return lines.join('\n');
+  }
+
+  if (method === 'kanban.board.get' || method === 'kanban.board.archive') {
+    const board = asRecord(payload.board || payload);
+    const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+    const id = readNonEmptyString(board.id) || 'unknown';
+    const status = readNonEmptyString(board.status) || 'unknown';
+    const lines = [
+      method === 'kanban.board.archive' ? 'Kanban Board Archived' : 'Kanban Board',
+      `Board id: ${id}`,
+      `Status: ${status}`,
+    ];
+    if (method === 'kanban.board.get') {
+      lines.push(`Tasks: ${Number(payload.totalTasks || tasks.length) || 0}`);
+    }
+    tasks.slice(0, 8).forEach((rawTask) => {
+      const task = asRecord(rawTask);
+      const taskId = readNonEmptyString(task.id) || 'unknown';
+      const taskStatus = readNonEmptyString(task.status) || 'unknown';
+      const priority = readNonEmptyString(task.priority);
+      lines.push(`${taskId} - ${taskStatus}${priority ? ` - ${priority}` : ''}`);
+    });
+    return lines.join('\n');
+  }
+
+  if (method.startsWith('kanban.dispatcher.')) {
+    const dispatcher = asRecord(payload.dispatcher);
+    const running = typeof payload.running === 'boolean' ? payload.running : null;
+    const status =
+      readNonEmptyString(dispatcher.status)
+      || (running === null ? 'unknown' : running ? 'running' : 'stopped');
+    const lines = [
+      method === 'kanban.dispatcher.start'
+        ? 'Kanban Dispatcher Started'
+        : method === 'kanban.dispatcher.stop'
+          ? 'Kanban Dispatcher Stopped'
+          : 'Kanban Dispatcher Status',
+      `Status: ${status}`,
+    ];
+    const boardId = readNonEmptyString(dispatcher.boardId || dispatcher.board_id);
+    if (boardId) {
+      lines.push(`Board id: ${boardId}`);
+    }
+    return lines.join('\n');
+  }
+
+  const title =
+    method === 'kanban.board.create'
+      ? 'Kanban Board Created'
+      : method === 'kanban.task.create'
+        ? 'Kanban Task Created'
+        : method === 'kanban.task.update'
+          ? 'Kanban Task Updated'
+          : method === 'kanban.task.comment'
+            ? 'Kanban Task Commented'
+            : 'Kanban Updated';
+  const board = method === 'kanban.board.create' ? asRecord(payload) : asRecord(payload.board);
+  const task = method.startsWith('kanban.task.') ? asRecord(payload.task || payload) : {};
+  const taskId = readNonEmptyString(task.id);
+  const boardId = readNonEmptyString(board.id || task.boardId || task.board_id);
+  const status = readNonEmptyString(task.status || board.status) || 'unknown';
+  const lines = [title, `Status: ${status}`];
+  if (boardId) lines.push(`Board id: ${boardId}`);
+  if (taskId) lines.push(`Task id: ${taskId}`);
+  return lines.join('\n');
+}
+
+function formatCheckpointResponse(method: string, payload: Record<string, unknown>): string {
+  const checkpointId = readNonEmptyString(payload.checkpointId || payload.checkpoint_id) || 'unknown';
+
+  if (method === 'checkpoint.restore') {
+    const restored = Array.isArray(payload.restored) ? payload.restored : [];
+    const count = Number(payload.restoredCount || payload.restored_count || restored.length) || 0;
+    const lines = ['Checkpoint Restored', `Checkpoint id: ${checkpointId}`, `Restored paths: ${count}`];
+    restored.slice(0, 8).forEach((pathValue) => {
+      const pathText = readNonEmptyString(pathValue);
+      if (pathText) lines.push(pathText);
+    });
+    return lines.join('\n');
+  }
+
+  const changed = Array.isArray(payload.changed) ? payload.changed : [];
+  const count = Number(payload.changedCount || payload.changed_count || changed.length) || 0;
+  const output = readNonEmptyString(payload.output);
+  const lines = ['Checkpoint Diff', `Checkpoint id: ${checkpointId}`, `Changed paths: ${count}`];
+  changed.slice(0, 8).forEach((pathValue) => {
+    const pathText = readNonEmptyString(pathValue);
+    if (pathText) lines.push(pathText);
+  });
+  if (output) lines.push('', output);
+  return lines.join('\n');
+}
+
+function formatCronResponse(method: string, payload: Record<string, unknown>): string {
+  if (method === 'cron.abort') {
+    const run = asRecord(payload.run || payload);
+    const runId = readNonEmptyString(run.id || run.runId || run.run_id) || 'unknown';
+    const status = readNonEmptyString(run.status) || 'aborted';
+    return ['Cron Run Aborted', `Run id: ${runId}`, `Status: ${status}`].join('\n');
+  }
+
+  return 'Cron Updated';
+}
+
+function formatApprovalResolveResponse(payload: Record<string, unknown>): string {
+  const approvalId = readNonEmptyString(payload.approvalId || payload.approval_id) || 'unknown';
+  const decision = readNonEmptyString(payload.decision) || 'resolved';
+  return ['Approval Resolved', `Approval id: ${approvalId}`, `Decision: ${decision}`].join('\n');
+}
+
+function formatApprovalListResponse(payload: Record<string, unknown>): string {
+  const pending = Array.isArray(payload.pending) ? payload.pending : [];
+  const lines = [`Pending Approvals: ${pending.length}`];
+
+  pending.slice(0, 8).forEach((rawPending) => {
+    const item = asRecord(rawPending);
+    const id = readNonEmptyString(item.id || item.approvalId || item.approval_id) || 'unknown';
+    const tool = readNonEmptyString(item.tool) || 'tool';
+    const action = asRecord(item.action);
+    const authorizationUrl = readNonEmptyString(action.authorization_url);
+    lines.push(`${id} - ${tool}`);
+
+    if (authorizationUrl) {
+      const resource = readNonEmptyString(action.resource);
+      const scope = readNonEmptyString(action.scope);
+      const redirectUri = readNonEmptyString(action.redirect_uri);
+      const context = [
+        resource ? `resource: ${resource}` : null,
+        scope ? `scope: ${scope}` : null,
+        redirectUri ? `redirect: ${redirectUri}` : null,
+      ].filter(Boolean);
+
+      lines.push(`Open OAuth: ${authorizationUrl}`);
+      if (context.length > 0) {
+        lines.push(context.join(' | '));
+      }
+    }
+
+    lines.push(...formatSamplingApprovalLines(action));
+  });
+
+  return lines.join('\n');
 }
 
 function parseOpenClawFrame(payload: string): OpenClawFrame | null {
@@ -424,6 +809,86 @@ function mapOpenClawResponseToMessages(
       }];
     }
 
+    case 'goal.set':
+    case 'goal.pause':
+    case 'goal.resume':
+    case 'goal.continue':
+    case 'goal.loop.once':
+    case 'goal.loop.start':
+    case 'goal.loop.stop':
+    case 'goal.loop.status':
+    case 'goal.clear':
+    case 'goal.status': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatGoalResponse(method, payload),
+          notify_type: method === 'goal.clear' ? 'success' : 'info',
+        },
+      }];
+    }
+
+    case 'kanban.board.create':
+    case 'kanban.board.list':
+    case 'kanban.board.get':
+    case 'kanban.board.archive':
+    case 'kanban.task.create':
+    case 'kanban.task.update':
+    case 'kanban.task.comment':
+    case 'kanban.dispatcher.start':
+    case 'kanban.dispatcher.status':
+    case 'kanban.dispatcher.stop': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatKanbanResponse(method, payload),
+          notify_type: method === 'kanban.board.create' || method === 'kanban.board.archive' || method === 'kanban.task.create' ? 'success' : 'info',
+        },
+      }];
+    }
+
+    case 'checkpoint.diff':
+    case 'checkpoint.restore': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatCheckpointResponse(method, payload),
+          notify_type: method === 'checkpoint.restore' ? 'success' : 'info',
+        },
+      }];
+    }
+
+    case 'cron.abort': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatCronResponse(method, payload),
+          notify_type: 'success',
+        },
+      }];
+    }
+
+    case 'exec.approval.resolve': {
+      const decision = readNonEmptyString(payload.decision) || '';
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatApprovalResolveResponse(payload),
+          notify_type: decision === 'deny' ? 'error' : 'success',
+        },
+      }];
+    }
+
+    case 'exec.approvals.get': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: formatApprovalListResponse(payload),
+          notify_type: 'info',
+        },
+      }];
+    }
+
     case 'health': {
       return [{ type: 'pong' }];
     }
@@ -525,6 +990,33 @@ function mapOpenClawEventToActions(
       sessionKey,
       runId,
       text,
+    }];
+  }
+
+  if (frame.event === 'exec.approval.requested') {
+    const payload = asRecord(frame.payload);
+    return [{
+      kind: 'ui_notify',
+      message: formatApprovalRequestedNotification(payload),
+      notifyType: 'warning',
+    }];
+  }
+
+  if (frame.event === 'exec.approval.resolved') {
+    const payload = asRecord(frame.payload);
+    const decision = readNonEmptyString(payload.decision) || 'resolved';
+    const approvalId = readNonEmptyString(payload.approvalId || payload.approval_id);
+    const tool = readNonEmptyString(payload.tool);
+    const suffix = [
+      approvalId ? `id: ${approvalId}` : null,
+      tool ? `tool: ${tool}` : null,
+    ].filter(Boolean);
+    return [{
+      kind: 'ui_notify',
+      message: suffix.length > 0
+        ? `Approval ${decision}. ${suffix.join(' | ')}`
+        : `Approval ${decision}.`,
+      notifyType: decision === 'denied' || decision === 'deny' || decision === 'timeout' ? 'error' : 'success',
     }];
   }
 
@@ -1126,6 +1618,147 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         break;
       }
 
+      case 'goal': {
+        const sessionKey = command.session_id || this.resolveWsSessionKey();
+        const params: Record<string, unknown> = { sessionKey };
+        let method = 'goal.status';
+
+        if (command.action === 'set') {
+          method = 'goal.set';
+          params.objective = command.objective || '';
+          params.agentId = this.options.wsAgentId || process.env.LEMON_AGENT_ID || 'default';
+          copyGoalOption(params, 'maxContinuations', command.max_continuations);
+        } else if (command.action === 'pause') {
+          method = 'goal.pause';
+        } else if (command.action === 'resume') {
+          method = 'goal.resume';
+        } else if (command.action === 'continue') {
+          method = 'goal.continue';
+          copyGoalOption(params, 'maxContinuations', command.max_continuations);
+          copyGoalOption(params, 'model', command.model);
+        } else if (command.action === 'loop_once') {
+          method = 'goal.loop.once';
+          copyGoalOption(params, 'maxContinuations', command.max_continuations);
+          copyGoalOption(params, 'judgeModel', command.judge_model);
+          copyGoalOption(params, 'judgeFailurePolicy', command.judge_failure_policy);
+          copyGoalOption(params, 'model', command.model);
+        } else if (command.action === 'loop_start') {
+          method = 'goal.loop.start';
+          copyGoalOption(params, 'maxTicks', command.max_ticks);
+          copyGoalOption(params, 'maxContinuations', command.max_continuations);
+          copyGoalOption(params, 'intervalMs', command.interval_ms);
+          copyGoalOption(params, 'waitTimeoutMs', command.wait_timeout_ms);
+          copyGoalOption(params, 'judgeModel', command.judge_model);
+          copyGoalOption(params, 'judgeFailurePolicy', command.judge_failure_policy);
+          copyGoalOption(params, 'model', command.model);
+          copyGoalOption(params, 'auto', command.auto);
+        } else if (command.action === 'loop_stop') {
+          method = 'goal.loop.stop';
+        } else if (command.action === 'loop_status') {
+          method = 'goal.loop.status';
+        } else if (command.action === 'clear') {
+          method = 'goal.clear';
+        }
+
+        this.sendOpenClawRequest(method, params, sessionKey);
+        break;
+      }
+
+      case 'kanban': {
+        const params: Record<string, unknown> = {};
+        let method = 'kanban.board.list';
+
+        if (command.action === 'board_create') {
+          method = 'kanban.board.create';
+          params.name = command.name || '';
+          copyKanbanOption(params, 'owner', command.owner);
+          copyKanbanOption(params, 'workspace', command.workspace);
+        } else if (command.action === 'board_get') {
+          method = 'kanban.board.get';
+          params.boardId = command.board_id || '';
+          copyKanbanOption(params, 'limit', command.limit);
+        } else if (command.action === 'board_archive') {
+          method = 'kanban.board.archive';
+          params.boardId = command.board_id || '';
+        } else if (command.action === 'task_create') {
+          method = 'kanban.task.create';
+          params.boardId = command.board_id || '';
+          params.title = command.title || '';
+          copyKanbanOption(params, 'status', command.status);
+          copyKanbanOption(params, 'priority', command.priority);
+          copyKanbanOption(params, 'assignee', command.assignee);
+          copyKanbanOption(params, 'workerProfile', command.worker_profile);
+          copyKanbanOption(params, 'sessionKey', command.session_key);
+          copyKanbanOption(params, 'runId', command.run_id);
+        } else if (command.action === 'task_update') {
+          method = 'kanban.task.update';
+          params.taskId = command.task_id || '';
+          copyKanbanOption(params, 'status', command.status);
+          copyKanbanOption(params, 'priority', command.priority);
+          copyKanbanOption(params, 'assignee', command.assignee);
+          copyKanbanOption(params, 'workerProfile', command.worker_profile);
+          copyKanbanOption(params, 'sessionKey', command.session_key);
+          copyKanbanOption(params, 'runId', command.run_id);
+        } else if (command.action === 'task_comment') {
+          method = 'kanban.task.comment';
+          params.taskId = command.task_id || '';
+          params.body = command.body || '';
+          copyKanbanOption(params, 'author', command.author);
+        } else if (command.action === 'dispatcher_start') {
+          method = 'kanban.dispatcher.start';
+          params.boardId = command.board_id || '';
+          copyKanbanOption(params, 'intervalMs', command.interval_ms);
+          copyKanbanOption(params, 'maxConcurrency', command.max_concurrency);
+          copyKanbanOption(params, 'leaseMs', command.lease_ms);
+          copyKanbanOption(params, 'workerId', command.worker_id);
+          copyKanbanOption(params, 'workerProfile', command.worker_profile);
+        } else if (command.action === 'dispatcher_status') {
+          method = 'kanban.dispatcher.status';
+          params.boardId = command.board_id || '';
+        } else if (command.action === 'dispatcher_stop') {
+          method = 'kanban.dispatcher.stop';
+          params.boardId = command.board_id || '';
+        } else {
+          copyKanbanOption(params, 'status', command.status);
+          copyKanbanOption(params, 'owner', command.owner);
+          copyKanbanOption(params, 'workspace', command.workspace);
+          copyKanbanOption(params, 'limit', command.limit);
+        }
+
+        this.sendOpenClawRequest(method, params, null);
+        break;
+      }
+
+      case 'checkpoint': {
+        const params: Record<string, unknown> = {
+          checkpointId: command.checkpoint_id,
+        };
+        if (Array.isArray(command.paths) && command.paths.length > 0) {
+          params.paths = command.paths;
+        }
+        const method =
+          command.action === 'restore' ? 'checkpoint.restore' : 'checkpoint.diff';
+        this.sendOpenClawRequest(method, params, null);
+        break;
+      }
+
+      case 'cron': {
+        this.sendOpenClawRequest('cron.abort', { runId: command.run_id }, null);
+        break;
+      }
+
+      case 'approval': {
+        if (command.action === 'list') {
+          this.sendOpenClawRequest('exec.approvals.get', {}, null);
+        } else {
+          this.sendOpenClawRequest('exec.approval.resolve', {
+            approvalId: command.approval_id,
+            decision: command.decision,
+          }, null);
+        }
+        break;
+      }
+
       case 'debug':
       case 'ui_response':
       case 'quit':
@@ -1252,6 +1885,221 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
    */
   ping(): void {
     this.send({ type: 'ping' });
+  }
+
+  goalStatus(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'status', session_id: sessionId });
+  }
+
+  goalSet(objective: string, sessionId?: string, options: GoalCommandOptions = {}): void {
+    this.send({
+      type: 'goal',
+      action: 'set',
+      objective,
+      session_id: sessionId,
+      max_continuations: options.maxContinuations,
+    });
+  }
+
+  goalPause(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'pause', session_id: sessionId });
+  }
+
+  goalResume(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'resume', session_id: sessionId });
+  }
+
+  goalContinue(sessionId?: string, options: GoalCommandOptions = {}): void {
+    this.send({
+      type: 'goal',
+      action: 'continue',
+      session_id: sessionId,
+      max_continuations: options.maxContinuations,
+      model: options.model,
+    });
+  }
+
+  goalLoopOnce(sessionId?: string, options: GoalCommandOptions = {}): void {
+    this.send({
+      type: 'goal',
+      action: 'loop_once',
+      session_id: sessionId,
+      max_continuations: options.maxContinuations,
+      judge_model: options.judgeModel,
+      judge_failure_policy: options.judgeFailurePolicy,
+      model: options.model,
+    });
+  }
+
+  goalLoopStart(sessionId?: string, options: GoalCommandOptions = {}): void {
+    this.send({
+      type: 'goal',
+      action: 'loop_start',
+      session_id: sessionId,
+      max_ticks: options.maxTicks,
+      max_continuations: options.maxContinuations,
+      interval_ms: options.intervalMs,
+      wait_timeout_ms: options.waitTimeoutMs,
+      judge_model: options.judgeModel,
+      judge_failure_policy: options.judgeFailurePolicy,
+      model: options.model,
+      auto: options.auto,
+    });
+  }
+
+  goalLoopStop(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'loop_stop', session_id: sessionId });
+  }
+
+  goalLoopStatus(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'loop_status', session_id: sessionId });
+  }
+
+  goalClear(sessionId?: string): void {
+    this.send({ type: 'goal', action: 'clear', session_id: sessionId });
+  }
+
+  kanbanBoardList(options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'board_list',
+      status: options.status,
+      owner: options.owner,
+      workspace: options.workspace,
+      limit: options.limit,
+    });
+  }
+
+  kanbanBoardCreate(name: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'board_create',
+      name,
+      owner: options.owner,
+      workspace: options.workspace || this.options.cwd,
+    });
+  }
+
+  kanbanBoardGet(boardId: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'board_get',
+      board_id: boardId,
+      limit: options.limit,
+    });
+  }
+
+  kanbanBoardArchive(boardId: string): void {
+    this.send({
+      type: 'kanban',
+      action: 'board_archive',
+      board_id: boardId,
+    });
+  }
+
+  kanbanTaskCreate(boardId: string, title: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'task_create',
+      board_id: boardId,
+      title,
+      status: options.status,
+      priority: options.priority,
+      assignee: options.assignee,
+      worker_profile: options.workerProfile,
+      session_key: options.sessionKey,
+      run_id: options.runId,
+    });
+  }
+
+  kanbanTaskUpdate(taskId: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'task_update',
+      task_id: taskId,
+      status: options.status,
+      priority: options.priority,
+      assignee: options.assignee,
+      worker_profile: options.workerProfile,
+      session_key: options.sessionKey,
+      run_id: options.runId,
+    });
+  }
+
+  kanbanTaskComment(taskId: string, body: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'task_comment',
+      task_id: taskId,
+      body,
+      author: options.author || this.options.wsAgentId || process.env.LEMON_AGENT_ID || 'operator',
+    });
+  }
+
+  kanbanDispatcherStart(boardId: string, options: KanbanCommandOptions = {}): void {
+    this.send({
+      type: 'kanban',
+      action: 'dispatcher_start',
+      board_id: boardId,
+      interval_ms: options.intervalMs,
+      max_concurrency: options.maxConcurrency,
+      lease_ms: options.leaseMs,
+      worker_id: options.workerId,
+      worker_profile: options.workerProfile,
+    });
+  }
+
+  kanbanDispatcherStatus(boardId: string): void {
+    this.send({ type: 'kanban', action: 'dispatcher_status', board_id: boardId });
+  }
+
+  kanbanDispatcherStop(boardId: string): void {
+    this.send({ type: 'kanban', action: 'dispatcher_stop', board_id: boardId });
+  }
+
+  checkpointDiff(checkpointId: string, paths: string[] = []): void {
+    this.send({
+      type: 'checkpoint',
+      action: 'diff',
+      checkpoint_id: checkpointId,
+      paths,
+    });
+  }
+
+  checkpointRestore(checkpointId: string, paths: string[] = []): void {
+    this.send({
+      type: 'checkpoint',
+      action: 'restore',
+      checkpoint_id: checkpointId,
+      paths,
+    });
+  }
+
+  cronAbort(runId: string): void {
+    this.send({
+      type: 'cron',
+      action: 'abort',
+      run_id: runId,
+    });
+  }
+
+  approvalResolve(
+    approvalId: string,
+    decision: ApprovalDecision
+  ): void {
+    this.send({
+      type: 'approval',
+      action: 'resolve',
+      approval_id: approvalId,
+      decision,
+    });
+  }
+
+  approvalList(): void {
+    this.send({
+      type: 'approval',
+      action: 'list',
+    });
   }
 
   /**
@@ -1550,6 +2398,17 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
           event: {
             type: 'tool_execution_end',
             data: [action.id, action.name, action.result, action.isError],
+          },
+        });
+        continue;
+      }
+
+      if (action.kind === 'ui_notify') {
+        this.emit('message', {
+          type: 'ui_notify',
+          params: {
+            message: action.message,
+            notify_type: action.notifyType,
           },
         });
         continue;

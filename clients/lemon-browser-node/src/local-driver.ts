@@ -15,6 +15,7 @@ export type RequestMsg = {
 
 export type LocalDriverConfig = {
   cdpPort: number;
+  cdpEndpoint: string | null;
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
@@ -38,9 +39,12 @@ export function resolveLocalDriverConfig(params: {
 
   const cdpPort =
     asInt(params.args['cdp-port'], asInt(env.LEMON_BROWSER_CDP_PORT, 18800));
+  const cdpEndpoint =
+    asString(params.args['cdp-endpoint']) ?? asString(env.LEMON_BROWSER_CDP_ENDPOINT);
   const headless = asBool(params.args['headless']) || asBool(env.LEMON_BROWSER_HEADLESS);
   const noSandbox = asBool(params.args['no-sandbox']) || asBool(env.LEMON_BROWSER_NO_SANDBOX);
-  const attachOnly = asBool(params.args['attach-only']) || asBool(env.LEMON_BROWSER_ATTACH_ONLY);
+  const attachOnly =
+    asBool(params.args['attach-only']) || asBool(env.LEMON_BROWSER_ATTACH_ONLY) || !!cdpEndpoint;
   const executablePath =
     asString(params.args['executable-path']) ?? asString(env.LEMON_BROWSER_EXECUTABLE);
 
@@ -52,6 +56,7 @@ export function resolveLocalDriverConfig(params: {
 
   return {
     cdpPort,
+    cdpEndpoint,
     headless,
     noSandbox,
     attachOnly,
@@ -123,6 +128,7 @@ async function main() {
 
   const chrome = new ChromeSession({
     cdpPort: config.cdpPort,
+    cdpEndpoint: config.cdpEndpoint ?? undefined,
     userDataDir: config.userDataDir,
     executablePath: config.executablePath ?? undefined,
     headless: config.headless,

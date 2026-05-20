@@ -1,6 +1,5 @@
 import argparse
 import os
-import sys
 
 
 def parse_args() -> argparse.Namespace:

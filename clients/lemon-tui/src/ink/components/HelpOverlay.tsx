@@ -69,6 +69,10 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
       <HelpSection title="Control">
         <HelpRow left="/abort" right="Stop current operation" />
         <HelpRow left="/reset" right="Clear conversation" />
+        <HelpRow left="/goal" right="Show or control current goal" />
+        <HelpRow left="/kanban" right="Manage durable boards and dispatch" />
+        <HelpRow left="/checkpoint" right="Preview or restore checkpoints" />
+        <HelpRow left="/approval" right="Approve or deny pending approvals" />
         <HelpRow left="/restart" right="Restart agent" />
         <HelpRow left="/bell" right="Toggle completion bell" />
         <HelpRow left="/quit" right="Exit application" />

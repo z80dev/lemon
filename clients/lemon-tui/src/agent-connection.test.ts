@@ -945,6 +945,69 @@ describe('AgentConnection', () => {
 
       expect(mockProcess.stdin.write).toHaveBeenCalledWith('{"type":"ping"}\n');
     });
+
+    it('should send goal commands', () => {
+      connection.goalLoopStart('session-1', {
+        maxTicks: 5,
+        maxContinuations: 3,
+        judgeModel: 'judge-model',
+        judgeFailurePolicy: 'continueOnce',
+        auto: true,
+      });
+
+      const callArg = mockProcess.stdin.write.mock.calls[0][0] as string;
+      const parsed = JSON.parse(callArg);
+
+      expect(parsed).toEqual({
+        type: 'goal',
+        action: 'loop_start',
+        session_id: 'session-1',
+        max_ticks: 5,
+        max_continuations: 3,
+        judge_model: 'judge-model',
+        judge_failure_policy: 'continueOnce',
+        auto: true,
+      });
+    });
+
+    it('should send cron abort commands', () => {
+      connection.cronAbort('cron_run_1');
+
+      const callArg = mockProcess.stdin.write.mock.calls[0][0] as string;
+      const parsed = JSON.parse(callArg);
+
+      expect(parsed).toEqual({
+        type: 'cron',
+        action: 'abort',
+        run_id: 'cron_run_1',
+      });
+    });
+
+    it('should send approval resolve commands', () => {
+      connection.approvalResolve('approval_1', 'approve_once');
+
+      const callArg = mockProcess.stdin.write.mock.calls[0][0] as string;
+      const parsed = JSON.parse(callArg);
+
+      expect(parsed).toEqual({
+        type: 'approval',
+        action: 'resolve',
+        approval_id: 'approval_1',
+        decision: 'approve_once',
+      });
+    });
+
+    it('should send approval list commands', () => {
+      connection.approvalList();
+
+      const callArg = mockProcess.stdin.write.mock.calls[0][0] as string;
+      const parsed = JSON.parse(callArg);
+
+      expect(parsed).toEqual({
+        type: 'approval',
+        action: 'list',
+      });
+    });
   });
 
   describe('respondToUIRequest()', () => {
@@ -1852,6 +1915,450 @@ describe('AgentConnection', () => {
       });
     });
 
+    it('sends goal commands over websocket and maps redacted status notification', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+        wsAgentId: 'default',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.goalSet('secret goal text', 'agent:test:main', { maxContinuations: 4 });
+      const reqFrame = readLastFrame(ws);
+
+      expect(reqFrame.method).toBe('goal.set');
+      expect(reqFrame.params).toEqual({
+        sessionKey: 'agent:test:main',
+        objective: 'secret goal text',
+        agentId: 'default',
+        maxContinuations: 4,
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          id: 'goal_123',
+          status: 'active',
+          objective: 'secret goal text',
+          continuationCount: 0,
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Goal Set',
+            'Status: active',
+            'Goal id: goal_123',
+            'Objective bytes: 16',
+            'Continuations: 0',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.goalContinue('agent:test:main', { maxContinuations: 4, model: 'worker-model' });
+      const continueFrame = readLastFrame(ws);
+      expect(continueFrame.method).toBe('goal.continue');
+      expect(continueFrame.params).toEqual({
+        sessionKey: 'agent:test:main',
+        maxContinuations: 4,
+        model: 'worker-model',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: continueFrame.id,
+        ok: true,
+        payload: {
+          runId: 'run_goal',
+          goal: {
+            id: 'goal_123',
+            status: 'active',
+            objectiveBytes: 16,
+            continuationCount: 1,
+          },
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Goal Continuation Submitted',
+            'Status: active',
+            'Goal id: goal_123',
+            'Objective bytes: 16',
+            'Continuations: 1',
+            'Run id: run_goal',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.goalLoopOnce('agent:test:main', {
+        judgeModel: 'judge-model',
+        judgeFailurePolicy: 'continueOnce',
+      });
+      const loopFrame = readLastFrame(ws);
+      expect(loopFrame.method).toBe('goal.loop.once');
+      expect(loopFrame.params).toEqual({
+        sessionKey: 'agent:test:main',
+        judgeModel: 'judge-model',
+        judgeFailurePolicy: 'continueOnce',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: loopFrame.id,
+        ok: true,
+        payload: {
+          runId: 'run_loop',
+          verdict: {
+            action: 'continue',
+            reason: 'still open',
+            source: 'test',
+          },
+          goal: {
+            id: 'goal_123',
+            status: 'active',
+            objectiveBytes: 16,
+            continuationCount: 2,
+          },
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Goal Loop Tick',
+            'Status: active',
+            'Goal id: goal_123',
+            'Objective bytes: 16',
+            'Continuations: 2',
+            'Run id: run_loop',
+            'Verdict: continue',
+            'Reason: still open',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.goalLoopStart('agent:test:main', {
+        maxTicks: 5,
+        maxContinuations: 4,
+        intervalMs: 25,
+        waitTimeoutMs: 10_000,
+        judgeModel: 'judge-model',
+        judgeFailurePolicy: 'needsInput',
+        auto: true,
+      });
+      const loopStartFrame = readLastFrame(ws);
+      expect(loopStartFrame.method).toBe('goal.loop.start');
+      expect(loopStartFrame.params).toEqual({
+        sessionKey: 'agent:test:main',
+        maxTicks: 5,
+        maxContinuations: 4,
+        intervalMs: 25,
+        waitTimeoutMs: 10000,
+        judgeModel: 'judge-model',
+        judgeFailurePolicy: 'needsInput',
+        auto: true,
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: loopStartFrame.id,
+        ok: true,
+        payload: {
+          loop: {
+            sessionKey: 'agent:test:main',
+            status: 'running',
+            startedAtMs: 123,
+            maxTicks: 3,
+          },
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Goal Loop Started',
+            'Loop status: running',
+            'Session: agent:test:main',
+            'Max ticks: 3',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.goalLoopStatus('agent:test:main');
+      expect(readLastFrame(ws).method).toBe('goal.loop.status');
+
+      conn.goalLoopStop('agent:test:main');
+      expect(readLastFrame(ws).method).toBe('goal.loop.stop');
+    });
+
+    it('sends kanban commands over websocket and maps redacted notifications', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        cwd: '/tmp/lemon',
+        wsAgentId: 'codex',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.kanbanBoardCreate('secret board title', { owner: 'codex' });
+      const createBoardFrame = readLastFrame(ws);
+      expect(createBoardFrame.method).toBe('kanban.board.create');
+      expect(createBoardFrame.params).toEqual({
+        name: 'secret board title',
+        owner: 'codex',
+        workspace: '/tmp/lemon',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: createBoardFrame.id,
+        ok: true,
+        payload: {
+          id: 'board_1',
+          name: 'secret board title',
+          status: 'active',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Kanban Board Created',
+            'Status: active',
+            'Board id: board_1',
+          ].join('\n'),
+          notify_type: 'success',
+        },
+      });
+
+      conn.kanbanTaskCreate('board_1', 'secret task title', {
+        priority: 'high',
+        assignee: 'sonnet',
+      });
+      const createTaskFrame = readLastFrame(ws);
+      expect(createTaskFrame.method).toBe('kanban.task.create');
+      expect(createTaskFrame.params).toEqual({
+        boardId: 'board_1',
+        title: 'secret task title',
+        priority: 'high',
+        assignee: 'sonnet',
+      });
+
+      conn.kanbanBoardGet('board_1', { limit: 5 });
+      const getBoardFrame = readLastFrame(ws);
+      expect(getBoardFrame.method).toBe('kanban.board.get');
+      expect(getBoardFrame.params).toEqual({
+        boardId: 'board_1',
+        limit: 5,
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: getBoardFrame.id,
+        ok: true,
+        payload: {
+          board: { id: 'board_1', name: 'secret board title', status: 'active' },
+          tasks: [
+            { id: 'task_1', title: 'secret task title', status: 'doing', priority: 'high' },
+          ],
+          totalTasks: 1,
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Kanban Board',
+            'Board id: board_1',
+            'Status: active',
+            'Tasks: 1',
+            'task_1 - doing - high',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.kanbanBoardArchive('board_1');
+      const archiveFrame = readLastFrame(ws);
+      expect(archiveFrame.method).toBe('kanban.board.archive');
+      expect(archiveFrame.params).toEqual({
+        boardId: 'board_1',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: archiveFrame.id,
+        ok: true,
+        payload: {
+          board: { id: 'board_1', name: 'secret board title', status: 'archived' },
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Kanban Board Archived',
+            'Board id: board_1',
+            'Status: archived',
+          ].join('\n'),
+          notify_type: 'success',
+        },
+      });
+
+      conn.kanbanTaskComment('task_1', 'secret comment');
+      const commentFrame = readLastFrame(ws);
+      expect(commentFrame.method).toBe('kanban.task.comment');
+      expect(commentFrame.params).toEqual({
+        taskId: 'task_1',
+        body: 'secret comment',
+        author: 'codex',
+      });
+
+      conn.kanbanDispatcherStart('board_1', { maxConcurrency: 2, workerProfile: 'junior' });
+      const dispatcherFrame = readLastFrame(ws);
+      expect(dispatcherFrame.method).toBe('kanban.dispatcher.start');
+      expect(dispatcherFrame.params).toEqual({
+        boardId: 'board_1',
+        maxConcurrency: 2,
+        workerProfile: 'junior',
+      });
+    });
+
+    it('sends checkpoint rollback commands over websocket and maps notifications', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.checkpointDiff('chk_1', ['/tmp/a.txt']);
+      const diffFrame = readLastFrame(ws);
+      expect(diffFrame.method).toBe('checkpoint.diff');
+      expect(diffFrame.params).toEqual({
+        checkpointId: 'chk_1',
+        paths: ['/tmp/a.txt'],
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: diffFrame.id,
+        ok: true,
+        payload: {
+          checkpoint_id: 'chk_1',
+          changed_count: 1,
+          changed: ['/tmp/a.txt'],
+          output: '--- /tmp/a.txt\n+++ /tmp/a.txt\n@@\n-before\n+after',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Checkpoint Diff',
+            'Checkpoint id: chk_1',
+            'Changed paths: 1',
+            '/tmp/a.txt',
+            '',
+            '--- /tmp/a.txt\n+++ /tmp/a.txt\n@@\n-before\n+after',
+          ].join('\n'),
+          notify_type: 'info',
+        },
+      });
+
+      conn.checkpointRestore('chk_1', ['/tmp/a.txt']);
+      const restoreFrame = readLastFrame(ws);
+      expect(restoreFrame.method).toBe('checkpoint.restore');
+      expect(restoreFrame.params).toEqual({
+        checkpointId: 'chk_1',
+        paths: ['/tmp/a.txt'],
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: restoreFrame.id,
+        ok: true,
+        payload: {
+          checkpoint_id: 'chk_1',
+          restored_count: 1,
+          restored: ['/tmp/a.txt'],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Checkpoint Restored',
+            'Checkpoint id: chk_1',
+            'Restored paths: 1',
+            '/tmp/a.txt',
+          ].join('\n'),
+          notify_type: 'success',
+        },
+      });
+    });
+
+    it('sends cron abort over websocket and maps notification', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.cronAbort('cron_run_1');
+      const abortFrame = readLastFrame(ws);
+      expect(abortFrame.method).toBe('cron.abort');
+      expect(abortFrame.params).toEqual({
+        runId: 'cron_run_1',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: abortFrame.id,
+        ok: true,
+        payload: {
+          run: {
+            id: 'cron_run_1',
+            status: 'aborted',
+          },
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          message: [
+            'Cron Run Aborted',
+            'Run id: cron_run_1',
+            'Status: aborted',
+          ].join('\n'),
+          notify_type: 'success',
+        },
+      });
+    });
+
     it('creates session through control-plane roundtrip before emitting session_started', async () => {
       const conn = new AgentConnection({
         wsUrl: 'ws://control-plane.test/ws',
@@ -2111,6 +2618,281 @@ describe('AgentConnection', () => {
             'Tool missing_tool_for_runner not found',
             true,
           ],
+        },
+      });
+    });
+
+    it('maps approval requested events into TUI notifications with OAuth context', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'exec.approval.requested',
+        payload: {
+          approvalId: 'approval-oauth-1',
+          tool: 'mcp_mcp_oauth',
+          action: {
+            type: 'mcp_oauth_authorization',
+            authorization_url: 'http://127.0.0.1:9000/authorize?state=abc',
+            resource: 'http://mcp.example',
+            redirect_uri: 'http://127.0.0.1:9191/callback',
+            scope: 'tools.read',
+            enabled: false,
+          },
+          rationale: 'Open authorization URL, complete login, then approve once.',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'warning',
+          message: [
+            'Approval required for mcp_mcp_oauth.',
+            'Open authorization URL, complete login, then approve once.',
+            'Open OAuth: http://127.0.0.1:9000/authorize?state=abc',
+            'resource: http://mcp.example | scope: tools.read | redirect: http://127.0.0.1:9191/callback',
+          ].join(' '),
+        },
+      });
+    });
+
+    it('maps approval requested events into TUI notifications with sampling context', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'exec.approval.requested',
+        payload: {
+          approvalId: 'approval-sampling-1',
+          tool: 'mcp_elixir_sampling',
+          action: {
+            type: 'mcp_sampling',
+            request_hash: 'abc123',
+            message_count: 1,
+            roles: ['user'],
+            content_kinds: { text: 1 },
+            text_char_count: 13,
+            max_tokens: 16,
+            requested_model: 'lemon-test',
+          },
+          rationale: 'MCP sampling request',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'warning',
+          message: [
+            'Approval required for mcp_elixir_sampling.',
+            'MCP sampling request',
+            'MCP sampling: model lemon-test | max tokens 16 | messages 1 | text chars 13',
+            'roles: user | content: text: 1 | request: abc123',
+          ].join(' '),
+        },
+      });
+    });
+
+    it('maps approval resolved events into TUI notifications with approval context', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'exec.approval.resolved',
+        payload: {
+          approvalId: 'approval-oauth-1',
+          decision: 'approve_once',
+          tool: 'mcp_mcp_oauth',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'success',
+          message: 'Approval approve_once. id: approval-oauth-1 | tool: mcp_mcp_oauth',
+        },
+      });
+    });
+
+    it('maps approval timeout events into TUI error notifications', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'exec.approval.resolved',
+        payload: {
+          approvalId: 'approval-timeout-1',
+          decision: 'timeout',
+          tool: 'bash',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'error',
+          message: 'Approval timeout. id: approval-timeout-1 | tool: bash',
+        },
+      });
+    });
+
+    it('sends approval resolution over websocket and maps notification', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.approvalResolve('approval-oauth-1', 'approve_once');
+      const resolveFrame = readLastFrame(ws);
+      expect(resolveFrame.method).toBe('exec.approval.resolve');
+      expect(resolveFrame.params).toEqual({
+        approvalId: 'approval-oauth-1',
+        decision: 'approve_once',
+      });
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: resolveFrame.id,
+        ok: true,
+        payload: {
+          resolved: true,
+          approvalId: 'approval-oauth-1',
+          decision: 'approve_once',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'success',
+          message: [
+            'Approval Resolved',
+            'Approval id: approval-oauth-1',
+            'Decision: approve_once',
+          ].join('\n'),
+        },
+      });
+    });
+
+    it('lists pending approvals over websocket with OAuth context', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.approvalList();
+      const listFrame = readLastFrame(ws);
+      expect(listFrame.method).toBe('exec.approvals.get');
+      expect(listFrame.params).toEqual({});
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: listFrame.id,
+        ok: true,
+        payload: {
+          pending: [
+            {
+              id: 'approval-oauth-1',
+              tool: 'mcp_mcp_oauth',
+              action: {
+                authorization_url: 'http://127.0.0.1:9000/authorize?state=abc',
+                resource: 'http://mcp.example',
+                redirect_uri: 'http://127.0.0.1:9191/callback',
+                scope: 'tools.read',
+              },
+            },
+          ],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'info',
+          message: [
+            'Pending Approvals: 1',
+            'approval-oauth-1 - mcp_mcp_oauth',
+            'Open OAuth: http://127.0.0.1:9000/authorize?state=abc',
+            'resource: http://mcp.example | scope: tools.read | redirect: http://127.0.0.1:9191/callback',
+          ].join('\n'),
+        },
+      });
+    });
+
+    it('lists pending approvals over websocket with sampling context', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.approvalList();
+      const listFrame = readLastFrame(ws);
+      expect(listFrame.method).toBe('exec.approvals.get');
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: listFrame.id,
+        ok: true,
+        payload: {
+          pending: [
+            {
+              id: 'approval-sampling-1',
+              tool: 'mcp_elixir_sampling',
+              action: {
+                type: 'mcp_sampling',
+                request_hash: 'abc123',
+                message_count: 1,
+                roles: ['user'],
+                content_kinds: { text: 1 },
+                text_char_count: 13,
+                max_tokens: 16,
+                requested_model: 'lemon-test',
+              },
+            },
+          ],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'ui_notify',
+        params: {
+          notify_type: 'info',
+          message: [
+            'Pending Approvals: 1',
+            'approval-sampling-1 - mcp_elixir_sampling',
+            'MCP sampling: model lemon-test | max tokens 16 | messages 1 | text chars 13',
+            'roles: user | content: text: 1 | request: abc123',
+          ].join('\n'),
         },
       });
     });

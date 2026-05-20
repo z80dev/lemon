@@ -18,7 +18,7 @@ class SelectOverlay(OverlayBase):
             desc = opt.get("description", "")
             desc_str = f" - {desc}" if desc else ""
             lines.append(f"  {marker} [{i+1}] {label}{desc_str}")
-        lines.append(f"\n  Enter number or use arrows, Enter to confirm")
+        lines.append("\n  Enter number or use arrows, Enter to confirm")
         return "\n".join(lines)
 
     def move_up(self):

@@ -1,7 +1,7 @@
 import time
 from lemon_cli.state.store import (
     SessionState, StateStore, NormalizedUserMessage,
-    NormalizedAssistantMessage, NormalizedToolResultMessage, ToolExecution,
+    NormalizedAssistantMessage, ToolExecution,
 )
 from lemon_cli.types import SessionEvent
 

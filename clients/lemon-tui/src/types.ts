@@ -241,6 +241,94 @@ export interface SetActiveSessionCommand {
   session_id: string;
 }
 
+export interface GoalCommand {
+  type: 'goal';
+  action:
+    | 'status'
+    | 'set'
+    | 'pause'
+    | 'resume'
+    | 'continue'
+    | 'loop_once'
+    | 'loop_start'
+    | 'loop_stop'
+    | 'loop_status'
+    | 'clear';
+  session_id?: string;
+  objective?: string;
+  max_continuations?: number;
+  max_ticks?: number;
+  interval_ms?: number;
+  wait_timeout_ms?: number;
+  judge_model?: string;
+  judge_failure_policy?: string;
+  model?: string;
+  auto?: boolean;
+}
+
+export interface KanbanCommand {
+  type: 'kanban';
+  action:
+    | 'board_list'
+    | 'board_create'
+    | 'board_get'
+    | 'board_archive'
+    | 'task_create'
+    | 'task_update'
+    | 'task_comment'
+    | 'dispatcher_start'
+    | 'dispatcher_status'
+    | 'dispatcher_stop';
+  board_id?: string;
+  task_id?: string;
+  name?: string;
+  title?: string;
+  body?: string;
+  status?: string;
+  owner?: string;
+  workspace?: string;
+  priority?: string;
+  assignee?: string;
+  worker_profile?: string;
+  session_key?: string;
+  run_id?: string;
+  author?: string;
+  limit?: number;
+  interval_ms?: number;
+  max_concurrency?: number;
+  lease_ms?: number;
+  worker_id?: string;
+}
+
+export interface CheckpointCommand {
+  type: 'checkpoint';
+  action: 'diff' | 'restore';
+  checkpoint_id: string;
+  paths?: string[];
+}
+
+export interface CronCommand {
+  type: 'cron';
+  action: 'abort';
+  run_id: string;
+}
+
+export type ApprovalDecision = 'approve_once' | 'approve_session' | 'approve_agent' | 'approve_global' | 'deny';
+
+export interface ApprovalListCommand {
+  type: 'approval';
+  action: 'list';
+}
+
+export interface ApprovalResolveCommand {
+  type: 'approval';
+  action: 'resolve';
+  approval_id: string;
+  decision: ApprovalDecision;
+}
+
+export type ApprovalCommand = ApprovalListCommand | ApprovalResolveCommand;
+
 export type ClientCommand =
   | PromptCommand
   | StatsCommand
@@ -256,7 +344,12 @@ export type ClientCommand =
   | CloseSessionCommand
   | ListRunningSessionsCommand
   | ListModelsCommand
-  | SetActiveSessionCommand;
+  | SetActiveSessionCommand
+  | GoalCommand
+  | KanbanCommand
+  | CheckpointCommand
+  | CronCommand
+  | ApprovalCommand;
 
 // ============================================================================
 // Session Events
