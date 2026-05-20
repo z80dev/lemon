@@ -41,10 +41,12 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
         case LemonRouter.submit(submit_params) do
           {:ok, run_id} ->
-            {:ok, %{
-              "runId" => run_id,
-              "sessionKey" => session_key
-            }}
+            {:ok,
+             %{
+               "runId" => run_id,
+               "sessionKey" => session_key,
+               "summary" => summary(run_id, session_key, agent_id, prompt, queue_mode)
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, inspect(reason), nil}}
@@ -58,4 +60,20 @@ defmodule LemonControlPlane.Methods.ChatSend do
   defp parse_queue_mode("steer"), do: :steer
   defp parse_queue_mode("interrupt"), do: :interrupt
   defp parse_queue_mode(_), do: :collect
+
+  defp summary(run_id, session_key, agent_id, prompt, queue_mode) do
+    %{
+      "runId" => run_id,
+      "sessionKey" => session_key,
+      "agentId" => agent_id,
+      "queueMode" => to_string(queue_mode),
+      "promptBytes" => byte_size(to_string(prompt)),
+      "cleanup" => %{
+        "includesPromptText" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
 end

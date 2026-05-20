@@ -26,24 +26,51 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
 
     runs = fetch_active_runs(agent_id, session_key, limit)
 
-    {:ok,
-     %{
-       "runs" => runs,
-       "total" => length(runs),
-       "filters" => %{
-         "agentId" => agent_id,
-         "sessionKey" => session_key,
-         "limit" => limit
-       }
-     }}
+    filters = %{
+      "agentId" => agent_id,
+      "sessionKey" => session_key,
+      "limit" => limit
+    }
+
+    {:ok, response(runs, filters)}
   rescue
     _ ->
-      {:ok,
-       %{
-         "runs" => [],
-         "total" => 0,
-         "filters" => %{"agentId" => nil, "sessionKey" => nil, "limit" => @default_limit}
-       }}
+      filters = %{"agentId" => nil, "sessionKey" => nil, "limit" => @default_limit}
+      {:ok, response([], filters)}
+  end
+
+  defp response(runs, filters) do
+    %{
+      "runs" => runs,
+      "total" => length(runs),
+      "filters" => filters,
+      "summary" => summary(runs, filters)
+    }
+  end
+
+  defp summary(runs, filters) do
+    started_values =
+      runs
+      |> Enum.map(& &1["startedAtMs"])
+      |> Enum.filter(&is_integer/1)
+
+    %{
+      "count" => length(runs),
+      "statusCounts" => count_by(runs, "status"),
+      "engineCounts" => count_by(runs, "engine"),
+      "agentCount" => unique_count(runs, "agentId"),
+      "sessionCount" => unique_count(runs, "sessionKey"),
+      "oldestStartedAtMs" => min_or_nil(started_values),
+      "newestStartedAtMs" => max_or_nil(started_values),
+      "filtersApplied" => filters_applied(filters),
+      "cleanup" => %{
+        "includesRunEvents" => false,
+        "includesRunRecords" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp fetch_active_runs(agent_id, session_key, limit) do
@@ -108,6 +135,38 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
   defp filter_by_session(_run, nil), do: true
   defp filter_by_session(%{"sessionKey" => session_key}, filter), do: session_key == filter
   defp filter_by_session(_, _), do: false
+
+  defp count_by(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> Enum.frequencies()
+  end
+
+  defp unique_count(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp filters_applied(filters) do
+    filters
+    |> Enum.reject(fn {key, value} -> key == "limit" or blank?(value) end)
+    |> Enum.map(fn {key, _value} -> key end)
+    |> Enum.sort()
+  end
+
+  defp min_or_nil([]), do: nil
+  defp min_or_nil(values), do: Enum.min(values)
+
+  defp max_or_nil([]), do: nil
+  defp max_or_nil(values), do: Enum.max(values)
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
 
   defp normalize_limit(limit, _default, max) when is_integer(limit) and limit > 0,
     do: min(limit, max)

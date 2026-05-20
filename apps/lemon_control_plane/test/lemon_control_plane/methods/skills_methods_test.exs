@@ -69,6 +69,13 @@ defmodule LemonControlPlane.Methods.SkillsMethodsTest do
 
       assert result["skillKey"] == skill_key
       assert result["enabled"] == false
+      assert result["summary"]["action"] == "skills.update"
+      assert result["summary"]["skillKeyReturned"] == true
+      assert result["summary"]["enabledReturned"] == true
+      assert result["summary"]["versionUpdate"] == false
+      assert result["summary"]["envKeyCount"] == 0
+      assert result["summary"]["cleanup"]["includesEnvironmentValues"] == false
+      assert result["summary"]["cleanup"]["includesApprovalContext"] == false
     end
 
     test "applies env config change when provided" do
@@ -77,14 +84,26 @@ defmodule LemonControlPlane.Methods.SkillsMethodsTest do
 
       params = %{
         "skillKey" => skill_key,
-        "env" => %{"API_KEY" => "test123"},
+        "env" => %{"API_KEY" => "test123", "PUBLIC_MODE" => "test"},
         "cwd" => "/tmp/test"
       }
 
       {:ok, result} = SkillsUpdate.handle(params, ctx)
 
       assert result["skillKey"] == skill_key
-      assert result["env"] == %{"API_KEY" => "test123"}
+
+      assert result["env"] == %{
+               "API_KEY" => %{"redacted" => true, "kind" => "secret"},
+               "PUBLIC_MODE" => "test"
+             }
+
+      assert result["summary"]["action"] == "skills.update"
+      assert result["summary"]["skillKeyReturned"] == true
+      assert result["summary"]["envKeyCount"] == 2
+      assert result["summary"]["envKeys"] == ["API_KEY", "PUBLIC_MODE"]
+      assert result["summary"]["cleanup"]["includesEnvironmentValues"] == true
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "test123"
     end
   end
 end

@@ -25,12 +25,17 @@ defmodule LemonControlPlane.Methods.Health do
 
   @impl true
   def handle(_params, _ctx) do
+    uptime_ms = uptime_ms()
+    memory_mb = memory_mb()
+    schedulers = System.schedulers_online()
+
     {:ok,
      %{
        "ok" => true,
-       "uptime_ms" => uptime_ms(),
-       "memory_mb" => memory_mb(),
-       "schedulers" => System.schedulers_online()
+       "uptime_ms" => uptime_ms,
+       "memory_mb" => memory_mb,
+       "schedulers" => schedulers,
+       "summary" => summary(uptime_ms, memory_mb, schedulers)
      }}
   end
 
@@ -42,5 +47,20 @@ defmodule LemonControlPlane.Methods.Health do
   defp memory_mb do
     bytes = :erlang.memory(:total)
     Float.round(bytes / 1_048_576, 2)
+  end
+
+  defp summary(uptime_ms, memory_mb, schedulers) do
+    %{
+      "action" => "health",
+      "ok" => true,
+      "uptimeMs" => uptime_ms,
+      "memoryMb" => memory_mb,
+      "schedulerCount" => schedulers,
+      "cleanup" => %{
+        "includesRawProcessState" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

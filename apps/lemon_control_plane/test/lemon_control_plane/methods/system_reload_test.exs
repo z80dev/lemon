@@ -39,6 +39,22 @@ defmodule LemonControlPlane.Methods.SystemReloadTest do
       assert is_list(payload["errors"])
       assert is_integer(payload["duration_ms"])
       assert is_list(payload["results"])
+      assert payload["summary"]["action"] == "system.reload"
+      assert payload["summary"]["kind"] == "module"
+      assert payload["summary"]["status"] == payload["status"]
+      assert payload["summary"]["targetReturned"] == true
+      assert payload["summary"]["resultCount"] == length(payload["results"])
+      assert payload["summary"]["reloadedCount"] == length(payload["reloaded"])
+      assert payload["summary"]["skippedCount"] == length(payload["skipped"])
+      assert payload["summary"]["errorCount"] == length(payload["errors"])
+      assert payload["summary"]["metadataReturned"] == Map.has_key?(payload, "metadata")
+      assert payload["summary"]["extensionPathReturned"] == false
+      assert payload["summary"]["cleanup"]["includesSourceCode"] == false
+      assert payload["summary"]["cleanup"]["includesFileContents"] == false
+      assert payload["summary"]["cleanup"]["includesCompileOutput"] == false
+      assert payload["summary"]["cleanup"]["includesRawProcessState"] == false
+      assert payload["summary"]["cleanup"]["includesCredentialValues"] == false
+      assert payload["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "returns invalid_request when module param missing" do
@@ -98,6 +114,10 @@ defmodule LemonControlPlane.Methods.SystemReloadTest do
       assert payload["target"] == inspect(path)
       assert payload["status"] in ["ok", "partial", "error"]
       assert is_list(payload["results"])
+      assert payload["summary"]["kind"] == "extension"
+      assert payload["summary"]["extensionPathReturned"] == true
+      assert payload["summary"]["cleanup"]["includesSourceCode"] == false
+      assert payload["summary"]["cleanup"]["includesFileContents"] == false
 
       _ = Lemon.Reload.soft_purge_module(SystemReloadExtensionOk)
     end
@@ -142,6 +162,9 @@ defmodule LemonControlPlane.Methods.SystemReloadTest do
       assert is_list(payload["results"])
       assert Enum.any?(payload["results"], &(&1["kind"] == "app"))
       assert Enum.any?(payload["results"], &(&1["kind"] == "extension"))
+      assert payload["summary"]["kind"] == "system"
+      assert payload["summary"]["resultCount"] == length(payload["results"])
+      assert payload["summary"]["extensionPathReturned"] == true
 
       _ = Lemon.Reload.soft_purge_module(SystemReloadAllExtensionOk)
     end

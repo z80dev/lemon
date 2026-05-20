@@ -39,7 +39,20 @@ defmodule LemonControlPlane.Methods.WizardCancel do
 
             WizardStore.put(wizard_id, updated)
 
-            {:ok, %{"success" => true}}
+            {:ok,
+             %{
+               "success" => true,
+               "summary" => %{
+                 "action" => name(),
+                 "success" => true,
+                 "wizardIdReturned" => false,
+                 "cleanup" => %{
+                   "includesWizardData" => false,
+                   "includesSecretValues" => false,
+                   "includesCredentialValues" => false
+                 }
+               }
+             }}
           end
       end
     end

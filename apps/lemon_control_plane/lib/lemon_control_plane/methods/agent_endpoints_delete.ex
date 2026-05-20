@@ -26,13 +26,33 @@ defmodule LemonControlPlane.Methods.AgentEndpointsDelete do
       true ->
         case LemonRouter.delete_agent_endpoint(agent_id, name) do
           :ok ->
+            trimmed_agent_id = String.trim(agent_id)
+            trimmed_name = String.trim(name)
+
             {:ok,
-             %{"ok" => true, "agentId" => String.trim(agent_id), "name" => String.trim(name)}}
+             %{
+               "ok" => true,
+               "agentId" => trimmed_agent_id,
+               "name" => trimmed_name,
+               "summary" => summary(trimmed_agent_id, trimmed_name)
+             }}
 
           {:error, reason} ->
             {:error, {:invalid_request, "Failed to delete endpoint alias", inspect(reason)}}
         end
     end
+  end
+
+  defp summary(agent_id, name) do
+    %{
+      "agentId" => agent_id,
+      "name" => name,
+      "deleted" => true,
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp get_param(params, key) when is_map(params) and is_binary(key) do

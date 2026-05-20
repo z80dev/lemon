@@ -7,9 +7,22 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
     assert ModelsList.name() == "models.list"
     assert ModelsList.scopes() == [:read]
 
-    assert {:ok, %{"models" => models}} = ModelsList.handle(%{}, %{})
+    assert {:ok,
+            %{
+              "models" => models,
+              "summary" => summary,
+              "includesCredentials" => false,
+              "includesSecretValues" => false
+            }} = ModelsList.handle(%{}, %{})
 
     assert length(models) > 3
+    assert summary["source"] in ["ai_models", "fallback"]
+    assert summary["total"] == length(models)
+    assert summary["providerCount"] >= 1
+    assert is_list(summary["providers"])
+    assert is_integer(summary["visionModelCount"])
+    assert is_integer(summary["thinkingModelCount"])
+    assert is_integer(summary["streamingModelCount"])
 
     assert Enum.any?(models, fn model ->
              model["provider"] == "anthropic" and model["id"] == "claude-3-5-haiku-20241022" and

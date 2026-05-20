@@ -54,7 +54,21 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
            %{
              "verified" => true,
              "identity" => identity,
-             "token" => token
+             "token" => token,
+             "summary" => %{
+               "verified" => true,
+               "identityType" => identity["type"],
+               "identityId" => identity_id(identity),
+               "tokenTtlMs" => @token_ttl_ms,
+               "credentialDelivery" => %{
+                 "includesSessionToken" => true
+               },
+               "cleanup" => %{
+                 "includesChallenge" => false,
+                 "includesChallengeToken" => false,
+                 "includesSecretValues" => false
+               }
+             }
            }}
 
         {:error, reason} ->
@@ -129,4 +143,8 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
     :crypto.strong_rand_bytes(32)
     |> Base.url_encode64(padding: false)
   end
+
+  defp identity_id(%{"nodeId" => node_id}), do: node_id
+  defp identity_id(%{"deviceId" => device_id}), do: device_id
+  defp identity_id(_), do: nil
 end

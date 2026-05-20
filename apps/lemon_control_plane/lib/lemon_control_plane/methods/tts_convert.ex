@@ -64,7 +64,23 @@ defmodule LemonControlPlane.Methods.TtsConvert do
                "success" => true,
                "provider" => active_provider,
                "format" => format,
-               "data" => Base.encode64(audio_data)
+               "data" => Base.encode64(audio_data),
+               "summary" => %{
+                 "action" => name(),
+                 "provider" => active_provider,
+                 "format" => format,
+                 "textChars" => String.length(text),
+                 "audioBytes" => byte_size(audio_data),
+                 "audioDataReturned" => true,
+                 "voiceReturned" => not is_nil(voice),
+                 "cleanup" => %{
+                   "includesText" => false,
+                   "includesVoice" => not is_nil(voice),
+                   "includesAudioData" => true,
+                   "includesCredentialValues" => false,
+                   "includesSecretValues" => false
+                 }
+               }
              }}
 
           {:error, :not_implemented, message} ->

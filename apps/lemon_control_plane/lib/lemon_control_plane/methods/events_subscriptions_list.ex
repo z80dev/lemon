@@ -31,10 +31,20 @@ defmodule LemonControlPlane.Methods.EventsSubscriptionsList do
     conn_id = ctx[:conn_id]
 
     subscriptions =
-      if conn_id do
-        get_connection_subscriptions(conn_id)
-      else
-        []
+      cond do
+        ctx[:subscription_mode] == :all ->
+          ["all"]
+
+        match?(%MapSet{}, ctx[:subscriptions]) ->
+          ctx[:subscriptions]
+          |> MapSet.to_list()
+          |> Enum.sort()
+
+        conn_id ->
+          get_connection_subscriptions(conn_id)
+
+        true ->
+          []
       end
 
     # Extract run subscriptions from the full list
@@ -43,29 +53,44 @@ defmodule LemonControlPlane.Methods.EventsSubscriptionsList do
       |> Enum.filter(&String.starts_with?(&1, "run:"))
       |> Enum.map(&String.replace_prefix(&1, "run:", ""))
 
-    {:ok, %{
-      "subscriptions" => subscriptions,
-      "runSubscriptions" => run_subscriptions,
-      "count" => length(subscriptions)
-    }}
+    {:ok,
+     %{
+       "subscriptions" => subscriptions,
+       "runSubscriptions" => run_subscriptions,
+       "count" => length(subscriptions),
+       "summary" => summary(subscriptions, run_subscriptions, conn_id)
+     }}
   end
 
   defp get_connection_subscriptions(conn_id) do
-    case Process.whereis(LemonControlPlane.WS.ConnectionRegistry) do
+    case Process.whereis(LemonControlPlane.ConnectionRegistry) do
       nil ->
         []
 
       registry ->
         case Registry.lookup(registry, conn_id) do
           [{_pid, _}] ->
-            # Request subscriptions from the connection process
-            # This is a simplified version - in production this might use a GenServer.call
-            # For now, return empty list as subscriptions are tracked per-connection
             []
 
           [] ->
             []
         end
     end
+  end
+
+  defp summary(subscriptions, run_subscriptions, conn_id) do
+    %{
+      "topicCount" => length(subscriptions),
+      "runSubscriptionCount" => length(run_subscriptions),
+      "sessionSubscriptionCount" =>
+        Enum.count(subscriptions, &String.starts_with?(&1, "session:")),
+      "hasConnection" => is_binary(conn_id) and conn_id != "",
+      "cleanup" => %{
+        "includesPayloads" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

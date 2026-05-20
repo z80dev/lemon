@@ -38,13 +38,28 @@ defmodule LemonControlPlane.Methods.ConfigSchema do
         "defaultTimeout" => %{
           "type" => "integer",
           "minimum" => 1000,
-          "maximum" => 3600000,
-          "default" => 300000,
+          "maximum" => 3_600_000,
+          "default" => 300_000,
           "description" => "Default timeout for agent runs (ms)"
         }
       }
     }
 
-    {:ok, %{"schema" => schema}}
+    {:ok, %{"schema" => schema, "summary" => summary(schema)}}
+  end
+
+  defp summary(schema) do
+    properties = Map.get(schema, "properties", %{})
+
+    %{
+      "type" => schema["type"],
+      "propertyCount" => map_size(properties),
+      "propertyKeys" => Map.keys(properties),
+      "cleanup" => %{
+        "includesValues" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

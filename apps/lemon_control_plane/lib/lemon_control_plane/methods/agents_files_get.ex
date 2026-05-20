@@ -29,16 +29,36 @@ defmodule LemonControlPlane.Methods.AgentsFilesGet do
           {:error, Errors.not_found("File not found: #{file_name}")}
 
         file ->
+          content = file[:content] || file["content"] || ""
+          type = to_string(file[:type] || file["type"] || "text")
+          updated_at = file[:updated_at] || file["updatedAt"] || file[:updated_at_ms]
+
           {:ok,
            %{
              "agentId" => agent_id,
              "fileName" => file_name,
-             "content" => file[:content] || file["content"] || "",
-             "type" => to_string(file[:type] || file["type"] || "text"),
-             "updatedAt" => file[:updated_at] || file["updatedAt"] || file[:updated_at_ms]
+             "content" => content,
+             "type" => type,
+             "updatedAt" => updated_at,
+             "summary" => summary(agent_id, file_name, content, type, updated_at)
            }}
       end
     end
+  end
+
+  defp summary(agent_id, file_name, content, type, updated_at) do
+    %{
+      "agentId" => agent_id,
+      "fileName" => file_name,
+      "type" => type,
+      "sizeBytes" => byte_size(to_string(content)),
+      "contentReturned" => true,
+      "hasUpdatedAt" => not is_nil(updated_at),
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp get_agent_file(agent_id, file_name) do

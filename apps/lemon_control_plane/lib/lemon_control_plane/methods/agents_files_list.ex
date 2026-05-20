@@ -25,9 +25,28 @@ defmodule LemonControlPlane.Methods.AgentsFilesList do
     {:ok,
      %{
        "agentId" => agent_id,
-       "files" => files
+       "files" => files,
+       "summary" => summary(agent_id, files)
      }}
   end
+
+  defp summary(agent_id, files) do
+    %{
+      "agentId" => agent_id,
+      "fileCount" => length(files),
+      "totalSizeBytes" => Enum.reduce(files, 0, &(&2 + file_size(&1))),
+      "typeCounts" => Enum.frequencies_by(files, &(&1["type"] || "unknown")),
+      "hasFiles" => files != [],
+      "cleanup" => %{
+        "includesFileContent" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp file_size(file) when is_map(file), do: file["size"] || 0
+  defp file_size(_file), do: 0
 
   defp list_agent_files(agent_id) do
     # Files are stored with compound key {agent_id, file_name} by agents.files.set

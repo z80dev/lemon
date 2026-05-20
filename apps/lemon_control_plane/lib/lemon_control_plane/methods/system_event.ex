@@ -44,6 +44,16 @@ defmodule LemonControlPlane.Methods.SystemEvent do
     "custom" => :custom_event
   }
 
+  @allowed_targets [
+    "system",
+    "channels",
+    "cron",
+    "exec_approvals",
+    "goals",
+    "nodes",
+    "presence"
+  ]
+
   @impl true
   def name, do: "system-event"
 
@@ -58,20 +68,30 @@ defmodule LemonControlPlane.Methods.SystemEvent do
 
   @impl true
   def handle(params, ctx) do
-    event_type = params["eventType"] || params["event_type"]
-    payload = params["payload"] || %{}
-    target = params["target"]
+    params = params || %{}
+    event_type = params["eventType"] || params["event_type"] || params[:event_type]
+    payload = params["payload"] || params[:payload] || %{}
+    target = params["target"] || params[:target]
 
-    if is_nil(event_type) or event_type == "" do
-      {:error, {:invalid_request, "eventType is required", nil}}
-    else
-      case validate_and_convert_event_type(event_type) do
-        {:ok, atom_type, is_custom} ->
-          emit_event(event_type, atom_type, payload, target, ctx, is_custom)
+    cond do
+      is_nil(event_type) or event_type == "" ->
+        {:error, {:invalid_request, "eventType is required", nil}}
 
-        {:error, reason} ->
-          {:error, {:invalid_request, reason, nil}}
-      end
+      not is_map(payload) ->
+        {:error, {:invalid_request, "payload must be an object", nil}}
+
+      true ->
+        case validate_and_convert_event_type(event_type) do
+          {:ok, atom_type, is_custom} ->
+            with {:ok, topic} <- validate_target(target) do
+              emit_event(event_type, atom_type, payload, topic, ctx, is_custom)
+            else
+              {:error, reason} -> {:error, {:invalid_request, reason, nil}}
+            end
+
+          {:error, reason} ->
+            {:error, {:invalid_request, reason, nil}}
+        end
     end
   end
 
@@ -88,12 +108,35 @@ defmodule LemonControlPlane.Methods.SystemEvent do
         {:ok, :custom_event, true}
 
       true ->
-        {:error, "Invalid event type '#{event_type}'. Allowed types: #{Enum.join(allowed_event_types(), ", ")}"}
+        {:error,
+         "Invalid event type '#{event_type}'. Allowed types: #{Enum.join(allowed_event_types(), ", ")}"}
     end
   end
 
-  defp emit_event(original_type, atom_type, payload, target, ctx, is_custom) do
-    # For custom events, include the original type in the payload
+  defp validate_and_convert_event_type(_), do: {:error, "eventType must be a string"}
+
+  defp validate_target(nil), do: {:ok, "system"}
+
+  defp validate_target(target) when is_binary(target) do
+    cond do
+      target in @allowed_targets ->
+        {:ok, target}
+
+      String.starts_with?(target, "run:") and byte_size(target) > 4 ->
+        {:ok, target}
+
+      String.starts_with?(target, "session:") and byte_size(target) > 8 ->
+        {:ok, target}
+
+      true ->
+        {:error,
+         "Invalid target '#{target}'. Allowed targets: #{Enum.join(@allowed_targets, ", ")}, run:<id>, or session:<key>"}
+    end
+  end
+
+  defp validate_target(_), do: {:error, "target must be a string"}
+
+  defp emit_event(original_type, atom_type, payload, topic, ctx, is_custom) do
     final_payload =
       if is_custom do
         Map.put(payload, :custom_event_type, original_type)
@@ -108,31 +151,41 @@ defmodule LemonControlPlane.Methods.SystemEvent do
       meta: %{
         origin: :system_event,
         conn_id: ctx[:conn_id],
-        target: target,
+        target: topic,
         original_event_type: original_type
       }
     }
 
-    # Determine topic based on target
-    topic = determine_topic(target, original_type)
-
-    # Broadcast the event
     Bus.broadcast(topic, event)
 
-    {:ok, %{
-      "success" => true,
-      "eventType" => original_type,
-      "topic" => topic,
-      "timestamp" => event.ts_ms
-    }}
+    {:ok,
+     %{
+       "success" => true,
+       "eventType" => original_type,
+       "topic" => topic,
+       "timestamp" => event.ts_ms,
+       "summary" => summary(original_type, topic, event)
+     }}
   end
 
-  defp determine_topic(nil, _event_type), do: "system"
-  defp determine_topic("system", _event_type), do: "system"
-  defp determine_topic("run:" <> run_id, _event_type), do: "run:#{run_id}"
-  defp determine_topic("session:" <> session_key, _event_type), do: "session:#{session_key}"
-  defp determine_topic("channels", _event_type), do: "channels"
-  defp determine_topic("nodes", _event_type), do: "nodes"
-  defp determine_topic("cron", _event_type), do: "cron"
-  defp determine_topic(custom, _event_type), do: custom
+  defp summary(original_type, topic, event) do
+    %{
+      "eventType" => original_type,
+      "topic" => topic,
+      "targetKind" => target_kind(topic),
+      "timestampMs" => event.ts_ms,
+      "payloadKeyCount" => map_size(event.payload),
+      "custom" => String.starts_with?(original_type, "custom_"),
+      "cleanup" => %{
+        "includesPayload" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp target_kind("run:" <> _), do: "run"
+  defp target_kind("session:" <> _), do: "session"
+  defp target_kind(topic), do: topic
 end

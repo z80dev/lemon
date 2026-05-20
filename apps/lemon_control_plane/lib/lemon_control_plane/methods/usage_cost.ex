@@ -81,8 +81,32 @@ defmodule LemonControlPlane.Methods.UsageCost do
         result
       end
 
-    {:ok, result}
+    {:ok, Map.put(result, "summary", summary(result, group_by))}
   end
+
+  defp summary(result, group_by) do
+    %{
+      "groupBy" => group_by,
+      "providerCount" => result["breakdown"] |> Map.keys() |> length(),
+      "dailyReturned" => Map.has_key?(result, "daily"),
+      "dailyCount" => result |> Map.get("daily", %{}) |> map_size(),
+      "totalRequests" => result["totalRequests"] || 0,
+      "totalTokenCount" => total_token_count(result["totalTokens"]),
+      "cleanup" => %{
+        "includesPrompts" => false,
+        "includesResponses" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp total_token_count(tokens) when is_map(tokens) do
+    (get_field(tokens, :input) || 0) + (get_field(tokens, :output) || 0)
+  end
+
+  defp total_token_count(_), do: 0
 
   @doc """
   Record a usage event for cost tracking.
@@ -158,20 +182,24 @@ defmodule LemonControlPlane.Methods.UsageCost do
         %{
           total_cost: 0.0,
           breakdown: %{},
+          requests: %{},
           total_requests: 0,
           total_tokens: %{input: 0, output: 0}
         }
 
-    updated = %{
-      summary
-      | total_cost: (get_field(summary, :total_cost) || 0.0) + cost,
+    updated =
+      Map.merge(summary, %{
+        total_cost: (get_field(summary, :total_cost) || 0.0) + cost,
         breakdown: update_breakdown(get_field(summary, :breakdown) || %{}, provider, cost),
+        requests: update_count(get_field(summary, :requests) || %{}, provider, 1),
+        tokens:
+          update_tokens(get_field(summary, :tokens) || %{}, provider, input_tokens, output_tokens),
         total_requests: (get_field(summary, :total_requests) || 0) + 1,
         total_tokens: %{
           input: (get_in_field(summary, [:total_tokens, :input]) || 0) + input_tokens,
           output: (get_in_field(summary, [:total_tokens, :output]) || 0) + output_tokens
         }
-    }
+      })
 
     UsageStore.put_summary(:current, updated)
   end

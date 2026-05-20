@@ -34,14 +34,38 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
       |> Enum.sort_by(& &1["transportId"])
 
     enabled_count = Enum.count(transports, &(&1["enabled"] == true))
+    disabled_count = length(transports) - enabled_count
 
     {:ok,
      %{
        "registryRunning" => registry_running?,
+       "registryModule" => module_name(transport_registry_module()),
+       "registryLoaded" => Code.ensure_loaded?(transport_registry_module()),
        "transports" => transports,
        "total" => length(transports),
-       "enabled" => enabled_count
+       "enabled" => enabled_count,
+       "disabled" => disabled_count,
+       "summary" => %{
+         "status" => summary_status(registry_running?, transports),
+         "configuredCount" => length(transports),
+         "enabledCount" => enabled_count,
+         "disabledCount" => disabled_count,
+         "moduleLoadedCount" => Enum.count(transports, &is_binary(&1["module"])),
+         "moduleMissingCount" => Enum.count(transports, &is_nil(&1["module"])),
+         "cleanup" => %{
+           "includesCredentialValues" => false,
+           "includesRawConfig" => false,
+           "includesSecretNames" => false
+         }
+       }
      }}
+  end
+
+  defp summary_status(false, _transports), do: "registry_stopped"
+  defp summary_status(true, []), do: "empty"
+
+  defp summary_status(true, transports) do
+    if Enum.any?(transports, &(&1["enabled"] == true)), do: "enabled", else: "disabled"
   end
 
   defp transport_registry_running? do

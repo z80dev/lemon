@@ -2,12 +2,13 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
   use ExUnit.Case, async: true
 
   @moduledoc """
-  Tests for the 5 new control-plane monitoring method implementations:
+  Tests for the control-plane monitoring method implementations:
   - RunsActiveList
   - RunsRecentList
   - TasksActiveList
   - TasksRecentList
   - RunGraphGet
+  - RunIntrospectionList
   """
 
   describe "RunsActiveList" do
@@ -76,6 +77,19 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert Map.has_key?(result, "runs")
       assert Map.has_key?(result, "total")
       assert Map.has_key?(result, "filters")
+    end
+
+    test "handle/2 returns run summary and cleanup flags" do
+      {:ok, result} = RunsActiveList.handle(%{"agentId" => "agent-1"}, %{})
+
+      assert result["summary"]["count"] == result["total"]
+      assert is_map(result["summary"]["statusCounts"])
+      assert is_map(result["summary"]["engineCounts"])
+      assert result["summary"]["filtersApplied"] == ["agentId"]
+      assert result["summary"]["cleanup"]["includesRunEvents"] == false
+      assert result["summary"]["cleanup"]["includesRunRecords"] == false
+      assert result["summary"]["cleanup"]["includesCredentials"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "handle/2 with combined filters returns valid response" do
@@ -165,6 +179,20 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert Map.has_key?(result, "filters")
     end
 
+    test "handle/2 returns recent run summary and cleanup flags" do
+      {:ok, result} = RunsRecentList.handle(%{"status" => "completed"}, %{})
+
+      assert result["summary"]["count"] == result["total"]
+      assert is_map(result["summary"]["statusCounts"])
+      assert is_map(result["summary"]["engineCounts"])
+      assert is_integer(result["summary"]["okCount"])
+      assert is_integer(result["summary"]["errorCount"])
+      assert result["summary"]["filtersApplied"] == ["status"]
+      assert result["summary"]["cleanup"]["includesRunEvents"] == false
+      assert result["summary"]["cleanup"]["includesRunRecords"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+    end
+
     test "handle/2 filters always contains status key" do
       {:ok, result} = RunsRecentList.handle(%{}, %{})
       assert Map.has_key?(result["filters"], "status")
@@ -249,6 +277,21 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert Map.has_key?(result, "tasks")
       assert Map.has_key?(result, "total")
       assert Map.has_key?(result, "filters")
+    end
+
+    test "handle/2 returns active task summary and truthful include flags" do
+      {:ok, result} =
+        TasksActiveList.handle(%{"runId" => "run-1", "includeEvents" => true}, %{})
+
+      assert result["summary"]["count"] == result["total"]
+      assert is_map(result["summary"]["statusCounts"])
+      assert is_map(result["summary"]["engineCounts"])
+      assert is_integer(result["summary"]["eventCount"])
+      assert is_integer(result["summary"]["reasoningCount"])
+      assert result["summary"]["filtersApplied"] == ["runId"]
+      assert result["summary"]["cleanup"]["includesTaskEvents"] == true
+      assert result["summary"]["cleanup"]["includesTaskRecords"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "handle/2 filters contains runId and agentId keys" do
@@ -340,6 +383,21 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert Map.has_key?(result, "filters")
     end
 
+    test "handle/2 returns recent task summary and truthful include flags" do
+      {:ok, result} =
+        TasksRecentList.handle(%{"status" => "error", "includeRecord" => true}, %{})
+
+      assert result["summary"]["count"] == result["total"]
+      assert is_map(result["summary"]["statusCounts"])
+      assert is_map(result["summary"]["engineCounts"])
+      assert is_integer(result["summary"]["eventCount"])
+      assert is_integer(result["summary"]["reasoningCount"])
+      assert result["summary"]["filtersApplied"] == ["status"]
+      assert result["summary"]["cleanup"]["includesTaskEvents"] == false
+      assert result["summary"]["cleanup"]["includesTaskRecords"] == true
+      assert result["summary"]["cleanup"]["includesCredentials"] == false
+    end
+
     test "handle/2 filters always contains status key" do
       {:ok, result} = TasksRecentList.handle(%{}, %{})
       assert Map.has_key?(result["filters"], "status")
@@ -391,6 +449,15 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert is_map(result["graph"])
       assert is_integer(result["nodeCount"])
       assert result["nodeCount"] >= 1
+      assert result["summary"]["action"] == "run.graph.get"
+      assert result["summary"]["runIdReturned"] == true
+      assert result["summary"]["graphReturned"] == true
+      assert result["summary"]["nodeCount"] == result["nodeCount"]
+      assert result["summary"]["statusCounts"][result["graph"]["status"]] >= 1
+      assert result["summary"]["cleanup"]["includesFullGraph"] == true
+      assert result["summary"]["cleanup"]["includesRawRunRecord"] == false
+      assert result["summary"]["cleanup"]["includesRawRunEvents"] == false
+      assert result["summary"]["cleanup"]["includesIntrospectionPayloads"] == false
     end
 
     test "handle/2 graph contains runId, status, and children" do
@@ -455,6 +522,10 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert result["options"]["runEventLimit"] == 25
       assert result["options"]["includeIntrospection"] == true
       assert result["options"]["introspectionLimit"] == 30
+      assert result["summary"]["options"] == result["options"]
+      assert result["summary"]["cleanup"]["includesRawRunRecord"] == true
+      assert result["summary"]["cleanup"]["includesRawRunEvents"] == true
+      assert result["summary"]["cleanup"]["includesIntrospectionPayloads"] == true
     end
 
     test "handle/2 includes optional runRecord and introspection keys when requested" do
@@ -471,6 +542,67 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       graph = result["graph"]
       assert Map.has_key?(graph, "runRecord")
       assert Map.has_key?(graph, "introspection")
+    end
+  end
+
+  describe "RunIntrospectionList" do
+    alias LemonControlPlane.Methods.RunIntrospectionList
+
+    test "name/0 returns correct method name" do
+      assert RunIntrospectionList.name() == "run.introspection.list"
+    end
+
+    test "scopes/0 returns read scope" do
+      assert RunIntrospectionList.scopes() == [:read]
+    end
+
+    test "handle/2 requires runId" do
+      {:error, error} = RunIntrospectionList.handle(%{}, %{})
+      assert match?({:bad_request, _, _}, error)
+    end
+
+    test "handle/2 returns timeline summary and cleanup flags" do
+      {:ok, result} =
+        RunIntrospectionList.handle(
+          %{
+            "runId" => "run-introspection-check",
+            "limit" => 10,
+            "includeRunRecord" => false,
+            "includeRunEvents" => false
+          },
+          %{}
+        )
+
+      assert result["runId"] == "run-introspection-check"
+      assert is_list(result["events"])
+      assert result["total"] == length(result["events"])
+      assert result["summary"]["action"] == "run.introspection.list"
+      assert result["summary"]["runIdReturned"] == true
+      assert result["summary"]["eventCount"] == result["total"]
+      assert result["summary"]["eventTypes"] == result["eventTypes"]
+      assert result["summary"]["runRecordReturned"] == false
+      assert result["summary"]["options"] == result["options"]
+      assert result["summary"]["cleanup"]["includesEventPayloads"] == true
+      assert result["summary"]["cleanup"]["includesRawRunRecord"] == false
+      assert result["summary"]["cleanup"]["includesRawRunEvents"] == false
+    end
+
+    test "handle/2 reports requested run-store internals" do
+      {:ok, result} =
+        RunIntrospectionList.handle(
+          %{
+            "runId" => "run-introspection-internals",
+            "includeRunRecord" => true,
+            "includeRunEvents" => true,
+            "runEventLimit" => 5
+          },
+          %{}
+        )
+
+      assert result["summary"]["options"]["includeRunRecord"] == true
+      assert result["summary"]["options"]["includeRunEvents"] == true
+      assert result["summary"]["cleanup"]["includesRawRunRecord"] == true
+      assert result["summary"]["cleanup"]["includesRawRunEvents"] == true
     end
   end
 end

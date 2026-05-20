@@ -32,7 +32,21 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
 
       case apply_session_patch(session_key, patch) do
         :ok ->
-          {:ok, %{"success" => true, "sessionKey" => session_key}}
+          {:ok,
+           %{
+             "success" => true,
+             "sessionKey" => session_key,
+             "summary" => %{
+               "sessionKey" => session_key,
+               "patchedKeys" => patch_keys(patch),
+               "patchedCount" => map_size(patch),
+               "cleanup" => %{
+                 "includesToolPolicy" => false,
+                 "includesModel" => false,
+                 "includesSecretValues" => false
+               }
+             }
+           }}
 
         {:error, reason} ->
           {:error, {:internal_error, "Failed to patch session", reason}}
@@ -48,5 +62,12 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
     :ok
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp patch_keys(patch) do
+    patch
+    |> Map.keys()
+    |> Enum.map(&Atom.to_string/1)
+    |> Enum.sort()
   end
 end

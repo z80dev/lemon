@@ -8,8 +8,11 @@ defmodule LemonControlPlane.EventBridge do
   ## Topics Subscribed
 
   - `run:*` - Run lifecycle events (agent, chat events, task lifecycle)
+  - `session:*` - Session lifecycle and task events
+  - `channels` - Channel-related events
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
+  - `goals` - Durable goal lifecycle events
   - `system` - System events (shutdown, health, tick, talk.mode)
   - `nodes` - Node pairing events
   - `presence` - Presence events
@@ -24,16 +27,30 @@ defmodule LemonControlPlane.EventBridge do
   | :run_completed           | agent                     |
   | :delta                   | chat                      |
   | :engine_action           | agent (type: tool_use)    |
+  | :checkpoint_created      | agent (type: checkpoint_created) |
+  | :checkpoint_restored     | agent (type: checkpoint_restored) |
+  | :checkpoint_deleted      | agent (type: checkpoint_deleted) |
+  | :goal_set                | goal                      |
+  | :goal_paused             | goal                      |
+  | :goal_resumed            | goal                      |
+  | :goal_completed          | goal                      |
+  | :goal_cleared            | goal                      |
+  | :goal_continuation_submitted | goal                  |
+  | :goal_loop_verdict       | goal                      |
+  | :goal_loop_status        | goal                      |
   | :approval_requested      | exec.approval.requested   |
   | :approval_resolved       | exec.approval.resolved    |
   | :cron_run_started        | cron                      |
   | :cron_run_completed      | cron                      |
+  | :cron_lifecycle_action   | cron.audit                |
   | :cron_tick               | tick                      |
   | :tick                    | tick                      |
   | :presence_changed        | presence                  |
   | :talk_mode_changed       | talk.mode                 |
   | :heartbeat               | heartbeat                 |
   | :heartbeat_alert         | heartbeat                 |
+  | :metrics                 | metrics                   |
+  | :log                     | log                       |
   | :node_pair_requested     | node.pair.requested       |
   | :node_pair_resolved      | node.pair.resolved        |
   | :node_invoke_request     | node.invoke.request       |
@@ -63,7 +80,9 @@ defmodule LemonControlPlane.EventBridge do
 
   @bus_topics [
     "exec_approvals",
+    "channels",
     "cron",
+    "goals",
     "system",
     "nodes",
     "presence"
@@ -80,14 +99,28 @@ defmodule LemonControlPlane.EventBridge do
   Subscribe to run events for a specific run_id.
   """
   def subscribe_run(run_id) do
-    GenServer.cast(__MODULE__, {:subscribe_run, run_id})
+    subscribe_topics(["run:#{run_id}"])
   end
 
   @doc """
   Unsubscribe from run events.
   """
   def unsubscribe_run(run_id) do
-    GenServer.cast(__MODULE__, {:unsubscribe_run, run_id})
+    unsubscribe_topics(["run:#{run_id}"])
+  end
+
+  @doc """
+  Subscribe the bridge to dynamic bus topics needed by active clients.
+  """
+  def subscribe_topics(topics) when is_list(topics) do
+    GenServer.cast(__MODULE__, {:subscribe_topics, topics})
+  end
+
+  @doc """
+  Release bridge subscriptions for dynamic bus topics no longer needed.
+  """
+  def unsubscribe_topics(topics) when is_list(topics) do
+    GenServer.cast(__MODULE__, {:unsubscribe_topics, topics})
   end
 
   @impl true
@@ -104,19 +137,28 @@ defmodule LemonControlPlane.EventBridge do
     {:ok,
      %{
        run_subscriptions: MapSet.new(),
+       topic_ref_counts: %{},
        state_versions: state_versions
      }}
   end
 
   @impl true
-  def handle_cast({:subscribe_run, run_id}, state) do
-    Bus.subscribe("run:#{run_id}")
-    {:noreply, %{state | run_subscriptions: MapSet.put(state.run_subscriptions, run_id)}}
+  def handle_cast({:subscribe_topics, topics}, state) do
+    state =
+      topics
+      |> Enum.filter(&dynamic_topic?/1)
+      |> Enum.reduce(state, &subscribe_dynamic_topic/2)
+
+    {:noreply, state}
   end
 
-  def handle_cast({:unsubscribe_run, run_id}, state) do
-    Bus.unsubscribe("run:#{run_id}")
-    {:noreply, %{state | run_subscriptions: MapSet.delete(state.run_subscriptions, run_id)}}
+  def handle_cast({:unsubscribe_topics, topics}, state) do
+    state =
+      topics
+      |> Enum.filter(&dynamic_topic?/1)
+      |> Enum.reduce(state, &unsubscribe_dynamic_topic/2)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -154,6 +196,7 @@ defmodule LemonControlPlane.EventBridge do
   defp state_version_key_for(:cron_tick), do: :cron
   defp state_version_key_for(:cron_run_started), do: :cron
   defp state_version_key_for(:cron_run_completed), do: :cron
+  defp state_version_key_for(:cron_lifecycle_action), do: :cron
   defp state_version_key_for(:cron_job_created), do: :cron
   defp state_version_key_for(:cron_job_updated), do: :cron
   defp state_version_key_for(:cron_job_deleted), do: :cron
@@ -220,6 +263,57 @@ defmodule LemonControlPlane.EventBridge do
     )
   rescue
     _ -> :ok
+  end
+
+  defp dynamic_topic?(topic) when is_binary(topic) do
+    String.starts_with?(topic, "run:") || String.starts_with?(topic, "session:")
+  end
+
+  defp dynamic_topic?(_), do: false
+
+  defp subscribe_dynamic_topic(topic, state) do
+    count = Map.get(state.topic_ref_counts, topic, 0)
+
+    if count == 0 do
+      Bus.subscribe(topic)
+    end
+
+    ref_counts = Map.put(state.topic_ref_counts, topic, count + 1)
+    %{state | topic_ref_counts: ref_counts, run_subscriptions: run_subscription_set(ref_counts)}
+  end
+
+  defp unsubscribe_dynamic_topic(topic, state) do
+    case Map.get(state.topic_ref_counts, topic, 0) do
+      count when count > 1 ->
+        ref_counts = Map.put(state.topic_ref_counts, topic, count - 1)
+
+        %{
+          state
+          | topic_ref_counts: ref_counts,
+            run_subscriptions: run_subscription_set(ref_counts)
+        }
+
+      1 ->
+        Bus.unsubscribe(topic)
+        ref_counts = Map.delete(state.topic_ref_counts, topic)
+
+        %{
+          state
+          | topic_ref_counts: ref_counts,
+            run_subscriptions: run_subscription_set(ref_counts)
+        }
+
+      _ ->
+        state
+    end
+  end
+
+  defp run_subscription_set(ref_counts) do
+    ref_counts
+    |> Map.keys()
+    |> Enum.filter(&String.starts_with?(&1, "run:"))
+    |> Enum.map(&String.replace_prefix(&1, "run:", ""))
+    |> MapSet.new()
   end
 
   defp get_connected_clients do
@@ -301,27 +395,78 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  # Approval events
-  defp map_event_type(:approval_requested, payload, _meta) do
-    pending = payload[:pending] || payload
-
-    {"exec.approval.requested",
+  defp map_event_type(type, payload, meta)
+       when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] do
+    {"agent",
      %{
-       "approvalId" => pending[:id] || payload[:approval_id],
-       "runId" => pending[:run_id],
-       "sessionKey" => pending[:session_key],
-       "agentId" => pending[:agent_id],
-       "tool" => pending[:tool],
-       "rationale" => pending[:rationale],
-       "expiresAtMs" => pending[:expires_at_ms]
+       "type" => Atom.to_string(type),
+       "runId" => get_field(meta, :run_id),
+       "sessionKey" => get_field(meta, :session_key),
+       "checkpointId" => get_field(payload, :checkpoint_id),
+       "checkpointKind" => get_field(payload, :checkpoint_kind),
+       "tool" => get_field(payload, :tool),
+       "action" => get_field(payload, :action),
+       "pathCount" => get_field(payload, :path_count),
+       "paths" => get_field(payload, :paths),
+       "restoredCount" => get_field(payload, :restored_count)
      }}
   end
 
-  defp map_event_type(:approval_resolved, payload, _meta) do
+  defp map_event_type(type, payload, meta)
+       when type in [
+              :goal_set,
+              :goal_paused,
+              :goal_resumed,
+              :goal_completed,
+              :goal_cleared,
+              :goal_continuation_submitted,
+              :goal_loop_verdict,
+              :goal_loop_status
+            ] do
+    {"goal",
+     %{
+       "type" => Atom.to_string(type),
+       "sessionKey" => get_field(meta, :session_key) || get_field(payload, :session_key),
+       "goalId" => get_field(payload, :goal_id),
+       "agentId" => get_field(payload, :agent_id),
+       "status" => get_field(payload, :status),
+       "objectiveBytes" => get_field(payload, :objective_bytes),
+       "continuationCount" => get_field(payload, :continuation_count),
+       "lastRunId" => get_field(payload, :last_run_id),
+       "loopStatus" => get_field(payload, :loop_status),
+       "loopVerdict" => get_field(payload, :loop_verdict)
+     }}
+  end
+
+  # Approval events
+  defp map_event_type(:approval_requested, payload, _meta) do
+    pending = get_field(payload, :pending) || payload
+
+    {"exec.approval.requested",
+     %{
+       "approvalId" => get_field(pending, :id) || get_field(payload, :approval_id),
+       "runId" => get_field(pending, :run_id),
+       "sessionKey" => get_field(pending, :session_key),
+       "agentId" => get_field(pending, :agent_id),
+       "tool" => get_field(pending, :tool),
+       "action" => stringify_keys(get_field(pending, :action) || %{}),
+       "rationale" => get_field(pending, :rationale),
+       "requestedAtMs" => get_field(pending, :requested_at_ms),
+       "expiresAtMs" => get_field(pending, :expires_at_ms)
+     }}
+  end
+
+  defp map_event_type(:approval_resolved, payload, meta) do
+    pending = get_field(payload, :pending) || %{}
+
     {"exec.approval.resolved",
      %{
-       "approvalId" => payload[:approval_id],
-       "decision" => to_string(payload[:decision])
+       "approvalId" => get_field(payload, :approval_id),
+       "decision" => to_string(get_field(payload, :decision) || :resolved),
+       "runId" => get_field(pending, :run_id) || get_field(meta, :run_id),
+       "sessionKey" => get_field(pending, :session_key) || get_field(meta, :session_key),
+       "agentId" => get_field(pending, :agent_id),
+       "tool" => get_field(pending, :tool)
      }}
   end
 
@@ -359,6 +504,25 @@ defmodule LemonControlPlane.EventBridge do
        "sessionKey" => payload[:session_key],
        "durationMs" => payload[:duration_ms] || run[:duration_ms],
        "error" => payload[:error] || run[:error]
+     }}
+  end
+
+  defp map_event_type(:cron_lifecycle_action, payload, _meta) do
+    audit = payload[:audit] || payload
+
+    {"cron.audit",
+     %{
+       "type" => get_field(audit, :action),
+       "auditId" => get_field(audit, :id),
+       "jobId" => get_field(audit, :job_id),
+       "cronRunId" => get_field(audit, :run_id),
+       "runId" => get_field(audit, :router_run_id) || get_field(audit, :run_id),
+       "source" => get_field(audit, :source),
+       "status" => get_field(audit, :status),
+       "triggeredBy" => get_field(audit, :triggered_by),
+       "reason" => get_field(audit, :reason),
+       "changedFields" => get_field(audit, :changed_fields) || [],
+       "tsMs" => get_field(audit, :ts_ms)
      }}
   end
 
@@ -437,6 +601,29 @@ defmodule LemonControlPlane.EventBridge do
        "jobId" => payload[:job_id],
        "timestampMs" => System.system_time(:millisecond)
      }}
+  end
+
+  defp map_event_type(:metrics, payload, meta) do
+    {"metrics",
+     add_target_fields(
+       %{
+         "payload" => stringify_keys(payload || %{}),
+         "timestampMs" => System.system_time(:millisecond)
+       },
+       meta
+     )}
+  end
+
+  defp map_event_type(:log, payload, meta) do
+    {"log",
+     add_target_fields(
+       %{
+         "level" => get_field(payload, :level),
+         "message" => truncate(get_field(payload, :message), 500),
+         "timestampMs" => get_field(payload, :timestamp_ms) || System.system_time(:millisecond)
+       },
+       meta
+     )}
   end
 
   # Node events
@@ -528,11 +715,14 @@ defmodule LemonControlPlane.EventBridge do
     custom_type = meta[:original_event_type] || payload[:custom_event_type] || "custom"
 
     {"custom",
-     %{
-       "type" => custom_type,
-       "payload" => payload,
-       "timestampMs" => System.system_time(:millisecond)
-     }}
+     add_target_fields(
+       %{
+         "type" => custom_type,
+         "payload" => payload,
+         "timestampMs" => System.system_time(:millisecond)
+       },
+       meta
+     )}
   end
 
   # Task lifecycle events
@@ -649,6 +839,33 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   defp get_field(_, _), do: nil
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
+  end
+
+  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  defp stringify_keys(value), do: value
+
+  defp add_target_fields(payload, meta) do
+    meta
+    |> target_fields()
+    |> Enum.reduce(payload, fn {key, value}, acc ->
+      if is_binary(value) and value != "" do
+        Map.put(acc, key, value)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp target_fields(meta) do
+    case get_field(meta || %{}, :target) do
+      "run:" <> run_id -> [{"runId", run_id}]
+      "session:" <> session_key -> [{"sessionKey", session_key}]
+      _ -> []
+    end
+  end
 
   defp map_cron_job_event(type, payload) do
     job = payload[:job] || %{}

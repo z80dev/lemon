@@ -236,6 +236,8 @@ defmodule LemonControlPlane.Protocol.Frames do
       # Run/Agent events
       "agent",
       "chat",
+      # Durable goal events
+      "goal",
       # Presence
       "presence",
       # System events
@@ -244,9 +246,12 @@ defmodule LemonControlPlane.Protocol.Frames do
       "shutdown",
       "health",
       "heartbeat",
+      "metrics",
+      "log",
       # Cron events
       "cron",
       "cron.job",
+      "cron.audit",
       # Task / run-graph events
       "task.started",
       "task.completed",

@@ -94,7 +94,21 @@ defmodule LemonControlPlane.Methods.DevicePairApprove do
                %{
                  "success" => true,
                  "deviceToken" => device_token,
-                 "challengeToken" => challenge_token
+                 "challengeToken" => challenge_token,
+                 "summary" => %{
+                   "pairingId" => pairing_id,
+                   "success" => true,
+                   "deviceType" => device_type,
+                   "challengeExpiresAtMs" => challenge_expires_at,
+                   "credentialDelivery" => %{
+                     "includesDeviceToken" => true,
+                     "includesChallengeToken" => true
+                   },
+                   "cleanup" => %{
+                     "includesMetadata" => false,
+                     "includesSecretValues" => false
+                   }
+                 }
                }}
           end
       end

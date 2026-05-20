@@ -3,6 +3,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
   alias LemonControlPlane.EventBridge
   alias LemonControlPlane.Presence
+  alias LemonControlPlane.Protocol.Schemas
 
   setup do
     bridge =
@@ -83,6 +84,35 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       EventBridge.subscribe_run(run_id)
       assert :ok = EventBridge.unsubscribe_run(run_id)
+    end
+  end
+
+  describe "dynamic topic subscriptions" do
+    test "subscribes to session topics" do
+      session_key = "session_#{System.unique_integer()}"
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      assert :ok = EventBridge.subscribe_topics(["session:#{session_key}"])
+      Process.sleep(10)
+
+      event =
+        LemonCore.Event.new(
+          :task_completed,
+          %{task_id: "task-1", session_key: session_key, ok: true},
+          %{session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("session:#{session_key}", event)
+
+      assert_receive {:event, "task.completed",
+                      %{"taskId" => "task-1", "sessionKey" => ^session_key}, _state_version},
+                     1_000
+
+      assert :ok = EventBridge.unsubscribe_topics(["session:#{session_key}"])
+      Presence.unregister(conn_id)
     end
   end
 
@@ -169,6 +199,8 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
       flush_events()
+      EventBridge.subscribe_run(run_id)
+      Process.sleep(10)
 
       EventBridge.subscribe_run(run_id)
       Process.sleep(10)
@@ -186,7 +218,8 @@ defmodule LemonControlPlane.EventBridgeTest do
                 result: "Tool missing_tool_for_runner not found",
                 result_meta: %{
                   error_type: :unknown_tool,
-                  tool_name: "missing_tool_for_runner"
+                  tool_name: "missing_tool_for_runner",
+                  exit_code: 127
                 }
               }
             },
@@ -211,7 +244,8 @@ defmodule LemonControlPlane.EventBridgeTest do
                           "detail" => %{
                             result_meta: %{
                               error_type: :unknown_tool,
-                              tool_name: "missing_tool_for_runner"
+                              tool_name: "missing_tool_for_runner",
+                              exit_code: 127
                             }
                           }
                         },
@@ -224,9 +258,260 @@ defmodule LemonControlPlane.EventBridgeTest do
       EventBridge.unsubscribe_run(run_id)
       Presence.unregister(conn_id)
     end
+
+    test "maps checkpoint events to agent events" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = "session:event-bridge-checkpoint"
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      EventBridge.subscribe_run(run_id)
+      Process.sleep(10)
+
+      event =
+        LemonCore.Event.new(
+          :checkpoint_created,
+          %{
+            checkpoint_id: "chk_bridge",
+            checkpoint_kind: "filesystem",
+            tool: "write",
+            action: "overwrite",
+            path_count: 1,
+            paths: ["/tmp/example.txt"]
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("run:#{run_id}", event)
+
+      assert_receive {:event, "agent",
+                      %{
+                        "type" => "checkpoint_created",
+                        "runId" => ^run_id,
+                        "sessionKey" => ^session_key,
+                        "checkpointId" => "chk_bridge",
+                        "checkpointKind" => "filesystem",
+                        "tool" => "write",
+                        "action" => "overwrite",
+                        "pathCount" => 1,
+                        "paths" => ["/tmp/example.txt"]
+                      }, _state_version},
+                     1_000
+
+      EventBridge.unsubscribe_run(run_id)
+      Presence.unregister(conn_id)
+    end
+
+    test "maps goal events to goal events" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = "session:event-bridge-goal"
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      EventBridge.subscribe_run(run_id)
+      Process.sleep(10)
+
+      event =
+        LemonCore.Event.new(
+          :goal_set,
+          %{
+            goal_id: "goal_bridge",
+            session_key: session_key,
+            agent_id: "default",
+            status: "active",
+            objective_bytes: 12,
+            continuation_count: 0
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("run:#{run_id}", event)
+
+      assert_receive {:event, "goal",
+                      %{
+                        "type" => "goal_set",
+                        "sessionKey" => ^session_key,
+                        "goalId" => "goal_bridge",
+                        "status" => "active",
+                        "objectiveBytes" => 12
+                      }, _state_version},
+                     1_000
+
+      EventBridge.unsubscribe_run(run_id)
+      Presence.unregister(conn_id)
+    end
+
+    test "maps goal continuation and loop verdict events to goal events" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = "session:event-bridge-goal-loop"
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      continuation =
+        LemonCore.Event.new(
+          :goal_continuation_submitted,
+          %{
+            goal_id: "goal_loop_bridge",
+            session_key: session_key,
+            agent_id: "default",
+            status: "active",
+            objective_bytes: 12,
+            continuation_count: 1,
+            last_run_id: run_id
+          },
+          %{session_key: session_key}
+        )
+
+      send(Process.whereis(EventBridge), continuation)
+
+      assert_receive {:event, "goal",
+                      %{
+                        "type" => "goal_continuation_submitted",
+                        "sessionKey" => ^session_key,
+                        "goalId" => "goal_loop_bridge",
+                        "continuationCount" => 1,
+                        "lastRunId" => ^run_id
+                      }, _state_version},
+                     1_000
+
+      verdict =
+        LemonCore.Event.new(
+          :goal_loop_verdict,
+          %{
+            goal_id: "goal_loop_bridge",
+            session_key: session_key,
+            agent_id: "default",
+            status: "active",
+            objective_bytes: 12,
+            continuation_count: 1,
+            last_run_id: run_id,
+            loop_verdict: %{
+              "action" => "continue",
+              "reason" => "more work remains",
+              "source" => "preview"
+            }
+          },
+          %{session_key: session_key}
+        )
+
+      send(Process.whereis(EventBridge), verdict)
+
+      assert_receive {:event, "goal",
+                      %{
+                        "type" => "goal_loop_verdict",
+                        "sessionKey" => ^session_key,
+                        "goalId" => "goal_loop_bridge",
+                        "lastRunId" => ^run_id,
+                        "loopVerdict" => %{
+                          "action" => "continue",
+                          "reason" => "more work remains",
+                          "source" => "preview"
+                        }
+                      }, _state_version},
+                     1_000
+
+      EventBridge.unsubscribe_run(run_id)
+      Presence.unregister(conn_id)
+    end
+
+    test "maps ingested metrics, log, and custom events with target fields" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = "session:event-bridge-ingest"
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(:metrics, %{count: 2}, %{target: "run:#{run_id}"})
+      )
+
+      assert_receive {:event, "metrics",
+                      %{
+                        "payload" => %{"count" => 2},
+                        "runId" => ^run_id
+                      }, _state_version},
+                     1_000
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :log,
+          %{level: "info", message: String.duplicate("x", 700), timestamp_ms: 123},
+          %{target: "session:#{session_key}"}
+        )
+      )
+
+      assert_receive {:event, "log",
+                      %{
+                        "level" => "info",
+                        "message" => message,
+                        "timestampMs" => 123,
+                        "sessionKey" => ^session_key
+                      }, _state_version},
+                     1_000
+
+      assert byte_size(message) < 700
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :custom_event,
+          %{custom_event_type: "custom_widget", ok: true},
+          %{target: "run:#{run_id}", original_event_type: "custom_widget"}
+        )
+      )
+
+      assert_receive {:event, "custom", %{"type" => "custom_widget", "runId" => ^run_id},
+                      _state_version},
+                     1_000
+
+      Presence.unregister(conn_id)
+    end
   end
 
   describe "static topic subscriptions" do
+    test "subscribes to goals topic on init" do
+      conn_id = "conn_#{System.unique_integer()}"
+      session_key = "session:event-bridge-static-goal"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      event =
+        LemonCore.Event.new(
+          :goal_set,
+          %{
+            goal_id: "goal_static_bridge",
+            session_key: session_key,
+            agent_id: "default",
+            status: "active",
+            objective_bytes: 8,
+            continuation_count: 0
+          },
+          %{session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("goals", event)
+
+      assert_receive {:event, "goal",
+                      %{
+                        "type" => "goal_set",
+                        "sessionKey" => ^session_key,
+                        "goalId" => "goal_static_bridge"
+                      }, _state_version},
+                     1_000
+
+      Presence.unregister(conn_id)
+    end
+
     test "subscribes to exec_approvals topic on init" do
       # EventBridge should be subscribed to exec_approvals
       if Code.ensure_loaded?(LemonCore.Bus) do
@@ -242,6 +527,141 @@ defmodule LemonControlPlane.EventBridgeTest do
         Process.sleep(50)
         assert Process.alive?(Process.whereis(EventBridge))
       end
+    end
+
+    test "broadcasts approval requested events with structured action metadata" do
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      event =
+        LemonCore.Event.new(
+          :approval_requested,
+          %{
+            "pending" => %{
+              "id" => "approval-oauth-1",
+              "run_id" => "run-oauth-1",
+              "session_key" => "session:oauth",
+              "agent_id" => "default",
+              "tool" => "mcp_mcp_oauth",
+              "action" => %{
+                type: "mcp_oauth_authorization",
+                authorization_url: "http://127.0.0.1:9000/authorize",
+                state: %{hash: "state123"},
+                enabled: false
+              },
+              "rationale" => "Open the MCP authorization URL.",
+              "requested_at_ms" => 1_700_000_000_000
+            }
+          },
+          %{}
+        )
+
+      LemonCore.Bus.broadcast("exec_approvals", event)
+
+      assert_receive {:event, "exec.approval.requested", payload, _state_version}, 1_000
+
+      assert payload == %{
+               "approvalId" => "approval-oauth-1",
+               "runId" => "run-oauth-1",
+               "sessionKey" => "session:oauth",
+               "agentId" => "default",
+               "tool" => "mcp_mcp_oauth",
+               "action" => %{
+                 "type" => "mcp_oauth_authorization",
+                 "authorization_url" => "http://127.0.0.1:9000/authorize",
+                 "state" => %{"hash" => "state123"},
+                 "enabled" => false
+               },
+               "rationale" => "Open the MCP authorization URL.",
+               "requestedAtMs" => 1_700_000_000_000,
+               "expiresAtMs" => nil
+             }
+
+      assert :ok = Schemas.validate_event("exec.approval.requested", payload)
+
+      Presence.unregister(conn_id)
+    end
+
+    test "broadcasts approval resolved events with pending metadata" do
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      event =
+        LemonCore.Event.new(
+          :approval_resolved,
+          %{
+            "approval_id" => "approval-oauth-1",
+            "decision" => "approve_once",
+            "pending" => %{
+              "run_id" => "run-oauth-1",
+              "session_key" => "session:oauth",
+              "agent_id" => "default",
+              "tool" => "mcp_mcp_oauth"
+            }
+          },
+          %{}
+        )
+
+      LemonCore.Bus.broadcast("exec_approvals", event)
+
+      assert_receive {:event, "exec.approval.resolved", payload, _state_version}, 1_000
+
+      assert payload == %{
+               "approvalId" => "approval-oauth-1",
+               "decision" => "approve_once",
+               "runId" => "run-oauth-1",
+               "sessionKey" => "session:oauth",
+               "agentId" => "default",
+               "tool" => "mcp_mcp_oauth"
+             }
+
+      assert :ok = Schemas.validate_event("exec.approval.resolved", payload)
+
+      Presence.unregister(conn_id)
+    end
+
+    test "broadcasts approval timeout events with pending metadata" do
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+
+      event =
+        LemonCore.Event.new(
+          :approval_resolved,
+          %{
+            approval_id: "approval-timeout-1",
+            decision: :timeout,
+            pending: %{
+              run_id: "run-timeout-1",
+              session_key: "session:timeout",
+              agent_id: "default",
+              tool: "bash"
+            }
+          },
+          %{}
+        )
+
+      LemonCore.Bus.broadcast("exec_approvals", event)
+
+      assert_receive {:event, "exec.approval.resolved", payload, _state_version}, 1_000
+
+      assert payload == %{
+               "approvalId" => "approval-timeout-1",
+               "decision" => "timeout",
+               "runId" => "run-timeout-1",
+               "sessionKey" => "session:timeout",
+               "agentId" => "default",
+               "tool" => "bash"
+             }
+
+      assert :ok = Schemas.validate_event("exec.approval.resolved", payload)
+
+      Presence.unregister(conn_id)
     end
 
     test "subscribes to cron topic on init" do

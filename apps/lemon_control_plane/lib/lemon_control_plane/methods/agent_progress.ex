@@ -40,7 +40,8 @@ defmodule LemonControlPlane.Methods.AgentProgress do
      %{
        "sessionId" => session_id,
        "cwd" => cwd,
-       "snapshot" => snapshot
+       "snapshot" => snapshot,
+       "summary" => summary(session_id, cwd, snapshot)
      }}
   rescue
     e ->
@@ -51,6 +52,61 @@ defmodule LemonControlPlane.Methods.AgentProgress do
          Exception.message(e)
        }}
   end
+
+  defp summary(session_id, cwd, snapshot) do
+    todos = get_snapshot_map(snapshot, :todos)
+    features = get_snapshot_map(snapshot, :features)
+    checkpoints = get_snapshot_map(snapshot, :checkpoints)
+    next_actions = get_snapshot_map(snapshot, :next_actions)
+
+    %{
+      "sessionId" => session_id,
+      "cwd" => cwd,
+      "overallPercentage" => get_snapshot_value(snapshot, :overall_percentage, 0),
+      "todos" => progress_counts(todos),
+      "features" => progress_counts(features),
+      "hasFeatures" => features != %{},
+      "checkpoints" => %{
+        "count" => get_snapshot_value(checkpoints, :count, 0),
+        "hasNewest" => not is_nil(get_snapshot_value(checkpoints, :newest, nil)),
+        "hasOldest" => not is_nil(get_snapshot_value(checkpoints, :oldest, nil))
+      },
+      "nextActionCounts" => %{
+        "todos" => length(get_snapshot_value(next_actions, :todos, [])),
+        "features" => length(get_snapshot_value(next_actions, :features, []))
+      },
+      "cleanup" => %{
+        "includesNextActionContent" => false,
+        "includesPromptText" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp progress_counts(progress) do
+    %{
+      "total" => get_snapshot_value(progress, :total, 0),
+      "completed" => get_snapshot_value(progress, :completed, 0),
+      "inProgress" => get_snapshot_value(progress, :in_progress, 0),
+      "pending" => get_snapshot_value(progress, :pending, 0),
+      "percentage" => get_snapshot_value(progress, :percentage, 0)
+    }
+  end
+
+  defp get_snapshot_map(map, key) do
+    case get_snapshot_value(map, key, %{}) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp get_snapshot_value(map, key, default) when is_map(map) and is_atom(key) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+  end
+
+  defp get_snapshot_value(_map, _key, default), do: default
 
   defp introspection_opts(params) do
     []

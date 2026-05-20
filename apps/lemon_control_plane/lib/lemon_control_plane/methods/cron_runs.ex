@@ -73,7 +73,17 @@ defmodule LemonControlPlane.Methods.CronRuns do
            "includeRunRecord" => include_run_record,
            "includeIntrospection" => include_introspection,
            "introspectionLimit" => introspection_limit
-         }
+         },
+         "summary" =>
+           summary(
+             runs,
+             status,
+             since_ms,
+             include_output,
+             include_meta,
+             include_run_record,
+             include_introspection
+           )
        }}
     end
   end
@@ -87,7 +97,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
          introspection_limit
        ) do
     router_run_id = run.run_id
-    output = run.output
+    output = redact_text(run.output)
+    error = redact_text(run.error)
 
     base =
       %{
@@ -101,10 +112,18 @@ defmodule LemonControlPlane.Methods.CronRuns do
         "durationMs" => run.duration_ms,
         "output" => if(include_output, do: output, else: truncate(output, 800)),
         "outputPreview" => truncate(output, 300),
-        "error" => run.error,
+        "error" => error,
         "suppressed" => run.suppressed || false,
         "sessionKey" => get_meta_value(run.meta, "session_key"),
-        "agentId" => get_meta_value(run.meta, "agent_id")
+        "agentId" => get_meta_value(run.meta, "agent_id"),
+        "summary" =>
+          run_summary(
+            run,
+            include_output,
+            include_meta,
+            include_run_record,
+            include_introspection
+          )
       }
       |> maybe_put("meta", serialize_term(run.meta), include_meta)
       |> maybe_put(
@@ -119,6 +138,90 @@ defmodule LemonControlPlane.Methods.CronRuns do
       )
 
     base
+  end
+
+  defp run_summary(run, include_output, include_meta, include_run_record, include_introspection) do
+    output_bytes = byte_size(run.output || "")
+    error_bytes = byte_size(run.error || "")
+
+    %{
+      "runId" => run.id,
+      "jobId" => run.job_id,
+      "status" => Atom.to_string(run.status),
+      "triggeredBy" => Atom.to_string(run.triggered_by),
+      "outputBytes" => output_bytes,
+      "errorBytes" => error_bytes,
+      "fullOutputReturned" => include_output,
+      "outputPreviewReturned" => output_bytes > 0,
+      "errorTextReturned" => error_bytes > 0,
+      "metaReturned" => include_meta,
+      "runRecordReturned" => include_run_record and is_binary(run.run_id),
+      "introspectionReturned" => include_introspection and is_binary(run.run_id),
+      "rawIdsReturned" => true
+    }
+  end
+
+  defp summary(
+         runs,
+         status,
+         since_ms,
+         include_output,
+         include_meta,
+         include_run_record,
+         include_introspection
+       ) do
+    output_run_count = Enum.count(runs, &present?(&1.output))
+    error_run_count = Enum.count(runs, &present?(&1.error))
+
+    %{
+      "runCount" => length(runs),
+      "statusCounts" => status_counts(runs),
+      "filteredByStatus" => not is_nil(status),
+      "filteredBySinceMs" => not is_nil(since_ms),
+      "outputRunCount" => output_run_count,
+      "errorRunCount" => error_run_count,
+      "fullOutputReturned" => include_output,
+      "outputPreviewReturned" => output_run_count > 0,
+      "errorTextReturned" => error_run_count > 0,
+      "metaReturned" => include_meta,
+      "runRecordReturned" => include_run_record,
+      "introspectionReturned" => include_introspection,
+      "rawIdsReturned" => true,
+      "cleanup" =>
+        cleanup_summary(
+          output_run_count,
+          error_run_count,
+          include_output,
+          include_run_record,
+          include_introspection
+        )
+    }
+  end
+
+  defp status_counts(runs) do
+    Enum.reduce(runs, %{}, fn run, acc ->
+      Map.update(acc, Atom.to_string(run.status), 1, &(&1 + 1))
+    end)
+  end
+
+  defp cleanup_summary(
+         output_run_count,
+         error_run_count,
+         include_output,
+         include_run_record,
+         include_introspection
+       ) do
+    %{
+      "includesPromptText" => false,
+      "includesCommandText" => false,
+      "includesOutputText" => output_run_count > 0,
+      "includesFullOutputText" => include_output and output_run_count > 0,
+      "includesErrorText" => error_run_count > 0,
+      "redactsSensitiveOutputValues" => true,
+      "includesMessageBodies" => include_run_record or include_introspection,
+      "includesCredentials" => false,
+      "includesSecretValues" => false
+    }
   end
 
   defp fetch_run_record(run_id) do
@@ -197,6 +300,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
       "completed" -> :completed
       "failed" -> :failed
       "timeout" -> :timeout
+      "aborted" -> :aborted
       _ -> nil
     end
   end
@@ -243,7 +347,10 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
-      Map.put(acc, key_to_string(k), serialize_term(v, depth + 1))
+      key = key_to_string(k)
+      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      Map.put(acc, key, serialize_term(value, depth + 1))
     end)
   end
 
@@ -255,7 +362,38 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
+
+  defp serialize_term(value, _depth) when is_binary(value),
+    do: inspect(redact_text(value), limit: 200)
+
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
+
+  defp redact_text(nil), do: nil
+
+  defp redact_text(text) when is_binary(text) do
+    text
+    |> then(fn value ->
+      Regex.replace(
+        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
+        value,
+        "\\1=[REDACTED]"
+      )
+    end)
+    |> then(fn value ->
+      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
+    end)
+  end
+
+  defp redact_text(value), do: value
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      &String.contains?(normalized, &1)
+    )
+  end
 
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)
@@ -285,6 +423,9 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp normalize_string(value) when is_binary(value), do: value
   defp normalize_string(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_string(value), do: to_string(value)
+
+  defp present?(value) when is_binary(value), do: value != ""
+  defp present?(_), do: false
 
   defp truncate(nil, _), do: nil
   defp truncate(value, max) when is_binary(value) and byte_size(value) <= max, do: value

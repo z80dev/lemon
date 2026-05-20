@@ -25,7 +25,13 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
 
     if is_binary(run_id) and run_id != "" do
       limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
-      run_event_limit = normalize_limit(get_param(params, "runEventLimit"), @default_run_event_limit, @max_run_event_limit)
+
+      run_event_limit =
+        normalize_limit(
+          get_param(params, "runEventLimit"),
+          @default_run_event_limit,
+          @max_run_event_limit
+        )
 
       event_types =
         get_param(params, "eventTypes")
@@ -37,7 +43,21 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
       include_run_events = truthy?(get_param(params, "includeRunEvents"), false)
 
       events = fetch_events(run_id, limit, event_types, since_ms, until_ms)
-      run_record = if include_run_record, do: fetch_run_record(run_id, include_run_events, run_event_limit), else: nil
+
+      run_record =
+        if include_run_record,
+          do: fetch_run_record(run_id, include_run_events, run_event_limit),
+          else: nil
+
+      options = %{
+        "limit" => limit,
+        "runEventLimit" => run_event_limit,
+        "eventTypes" => event_types,
+        "sinceMs" => since_ms,
+        "untilMs" => until_ms,
+        "includeRunRecord" => include_run_record,
+        "includeRunEvents" => include_run_events
+      }
 
       {:ok,
        %{
@@ -46,15 +66,8 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
          "total" => length(events),
          "eventTypes" => summarize_event_types(events),
          "runRecord" => run_record,
-         "options" => %{
-           "limit" => limit,
-           "runEventLimit" => run_event_limit,
-           "eventTypes" => event_types,
-           "sinceMs" => since_ms,
-           "untilMs" => until_ms,
-           "includeRunRecord" => include_run_record,
-           "includeRunEvents" => include_run_events
-         }
+         "options" => options,
+         "summary" => summary(run_id, events, run_record, options)
        }}
     else
       {:error, {:bad_request, "runId is required", nil}}
@@ -69,8 +82,28 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
          "events" => [],
          "total" => 0,
          "eventTypes" => %{},
-         "runRecord" => nil
+         "runRecord" => nil,
+         "summary" => summary(run_id, [], nil, %{})
        }}
+  end
+
+  defp summary(run_id, events, run_record, options) do
+    %{
+      "action" => "run.introspection.list",
+      "runIdReturned" => is_binary(run_id),
+      "eventCount" => length(events),
+      "eventTypes" => summarize_event_types(events),
+      "runRecordReturned" => not is_nil(run_record),
+      "options" => options,
+      "cleanup" => %{
+        "includesEventPayloads" => true,
+        "includesRawRunRecord" => Map.get(options, "includeRunRecord", false),
+        "includesRawRunEvents" => Map.get(options, "includeRunEvents", false),
+        "redactsSensitivePayloadValues" => true,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp fetch_events(run_id, limit, event_types, since_ms, until_ms) do
@@ -104,7 +137,11 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
 
         serialized =
           if include_run_events do
-            Map.put(serialized, "events", events |> Enum.take(run_event_limit) |> Enum.map(&serialize_term/1))
+            Map.put(
+              serialized,
+              "events",
+              events |> Enum.take(run_event_limit) |> Enum.map(&serialize_term/1)
+            )
           else
             Map.put(serialized, "events", [])
           end
@@ -199,7 +236,10 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
 
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
-      Map.put(acc, key_to_string(k), serialize_term(v, depth + 1))
+      key = key_to_string(k)
+      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      Map.put(acc, key, serialize_term(value, depth + 1))
     end)
   end
 
@@ -215,9 +255,32 @@ defmodule LemonControlPlane.Methods.RunIntrospectionList do
 
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
-  defp serialize_term(value, _depth) when is_binary(value), do: value
+  defp serialize_term(value, _depth) when is_binary(value), do: redact_text(value)
   defp serialize_term(value, _depth) when is_integer(value) or is_float(value), do: value
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
+
+  defp redact_text(text) do
+    text
+    |> then(fn value ->
+      Regex.replace(
+        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
+        value,
+        "\\1=[REDACTED]"
+      )
+    end)
+    |> then(fn value ->
+      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
+    end)
+  end
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      &String.contains?(normalized, &1)
+    )
+  end
 
   defp get_map(nil, _key, default), do: default
 

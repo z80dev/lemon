@@ -24,7 +24,16 @@ defmodule LemonControlPlane.Methods.AgentsList do
             Map.put(a, "id", a["agentId"] || a["id"])
           end)
 
-        {:ok, %{"agents" => agents}}
+        {:ok,
+         %{
+           "agents" => agents,
+           "totalAgents" => payload["totalAgents"] || length(agents),
+           "totalSessions" => payload["totalSessions"] || 0,
+           "summary" => payload["summary"] || %{"agentCount" => length(agents)},
+           "includesMessageBodies" => false,
+           "includesSecretValues" => false,
+           "includesCredentials" => false
+         }}
 
       error ->
         error

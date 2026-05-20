@@ -30,7 +30,46 @@ defmodule LemonControlPlane.Methods.ConfigSet do
 
       true ->
         ConfigStore.put(key, value)
-        {:ok, %{"key" => key, "value" => value, "success" => true}}
+
+        {:ok,
+         %{
+           "key" => key,
+           "value" => response_value(key, value),
+           "success" => true,
+           "summary" => summary(key, value)
+         }}
     end
+  end
+
+  defp summary(key, value) do
+    sensitive? = sensitive_key?(key)
+
+    %{
+      "key" => key,
+      "valueStored" => not is_nil(value),
+      "sensitive" => sensitive?,
+      "cleanup" => %{
+        "includesValue" => not sensitive?,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp response_value(key, value) do
+    if sensitive_key?(key) and not is_nil(value) do
+      %{"redacted" => true, "kind" => "secret"}
+    else
+      value
+    end
+  end
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      fn marker -> String.contains?(normalized, marker) end
+    )
   end
 end

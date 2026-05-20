@@ -20,10 +20,35 @@ defmodule LemonControlPlane.Methods.AgentEndpointsList do
       LemonRouter.list_agent_endpoints(agent_id: agent_id, limit: limit)
       |> Enum.map(&format_endpoint/1)
 
-    {:ok, %{"endpoints" => endpoints, "total" => length(endpoints)}}
+    {:ok,
+     %{
+       "endpoints" => endpoints,
+       "total" => length(endpoints),
+       "summary" => summary(endpoints, agent_id, limit)
+     }}
   rescue
     e ->
       {:error, {:internal_error, "Failed to list endpoints", Exception.message(e)}}
+  end
+
+  defp summary(endpoints, agent_id, limit) do
+    %{
+      "agentId" => agent_id,
+      "endpointCount" => length(endpoints),
+      "limit" => limit,
+      "channelCounts" => count_channels(endpoints),
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp count_channels(endpoints) do
+    Enum.reduce(endpoints, %{}, fn endpoint, acc ->
+      channel_id = get_in(endpoint, ["route", "channelId"]) || "unknown"
+      Map.update(acc, channel_id, 1, &(&1 + 1))
+    end)
   end
 
   defp format_endpoint(endpoint) do

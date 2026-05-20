@@ -43,7 +43,11 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
        "agents" => agents,
        "sessions" => sessions,
        "totalAgents" => length(agents),
-       "totalSessions" => length(sessions)
+       "totalSessions" => length(sessions),
+       "summary" => directory_summary(agents, sessions, include_sessions?),
+       "includesMessageBodies" => false,
+       "includesSecretValues" => false,
+       "includesCredentials" => false
      }}
   rescue
     e ->
@@ -91,6 +95,18 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
       "runCount" => session[:run_count],
       "createdAtMs" => session[:created_at_ms],
       "updatedAtMs" => session[:updated_at_ms]
+    }
+  end
+
+  defp directory_summary(agents, sessions, include_sessions?) do
+    %{
+      "includeSessions" => include_sessions?,
+      "agentCount" => length(agents),
+      "sessionCount" => length(sessions),
+      "activeSessionCount" => Enum.count(sessions, &(&1["active"] == true)),
+      "routeSessionCount" => Enum.count(sessions, &(&1["kind"] == "channel_peer")),
+      "totalAgentSessionCount" => Enum.reduce(agents, 0, &(&1["sessionCount"] + &2)),
+      "totalAgentActiveSessionCount" => Enum.reduce(agents, 0, &(&1["activeSessionCount"] + &2))
     }
   end
 

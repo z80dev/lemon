@@ -33,7 +33,22 @@ defmodule LemonControlPlane.Methods.TtsEnable do
     {:ok,
      %{
        "enabled" => true,
-       "provider" => provider
+       "provider" => provider,
+       "summary" => summary("enable", true, provider)
      }}
+  end
+
+  defp summary(action, enabled, provider) do
+    %{
+      "action" => action,
+      "enabled" => enabled,
+      "provider" => provider,
+      "cleanup" => %{
+        "includesInputText" => false,
+        "includesAudio" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

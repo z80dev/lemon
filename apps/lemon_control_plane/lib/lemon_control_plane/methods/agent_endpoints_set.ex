@@ -43,12 +43,36 @@ defmodule LemonControlPlane.Methods.AgentEndpointsSet do
 
         case LemonRouter.set_agent_endpoint(agent_id, name, target, opts) do
           {:ok, endpoint} ->
-            {:ok, %{"endpoint" => format_endpoint(endpoint)}}
+            formatted = format_endpoint(endpoint)
+
+            {:ok,
+             %{
+               "endpoint" => formatted,
+               "summary" => summary(formatted)
+             }}
 
           {:error, reason} ->
             {:error, {:invalid_request, "Failed to set endpoint alias", inspect(reason)}}
         end
     end
+  end
+
+  defp summary(endpoint) do
+    route = endpoint["route"] || %{}
+
+    %{
+      "agentId" => endpoint["agentId"],
+      "name" => endpoint["name"],
+      "hasDescription" => is_binary(endpoint["description"]) and endpoint["description"] != "",
+      "channelId" => route["channelId"],
+      "peerKind" => route["peerKind"],
+      "hasPeerId" => is_binary(route["peerId"]) and route["peerId"] != "",
+      "hasThreadId" => is_binary(route["threadId"]) and route["threadId"] != "",
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp format_endpoint(endpoint) do

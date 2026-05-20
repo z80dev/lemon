@@ -38,6 +38,28 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.AgentEndpointsList,
     LemonControlPlane.Methods.AgentEndpointsSet,
     LemonControlPlane.Methods.AgentEndpointsDelete,
+    # Goals
+    LemonControlPlane.Methods.GoalSet,
+    LemonControlPlane.Methods.GoalStatus,
+    LemonControlPlane.Methods.GoalPause,
+    LemonControlPlane.Methods.GoalResume,
+    LemonControlPlane.Methods.GoalContinue,
+    LemonControlPlane.Methods.GoalLoopOnce,
+    LemonControlPlane.Methods.GoalLoopStart,
+    LemonControlPlane.Methods.GoalLoopStop,
+    LemonControlPlane.Methods.GoalLoopStatus,
+    LemonControlPlane.Methods.GoalClear,
+    # Kanban/fleet boards
+    LemonControlPlane.Methods.KanbanBoardCreate,
+    LemonControlPlane.Methods.KanbanBoardList,
+    LemonControlPlane.Methods.KanbanBoardGet,
+    LemonControlPlane.Methods.KanbanBoardArchive,
+    LemonControlPlane.Methods.KanbanTaskCreate,
+    LemonControlPlane.Methods.KanbanTaskUpdate,
+    LemonControlPlane.Methods.KanbanTaskComment,
+    LemonControlPlane.Methods.KanbanDispatcherStart,
+    LemonControlPlane.Methods.KanbanDispatcherStatus,
+    LemonControlPlane.Methods.KanbanDispatcherStop,
     # Logs
     LemonControlPlane.Methods.LogsTail,
     # Channels
@@ -46,6 +68,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ChannelsLogout,
     # Models
     LemonControlPlane.Methods.ModelsList,
+    LemonControlPlane.Methods.ProvidersStatus,
+    LemonControlPlane.Methods.MemoryStatus,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     LemonControlPlane.Methods.AgentsFilesList,
@@ -56,6 +80,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SkillsBins,
     LemonControlPlane.Methods.SkillsInstall,
     LemonControlPlane.Methods.SkillsUpdate,
+    LemonControlPlane.Methods.ExtensionsStatus,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
     LemonControlPlane.Methods.SessionsPreview,
@@ -78,9 +103,13 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,
     LemonControlPlane.Methods.CronUpdate,
+    LemonControlPlane.Methods.CronPause,
+    LemonControlPlane.Methods.CronResume,
+    LemonControlPlane.Methods.CronAbort,
     LemonControlPlane.Methods.CronRemove,
     LemonControlPlane.Methods.CronRun,
     LemonControlPlane.Methods.CronRuns,
+    LemonControlPlane.Methods.CronAudit,
     LemonControlPlane.Methods.CronStatus,
     # Exec approvals
     LemonControlPlane.Methods.ExecApprovalsGet,
@@ -102,7 +131,23 @@ defmodule LemonControlPlane.Methods.Registry do
     # Talk mode
     LemonControlPlane.Methods.TalkMode,
     # Browser
+    LemonControlPlane.Methods.BrowserStatus,
     LemonControlPlane.Methods.BrowserRequest,
+    LemonControlPlane.Methods.MediaStatus,
+    LemonControlPlane.Methods.ReadinessStatus,
+    LemonControlPlane.Methods.ProofsStatus,
+    LemonControlPlane.Methods.CheckpointStatus,
+    LemonControlPlane.Methods.CheckpointDiff,
+    LemonControlPlane.Methods.CheckpointRestore,
+    LemonControlPlane.Methods.LspDiagnosticsStatus,
+    LemonControlPlane.Methods.LspDocumentChange,
+    LemonControlPlane.Methods.LspDocumentClose,
+    LemonControlPlane.Methods.LspDocumentOpen,
+    LemonControlPlane.Methods.LspServerInitialize,
+    LemonControlPlane.Methods.LspServerRequest,
+    LemonControlPlane.Methods.LspServerStart,
+    LemonControlPlane.Methods.LspServerStop,
+    LemonControlPlane.Methods.TerminalBackendsStatus,
     # Node pairing
     LemonControlPlane.Methods.NodePairRequest,
     LemonControlPlane.Methods.NodePairList,

@@ -59,7 +59,23 @@ defmodule LemonControlPlane.Methods.DevicePairReject do
               }
             })
 
-            {:ok, %{"success" => true}}
+            {:ok,
+             %{
+               "success" => true,
+               "pairingId" => pairing_id,
+               "summary" => %{
+                 "pairingId" => pairing_id,
+                 "success" => true,
+                 "rejected" => true,
+                 "deviceType" => device_type,
+                 "cleanup" => %{
+                   "includesPairingCode" => false,
+                   "includesDeviceToken" => false,
+                   "includesChallengeToken" => false,
+                   "includesSecretValues" => false
+                 }
+               }
+             }}
           end
       end
     end

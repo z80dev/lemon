@@ -27,30 +27,60 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
 
     runs = fetch_recent_runs(agent_id, session_key, limit, status_filter)
 
-    {:ok,
-     %{
-       "runs" => runs,
-       "total" => length(runs),
-       "filters" => %{
-         "agentId" => agent_id,
-         "sessionKey" => session_key,
-         "limit" => limit,
-         "status" => status_filter
-       }
-     }}
+    filters = %{
+      "agentId" => agent_id,
+      "sessionKey" => session_key,
+      "limit" => limit,
+      "status" => status_filter
+    }
+
+    {:ok, response(runs, filters)}
   rescue
     _ ->
-      {:ok,
-       %{
-         "runs" => [],
-         "total" => 0,
-         "filters" => %{
-           "agentId" => nil,
-           "sessionKey" => nil,
-           "limit" => @default_limit,
-           "status" => nil
-         }
-       }}
+      filters = %{
+        "agentId" => nil,
+        "sessionKey" => nil,
+        "limit" => @default_limit,
+        "status" => nil
+      }
+
+      {:ok, response([], filters)}
+  end
+
+  defp response(runs, filters) do
+    %{
+      "runs" => runs,
+      "total" => length(runs),
+      "filters" => filters,
+      "summary" => summary(runs, filters)
+    }
+  end
+
+  defp summary(runs, filters) do
+    durations =
+      runs
+      |> Enum.map(& &1["durationMs"])
+      |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+
+    %{
+      "count" => length(runs),
+      "statusCounts" => count_by(runs, "status"),
+      "engineCounts" => count_by(runs, "engine"),
+      "agentCount" => unique_count(runs, "agentId"),
+      "sessionCount" => unique_count(runs, "sessionKey"),
+      "okCount" => Enum.count(runs, &(&1["ok"] == true)),
+      "errorCount" => Enum.count(runs, &(&1["status"] == "error")),
+      "abortedCount" => Enum.count(runs, &(&1["status"] == "aborted")),
+      "averageDurationMs" => average_or_nil(durations),
+      "filtersApplied" => filters_applied(filters),
+      "cleanup" => %{
+        "includesRunEvents" => false,
+        "includesRunRecords" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp fetch_recent_runs(agent_id, session_key, limit, status_filter) do
@@ -115,6 +145,35 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
   defp filter_by_status(nil, _filter), do: false
   defp filter_by_status(%{"status" => status}, filter), do: status == filter
   defp filter_by_status(_, _), do: false
+
+  defp count_by(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> Enum.frequencies()
+  end
+
+  defp unique_count(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp filters_applied(filters) do
+    filters
+    |> Enum.reject(fn {key, value} -> key == "limit" or blank?(value) end)
+    |> Enum.map(fn {key, _value} -> key end)
+    |> Enum.sort()
+  end
+
+  defp average_or_nil([]), do: nil
+  defp average_or_nil(values), do: div(Enum.sum(values), length(values))
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
 
   defp maybe_add_opt(opts, _key, nil), do: opts
   defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)

@@ -196,21 +196,24 @@ defmodule LemonControlPlane.Methods.SystemReload do
       "duration_ms" => result.duration_ms
     }
 
-    case result.metadata do
-      %{results: results} = metadata ->
-        Map.merge(base, %{
-          "results" => Enum.map(results, &result_to_map/1),
-          "metadata" => Map.delete(metadata, :results)
-        })
+    payload =
+      case result.metadata do
+        %{results: results} = metadata ->
+          Map.merge(base, %{
+            "results" => Enum.map(results, &result_to_map/1),
+            "metadata" => Map.delete(metadata, :results)
+          })
 
-      metadata when is_map(metadata) ->
-        base
-        |> Map.put("results", [result_to_map(result)])
-        |> Map.put("metadata", metadata)
+        metadata when is_map(metadata) ->
+          base
+          |> Map.put("results", [result_to_map(result)])
+          |> Map.put("metadata", metadata)
 
-      _ ->
-        Map.put(base, "results", [result_to_map(result)])
-    end
+        _ ->
+          Map.put(base, "results", [result_to_map(result)])
+      end
+
+    Map.put(payload, "summary", summary(result, payload))
   end
 
   defp result_to_map(result) do
@@ -231,4 +234,34 @@ defmodule LemonControlPlane.Methods.SystemReload do
   end
 
   defp to_payload_item(other), do: %{"value" => inspect(other)}
+
+  defp summary(result, payload) do
+    results = Map.get(payload, "results", [])
+
+    %{
+      "action" => "system.reload",
+      "kind" => to_string(result.kind),
+      "status" => to_string(result.status),
+      "targetReturned" => Map.has_key?(payload, "target"),
+      "resultCount" => length(results),
+      "reloadedCount" => length(result.reloaded),
+      "skippedCount" => length(result.skipped),
+      "errorCount" => length(result.errors),
+      "durationMs" => result.duration_ms,
+      "metadataReturned" => Map.has_key?(payload, "metadata"),
+      "extensionPathReturned" => extension_path_returned?(result, results),
+      "cleanup" => %{
+        "includesSourceCode" => false,
+        "includesFileContents" => false,
+        "includesCompileOutput" => false,
+        "includesRawProcessState" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp extension_path_returned?(result, results) do
+    result.kind == :extension or Enum.any?(results, &(&1["kind"] == "extension"))
+  end
 end

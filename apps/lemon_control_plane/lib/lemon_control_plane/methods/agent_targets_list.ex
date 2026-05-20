@@ -36,7 +36,11 @@ defmodule LemonControlPlane.Methods.AgentTargetsList do
      %{
        "targets" => targets,
        "total" => length(targets),
-       "channelId" => channel_id
+       "channelId" => channel_id,
+       "summary" => target_summary(targets, channel_id),
+       "includesMessageBodies" => false,
+       "includesSecretValues" => false,
+       "includesCredentials" => false
      }}
   rescue
     e ->
@@ -63,6 +67,20 @@ defmodule LemonControlPlane.Methods.AgentTargetsList do
       "latestSessionKey" => target[:latest_session_key],
       "latestUpdatedAtMs" => target[:latest_updated_at_ms],
       "agentIds" => target[:agent_ids] || []
+    }
+  end
+
+  defp target_summary(targets, channel_id) do
+    %{
+      "channelId" => channel_id,
+      "targetCount" => length(targets),
+      "activeSessionCount" => Enum.reduce(targets, 0, &(&1["activeSessionCount"] + &2)),
+      "sessionCount" => Enum.reduce(targets, 0, &(&1["sessionCount"] + &2)),
+      "agentCount" =>
+        targets
+        |> Enum.flat_map(& &1["agentIds"])
+        |> Enum.uniq()
+        |> length()
     }
   end
 

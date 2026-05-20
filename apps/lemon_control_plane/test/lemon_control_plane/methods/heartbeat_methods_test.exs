@@ -31,6 +31,15 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
       assert result["agentId"] == agent_id
       assert result["enabled"] == true
       assert result["intervalMs"] == 30_000
+      assert result["summary"]["agentId"] == agent_id
+      assert result["summary"]["enabled"] == true
+      assert result["summary"]["intervalMs"] == 30_000
+      assert result["summary"]["promptConfigured"] == true
+      assert is_integer(result["summary"]["updatedAtMs"])
+      assert result["summary"]["cleanup"]["includesPrompt"] == false
+      assert result["summary"]["cleanup"]["includesCredentials"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "CHECK_STATUS"
 
       # Verify config is stored
       stored = LemonCore.Store.get(:heartbeat_config, agent_id)
@@ -54,6 +63,9 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
 
       {:ok, result} = SetHeartbeats.handle(params, ctx)
       assert result["enabled"] == false
+      assert result["summary"]["enabled"] == false
+      assert result["summary"]["promptConfigured"] == true
+      assert result["summary"]["cleanup"]["includesPrompt"] == false
 
       stored = LemonCore.Store.get(:heartbeat_config, agent_id)
       assert stored[:enabled] == false
@@ -81,6 +93,7 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
 
       {:ok, result} = SetHeartbeats.handle(params, ctx)
       assert result["intervalMs"] == 60_000
+      assert result["summary"]["intervalMs"] == 60_000
 
       # Cleanup
       LemonCore.Store.delete(:heartbeat_config, agent_id)
@@ -113,6 +126,12 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
       assert result["agentId"] == agent_id
       assert result["enabled"] == false
       assert result["lastRun"] == nil
+      assert result["summary"]["configured"] == false
+      assert result["summary"]["enabled"] == false
+      assert result["summary"]["hasLastRun"] == false
+      assert result["summary"]["cleanup"]["includesResponse"] == false
+      assert result["summary"]["cleanup"]["includesPrompt"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "returns config when it exists" do
@@ -133,6 +152,10 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
       {:ok, result} = LastHeartbeat.handle(params, ctx)
       assert result["enabled"] == true
       assert result["intervalMs"] == 45_000
+      assert result["summary"]["configured"] == true
+      assert result["summary"]["enabled"] == true
+      assert result["summary"]["intervalMs"] == 45_000
+      assert result["summary"]["hasLastRun"] == false
 
       # Cleanup
       LemonCore.Store.delete(:heartbeat_config, agent_id)
@@ -163,8 +186,37 @@ defmodule LemonControlPlane.Methods.HeartbeatMethodsTest do
       assert result["lastRun"]["status"] == "ok"
       assert result["lastRun"]["response"] == "HEARTBEAT_OK"
       assert result["lastRun"]["suppressed"] == true
+      assert result["summary"]["hasLastRun"] == true
+      assert result["summary"]["lastStatus"] == "ok"
+      assert result["summary"]["lastSuppressed"] == true
+      assert result["summary"]["lastResponseLength"] == String.length("HEARTBEAT_OK")
+      assert result["summary"]["cleanup"]["includesResponse"] == true
+      assert result["summary"]["cleanup"]["redactsSensitiveResponse"] == true
+      assert result["summary"]["cleanup"]["includesPrompt"] == false
 
       # Cleanup
+      LemonCore.Store.delete(:heartbeat_config, agent_id)
+      LemonCore.Store.delete(:heartbeat_last, agent_id)
+    end
+
+    test "redacts sensitive heartbeat response text" do
+      agent_id = "agent_#{System.unique_integer()}"
+
+      LemonCore.Store.put(:heartbeat_config, agent_id, %{enabled: true, interval_ms: 60_000})
+
+      LemonCore.Store.put(:heartbeat_last, agent_id, %{
+        timestamp_ms: System.system_time(:millisecond),
+        status: :ok,
+        response: "api_key=should-not-leak",
+        suppressed: false
+      })
+
+      {:ok, result} = LastHeartbeat.handle(%{"agentId" => agent_id}, %{auth: %{role: :operator}})
+
+      assert result["lastRun"]["response"] == "[redacted]"
+      assert result["summary"]["lastResponseLength"] == String.length("[redacted]")
+      refute inspect(result) =~ "should-not-leak"
+
       LemonCore.Store.delete(:heartbeat_config, agent_id)
       LemonCore.Store.delete(:heartbeat_last, agent_id)
     end

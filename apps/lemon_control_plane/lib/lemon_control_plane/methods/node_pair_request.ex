@@ -61,10 +61,28 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
        %{
          "pairingId" => pairing_id,
          "code" => pairing_code,
-         "expiresAtMs" => expires_at_ms
+         "expiresAtMs" => expires_at_ms,
+         "summary" => %{
+           "pairingId" => pairing_id,
+           "nodeType" => node_type,
+           "expiresAtMs" => expires_at_ms,
+           "capabilityCount" => capability_count(capabilities),
+           "credentialDelivery" => %{
+             "includesPairingCode" => true
+           },
+           "cleanup" => %{
+             "includesCapabilities" => false,
+             "includesApprovedTokens" => false,
+             "includesChallengeTokens" => false,
+             "includesSecretValues" => false
+           }
+         }
        }}
     end
   end
+
+  defp capability_count(capabilities) when is_map(capabilities), do: map_size(capabilities)
+  defp capability_count(_), do: 0
 
   defp generate_pairing_code do
     # Generate a 6-digit numeric code

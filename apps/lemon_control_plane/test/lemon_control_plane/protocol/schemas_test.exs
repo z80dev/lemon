@@ -10,14 +10,41 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert Schemas.get("sessions.active.list") != nil
       assert Schemas.get("transports.status") != nil
       assert Schemas.get("introspection.snapshot") != nil
+      assert Schemas.get("providers.status") != nil
+      assert Schemas.get("memory.status") != nil
+      assert Schemas.get("extensions.status") != nil
+      assert Schemas.get("media.status") != nil
+      assert Schemas.get("proofs.status") != nil
+      assert Schemas.get("lsp.diagnostics.status") != nil
+      assert Schemas.get("lsp.server.start") != nil
+      assert Schemas.get("lsp.server.initialize") != nil
+      assert Schemas.get("lsp.server.request") != nil
+      assert Schemas.get("lsp.server.stop") != nil
+      assert Schemas.get("lsp.document.open") != nil
+      assert Schemas.get("lsp.document.change") != nil
+      assert Schemas.get("lsp.document.close") != nil
       assert Schemas.get("cron.add") != nil
+      assert Schemas.get("cron.pause") != nil
+      assert Schemas.get("cron.resume") != nil
+      assert Schemas.get("cron.abort") != nil
+      assert Schemas.get("cron.audit") != nil
       assert Schemas.get("chat.send") != nil
       assert Schemas.get("agent") != nil
+    end
+
+    test "returns schema for contract-backed events" do
+      assert Schemas.get_event("exec.approval.requested") != nil
+      assert Schemas.get_event("exec.approval.resolved") != nil
     end
 
     test "returns nil for unknown methods" do
       assert Schemas.get("unknown.method") == nil
       assert Schemas.get("") == nil
+    end
+
+    test "returns nil for unknown events" do
+      assert Schemas.get_event("unknown.event") == nil
+      assert Schemas.get_event("") == nil
     end
   end
 
@@ -39,14 +66,14 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     end
 
     test "validates multiple required fields" do
-      # cron.add requires name, schedule, agentId, sessionKey, prompt
+      # cron.add requires name and schedule; execution target is validated by the method.
       result = Schemas.validate("cron.add", %{})
       assert {:error, msg} = result
       assert msg =~ "name"
       assert msg =~ "schedule"
-      assert msg =~ "agentId"
-      assert msg =~ "sessionKey"
-      assert msg =~ "prompt"
+      refute msg =~ "agentId"
+      refute msg =~ "sessionKey"
+      refute msg =~ "prompt"
     end
 
     test "validates field types - string" do
@@ -68,6 +95,14 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert msg =~ "expected integer"
     end
 
+    test "validates channels.status method schema" do
+      assert :ok = Schemas.validate("channels.status", %{})
+      assert :ok = Schemas.validate("channels.status", %{"projectDir" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("channels.status", %{"project_dir" => "/tmp/lemon"})
+
+      assert {:error, _} = Schemas.validate("channels.status", %{"projectDir" => 123})
+    end
+
     test "validates field types - boolean" do
       # cron.add has optional boolean enabled
       valid_params = %{
@@ -76,15 +111,51 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
         "agentId" => "agent-1",
         "sessionKey" => "session-1",
         "prompt" => "hello",
-        "enabled" => true
+        "enabled" => true,
+        "maxRetries" => 1,
+        "retryBackoffMs" => 1_000
       }
 
       assert :ok = Schemas.validate("cron.add", valid_params)
+
+      command_params = %{
+        "name" => "command",
+        "schedule" => "hourly",
+        "command" => "printf ok",
+        "cwd" => "/tmp",
+        "env" => %{"LANG" => "C"}
+      }
+
+      assert :ok = Schemas.validate("cron.add", command_params)
 
       invalid_params = Map.put(valid_params, "enabled", "yes")
       assert {:error, msg} = Schemas.validate("cron.add", invalid_params)
       assert msg =~ "enabled"
       assert msg =~ "expected boolean"
+    end
+
+    test "validates cron lifecycle schemas" do
+      assert :ok = Schemas.validate("cron.pause", %{"id" => "cron_1"})
+      assert :ok = Schemas.validate("cron.resume", %{"id" => "cron_1"})
+      assert :ok = Schemas.validate("cron.abort", %{"runId" => "run_1"})
+      assert :ok = Schemas.validate("cron.audit", %{"jobId" => "cron_1", "limit" => 10})
+
+      assert :ok =
+               Schemas.validate("cron.update", %{
+                 "id" => "cron_1",
+                 "command" => "printf ok",
+                 "cwd" => "/tmp",
+                 "env" => %{"LANG" => "C"}
+               })
+
+      assert {:error, msg} = Schemas.validate("cron.pause", %{})
+      assert msg =~ "id"
+
+      assert {:error, msg} = Schemas.validate("cron.abort", %{})
+      assert msg =~ "runId"
+
+      assert {:error, msg} = Schemas.validate("cron.audit", %{"limit" => "ten"})
+      assert msg =~ "limit"
     end
 
     test "validates field types - map" do
@@ -152,6 +223,49 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
                })
     end
 
+    test "validates approval event schemas" do
+      assert :ok =
+               Schemas.validate_event("exec.approval.requested", %{
+                 "approvalId" => "approval-oauth-1",
+                 "runId" => "run-1",
+                 "sessionKey" => "session-1",
+                 "agentId" => "agent-1",
+                 "tool" => "mcp_mcp_oauth",
+                 "action" => %{"type" => "mcp_oauth"},
+                 "rationale" => "Authorize MCP resource",
+                 "requestedAtMs" => 1_772_000_000_000,
+                 "expiresAtMs" => 1_772_000_060_000
+               })
+
+      assert :ok =
+               Schemas.validate_event("exec.approval.resolved", %{
+                 "approvalId" => "approval-oauth-1",
+                 "decision" => "approve_once",
+                 "runId" => "run-1",
+                 "sessionKey" => "session-1",
+                 "agentId" => "agent-1",
+                 "tool" => "mcp_mcp_oauth"
+               })
+
+      assert {:error, msg} =
+               Schemas.validate_event("exec.approval.resolved", %{
+                 "decision" => "approve_once"
+               })
+
+      assert msg =~ "approvalId"
+
+      assert {:error, msg} =
+               Schemas.validate_event("exec.approval.requested", %{
+                 "approvalId" => "approval-oauth-1",
+                 "tool" => "mcp_mcp_oauth",
+                 "action" => []
+               })
+
+      assert msg =~ "action"
+      assert msg =~ "expected map"
+      assert :ok = Schemas.validate_event("custom.event", %{"anything" => true})
+    end
+
     test "validates agent schema" do
       assert {:error, _} = Schemas.validate("agent", %{})
 
@@ -166,6 +280,41 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
                })
     end
 
+    test "validates providers.status schema" do
+      assert :ok = Schemas.validate("providers.status", %{})
+      assert :ok = Schemas.validate("providers.status", %{"provider" => "openai"})
+      assert :ok = Schemas.validate("providers.status", %{"providers" => ["openai", "zai"]})
+      assert :ok = Schemas.validate("providers.status", %{"includeCatalog" => true})
+      assert :ok = Schemas.validate("providers.status", %{"fallbackProviders" => ["zai"]})
+      assert :ok = Schemas.validate("providers.status", %{"requestedModel" => "gpt-5-mini"})
+
+      assert {:error, msg} = Schemas.validate("providers.status", %{"providers" => "openai"})
+      assert msg =~ "providers"
+      assert msg =~ "expected list"
+    end
+
+    test "validates extensions.status schema" do
+      assert :ok = Schemas.validate("extensions.status", %{})
+      assert :ok = Schemas.validate("extensions.status", %{"cwd" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("extensions.status", %{"projectDir" => "/tmp/lemon"})
+
+      assert :ok =
+               Schemas.validate("extensions.status", %{
+                 "extensionPaths" => ["/tmp/extensions"]
+               })
+
+      assert {:error, msg} =
+               Schemas.validate("extensions.status", %{"extensionPaths" => "/tmp/extensions"})
+
+      assert msg =~ "extensionPaths"
+      assert msg =~ "expected list"
+    end
+
+    test "validates memory.status schema" do
+      assert :ok = Schemas.validate("memory.status", %{})
+      assert :ok = Schemas.validate("memory.status", nil)
+    end
+
     # New tests for parity methods
     test "validates system-presence method (no params required)" do
       assert :ok = Schemas.validate("system-presence", %{})
@@ -175,6 +324,7 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "validates system-event method requires eventType" do
       assert {:error, _} = Schemas.validate("system-event", %{})
       assert :ok = Schemas.validate("system-event", %{"eventType" => "test"})
+      assert :ok = Schemas.validate("system-event", %{"event_type" => "test"})
     end
 
     test "validates system-event method with optional params" do
@@ -185,6 +335,39 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       }
 
       assert :ok = Schemas.validate("system-event", params)
+
+      assert {:error, msg} =
+               Schemas.validate("system-event", %{"eventType" => "test", "payload" => []})
+
+      assert msg =~ "payload"
+    end
+
+    test "validates events.ingest schema" do
+      assert :ok =
+               Schemas.validate("events.ingest", %{
+                 "eventType" => "custom",
+                 "payload" => %{"safe" => true},
+                 "target" => "system"
+               })
+
+      assert :ok = Schemas.validate("events.ingest", %{"event_type" => "custom"})
+
+      assert {:error, msg} = Schemas.validate("events.ingest", %{})
+      assert msg =~ "eventType"
+
+      assert {:error, msg} =
+               Schemas.validate("events.ingest", %{"eventType" => "custom", "payload" => []})
+
+      assert msg =~ "payload"
+    end
+
+    test "validates event subscription topic string compatibility" do
+      assert :ok = Schemas.validate("events.subscribe", %{"topics" => "system"})
+      assert :ok = Schemas.validate("events.subscribe", %{"topics" => ["system"]})
+      assert :ok = Schemas.validate("events.unsubscribe", %{"topics" => "system"})
+
+      assert {:error, msg} = Schemas.validate("events.subscribe", %{"topics" => 123})
+      assert msg =~ "topics"
     end
 
     test "validates system.reload schema structure" do
@@ -349,6 +532,125 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
                })
 
       assert {:error, _} = Schemas.validate("introspection.snapshot", %{"includeAgents" => "yes"})
+    end
+
+    test "validates lsp.diagnostics.status method schema" do
+      assert :ok = Schemas.validate("lsp.diagnostics.status", %{})
+      assert :ok = Schemas.validate("lsp.diagnostics.status", %{"diagnosticsTimeoutMs" => 1000})
+      assert :ok = Schemas.validate("lsp.diagnostics.status", %{"diagnostics_timeout_ms" => 1000})
+
+      assert {:error, _} =
+               Schemas.validate("lsp.diagnostics.status", %{"diagnosticsTimeoutMs" => "slow"})
+    end
+
+    test "validates media.status method schema" do
+      assert :ok = Schemas.validate("media.status", %{})
+      assert :ok = Schemas.validate("media.status", %{"projectDir" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("media.status", %{"project_dir" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("media.status", %{"jobsDir" => "/tmp/lemon/jobs"})
+      assert :ok = Schemas.validate("media.status", %{"artifactsDir" => "/tmp/lemon/artifacts"})
+      assert :ok = Schemas.validate("media.status", %{"limit" => 5})
+
+      assert {:error, _} = Schemas.validate("media.status", %{"limit" => "many"})
+    end
+
+    test "validates proofs.status method schema" do
+      assert :ok = Schemas.validate("proofs.status", %{})
+      assert :ok = Schemas.validate("proofs.status", %{"projectDir" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("proofs.status", %{"project_dir" => "/tmp/lemon"})
+      assert :ok = Schemas.validate("proofs.status", %{"limit" => 5})
+
+      assert {:error, _} = Schemas.validate("proofs.status", %{"limit" => "many"})
+    end
+
+    test "validates checkpoint.status method schema" do
+      assert :ok = Schemas.validate("checkpoint.status", %{})
+
+      assert :ok =
+               Schemas.validate("checkpoint.status", %{
+                 "checkpointDir" => "/tmp/lemon-checkpoints",
+                 "limit" => 5,
+                 "eventLimit" => 3,
+                 "runId" => "run_1",
+                 "sessionKey" => "agent:default",
+                 "agentId" => "default"
+               })
+
+      assert :ok =
+               Schemas.validate("checkpoint.status", %{
+                 "checkpoint_dir" => "/tmp/lemon-checkpoints",
+                 "event_limit" => 3,
+                 "run_id" => "run_1",
+                 "session_key" => "agent:default",
+                 "agent_id" => "default"
+               })
+
+      assert {:error, _} = Schemas.validate("checkpoint.status", %{"eventLimit" => "many"})
+    end
+
+    test "validates lsp server session method schemas" do
+      assert :ok =
+               Schemas.validate("lsp.server.start", %{
+                 "serverId" => "elixir-ls",
+                 "sessionId" => "test-session",
+                 "cwd" => "/tmp"
+               })
+
+      assert {:error, _} = Schemas.validate("lsp.server.start", %{})
+      assert {:error, _} = Schemas.validate("lsp.server.start", %{"serverId" => 123})
+
+      assert :ok =
+               Schemas.validate("lsp.server.request", %{
+                 "sessionId" => "test-session",
+                 "method" => "initialize",
+                 "params" => %{},
+                 "timeoutMs" => 1000
+               })
+
+      assert {:error, _} = Schemas.validate("lsp.server.request", %{})
+      assert {:error, _} = Schemas.validate("lsp.server.request", %{"sessionId" => "test"})
+      assert {:error, _} = Schemas.validate("lsp.server.request", %{"method" => "initialize"})
+      assert {:error, _} = Schemas.validate("lsp.server.request", %{"sessionId" => 123})
+
+      assert :ok =
+               Schemas.validate("lsp.server.initialize", %{
+                 "sessionId" => "test-session",
+                 "params" => %{},
+                 "timeoutMs" => 1000
+               })
+
+      assert {:error, _} = Schemas.validate("lsp.server.initialize", %{})
+      assert {:error, _} = Schemas.validate("lsp.server.initialize", %{"sessionId" => 123})
+
+      assert :ok =
+               Schemas.validate("lsp.document.open", %{
+                 "sessionId" => "test-session",
+                 "uri" => "file:///tmp/test.ex",
+                 "languageId" => "elixir",
+                 "text" => "defmodule Test do end",
+                 "version" => 1
+               })
+
+      assert :ok =
+               Schemas.validate("lsp.document.change", %{
+                 "sessionId" => "test-session",
+                 "uri" => "file:///tmp/test.ex",
+                 "text" => "defmodule Test do\nend",
+                 "version" => 2
+               })
+
+      assert :ok =
+               Schemas.validate("lsp.document.close", %{
+                 "sessionId" => "test-session",
+                 "uri" => "file:///tmp/test.ex"
+               })
+
+      assert {:error, _} = Schemas.validate("lsp.document.open", %{"sessionId" => "test"})
+      assert {:error, _} = Schemas.validate("lsp.document.change", %{"sessionId" => "test"})
+      assert {:error, _} = Schemas.validate("lsp.document.close", %{"sessionId" => "test"})
+      assert :ok = Schemas.validate("lsp.server.stop", %{"sessionId" => "test-session"})
+      assert {:error, _} = Schemas.validate("lsp.server.stop", %{})
+      assert {:error, _} = Schemas.validate("lsp.server.stop", %{"sessionId" => 123})
     end
 
     test "validates agent routing method schemas" do

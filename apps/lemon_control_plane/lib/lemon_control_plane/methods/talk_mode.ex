@@ -31,13 +31,15 @@ defmodule LemonControlPlane.Methods.TalkMode do
 
   defp get_talk_mode(session_key, _ctx) do
     mode = TalkModeStore.get(session_key) || %{mode: :off}
+    mode_value = to_string(mode[:mode] || :off)
 
     {:ok,
      %{
        "sessionKey" => session_key,
-       "mode" => to_string(mode[:mode] || :off),
+       "mode" => mode_value,
        "provider" => mode[:provider],
-       "voice" => mode[:voice]
+       "voice" => mode[:voice],
+       "summary" => summary(session_key, mode_value, false)
      }}
   end
 
@@ -67,7 +69,8 @@ defmodule LemonControlPlane.Methods.TalkMode do
        %{
          "sessionKey" => session_key,
          "mode" => mode,
-         "set" => true
+         "set" => true,
+         "summary" => summary(session_key, mode, true)
        }}
     else
       {:error,
@@ -75,5 +78,18 @@ defmodule LemonControlPlane.Methods.TalkMode do
          "Invalid mode. Must be one of: #{Enum.join(valid_modes, ", ")}"
        )}
     end
+  end
+
+  defp summary(session_key, mode, set?) do
+    %{
+      "sessionKey" => session_key,
+      "mode" => mode,
+      "set" => set?,
+      "cleanup" => %{
+        "includesAudio" => false,
+        "includesTranscript" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

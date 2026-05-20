@@ -62,7 +62,18 @@ defmodule LemonControlPlane.Methods.NodePairReject do
               {:ok,
                %{
                  "pairingId" => pairing_id,
-                 "rejected" => true
+                 "rejected" => true,
+                 "summary" => %{
+                   "pairingId" => pairing_id,
+                   "rejected" => true,
+                   "cleanup" => %{
+                     "includesPairingCode" => false,
+                     "includesCapabilities" => false,
+                     "includesApprovedTokens" => false,
+                     "includesChallengeTokens" => false,
+                     "includesSecretValues" => false
+                   }
+                 }
                }}
             end
         end

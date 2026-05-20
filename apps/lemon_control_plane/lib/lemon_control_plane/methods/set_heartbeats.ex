@@ -48,8 +48,24 @@ defmodule LemonControlPlane.Methods.SetHeartbeats do
          %{
            "agentId" => agent_id,
            "enabled" => enabled,
-           "intervalMs" => config.interval_ms
+           "intervalMs" => config.interval_ms,
+           "summary" => summary(config)
          }}
     end
+  end
+
+  defp summary(config) do
+    %{
+      "agentId" => config.agent_id,
+      "enabled" => config.enabled,
+      "intervalMs" => config.interval_ms,
+      "promptConfigured" => is_binary(config.prompt) and config.prompt != "",
+      "updatedAtMs" => config.updated_at_ms,
+      "cleanup" => %{
+        "includesPrompt" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

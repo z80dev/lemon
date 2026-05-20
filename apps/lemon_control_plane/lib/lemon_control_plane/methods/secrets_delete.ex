@@ -23,10 +23,34 @@ defmodule LemonControlPlane.Methods.SecretsDelete do
 
       true ->
         case LemonCore.Secrets.delete(name) do
-          :ok -> {:ok, %{"ok" => true, "name" => String.trim(name)}}
-          {:error, :invalid_secret_name} -> {:error, Errors.invalid_request("name is invalid")}
-          _ -> {:error, Errors.internal_error("failed to delete secret")}
+          :ok ->
+            trimmed = String.trim(name)
+
+            {:ok,
+             %{
+               "ok" => true,
+               "name" => trimmed,
+               "summary" => summary(trimmed)
+             }}
+
+          {:error, :invalid_secret_name} ->
+            {:error, Errors.invalid_request("name is invalid")}
+
+          _ ->
+            {:error, Errors.internal_error("failed to delete secret")}
         end
     end
+  end
+
+  defp summary(name) do
+    %{
+      "name" => name,
+      "deleted" => true,
+      "cleanup" => %{
+        "includesSecretValues" => false,
+        "includesRawKeyMaterial" => false,
+        "includesCredentialValues" => false
+      }
+    }
   end
 end

@@ -38,13 +38,44 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "logs.tail" => %{
       optional: %{
+        "limit" => :integer,
+        "level" => :string,
         "lines" => :integer,
         "filter" => :string
       }
     },
+    "events.subscribe" => %{
+      optional: %{
+        "topics" => [:list, :string],
+        "runId" => :string,
+        "run_id" => :string
+      }
+    },
+    "events.unsubscribe" => %{
+      optional: %{
+        "topics" => [:list, :string],
+        "runId" => :string,
+        "run_id" => :string
+      }
+    },
+    "events.subscriptions.list" => %{optional: %{}},
+    "events.ingest" => %{
+      required_any: [["eventType", "event_type"]],
+      optional: %{
+        "eventType" => :string,
+        "event_type" => :string,
+        "payload" => :map,
+        "target" => :string
+      }
+    },
 
     # Channel methods
-    "channels.status" => %{optional: %{}},
+    "channels.status" => %{
+      optional: %{
+        "projectDir" => :string,
+        "project_dir" => :string
+      }
+    },
     "transports.status" => %{optional: %{}},
     "channels.logout" => %{
       optional: %{
@@ -58,6 +89,34 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "discoverOpenAI" => :boolean
       }
     },
+    "providers.status" => %{
+      optional: %{
+        "provider" => :string,
+        "providers" => :list,
+        "includeCatalog" => :boolean,
+        "include_catalog" => :boolean,
+        "requestedProvider" => :string,
+        "requested_provider" => :string,
+        "requestedModel" => :string,
+        "requested_model" => :string,
+        "model" => :string,
+        "fallbackProviders" => :list,
+        "fallback_providers" => :list,
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "cwd" => :string
+      }
+    },
+    "extensions.status" => %{
+      optional: %{
+        "cwd" => :string,
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "extensionPaths" => :list,
+        "extension_paths" => :list
+      }
+    },
+    "memory.status" => %{optional: %{}},
 
     # Agent methods
     "agents.list" => %{optional: %{}},
@@ -187,6 +246,191 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "agentId" => :string
       }
     },
+    "goal.set" => %{
+      required: %{
+        "sessionKey" => :string,
+        "objective" => :string
+      },
+      optional: %{
+        "agentId" => :string,
+        "runId" => :string,
+        "maxContinuations" => :integer
+      }
+    },
+    "goal.status" => %{
+      optional: %{
+        "sessionKey" => :string,
+        "agentId" => :string,
+        "status" => :string,
+        "limit" => :integer
+      }
+    },
+    "goal.pause" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "runId" => :string
+      }
+    },
+    "goal.resume" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "runId" => :string
+      }
+    },
+    "goal.continue" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "runId" => :string,
+        "maxContinuations" => :integer,
+        "judgeModel" => :string,
+        "judgeFailurePolicy" => :string,
+        "model" => :string
+      }
+    },
+    "goal.loop.once" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "runId" => :string,
+        "maxContinuations" => :integer,
+        "model" => :string
+      }
+    },
+    "goal.loop.start" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "runId" => :string,
+        "maxTicks" => :integer,
+        "maxContinuations" => :integer,
+        "intervalMs" => :integer,
+        "waitTimeoutMs" => :integer,
+        "judgeModel" => :string,
+        "judgeFailurePolicy" => :string,
+        "model" => :string,
+        "auto" => :boolean
+      }
+    },
+    "goal.loop.stop" => %{
+      required: %{
+        "sessionKey" => :string
+      }
+    },
+    "goal.loop.status" => %{
+      required: %{
+        "sessionKey" => :string
+      }
+    },
+    "goal.clear" => %{
+      required: %{
+        "sessionKey" => :string
+      }
+    },
+    "kanban.board.create" => %{
+      required: %{
+        "name" => :string
+      },
+      optional: %{
+        "workspace" => :string,
+        "owner" => :string,
+        "columns" => :list,
+        "meta" => :map
+      }
+    },
+    "kanban.board.list" => %{
+      optional: %{
+        "status" => :string,
+        "owner" => :string,
+        "workspace" => :string,
+        "limit" => :integer
+      }
+    },
+    "kanban.board.get" => %{
+      required: %{
+        "boardId" => :string
+      },
+      optional: %{
+        "limit" => :integer
+      }
+    },
+    "kanban.board.archive" => %{
+      required: %{
+        "boardId" => :string
+      }
+    },
+    "kanban.task.create" => %{
+      required: %{
+        "boardId" => :string,
+        "title" => :string
+      },
+      optional: %{
+        "description" => :string,
+        "status" => :string,
+        "priority" => :string,
+        "assignee" => :string,
+        "workerProfile" => :string,
+        "sessionKey" => :string,
+        "runId" => :string,
+        "dependsOn" => :list,
+        "meta" => :map
+      }
+    },
+    "kanban.task.update" => %{
+      required: %{
+        "taskId" => :string
+      },
+      optional: %{
+        "title" => :string,
+        "description" => :string,
+        "status" => :string,
+        "priority" => :string,
+        "assignee" => :string,
+        "workerProfile" => :string,
+        "sessionKey" => :string,
+        "runId" => :string,
+        "dependsOn" => :list,
+        "meta" => :map
+      }
+    },
+    "kanban.task.comment" => %{
+      required: %{
+        "taskId" => :string,
+        "body" => :string
+      },
+      optional: %{
+        "author" => :string
+      }
+    },
+    "kanban.dispatcher.start" => %{
+      required: %{
+        "boardId" => :string
+      },
+      optional: %{
+        "intervalMs" => :integer,
+        "maxConcurrency" => :integer,
+        "leaseMs" => :integer,
+        "workerId" => :string,
+        "workerProfile" => :string
+      }
+    },
+    "kanban.dispatcher.status" => %{
+      required: %{
+        "boardId" => :string
+      }
+    },
+    "kanban.dispatcher.stop" => %{
+      required: %{
+        "boardId" => :string
+      }
+    },
 
     # Skill methods
     "skills.status" => %{
@@ -231,6 +475,9 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "sessions.preview" => %{
       required: %{
         "sessionKey" => :string
+      },
+      optional: %{
+        "limit" => :integer
       }
     },
     "sessions.patch" => %{
@@ -354,23 +601,29 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Cron methods
     "cron.list" => %{
       optional: %{
-        "agentId" => :string
+        "agentId" => :string,
+        "includeTargetText" => :boolean
       }
     },
     "cron.status" => %{optional: %{}},
     "cron.add" => %{
       required: %{
         "name" => :string,
-        "schedule" => :string,
-        "agentId" => :string,
-        "sessionKey" => :string,
-        "prompt" => :string
+        "schedule" => :string
       },
       optional: %{
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "prompt" => :string,
+        "command" => :string,
+        "cwd" => :string,
+        "env" => :map,
         "enabled" => :boolean,
         "timezone" => :string,
         "jitterSec" => :integer,
         "timeoutMs" => :integer,
+        "maxRetries" => :integer,
+        "retryBackoffMs" => :integer,
         "meta" => :map
       }
     },
@@ -383,9 +636,29 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "schedule" => :string,
         "enabled" => :boolean,
         "prompt" => :string,
+        "command" => :string,
+        "cwd" => :string,
+        "env" => :map,
         "timezone" => :string,
         "jitterSec" => :integer,
-        "timeoutMs" => :integer
+        "timeoutMs" => :integer,
+        "maxRetries" => :integer,
+        "retryBackoffMs" => :integer
+      }
+    },
+    "cron.pause" => %{
+      required: %{
+        "id" => :string
+      }
+    },
+    "cron.resume" => %{
+      required: %{
+        "id" => :string
+      }
+    },
+    "cron.abort" => %{
+      required: %{
+        "runId" => :string
       }
     },
     "cron.remove" => %{
@@ -413,12 +686,24 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "introspectionLimit" => :integer
       }
     },
+    "cron.audit" => %{
+      optional: %{
+        "jobId" => :string,
+        "runId" => :string,
+        "cronRunId" => :string,
+        "action" => :string,
+        "sinceMs" => :integer,
+        "limit" => :integer
+      }
+    },
 
     # Chat methods
     "chat.history" => %{
       optional: %{
         "sessionKey" => :string,
-        "limit" => :integer
+        "limit" => :integer,
+        "beforeId" => :string,
+        "includeFullText" => :boolean
       }
     },
     "chat.send" => %{
@@ -439,6 +724,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
 
     # Browser methods
+    "browser.status" => %{
+      optional: %{
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "limit" => :integer
+      }
+    },
     "browser.request" => %{
       required: %{
         "method" => :string
@@ -449,6 +741,151 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "timeoutMs" => :integer,
         "await" => :boolean,
         "local" => :boolean
+      }
+    },
+    "media.status" => %{
+      optional: %{
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "jobsDir" => :string,
+        "jobs_dir" => :string,
+        "artifactsDir" => :string,
+        "artifacts_dir" => :string,
+        "limit" => :integer
+      }
+    },
+    "readiness.status" => %{
+      optional: %{
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "limit" => :integer
+      }
+    },
+    "proofs.status" => %{
+      optional: %{
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "limit" => :integer
+      }
+    },
+
+    # Checkpoint methods
+    "checkpoint.status" => %{
+      optional: %{
+        "checkpointDir" => :string,
+        "checkpoint_dir" => :string,
+        "limit" => :integer,
+        "eventLimit" => :integer,
+        "event_limit" => :integer,
+        "runId" => :string,
+        "run_id" => :string,
+        "sessionKey" => :string,
+        "session_key" => :string,
+        "agentId" => :string,
+        "agent_id" => :string
+      }
+    },
+    "checkpoint.diff" => %{
+      optional: %{
+        "checkpointId" => :string,
+        "checkpoint_id" => :string,
+        "paths" => :array
+      }
+    },
+    "checkpoint.restore" => %{
+      optional: %{
+        "checkpointId" => :string,
+        "checkpoint_id" => :string,
+        "paths" => :array,
+        "runId" => :string,
+        "run_id" => :string,
+        "sessionKey" => :string,
+        "session_key" => :string,
+        "agentId" => :string,
+        "agent_id" => :string,
+        "parentRunId" => :string,
+        "parent_run_id" => :string
+      }
+    },
+    "lsp.diagnostics.status" => %{
+      optional: %{
+        "diagnosticsTimeoutMs" => :integer,
+        "diagnostics_timeout_ms" => :integer
+      }
+    },
+    "lsp.server.start" => %{
+      required: %{
+        "serverId" => :string
+      },
+      optional: %{
+        "server_id" => :string,
+        "sessionId" => :string,
+        "session_id" => :string,
+        "cwd" => :string
+      }
+    },
+    "lsp.server.request" => %{
+      required: %{
+        "sessionId" => :string,
+        "method" => :string
+      },
+      optional: %{
+        "session_id" => :string,
+        "params" => :any,
+        "timeoutMs" => :integer,
+        "timeout_ms" => :integer
+      }
+    },
+    "lsp.server.initialize" => %{
+      required: %{
+        "sessionId" => :string
+      },
+      optional: %{
+        "session_id" => :string,
+        "params" => :any,
+        "timeoutMs" => :integer,
+        "timeout_ms" => :integer
+      }
+    },
+    "lsp.document.open" => %{
+      required: %{
+        "sessionId" => :string,
+        "uri" => :string,
+        "languageId" => :string,
+        "text" => :string
+      },
+      optional: %{
+        "session_id" => :string,
+        "language_id" => :string,
+        "version" => :integer
+      }
+    },
+    "lsp.document.change" => %{
+      required: %{
+        "sessionId" => :string,
+        "uri" => :string,
+        "text" => :string
+      },
+      optional: %{
+        "session_id" => :string,
+        "version" => :integer
+      }
+    },
+    "lsp.document.close" => %{
+      required: %{
+        "sessionId" => :string,
+        "uri" => :string
+      },
+      optional: %{
+        "session_id" => :string
+      }
+    },
+    "lsp.server.stop" => %{
+      required: %{
+        "sessionId" => :string
+      },
+      optional: %{
+        "session_id" => :string
       }
     },
 
@@ -691,10 +1128,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # System methods
     "system-presence" => %{optional: %{}},
     "system-event" => %{
-      required: %{
-        "eventType" => :string
-      },
+      required_any: [["eventType", "event_type"]],
       optional: %{
+        "eventType" => :string,
+        "event_type" => :string,
         "payload" => :map,
         "target" => :string
       }
@@ -791,11 +1228,47 @@ defmodule LemonControlPlane.Protocol.Schemas do
     }
   }
 
+  @event_schemas %{
+    "exec.approval.requested" => %{
+      required: %{
+        "approvalId" => :string,
+        "tool" => :string,
+        "action" => :map
+      },
+      optional: %{
+        "runId" => :string,
+        "sessionKey" => :string,
+        "agentId" => :string,
+        "rationale" => :string,
+        "requestedAtMs" => :integer,
+        "expiresAtMs" => :integer
+      }
+    },
+    "exec.approval.resolved" => %{
+      required: %{
+        "approvalId" => :string,
+        "decision" => :string
+      },
+      optional: %{
+        "runId" => :string,
+        "sessionKey" => :string,
+        "agentId" => :string,
+        "tool" => :string
+      }
+    }
+  }
+
   @doc """
   Get schema for a method.
   """
   @spec get(String.t()) :: map() | nil
   def get(method), do: Map.get(@schemas, method)
+
+  @doc """
+  Get schema for a server-to-client event payload.
+  """
+  @spec get_event(String.t()) :: map() | nil
+  def get_event(event), do: Map.get(@event_schemas, event)
 
   @doc """
   Validate params against a method's schema.
@@ -814,8 +1287,23 @@ defmodule LemonControlPlane.Protocol.Schemas do
     end
   end
 
+  @doc """
+  Validate a server-to-client event payload against its event schema.
+
+  Events without schema entries are allowed so existing untyped events remain
+  backwards-compatible.
+  """
+  @spec validate_event(String.t(), map() | nil) :: :ok | {:error, String.t()}
+  def validate_event(event, payload) do
+    case get_event(event) do
+      nil -> :ok
+      schema -> do_validate(payload || %{}, schema)
+    end
+  end
+
   defp do_validate(params, schema) do
     required = Map.get(schema, :required, %{})
+    required_any = Map.get(schema, :required_any, [])
 
     # Check required fields
     missing =
@@ -823,8 +1311,18 @@ defmodule LemonControlPlane.Protocol.Schemas do
       |> Enum.filter(fn {field, _type} -> is_nil(Map.get(params, field)) end)
       |> Enum.map(fn {field, _type} -> field end)
 
-    if length(missing) > 0 do
-      {:error, "Missing required fields: #{Enum.join(missing, ", ")}"}
+    missing_any =
+      required_any
+      |> Enum.reject(fn fields -> Enum.any?(fields, &(not is_nil(Map.get(params, &1)))) end)
+      |> Enum.map(&Enum.join(&1, " or "))
+
+    if length(missing) > 0 or length(missing_any) > 0 do
+      missing_parts =
+        []
+        |> maybe_missing("Missing required fields", missing)
+        |> maybe_missing("Missing one of", missing_any)
+
+      {:error, Enum.join(missing_parts, "; ")}
     else
       # Validate types of provided fields
       all_fields = Map.merge(required, Map.get(schema, :optional, %{}))
@@ -837,7 +1335,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         end)
         |> Enum.map(fn {field, value} ->
           expected_type = Map.get(all_fields, field)
-          "#{field}: expected #{expected_type}, got #{typeof(value)}"
+          "#{field}: expected #{format_type(expected_type)}, got #{typeof(value)}"
         end)
 
       if length(type_errors) > 0 do
@@ -850,6 +1348,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
   # nil is allowed for optional fields - must be first to match before type checks
   defp valid_type?(nil, _), do: true
+
+  defp valid_type?(value, expected_types) when is_list(expected_types) do
+    Enum.any?(expected_types, &valid_type?(value, &1))
+  end
+
   defp valid_type?(value, :string), do: is_binary(value)
   defp valid_type?(value, :integer), do: is_integer(value)
   defp valid_type?(value, :boolean), do: is_boolean(value)
@@ -857,6 +1360,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
   defp valid_type?(value, :list), do: is_list(value)
   defp valid_type?(_, :any), do: true
   defp valid_type?(_, _), do: false
+
+  defp maybe_missing(parts, _label, []), do: parts
+  defp maybe_missing(parts, label, fields), do: parts ++ ["#{label}: #{Enum.join(fields, ", ")}"]
+
+  defp format_type(expected_types) when is_list(expected_types) do
+    expected_types
+    |> Enum.map(&format_type/1)
+    |> Enum.join(" or ")
+  end
+
+  defp format_type(expected_type), do: to_string(expected_type)
 
   defp typeof(value) when is_binary(value), do: "string"
   defp typeof(value) when is_integer(value), do: "integer"

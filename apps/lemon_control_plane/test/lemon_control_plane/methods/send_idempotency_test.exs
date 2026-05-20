@@ -38,6 +38,15 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
         {:ok, response} ->
           assert response["success"] == true
           assert response["deliveryRef"] == "ref-123"
+          assert response["summary"]["channelId"] == "telegram"
+          assert response["summary"]["hasAccountId"] == false
+          assert response["summary"]["hasPeerId"] == false
+          assert response["summary"]["contentBytes"] == byte_size("Hello world")
+          assert response["summary"]["idempotent"] == true
+          assert response["summary"]["cleanup"]["includesContent"] == false
+          assert response["summary"]["cleanup"]["includesAttachments"] == false
+          assert response["summary"]["cleanup"]["includesCredentials"] == false
+          assert response["summary"]["cleanup"]["includesSecretValues"] == false
 
         {:error, {:internal_error, _, :channels_not_available}} ->
           # This is expected when LemonChannels is not available
@@ -61,6 +70,9 @@ defmodule LemonControlPlane.Methods.SendIdempotencyTest do
           assert response["success"] == true
           # deliveryRef can be a binary or a reference depending on implementation
           assert response["deliveryRef"] != nil
+          assert response["summary"]["channelId"] == "telegram"
+          assert response["summary"]["contentBytes"] == byte_size("Hello world")
+          assert response["summary"]["idempotent"] == false
 
         {:error, {:internal_error, _, :channels_not_available}} ->
           # Expected when LemonChannels.Outbox is not available

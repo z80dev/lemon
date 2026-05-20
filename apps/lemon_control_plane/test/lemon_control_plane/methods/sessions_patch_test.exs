@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.SessionsPatchTest do
   use ExUnit.Case, async: true
 
-  alias LemonControlPlane.Methods.SessionsPatch
+  alias LemonControlPlane.Methods.{SessionsDelete, SessionsPatch, SessionsReset}
 
   describe "handle/2" do
     test "returns error when sessionKey is missing" do
@@ -25,6 +25,13 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       {:ok, result} = SessionsPatch.handle(params, ctx)
       assert result["success"] == true
       assert result["sessionKey"] == session_key
+      assert result["summary"]["sessionKey"] == session_key
+      assert result["summary"]["patchedKeys"] == ["tool_policy"]
+      assert result["summary"]["patchedCount"] == 1
+      assert result["summary"]["cleanup"]["includesToolPolicy"] == false
+      assert result["summary"]["cleanup"]["includesModel"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "dangerous"
 
       # Verify policy is stored in the session policy store (where router reads from)
       stored = LemonCore.Store.get_session_policy(session_key)
@@ -120,6 +127,30 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       # Cleanup
       LemonCore.Store.delete_session_policy(session_key)
     end
+
+    test "summarizes multiple patched keys without echoing values" do
+      session_key = "session_#{System.unique_integer()}"
+
+      params = %{
+        "sessionKey" => session_key,
+        "model" => "secret-model-name",
+        "thinkingLevel" => "extended",
+        "preferredEngine" => "codex"
+      }
+
+      {:ok, result} = SessionsPatch.handle(params, %{auth: %{role: :operator}})
+
+      assert result["summary"]["patchedKeys"] == [
+               "model",
+               "preferred_engine",
+               "thinking_level"
+             ]
+
+      assert result["summary"]["patchedCount"] == 3
+      refute inspect(result) =~ "secret-model-name"
+
+      LemonCore.Store.delete_session_policy(session_key)
+    end
   end
 
   describe "preferred_engine" do
@@ -213,6 +244,50 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       # Cleanup
       LemonCore.Store.delete_session_policy(session_key)
+    end
+  end
+
+  describe "session lifecycle cleanup responses" do
+    test "sessions.reset returns cleanup summary without policy contents" do
+      session_key = "session_#{System.unique_integer()}"
+      LemonCore.Store.put_session_policy(session_key, %{model: "private-model"})
+
+      {:ok, result} = SessionsReset.handle(%{"sessionKey" => session_key}, %{})
+
+      assert result["success"] == true
+      assert result["sessionKey"] == session_key
+      assert result["summary"]["sessionKey"] == session_key
+      assert result["summary"]["reset"] == true
+      assert result["summary"]["cleanup"]["deletedRunHistory"] == true
+      assert result["summary"]["cleanup"]["deletedChatState"] == true
+      assert result["summary"]["cleanup"]["deletedSessionPolicy"] == true
+      assert result["summary"]["cleanup"]["includesMessages"] == false
+      assert result["summary"]["cleanup"]["includesPolicy"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "private-model"
+
+      assert LemonCore.Store.get_session_policy(session_key) == nil
+    end
+
+    test "sessions.delete returns cleanup summary without policy contents" do
+      session_key = "session_#{System.unique_integer()}"
+      LemonCore.Store.put_session_policy(session_key, %{model: "private-model"})
+
+      {:ok, result} = SessionsDelete.handle(%{"sessionKey" => session_key}, %{})
+
+      assert result["deleted"] == true
+      assert result["sessionKey"] == session_key
+      assert result["summary"]["sessionKey"] == session_key
+      assert result["summary"]["deleted"] == true
+      assert result["summary"]["cleanup"]["deletedRunSession"] == true
+      assert result["summary"]["cleanup"]["deletedChatState"] == true
+      assert result["summary"]["cleanup"]["deletedSessionPolicy"] == true
+      assert result["summary"]["cleanup"]["includesMessages"] == false
+      assert result["summary"]["cleanup"]["includesPolicy"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "private-model"
+
+      assert LemonCore.Store.get_session_policy(session_key) == nil
     end
   end
 end

@@ -41,7 +41,22 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
         # Pre-approval mode: store specific tool+action approvals for node
         case set_node_approvals(node_id, approvals) do
           {:ok, count} ->
-            {:ok, %{"success" => true, "nodeId" => node_id, "approvals_set" => count}}
+            {:ok,
+             %{
+               "success" => true,
+               "nodeId" => node_id,
+               "approvals_set" => count,
+               "summary" => %{
+                 "nodeId" => node_id,
+                 "mode" => "approvals",
+                 "approvalsSet" => count,
+                 "requestedApprovalCount" => list_count(approvals),
+                 "cleanup" => %{
+                   "includesActions" => false,
+                   "includesSecretValues" => false
+                 }
+               }
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, "Failed to set node approvals", reason}}
@@ -51,7 +66,20 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
         # Policy mode: store tool-level policy for node
         case set_node_policy(node_id, policy) do
           :ok ->
-            {:ok, %{"success" => true, "nodeId" => node_id}}
+            {:ok,
+             %{
+               "success" => true,
+               "nodeId" => node_id,
+               "summary" => %{
+                 "nodeId" => node_id,
+                 "mode" => "policy",
+                 "policyToolCount" => map_count(policy),
+                 "cleanup" => %{
+                   "includesActions" => false,
+                   "includesSecretValues" => false
+                 }
+               }
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, "Failed to set node policy", reason}}
@@ -122,4 +150,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeSet do
   end
 
   defp hash_action(_), do: :any
+
+  defp list_count(value) when is_list(value), do: length(value)
+  defp list_count(_), do: 0
+
+  defp map_count(value) when is_map(value), do: map_size(value)
+  defp map_count(_), do: 0
 end

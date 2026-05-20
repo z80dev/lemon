@@ -33,7 +33,8 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
                "runId" => result.run_id,
                "sessionKey" => result.session_key,
                "selector" => selector_label(result.selector),
-               "fanoutCount" => result.fanout_count || 0
+               "fanoutCount" => result.fanout_count || 0,
+               "summary" => summary(agent_id, prompt, params, result)
              }}
 
           {:error, reason} ->
@@ -102,6 +103,36 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
 
   defp normalize_map(value) when is_map(value), do: value
   defp normalize_map(_), do: %{}
+
+  defp summary(agent_id, prompt, params, result) do
+    queue_mode = parse_queue_mode(get_param(params, "queueMode"))
+
+    target =
+      get_param(params, "to") || get_param(params, "endpoint") || get_param(params, "route")
+
+    deliver_to = get_param(params, "deliverTo")
+
+    %{
+      "agentId" => agent_id,
+      "promptBytes" => byte_size(prompt),
+      "queueMode" => to_string(queue_mode),
+      "selector" => selector_label(result.selector),
+      "hasSessionKey" => is_binary(result.session_key) and result.session_key != "",
+      "hasTarget" => not is_nil(target),
+      "fanoutCount" => result.fanout_count || 0,
+      "deliverToCount" => deliver_to_count(deliver_to),
+      "cleanup" => %{
+        "includesPrompt" => false,
+        "includesMessages" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp deliver_to_count(value) when is_list(value), do: length(value)
+  defp deliver_to_count(value) when is_binary(value), do: 1
+  defp deliver_to_count(_), do: 0
 
   defp get_param(params, key) when is_map(params) and is_binary(key) do
     underscored = Macro.underscore(key)

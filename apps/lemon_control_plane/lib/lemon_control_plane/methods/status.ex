@@ -46,14 +46,57 @@ defmodule LemonControlPlane.Methods.Status do
 
   @impl true
   def handle(_params, _ctx) do
+    server = server_status()
+    connections = connection_status()
+    runs = run_status()
+    channels = channel_status()
+    skills = skills_status()
+
     {:ok,
      %{
-       "server" => server_status(),
-       "connections" => connection_status(),
-       "runs" => run_status(),
-       "channels" => channel_status(),
-       "skills" => skills_status()
+       "server" => server,
+       "connections" => connections,
+       "runs" => runs,
+       "channels" => channels,
+       "skills" => skills,
+       "summary" => summary(server, connections, runs, channels, skills)
      }}
+  end
+
+  defp summary(server, connections, runs, channels, skills) do
+    beam = server["beam"] || %{}
+
+    %{
+      "action" => "status",
+      "version" => server["version"],
+      "uptimeMs" => server["uptime_ms"],
+      "memoryMb" => server["memory_mb"],
+      "schedulerCount" => server["schedulers"],
+      "processCount" => beam["processCount"],
+      "processLimit" => beam["processLimit"],
+      "portCount" => beam["portCount"],
+      "portLimit" => beam["portLimit"],
+      "atomCount" => beam["atomCount"],
+      "atomLimit" => beam["atomLimit"],
+      "runQueue" => beam["runQueue"],
+      "connectionCount" => connections["active"],
+      "operatorCount" => connections["operators"],
+      "nodeCount" => connections["nodes"],
+      "deviceCount" => connections["devices"],
+      "activeRunCount" => runs["active"],
+      "queuedRunCount" => runs["queued"],
+      "completedTodayCount" => runs["completed_today"],
+      "configuredChannelCount" => length(channels["configured"] || []),
+      "connectedChannelCount" => length(channels["connected"] || []),
+      "installedSkillCount" => skills["installed"],
+      "enabledSkillCount" => skills["enabled"],
+      "cleanup" => %{
+        "includesRawProcessState" => false,
+        "includesChannelCredentials" => false,
+        "includesSkillSources" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp server_status do
@@ -65,7 +108,20 @@ defmodule LemonControlPlane.Methods.Status do
       "uptime_ms" => uptime,
       "memory_mb" => Float.round(memory_bytes / 1_048_576, 2),
       "otp_release" => to_string(:erlang.system_info(:otp_release)),
-      "schedulers" => System.schedulers_online()
+      "schedulers" => System.schedulers_online(),
+      "beam" => beam_status()
+    }
+  end
+
+  defp beam_status do
+    %{
+      "processCount" => :erlang.system_info(:process_count),
+      "processLimit" => :erlang.system_info(:process_limit),
+      "portCount" => :erlang.system_info(:port_count),
+      "portLimit" => :erlang.system_info(:port_limit),
+      "atomCount" => :erlang.system_info(:atom_count),
+      "atomLimit" => :erlang.system_info(:atom_limit),
+      "runQueue" => :erlang.statistics(:run_queue)
     }
   end
 
@@ -140,6 +196,8 @@ defmodule LemonControlPlane.Methods.Status do
       end
     rescue
       _ -> %{active: 0, queued: 0, completed_today: 0}
+    catch
+      :exit, _ -> %{active: 0, queued: 0, completed_today: 0}
     end
   end
 

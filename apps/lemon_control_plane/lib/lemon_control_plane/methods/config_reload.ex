@@ -41,7 +41,8 @@ defmodule LemonControlPlane.Methods.ConfigReload do
            "changedPaths" => result.changed_paths,
            "appliedAtMs" => result.applied_at_ms,
            "actions" => result.actions,
-           "warnings" => []
+           "warnings" => [],
+           "summary" => summary(result)
          }}
 
       {:error, :reload_in_progress} ->
@@ -84,4 +85,24 @@ defmodule LemonControlPlane.Methods.ConfigReload do
   end
 
   defp maybe_put_reason(opts, _), do: opts
+
+  defp summary(result) do
+    %{
+      "action" => "config.reload",
+      "status" => "ok",
+      "reloadIdReturned" => is_binary(result.reload_id),
+      "changedSourceCount" => length(result.changed_sources),
+      "changedPathCount" => length(result.changed_paths),
+      "actionCount" => length(result.actions),
+      "warningsCount" => 0,
+      "appliedAtMs" => result.applied_at_ms,
+      "cleanup" => %{
+        "includesConfigValues" => false,
+        "includesEnvironmentValues" => false,
+        "includesSecretValues" => false,
+        "includesFileContents" => false,
+        "includesCredentialValues" => false
+      }
+    }
+  end
 end

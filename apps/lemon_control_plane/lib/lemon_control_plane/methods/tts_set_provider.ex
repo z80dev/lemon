@@ -41,8 +41,25 @@ defmodule LemonControlPlane.Methods.TtsSetProvider do
 
         TtsStore.put(config)
 
-        {:ok, %{"provider" => provider}}
+        {:ok,
+         %{
+           "provider" => provider,
+           "summary" => summary(provider)
+         }}
       end
     end
+  end
+
+  defp summary(provider) do
+    %{
+      "action" => "set_provider",
+      "provider" => provider,
+      "cleanup" => %{
+        "includesInputText" => false,
+        "includesAudio" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

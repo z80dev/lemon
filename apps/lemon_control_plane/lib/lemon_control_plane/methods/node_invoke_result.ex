@@ -66,7 +66,22 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
             {:ok,
              %{
                "invokeId" => invoke_id,
-               "received" => true
+               "received" => true,
+               "summary" => %{
+                 "invokeId" => invoke_id,
+                 "nodeId" => get_field(invocation, :node_id),
+                 "status" => if(error, do: "error", else: "completed"),
+                 "ok" => is_nil(error),
+                 "hasResult" => not is_nil(result),
+                 "hasError" => not is_nil(error),
+                 "cleanup" => %{
+                   "includesResult" => false,
+                   "includesError" => false,
+                   "includesArgs" => false,
+                   "includesCredentials" => false,
+                   "includesSecretValues" => false
+                 }
+               }
              }}
         end
       end

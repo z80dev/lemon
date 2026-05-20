@@ -31,7 +31,12 @@ defmodule LemonControlPlane.Methods.Send do
       true ->
         case send_message(channel_id, account_id, peer_id, content, idempotency_key) do
           {:ok, delivery_ref} ->
-            {:ok, %{"success" => true, "deliveryRef" => delivery_ref}}
+            {:ok,
+             %{
+               "success" => true,
+               "deliveryRef" => delivery_ref,
+               "summary" => summary(channel_id, account_id, peer_id, content, idempotency_key)
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, "Failed to send message", reason}}
@@ -70,6 +75,7 @@ defmodule LemonControlPlane.Methods.Send do
           if idempotency_key do
             LemonCore.Idempotency.put(:send, idempotency_key, ref)
           end
+
           {:ok, ref}
 
         error ->
@@ -80,5 +86,21 @@ defmodule LemonControlPlane.Methods.Send do
     end
   rescue
     _ -> {:error, :channels_not_available}
+  end
+
+  defp summary(channel_id, account_id, peer_id, content, idempotency_key) do
+    %{
+      "channelId" => channel_id,
+      "hasAccountId" => is_binary(account_id) and account_id != "",
+      "hasPeerId" => is_binary(peer_id) and peer_id != "",
+      "contentBytes" => byte_size(content),
+      "idempotent" => is_binary(idempotency_key) and idempotency_key != "",
+      "cleanup" => %{
+        "includesContent" => false,
+        "includesAttachments" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

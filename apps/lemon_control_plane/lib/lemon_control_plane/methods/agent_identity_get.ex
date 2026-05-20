@@ -39,7 +39,29 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
         _ -> default_identity(agent_id)
       end
 
-    {:ok, identity}
+    {:ok, Map.put(identity, "summary", summary(identity))}
+  end
+
+  defp summary(identity) do
+    capabilities = identity["capabilities"] || %{}
+
+    %{
+      "agentId" => identity["agentId"],
+      "name" => identity["name"],
+      "defaultEngine" => identity["defaultEngine"],
+      "hasDescription" => is_binary(identity["description"]) and identity["description"] != "",
+      "hasAvatar" => is_binary(identity["avatar"]) and identity["avatar"] != "",
+      "capabilityCount" => map_size(capabilities),
+      "enabledCapabilities" =>
+        capabilities
+        |> Enum.filter(fn {_key, value} -> value == true end)
+        |> Enum.map(fn {key, _value} -> to_string(key) end)
+        |> Enum.sort(),
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp default_identity(agent_id) do

@@ -111,12 +111,32 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                    "nodeId" => node_id,
                    "token" => node_token,
                    "challengeToken" => challenge_token,
-                   "approved" => true
+                   "approved" => true,
+                   "summary" => %{
+                     "pairingId" => pairing_id,
+                     "nodeId" => node_id,
+                     "approved" => true,
+                     "nodeType" => node_type,
+                     "challengeExpiresAtMs" => challenge_expires_at,
+                     "capabilityCount" => capability_count(capabilities),
+                     "credentialDelivery" => %{
+                       "includesNodeToken" => true,
+                       "includesChallengeToken" => true
+                     },
+                     "cleanup" => %{
+                       "includesCapabilities" => false,
+                       "includesMetadata" => false,
+                       "includesStoredTokenHash" => false
+                     }
+                   }
                  }}
             end
         end
     end
   end
+
+  defp capability_count(capabilities) when is_map(capabilities), do: map_size(capabilities)
+  defp capability_count(_), do: 0
 
   defp generate_node_token do
     :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)

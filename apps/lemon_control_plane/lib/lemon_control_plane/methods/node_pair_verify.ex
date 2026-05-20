@@ -43,39 +43,43 @@ defmodule LemonControlPlane.Methods.NodePairVerify do
               {:error, Errors.invalid_request("Pairing code has expired")}
 
             status == :rejected or status == "rejected" ->
-              {:ok,
-               %{
-                 "valid" => false,
-                 "status" => "rejected"
-               }}
+              {:ok, response(false, "rejected")}
 
             status == :approved or status == "approved" ->
               # Return the node credentials
-              {:ok,
-               %{
-                 "valid" => true,
-                 "status" => "approved",
-                 "pairingId" => pairing_id
-               }}
+              {:ok, response(true, "approved", pairing_id)}
 
             status == :pending or status == "pending" ->
-              {:ok,
-               %{
-                 "valid" => true,
-                 "status" => "pending",
-                 "pairingId" => pairing_id
-               }}
+              {:ok, response(true, "pending", pairing_id)}
 
             true ->
-              {:ok,
-               %{
-                 "valid" => false,
-                 "status" => to_string(status)
-               }}
+              {:ok, response(false, to_string(status))}
           end
       end
     end
   end
+
+  defp response(valid, status, pairing_id \\ nil) do
+    %{
+      "valid" => valid,
+      "status" => status,
+      "summary" => %{
+        "valid" => valid,
+        "status" => status,
+        "hasPairingId" => not is_nil(pairing_id),
+        "cleanup" => %{
+          "includesPairingCode" => false,
+          "includesApprovedTokens" => false,
+          "includesChallengeTokens" => false,
+          "includesSecretValues" => false
+        }
+      }
+    }
+    |> maybe_put_pairing_id(pairing_id)
+  end
+
+  defp maybe_put_pairing_id(response, nil), do: response
+  defp maybe_put_pairing_id(response, pairing_id), do: Map.put(response, "pairingId", pairing_id)
 
   # Safe map access supporting both atom and string keys
   # This handles JSONL reload where keys become strings

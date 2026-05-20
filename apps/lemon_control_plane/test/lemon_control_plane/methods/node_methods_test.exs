@@ -18,6 +18,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       {:error, error} = NodeEvent.handle(params, ctx)
       # Error can be struct or tuple
       error_str = inspect(error)
+
       assert String.contains?(String.downcase(error_str), "forbidden") or
                (is_map(error) and error[:code] == "FORBIDDEN")
     end
@@ -34,6 +35,12 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       {:ok, result} = NodeEvent.handle(params, ctx)
       assert result["eventType"] == "status"
       assert result["broadcast"] == true
+      assert result["summary"]["eventType"] == "status"
+      assert result["summary"]["nodeId"] == "node-1"
+      assert result["summary"]["custom"] == false
+      assert result["summary"]["payloadKeyCount"] == 1
+      assert result["summary"]["cleanup"]["includesPayload"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "accepts event when auth has struct-like access" do
@@ -50,6 +57,8 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:ok, result} = NodeEvent.handle(params, ctx)
       assert result["eventType"] == "heartbeat"
+      assert result["summary"]["eventType"] == "heartbeat"
+      assert result["summary"]["payloadKeyCount"] == 0
     end
 
     test "returns error when eventType is missing" do
@@ -58,6 +67,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:error, error} = NodeEvent.handle(params, ctx)
       error_str = inspect(error)
+
       assert String.contains?(error_str, "eventType") or
                (is_map(error) and error[:code] == "INVALID_REQUEST")
     end
@@ -68,8 +78,17 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:error, error} = NodeEvent.handle(params, ctx)
       error_str = inspect(error)
+
       assert String.contains?(error_str, "eventType") or
                (is_map(error) and error[:code] == "INVALID_REQUEST")
+    end
+
+    test "returns error when payload is not an object" do
+      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      params = %{"eventType" => "status", "payload" => ["not", "an", "object"]}
+
+      {:error, error} = NodeEvent.handle(params, ctx)
+      assert inspect(error) =~ "payload"
     end
   end
 
@@ -85,6 +104,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:error, error} = NodeInvokeResult.handle(params, ctx)
       error_str = inspect(error)
+
       assert String.contains?(String.downcase(error_str), "forbidden") or
                (is_map(error) and error[:code] == "FORBIDDEN")
     end
@@ -95,6 +115,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:error, error} = NodeInvokeResult.handle(params, ctx)
       error_str = inspect(error)
+
       assert String.contains?(error_str, "invokeId") or
                (is_map(error) and error[:code] == "INVALID_REQUEST")
     end
@@ -105,6 +126,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:error, error} = NodeInvokeResult.handle(params, ctx)
       error_str = String.downcase(inspect(error))
+
       assert String.contains?(error_str, "not found") or
                (is_map(error) and error[:code] == "NOT_FOUND")
     end
@@ -128,6 +150,15 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       {:ok, result} = NodeInvokeResult.handle(params, ctx)
       assert result["invokeId"] == invoke_id
       assert result["received"] == true
+      assert result["summary"]["invokeId"] == invoke_id
+      assert result["summary"]["nodeId"] == "node-1"
+      assert result["summary"]["status"] == "completed"
+      assert result["summary"]["ok"] == true
+      assert result["summary"]["hasResult"] == true
+      assert result["summary"]["hasError"] == false
+      assert result["summary"]["cleanup"]["includesResult"] == false
+      assert result["summary"]["cleanup"]["includesArgs"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
 
       # Verify invocation was updated
       updated = LemonCore.Store.get(:node_invocations, invoke_id)
@@ -155,6 +186,11 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       {:ok, result} = NodeInvokeResult.handle(params, ctx)
       assert result["invokeId"] == invoke_id
+      assert result["summary"]["status"] == "error"
+      assert result["summary"]["ok"] == false
+      assert result["summary"]["hasResult"] == false
+      assert result["summary"]["hasError"] == true
+      assert result["summary"]["cleanup"]["includesError"] == false
 
       # Verify invocation was updated with error
       updated = LemonCore.Store.get(:node_invocations, invoke_id)

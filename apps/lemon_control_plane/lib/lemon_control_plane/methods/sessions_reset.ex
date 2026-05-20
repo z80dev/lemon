@@ -22,7 +22,23 @@ defmodule LemonControlPlane.Methods.SessionsReset do
     else
       case reset_session(session_key) do
         :ok ->
-          {:ok, %{"success" => true, "sessionKey" => session_key}}
+          {:ok,
+           %{
+             "success" => true,
+             "sessionKey" => session_key,
+             "summary" => %{
+               "sessionKey" => session_key,
+               "reset" => true,
+               "cleanup" => %{
+                 "deletedRunHistory" => true,
+                 "deletedChatState" => true,
+                 "deletedSessionPolicy" => true,
+                 "includesMessages" => false,
+                 "includesPolicy" => false,
+                 "includesSecretValues" => false
+               }
+             }
+           }}
 
         {:error, reason} ->
           {:error, {:internal_error, "Failed to reset session", reason}}

@@ -44,6 +44,16 @@ defmodule LemonControlPlane.Methods.EventsIngest do
     "log" => :log
   }
 
+  @allowed_targets [
+    "system",
+    "channels",
+    "cron",
+    "exec_approvals",
+    "goals",
+    "nodes",
+    "presence"
+  ]
+
   @impl true
   def name, do: "events.ingest"
 
@@ -52,20 +62,30 @@ defmodule LemonControlPlane.Methods.EventsIngest do
 
   @impl true
   def handle(params, _ctx) do
-    event_type = params["eventType"] || params["event_type"]
-    payload = params["payload"] || %{}
-    target = params["target"] || "system"
+    params = params || %{}
+    event_type = params["eventType"] || params["event_type"] || params[:event_type]
+    payload = params["payload"] || params[:payload] || %{}
+    target = params["target"] || params[:target] || "system"
 
-    if is_nil(event_type) or event_type == "" do
-      {:error, Errors.invalid_request("eventType is required")}
-    else
-      case validate_and_convert_event_type(event_type) do
-        {:ok, atom_type, is_custom} ->
-          ingest_event(event_type, atom_type, payload, target, is_custom)
+    cond do
+      is_nil(event_type) or event_type == "" ->
+        {:error, Errors.invalid_request("eventType is required")}
 
-        {:error, reason} ->
-          {:error, Errors.invalid_request(reason)}
-      end
+      not is_map(payload) ->
+        {:error, Errors.invalid_request("payload must be an object")}
+
+      true ->
+        case validate_and_convert_event_type(event_type) do
+          {:ok, atom_type, is_custom} ->
+            with {:ok, target} <- validate_target(target) do
+              ingest_event(event_type, atom_type, payload, target, is_custom)
+            else
+              {:error, reason} -> {:error, Errors.invalid_request(reason)}
+            end
+
+          {:error, reason} ->
+            {:error, Errors.invalid_request(reason)}
+        end
     end
   end
 
@@ -78,10 +98,31 @@ defmodule LemonControlPlane.Methods.EventsIngest do
         {:ok, :custom_event, true}
 
       true ->
-          {:error,
+        {:error,
          "Invalid event type '#{event_type}'. Allowed types: #{Enum.join(Map.keys(@allowed_event_types), ", ")}, or custom_*"}
     end
   end
+
+  defp validate_and_convert_event_type(_), do: {:error, "eventType must be a string"}
+
+  defp validate_target(target) when is_binary(target) do
+    cond do
+      target in @allowed_targets ->
+        {:ok, target}
+
+      String.starts_with?(target, "run:") and byte_size(target) > 4 ->
+        {:ok, target}
+
+      String.starts_with?(target, "session:") and byte_size(target) > 8 ->
+        {:ok, target}
+
+      true ->
+        {:error,
+         "Invalid target '#{target}'. Allowed targets: #{Enum.join(@allowed_targets, ", ")}, run:<id>, or session:<key>"}
+    end
+  end
+
+  defp validate_target(_), do: {:error, "target must be a string"}
 
   defp ingest_event(original_type, atom_type, payload, target, is_custom) do
     final_payload =
@@ -103,11 +144,34 @@ defmodule LemonControlPlane.Methods.EventsIngest do
 
     Bus.broadcast(target, event)
 
-    {:ok, %{
-      "ingested" => true,
+    {:ok,
+     %{
+       "ingested" => true,
+       "eventType" => original_type,
+       "target" => target,
+       "timestampMs" => event.ts_ms,
+       "summary" => summary(original_type, target, event)
+     }}
+  end
+
+  defp summary(original_type, target, event) do
+    %{
       "eventType" => original_type,
       "target" => target,
-      "timestampMs" => event.ts_ms
-    }}
+      "targetKind" => target_kind(target),
+      "timestampMs" => event.ts_ms,
+      "payloadKeyCount" => map_size(event.payload),
+      "custom" => String.starts_with?(original_type, "custom_"),
+      "cleanup" => %{
+        "includesPayload" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
+
+  defp target_kind("run:" <> _), do: "run"
+  defp target_kind("session:" <> _), do: "session"
+  defp target_kind(target), do: target
 end

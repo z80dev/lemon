@@ -22,12 +22,14 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
     else
       case compact_session(session_key, params) do
         {:ok, result} ->
-          {:ok, %{
-            "success" => true,
-            "sessionKey" => session_key,
-            "tokensBefore" => result[:tokens_before],
-            "tokensAfter" => result[:tokens_after]
-          }}
+          {:ok,
+           %{
+             "success" => true,
+             "sessionKey" => session_key,
+             "tokensBefore" => result[:tokens_before],
+             "tokensAfter" => result[:tokens_after],
+             "summary" => summary(session_key, result, params)
+           }}
 
         {:error, reason} ->
           {:error, {:internal_error, "Failed to compact session", reason}}
@@ -59,5 +61,23 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp summary(session_key, result, params) do
+    %{
+      "sessionKeyReturned" => is_binary(session_key) and session_key != "",
+      "compacted" => true,
+      "force" => params["force"] == true,
+      "customSummaryProvided" => is_binary(params["summary"]) and params["summary"] != "",
+      "tokensBeforeReturned" => is_integer(result[:tokens_before]),
+      "tokensAfterReturned" => is_integer(result[:tokens_after]),
+      "cleanup" => %{
+        "includesPromptText" => false,
+        "includesSummaryText" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

@@ -30,8 +30,29 @@ defmodule LemonControlPlane.Methods.SecretsList do
     {:ok,
      %{
        "owner" => owner,
-       "secrets" => Enum.map(entries, &format_metadata/1)
+       "secrets" => Enum.map(entries, &format_metadata/1),
+       "summary" => summary(owner, entries)
      }}
+  end
+
+  defp summary(owner, entries) do
+    %{
+      "owner" => owner,
+      "secretCount" => length(entries),
+      "providerCounts" => count_by(entries, & &1.provider),
+      "cleanup" => %{
+        "includesSecretValues" => false,
+        "includesRawKeyMaterial" => false,
+        "includesCredentialValues" => false
+      }
+    }
+  end
+
+  defp count_by(entries, fun) do
+    Enum.reduce(entries, %{}, fn entry, acc ->
+      key = fun.(entry) || "unknown"
+      Map.update(acc, to_string(key), 1, &(&1 + 1))
+    end)
   end
 
   defp format_metadata(entry) do

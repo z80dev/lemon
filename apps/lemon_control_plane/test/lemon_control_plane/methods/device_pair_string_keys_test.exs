@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Methods.{DevicePairApprove, DevicePairReject}
+  alias LemonControlPlane.Methods.{DevicePairApprove, DevicePairReject, DevicePairRequest}
 
   @admin_ctx %{conn_id: "test-conn", auth: %{role: :operator}}
 
@@ -15,20 +15,48 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
     # Clean up stores after each test
     on_exit(fn ->
       try do
-        LemonCore.Store.list(:device_pairing) |> Enum.each(fn {k, _} ->
+        LemonCore.Store.list(:device_pairing)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:device_pairing, k)
         end)
-        LemonCore.Store.list(:device_pairing_challenges) |> Enum.each(fn {k, _} ->
+
+        LemonCore.Store.list(:device_pairing_challenges)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:device_pairing_challenges, k)
         end)
-        LemonCore.Store.list(:devices) |> Enum.each(fn {k, _} ->
+
+        LemonCore.Store.list(:devices)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:devices, k)
         end)
       rescue
         _ -> :ok
       end
     end)
+
     :ok
+  end
+
+  describe "DevicePairRequest" do
+    test "returns bounded request summary while preserving pairing code delivery" do
+      {:ok, result} =
+        DevicePairRequest.handle(
+          %{
+            "deviceType" => "mobile",
+            "deviceName" => "Request Phone"
+          },
+          @admin_ctx
+        )
+
+      assert is_binary(result["pairingId"])
+      assert is_binary(result["code"])
+      assert result["summary"]["pairingId"] == result["pairingId"]
+      assert result["summary"]["deviceType"] == "mobile"
+      assert result["summary"]["credentialDelivery"]["includesPairingCode"] == true
+      assert result["summary"]["cleanup"]["includesDeviceToken"] == false
+      assert result["summary"]["cleanup"]["includesChallengeToken"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+    end
   end
 
   describe "DevicePairApprove with string keys" do
@@ -44,28 +72,44 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "created_at_ms" => System.system_time(:millisecond)
       })
 
-      {:ok, result} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert result["success"] == true
       assert is_binary(result["deviceToken"])
       assert is_binary(result["challengeToken"])
+      assert result["summary"]["pairingId"] == pairing_id
+      assert result["summary"]["success"] == true
+      assert result["summary"]["deviceType"] == "mobile"
+      assert result["summary"]["credentialDelivery"]["includesDeviceToken"] == true
+      assert result["summary"]["credentialDelivery"]["includesChallengeToken"] == true
+      assert result["summary"]["cleanup"]["includesMetadata"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "rejects already resolved pairing with string keys" do
       pairing_id = "resolved-string-pairing-#{System.unique_integer([:positive])}"
 
       LemonCore.Store.put(:device_pairing, pairing_id, %{
-        "status" => "approved",  # Already resolved
+        # Already resolved
+        "status" => "approved",
         "device_type" => "tablet",
         "device_name" => "Test Tablet",
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
-      {:error, error} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:error, error} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert {:conflict, _} = error
     end
@@ -77,12 +121,17 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "status" => "pending",
         "device_type" => "mobile",
         "device_name" => "Expired Phone",
-        "expires_at_ms" => System.system_time(:millisecond) - 1000  # Expired
+        # Expired
+        "expires_at_ms" => System.system_time(:millisecond) - 1000
       })
 
-      {:error, error} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:error, error} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert {:timeout, _} = error
     end
@@ -98,9 +147,13 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
-      {:ok, result} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert result["success"] == true
     end
@@ -117,11 +170,24 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
-      {:ok, result} = DevicePairReject.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairReject.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert result["success"] == true
+      assert result["pairingId"] == pairing_id
+      assert result["summary"]["pairingId"] == pairing_id
+      assert result["summary"]["success"] == true
+      assert result["summary"]["rejected"] == true
+      assert result["summary"]["deviceType"] == "mobile"
+      assert result["summary"]["cleanup"]["includesPairingCode"] == false
+      assert result["summary"]["cleanup"]["includesDeviceToken"] == false
+      assert result["summary"]["cleanup"]["includesChallengeToken"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
 
       # Verify status was updated
       updated = LemonCore.Store.get(:device_pairing, pairing_id)
@@ -133,14 +199,19 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
       pairing_id = "resolved-reject-string-#{System.unique_integer([:positive])}"
 
       LemonCore.Store.put(:device_pairing, pairing_id, %{
-        "status" => "rejected",  # Already resolved
+        # Already resolved
+        "status" => "rejected",
         "device_type" => "tablet",
         "device_name" => "Already Rejected"
       })
 
-      {:error, error} = DevicePairReject.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:error, error} =
+        DevicePairReject.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert {:conflict, _} = error
     end
@@ -149,14 +220,19 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
       pairing_id = "pending-string-#{System.unique_integer([:positive])}"
 
       LemonCore.Store.put(:device_pairing, pairing_id, %{
-        "status" => "pending",  # String value
+        # String value
+        "status" => "pending",
         "device_type" => "laptop",
         "device_name" => "Pending Laptop"
       })
 
-      {:ok, result} = DevicePairReject.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairReject.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       assert result["success"] == true
     end
@@ -173,9 +249,13 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
-      {:ok, result} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       device_token = result["deviceToken"]
 
@@ -200,9 +280,13 @@ defmodule LemonControlPlane.Methods.DevicePairStringKeysTest do
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
-      {:ok, result} = DevicePairApprove.handle(%{
-        "pairingId" => pairing_id
-      }, @admin_ctx)
+      {:ok, result} =
+        DevicePairApprove.handle(
+          %{
+            "pairingId" => pairing_id
+          },
+          @admin_ctx
+        )
 
       challenge_token = result["challengeToken"]
 

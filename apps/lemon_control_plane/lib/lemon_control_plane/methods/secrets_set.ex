@@ -36,7 +36,8 @@ defmodule LemonControlPlane.Methods.SecretsSet do
             {:ok,
              %{
                "ok" => true,
-               "secret" => format_metadata(metadata)
+               "secret" => format_metadata(metadata),
+               "summary" => summary(metadata)
              }}
 
           {:error, reason} ->
@@ -47,6 +48,21 @@ defmodule LemonControlPlane.Methods.SecretsSet do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp summary(metadata) do
+    %{
+      "name" => metadata.name,
+      "owner" => metadata.owner,
+      "provider" => metadata.provider,
+      "expires" => not is_nil(metadata.expires_at),
+      "version" => metadata.version,
+      "cleanup" => %{
+        "includesSecretValues" => false,
+        "includesRawKeyMaterial" => false,
+        "includesCredentialValues" => false
+      }
+    }
+  end
 
   defp format_metadata(metadata) do
     %{

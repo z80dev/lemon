@@ -54,6 +54,11 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
         {:ok, response} ->
           # Installation succeeded - approval was granted
           assert response["installed"] == true
+          assert response["summary"]["action"] == "skills.install"
+          assert response["summary"]["installed"] == true
+          assert response["summary"]["approvalContextReturned"] == false
+          assert response["summary"]["cleanup"]["includesApprovalContext"] == false
+          assert response["summary"]["cleanup"]["includesSecretValues"] == false
       end
     end
 
@@ -81,6 +86,7 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       }
 
       result = SkillsInstall.handle(params, @admin_ctx)
+
       case result do
         {:error, _} -> :ok
         {:ok, _} -> :ok
@@ -115,6 +121,11 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
           assert response["skillKey"] == "test-skill"
           # enabled may be true or the actual current value
           assert Map.has_key?(response, "enabled")
+          assert response["summary"]["action"] == "skills.update"
+          assert response["summary"]["skillKeyReturned"] == true
+          assert response["summary"]["enabledReturned"] == true
+          assert response["summary"]["versionUpdate"] == false
+          assert response["summary"]["cleanup"]["includesApprovalContext"] == false
 
         {:error, _} ->
           # Config or store might not be available
@@ -125,7 +136,7 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
     test "handles env updates" do
       params = %{
         "skillKey" => "test-skill",
-        "env" => %{"API_KEY" => "secret"},
+        "env" => %{"API_KEY" => "super-private-value", "PUBLIC_MODE" => "on"},
         "cwd" => "/tmp"
       }
 
@@ -134,7 +145,18 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       case result do
         {:ok, response} ->
           assert response["skillKey"] == "test-skill"
-          assert response["env"] == %{"API_KEY" => "secret"}
+
+          assert response["env"] == %{
+                   "API_KEY" => %{"redacted" => true, "kind" => "secret"},
+                   "PUBLIC_MODE" => "on"
+                 }
+
+          assert response["summary"]["action"] == "skills.update"
+          assert response["summary"]["envKeyCount"] == 2
+          assert response["summary"]["envKeys"] == ["API_KEY", "PUBLIC_MODE"]
+          assert response["summary"]["cleanup"]["includesEnvironmentValues"] == true
+          assert response["summary"]["cleanup"]["includesSecretValues"] == false
+          refute inspect(response) =~ "super-private-value"
 
         {:error, _} ->
           :ok
@@ -182,6 +204,7 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       # The context should be passed through to the installer
       # We can't easily verify this without mocking, but we ensure no crash
       result = SkillsInstall.handle(params, ctx)
+
       case result do
         {:error, _} -> :ok
         {:ok, _} -> :ok
@@ -200,6 +223,7 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       params = %{"skillKey" => "version-update-skill", "cwd" => "/tmp"}
 
       result = SkillsUpdate.handle(params, ctx)
+
       case result do
         {:error, _} -> :ok
         {:ok, _} -> :ok

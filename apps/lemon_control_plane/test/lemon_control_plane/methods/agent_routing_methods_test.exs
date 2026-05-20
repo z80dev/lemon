@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     AgentEndpointsList,
     AgentEndpointsSet,
     AgentInboxSend,
+    AgentsList,
     AgentTargetsList
   }
 
@@ -55,6 +56,18 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     assert result["runId"] == "run_cp_agent_inbox_stub"
     assert result["selector"] == "latest"
     assert result["fanoutCount"] == 2
+    assert result["summary"]["agentId"] == agent_id
+    assert result["summary"]["promptBytes"] == byte_size("hello from control plane")
+    assert result["summary"]["queueMode"] == "followup"
+    assert result["summary"]["selector"] == "latest"
+    assert result["summary"]["hasSessionKey"] == true
+    assert result["summary"]["hasTarget"] == true
+    assert result["summary"]["fanoutCount"] == 2
+    assert result["summary"]["deliverToCount"] == 2
+    assert result["summary"]["cleanup"]["includesPrompt"] == false
+    assert result["summary"]["cleanup"]["includesMessages"] == false
+    assert result["summary"]["cleanup"]["includesCredentials"] == false
+    assert result["summary"]["cleanup"]["includesSecretValues"] == false
 
     assert_receive {:submitted_request, request}, 500
     assert request.agent_id == agent_id
@@ -84,7 +97,9 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
       "queueMode" => "collect"
     }
 
-    assert {:ok, _result} = AgentInboxSend.handle(params, %{})
+    assert {:ok, result} = AgentInboxSend.handle(params, %{})
+    assert result["summary"]["queueMode"] == "collect"
+    assert result["summary"]["cleanup"]["includesPrompt"] == false
 
     assert_receive {:submitted_request, request}, 500
     assert request.queue_mode == :collect
@@ -96,7 +111,7 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     token = System.unique_integer([:positive, :monotonic])
     agent_id = "cp_endpoints_#{token}"
 
-    assert {:ok, %{"endpoint" => endpoint}} =
+    assert {:ok, %{"endpoint" => endpoint, "summary" => set_summary}} =
              AgentEndpointsSet.handle(
                %{
                  "agentId" => agent_id,
@@ -114,14 +129,37 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     assert endpoint["route"]["peerKind"] == "group"
     assert endpoint["route"]["peerId"] == "-100123400"
     assert endpoint["route"]["threadId"] == "77"
+    assert set_summary["agentId"] == agent_id
+    assert set_summary["name"] == "ops-room"
+    assert set_summary["channelId"] == "telegram"
+    assert set_summary["peerKind"] == "group"
+    assert set_summary["hasPeerId"] == true
+    assert set_summary["hasThreadId"] == true
+    assert set_summary["cleanup"]["includesCredentials"] == false
+    assert set_summary["cleanup"]["includesSecretValues"] == false
 
-    assert {:ok, %{"endpoints" => endpoints}} =
+    assert {:ok, %{"endpoints" => endpoints, "summary" => list_summary}} =
              AgentEndpointsList.handle(%{"agentId" => agent_id}, %{})
 
     assert Enum.any?(endpoints, &(&1["name"] == "ops-room"))
+    assert list_summary["agentId"] == agent_id
+    assert list_summary["endpointCount"] == length(endpoints)
+    assert list_summary["channelCounts"]["telegram"] >= 1
+    assert list_summary["cleanup"]["includesCredentials"] == false
 
-    assert {:ok, %{"ok" => true, "agentId" => ^agent_id, "name" => "ops-room"}} =
+    assert {:ok,
+            %{
+              "ok" => true,
+              "agentId" => ^agent_id,
+              "name" => "ops-room",
+              "summary" => delete_summary
+            }} =
              AgentEndpointsDelete.handle(%{"agentId" => agent_id, "name" => "ops-room"}, %{})
+
+    assert delete_summary["agentId"] == agent_id
+    assert delete_summary["name"] == "ops-room"
+    assert delete_summary["deleted"] == true
+    assert delete_summary["cleanup"]["includesCredentials"] == false
 
     assert {:ok, %{"endpoints" => after_delete}} =
              AgentEndpointsList.handle(%{"agentId" => agent_id}, %{})
@@ -164,6 +202,13 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
 
     assert Enum.any?(result["agents"], &(&1["agentId"] == agent_id))
     assert Enum.any?(result["sessions"], &(&1["sessionKey"] == session_key))
+    assert result["summary"]["includeSessions"] == true
+    assert result["summary"]["agentCount"] >= 1
+    assert result["summary"]["sessionCount"] >= 1
+    assert result["summary"]["routeSessionCount"] >= 1
+    assert result["includesMessageBodies"] == false
+    assert result["includesSecretValues"] == false
+    assert result["includesCredentials"] == false
 
     assert {:ok, no_sessions} =
              AgentDirectoryList.handle(
@@ -172,6 +217,13 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
              )
 
     assert no_sessions["sessions"] == []
+    assert no_sessions["summary"]["includeSessions"] == false
+
+    assert {:ok, agents_list} = AgentsList.handle(%{"agentId" => agent_id}, %{})
+    assert Enum.any?(agents_list["agents"], &(&1["agentId"] == agent_id and &1["id"] == agent_id))
+    assert agents_list["totalAgents"] >= 1
+    assert agents_list["summary"]["agentCount"] >= 1
+    assert agents_list["includesMessageBodies"] == false
   end
 
   test "agent.targets.list returns known telegram targets with copyable routing strings" do
@@ -216,5 +268,10 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     assert target["target"] == "tg:#{chat_id}/#{topic_id}"
     assert target["label"] =~ "Release Room"
     assert target["label"] =~ "Shipit"
+    assert result["summary"]["channelId"] == "telegram"
+    assert result["summary"]["targetCount"] >= 1
+    assert result["includesMessageBodies"] == false
+    assert result["includesSecretValues"] == false
+    assert result["includesCredentials"] == false
   end
 end

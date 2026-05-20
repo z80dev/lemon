@@ -31,8 +31,23 @@ defmodule LemonControlPlane.Methods.SecretsExists do
         {:ok,
          %{
            "name" => String.trim(name),
-           "exists" => exists?
+           "exists" => exists?,
+           "summary" => summary(String.trim(name), exists?, params)
          }}
     end
+  end
+
+  defp summary(name, exists?, params) do
+    %{
+      "name" => name,
+      "exists" => exists?,
+      "preferEnv" => params["preferEnv"] == true,
+      "envFallback" => params["envFallback"] != false,
+      "cleanup" => %{
+        "includesSecretValues" => false,
+        "includesRawKeyMaterial" => false,
+        "includesCredentialValues" => false
+      }
+    }
   end
 end

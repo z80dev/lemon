@@ -55,13 +55,14 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
     if is_nil(update_url) or update_url == "" do
       # No update URL configured - return current version info
-      {:ok,
-       %{
-         "currentVersion" => current_version,
-         "updateAvailable" => false,
-         "latestVersion" => current_version,
-         "message" => "Update checking not configured. Set update_url in update_config."
-       }}
+      result = %{
+        "currentVersion" => current_version,
+        "updateAvailable" => false,
+        "latestVersion" => current_version,
+        "message" => "Update checking not configured. Set update_url in update_config."
+      }
+
+      {:ok, Map.put(result, "summary", summary(result, force, check_only, false))}
     else
       # Fetch latest version info from update URL
       case fetch_update_manifest(update_url) do
@@ -81,18 +82,22 @@ defmodule LemonControlPlane.Methods.UpdateRun do
             # Attempt to apply update
             case apply_update(manifest, update_config) do
               {:ok, message} ->
-                {:ok,
-                 Map.merge(result, %{
-                   "updateApplied" => true,
-                   "message" => message
-                 })}
+                result =
+                  Map.merge(result, %{
+                    "updateApplied" => true,
+                    "message" => message
+                  })
+
+                {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
 
               {:error, reason} ->
-                {:ok,
-                 Map.merge(result, %{
-                   "updateApplied" => false,
-                   "message" => "Update available but failed to apply: #{reason}"
-                 })}
+                result =
+                  Map.merge(result, %{
+                    "updateApplied" => false,
+                    "message" => "Update available but failed to apply: #{reason}"
+                  })
+
+                {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
             end
           else
             message =
@@ -102,13 +107,37 @@ defmodule LemonControlPlane.Methods.UpdateRun do
                 true -> "Update available. Use force=true to apply."
               end
 
-            {:ok, Map.put(result, "message", message)}
+            result = Map.put(result, "message", message)
+            {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
           end
 
         {:error, reason} ->
           {:error, Errors.internal_error("Failed to check for updates: #{reason}")}
       end
     end
+  end
+
+  defp summary(result, force, check_only, configured?) do
+    %{
+      "action" => name(),
+      "configured" => configured?,
+      "force" => force == true,
+      "checkOnly" => check_only == true,
+      "currentVersion" => Map.get(result, "currentVersion"),
+      "latestVersion" => Map.get(result, "latestVersion"),
+      "updateAvailable" => Map.get(result, "updateAvailable") == true,
+      "updateApplied" => Map.get(result, "updateApplied") == true,
+      "releaseDateReturned" => not is_nil(Map.get(result, "releaseDate")),
+      "changelogReturned" => not is_nil(Map.get(result, "changelog")),
+      "messageReturned" => not is_nil(Map.get(result, "message")),
+      "cleanup" => %{
+        "includesDownloadUrl" => false,
+        "includesChecksum" => false,
+        "includesDownloadedBytes" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp get_current_version do

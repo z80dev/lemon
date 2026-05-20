@@ -31,8 +31,37 @@ defmodule LemonControlPlane.Methods.ConfigPatch do
       {:ok,
        %{
          "success" => true,
-         "applied" => Map.keys(patch)
+         "applied" => Map.keys(patch),
+         "summary" => summary(patch)
        }}
     end
   end
+
+  defp summary(patch) do
+    keys = Map.keys(patch)
+
+    %{
+      "appliedCount" => length(keys),
+      "appliedKeys" => keys,
+      "sensitiveKeyCount" => Enum.count(keys, &sensitive_key?/1),
+      "cleanup" => %{
+        "includesValues" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp sensitive_key?(key) when is_binary(key) do
+    key
+    |> String.downcase()
+    |> then(fn lowered ->
+      String.contains?(lowered, "secret") or
+        String.contains?(lowered, "token") or
+        String.contains?(lowered, "key") or
+        String.contains?(lowered, "password")
+    end)
+  end
+
+  defp sensitive_key?(_), do: false
 end

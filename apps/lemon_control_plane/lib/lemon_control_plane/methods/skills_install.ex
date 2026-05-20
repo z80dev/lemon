@@ -46,13 +46,28 @@ defmodule LemonControlPlane.Methods.SkillsInstall do
 
         case LemonSkills.Installer.install(skill_key, opts) do
           {:ok, entry} ->
-            {:ok, %{
-              "installed" => true,
-              "skillKey" => entry.key,
-              "name" => entry.name,
-              "path" => entry.path,
-              "source" => to_string(entry.source)
-            }}
+            {:ok,
+             %{
+               "installed" => true,
+               "skillKey" => entry.key,
+               "name" => entry.name,
+               "path" => entry.path,
+               "source" => to_string(entry.source),
+               "summary" => %{
+                 "action" => name(),
+                 "installed" => true,
+                 "skillKeyReturned" => true,
+                 "pathReturned" => true,
+                 "sourceReturned" => true,
+                 "approvalContextReturned" => false,
+                 "cleanup" => %{
+                   "includesCredentialValues" => false,
+                   "includesSecretValues" => false,
+                   "includesEnvironmentValues" => false,
+                   "includesApprovalContext" => false
+                 }
+               }
+             }}
 
           {:error, "Skill install denied by user"} ->
             {:error, Errors.permission_denied("Skill installation was denied")}

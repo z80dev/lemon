@@ -22,7 +22,12 @@ defmodule LemonControlPlane.Methods.ChannelsLogout do
     else
       case logout_channel(channel_id) do
         :ok ->
-          {:ok, %{"success" => true, "channelId" => channel_id}}
+          {:ok,
+           %{
+             "success" => true,
+             "channelId" => channel_id,
+             "summary" => summary(channel_id)
+           }}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Channel not found", channel_id}}
@@ -36,7 +41,7 @@ defmodule LemonControlPlane.Methods.ChannelsLogout do
   defp logout_channel(channel_id) do
     # Try LemonChannels.Registry first
     if Code.ensure_loaded?(LemonChannels.Registry) and
-       function_exported?(LemonChannels.Registry, :logout, 1) do
+         function_exported?(LemonChannels.Registry, :logout, 1) do
       LemonChannels.Registry.logout(channel_id)
     else
       # No channel registry available
@@ -44,5 +49,18 @@ defmodule LemonControlPlane.Methods.ChannelsLogout do
     end
   rescue
     _ -> {:error, :not_found}
+  end
+
+  defp summary(channel_id) do
+    %{
+      "channelId" => channel_id,
+      "loggedOut" => true,
+      "cleanup" => %{
+        "includesCredentials" => false,
+        "includesSessionTokens" => false,
+        "includesAdapterState" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

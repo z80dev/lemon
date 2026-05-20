@@ -76,27 +76,73 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       |> Enum.take(opts.limit)
       |> Enum.map(&format_run(&1, opts))
 
-    {:ok,
-     %{
-       "sessionKey" => session_key,
-       "session" => session_meta,
-       "runs" => runs,
-       "runCount" => total_run_count,
-       "options" => %{
-         "limit" => opts.limit,
-         "historyLimit" => opts.history_limit,
-         "eventLimit" => opts.event_limit,
-         "toolCallLimit" => opts.tool_call_limit,
-         "includeFullText" => opts.include_full_text,
-         "includeRawEvents" => opts.include_raw_events,
-         "includeRunRecord" => opts.include_run_record
-       }
-     }}
+    {:ok, response(session_key, session_meta, runs, total_run_count, opts)}
   rescue
-    _ -> {:ok, %{"sessionKey" => session_key, "session" => %{}, "runs" => [], "runCount" => 0}}
+    _ -> {:ok, response(session_key, %{}, [], 0, opts)}
   catch
     :exit, _ ->
-      {:ok, %{"sessionKey" => session_key, "session" => %{}, "runs" => [], "runCount" => 0}}
+      {:ok, response(session_key, %{}, [], 0, opts)}
+  end
+
+  defp response(session_key, session_meta, runs, total_run_count, opts) do
+    options = %{
+      "limit" => opts.limit,
+      "historyLimit" => opts.history_limit,
+      "eventLimit" => opts.event_limit,
+      "toolCallLimit" => opts.tool_call_limit,
+      "includeFullText" => opts.include_full_text,
+      "includeRawEvents" => opts.include_raw_events,
+      "includeRunRecord" => opts.include_run_record
+    }
+
+    %{
+      "sessionKey" => session_key,
+      "session" => session_meta,
+      "runs" => runs,
+      "runCount" => total_run_count,
+      "options" => options,
+      "summary" => summary(runs, total_run_count, options)
+    }
+  end
+
+  defp summary(runs, total_run_count, options) do
+    durations =
+      runs
+      |> Enum.map(& &1["durationMs"])
+      |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+
+    token_totals =
+      Enum.reduce(runs, %{"input" => 0, "output" => 0, "total" => 0}, fn run, acc ->
+        tokens = run["tokens"] || %{}
+
+        %{
+          "input" => acc["input"] + integer_or_zero(tokens["input"]),
+          "output" => acc["output"] + integer_or_zero(tokens["output"]),
+          "total" => acc["total"] + integer_or_zero(tokens["total"])
+        }
+      end)
+
+    %{
+      "count" => length(runs),
+      "totalAvailable" => total_run_count,
+      "okCount" => Enum.count(runs, &(&1["ok"] == true)),
+      "errorCount" => Enum.count(runs, &present?(&1["error"])),
+      "engineCounts" => count_by(runs, "engine"),
+      "toolCallCount" => sum_integer(runs, "toolCallCount"),
+      "eventCount" => sum_integer(runs, "eventCount"),
+      "tokenTotals" => token_totals,
+      "averageDurationMs" => average_or_nil(durations),
+      "cleanup" => %{
+        "includesFullText" => options["includeFullText"] == true,
+        "includesRawEvents" => options["includeRawEvents"] == true,
+        "includesRunRecords" => options["includeRunRecord"] == true,
+        "includesMessageBodies" => true,
+        "redactsSensitivePreviews" => options["includeFullText"] != true,
+        "redactsSensitiveRunInternals" => true,
+        "includesCredentials" => false,
+        "includesSecretValues" => options["includeFullText"] == true
+      }
+    }
   end
 
   defp require_session_key(params) do
@@ -171,18 +217,18 @@ defmodule LemonControlPlane.Methods.SessionDetail do
         "prompt" => prompt,
         "answer" => answer,
         "ok" => get_ok(completed),
-        "error" => get_error(completed),
+        "error" => serialize_term(get_error(completed)),
         "durationMs" => get_map(summary, :duration_ms),
         "toolCallCount" => count_tool_calls(events),
         "toolCalls" => extract_tool_calls(events, opts.tool_call_limit),
         "tokens" => format_usage(completed),
         "eventCount" => length(events),
         "eventDigest" => build_event_digest(events, opts.event_limit),
-        "summaryRaw" => serialize_term(summary),
-        "completedRaw" => serialize_term(completed)
+        "summaryRaw" => serialize_term(sanitize_text_fields(summary, opts.include_full_text)),
+        "completedRaw" => serialize_term(sanitize_text_fields(completed, opts.include_full_text))
       }
-      |> maybe_put("promptFull", prompt_raw, not opts.include_full_text and prompt_raw != "")
-      |> maybe_put("answerFull", answer_raw, not opts.include_full_text and answer_raw != "")
+      |> maybe_put("promptFull", prompt_raw, opts.include_full_text and prompt_raw != "")
+      |> maybe_put("answerFull", answer_raw, opts.include_full_text and answer_raw != "")
       |> maybe_put("events", build_raw_events(events, opts), opts.include_raw_events)
       |> maybe_put("runRecord", fetch_run_record(run_id, opts), opts.include_run_record)
 
@@ -208,6 +254,60 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       "completedRaw" => %{}
     }
   end
+
+  defp count_by(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.frequencies()
+  end
+
+  defp sum_integer(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.filter(&is_integer/1)
+    |> Enum.sum()
+  end
+
+  defp average_or_nil([]), do: nil
+  defp average_or_nil(values), do: div(Enum.sum(values), length(values))
+
+  defp integer_or_zero(value) when is_integer(value), do: value
+  defp integer_or_zero(_), do: 0
+
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?(_), do: true
+
+  defp sanitize_text_fields(value, true), do: value
+
+  defp sanitize_text_fields(%{__struct__: _} = struct, false) do
+    struct
+    |> Map.from_struct()
+    |> sanitize_text_fields(false)
+  end
+
+  defp sanitize_text_fields(map, false) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      key_name = key |> key_to_string() |> String.downcase()
+
+      safe_value =
+        if key_name in ["prompt", "answer", "prompt_full", "answer_full"] do
+          value
+          |> safe_binary()
+          |> truncate(@max_preview_bytes)
+        else
+          sanitize_text_fields(value, false)
+        end
+
+      {key, safe_value}
+    end)
+  end
+
+  defp sanitize_text_fields(list, false) when is_list(list),
+    do: Enum.map(list, &sanitize_text_fields(&1, false))
+
+  defp sanitize_text_fields(value, false), do: value
 
   defp fetch_run_record(run_id, opts) when is_binary(run_id) do
     case LemonCore.RunStore.get(run_id) do
@@ -335,7 +435,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp format_tool_detail(nil), do: nil
 
   defp format_tool_detail(detail) when is_binary(detail),
-    do: truncate(detail, @max_preview_bytes)
+    do: detail |> redact_text() |> truncate(@max_preview_bytes)
 
   defp format_tool_detail(detail) do
     truncate(inspect(serialize_term(detail), limit: 120), @max_preview_bytes)
@@ -416,7 +516,10 @@ defmodule LemonControlPlane.Methods.SessionDetail do
 
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
-      Map.put(acc, key_to_string(k), serialize_term(v, depth + 1))
+      key = key_to_string(k)
+      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      Map.put(acc, key, serialize_term(value, depth + 1))
     end)
   end
 
@@ -430,11 +533,36 @@ defmodule LemonControlPlane.Methods.SessionDetail do
     |> Enum.map(&serialize_term(&1, depth + 1))
   end
 
-  defp serialize_term(value, _depth) when is_binary(value), do: truncate(value, @max_string_bytes)
+  defp serialize_term(value, _depth) when is_binary(value),
+    do: value |> redact_text() |> truncate(@max_string_bytes)
+
   defp serialize_term(value, _depth) when is_integer(value) or is_float(value), do: value
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
+
+  defp redact_text(text) do
+    text
+    |> then(fn value ->
+      Regex.replace(
+        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
+        value,
+        "\\1=[REDACTED]"
+      )
+    end)
+    |> then(fn value ->
+      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
+    end)
+  end
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      &String.contains?(normalized, &1)
+    )
+  end
 
   defp get_map(nil, _key, default), do: default
 
@@ -479,7 +607,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp safe_binary(value), do: inspect(value)
 
   defp maybe_truncate(value, true, _max), do: value
-  defp maybe_truncate(value, false, max), do: truncate(value, max)
+  defp maybe_truncate(value, false, max), do: value |> redact_text() |> truncate(max)
 
   defp truncate(nil, _), do: nil
   defp truncate(text, max) when is_binary(text) and byte_size(text) <= max, do: text

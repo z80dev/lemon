@@ -39,21 +39,15 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
       opts = parse_opts(params)
       graph = build_run_graph(run_id, opts)
       node_count = count_nodes(graph)
+      options = options_payload(opts)
 
       {:ok,
        %{
          "runId" => run_id,
          "graph" => graph,
          "nodeCount" => node_count,
-         "options" => %{
-           "maxDepth" => opts.max_depth,
-           "childLimit" => opts.child_limit,
-           "includeRunRecord" => opts.include_run_record,
-           "includeRunEvents" => opts.include_run_events,
-           "runEventLimit" => opts.run_event_limit,
-           "includeIntrospection" => opts.include_introspection,
-           "introspectionLimit" => opts.introspection_limit
-         }
+         "options" => options,
+         "summary" => summary(run_id, graph, node_count, options)
        }}
     end
   rescue
@@ -68,9 +62,64 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
            "status" => "unknown",
            "children" => []
          },
-         "nodeCount" => 1
+         "nodeCount" => 1,
+         "summary" =>
+           summary(
+             run_id,
+             %{"runId" => run_id, "status" => "unknown", "children" => []},
+             1,
+             %{}
+           )
        }}
   end
+
+  defp options_payload(opts) do
+    %{
+      "maxDepth" => opts.max_depth,
+      "childLimit" => opts.child_limit,
+      "includeRunRecord" => opts.include_run_record,
+      "includeRunEvents" => opts.include_run_events,
+      "runEventLimit" => opts.run_event_limit,
+      "includeIntrospection" => opts.include_introspection,
+      "introspectionLimit" => opts.introspection_limit
+    }
+  end
+
+  defp summary(run_id, graph, node_count, options) do
+    %{
+      "action" => "run.graph.get",
+      "runIdReturned" => is_binary(run_id),
+      "graphReturned" => true,
+      "nodeCount" => node_count,
+      "statusCounts" => status_counts(graph),
+      "options" => options,
+      "cleanup" => %{
+        "includesRawRunRecord" => Map.get(options, "includeRunRecord", false),
+        "includesRawRunEvents" => Map.get(options, "includeRunEvents", false),
+        "includesIntrospectionPayloads" => Map.get(options, "includeIntrospection", false),
+        "includesFullGraph" => true,
+        "redactsSensitivePayloadValues" => true,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp status_counts(graph) do
+    graph
+    |> flatten_nodes()
+    |> Enum.reduce(%{}, fn node, acc ->
+      status = Map.get(node, "status") || "unknown"
+      Map.update(acc, status, 1, &(&1 + 1))
+    end)
+  end
+
+  defp flatten_nodes(%{"children" => children} = node) when is_list(children) do
+    [node | Enum.flat_map(children, &flatten_nodes/1)]
+  end
+
+  defp flatten_nodes(node) when is_map(node), do: [node]
+  defp flatten_nodes(_), do: []
 
   defp build_run_graph(run_id, opts) do
     build_node(run_id, opts, 0, MapSet.new())
@@ -227,7 +276,7 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
       [] ->
         "unknown"
-      end
+    end
   rescue
     _ -> "unknown"
   catch
@@ -475,7 +524,10 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
-      Map.put(acc, key_to_string(k), serialize_term(v, depth + 1))
+      key = key_to_string(k)
+      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      Map.put(acc, key, serialize_term(value, depth + 1))
     end)
   end
 
@@ -487,7 +539,34 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
+
+  defp serialize_term(value, _depth) when is_binary(value),
+    do: inspect(redact_text(value), limit: 200)
+
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
+
+  defp redact_text(text) do
+    text
+    |> then(fn value ->
+      Regex.replace(
+        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
+        value,
+        "\\1=[REDACTED]"
+      )
+    end)
+    |> then(fn value ->
+      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
+    end)
+  end
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      &String.contains?(normalized, &1)
+    )
+  end
 
   defp normalize_list(value) when is_list(value), do: value
   defp normalize_list(_), do: []

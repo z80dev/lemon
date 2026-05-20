@@ -39,7 +39,19 @@ defmodule LemonControlPlane.Methods.WizardStart do
        "wizardId" => wizard_id,
        "type" => wizard_type,
        "steps" => wizard.steps,
-       "currentStep" => 0
+       "currentStep" => 0,
+       "summary" => %{
+         "action" => name(),
+         "wizardIdReturned" => true,
+         "type" => wizard_type,
+         "stepCount" => length(wizard.steps),
+         "currentStep" => 0,
+         "cleanup" => %{
+           "includesWizardData" => false,
+           "includesSecretValues" => false,
+           "includesCredentialValues" => false
+         }
+       }
      }}
   end
 

@@ -31,25 +31,58 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
     assert {:ok, set_result} = SecretsSet.handle(%{"name" => "cp_secret", "value" => "v1"}, %{})
     assert set_result["ok"] == true
     assert set_result["secret"]["name"] == "cp_secret"
+    assert set_result["summary"]["name"] == "cp_secret"
+    assert set_result["summary"]["cleanup"]["includesSecretValues"] == false
+    assert set_result["summary"]["cleanup"]["includesRawKeyMaterial"] == false
+    assert set_result["summary"]["cleanup"]["includesCredentialValues"] == false
+    refute inspect(set_result) =~ "\"v1\""
 
     assert {:ok, exists_result} = SecretsExists.handle(%{"name" => "cp_secret"}, %{})
     assert exists_result["exists"] == true
+    assert exists_result["summary"]["name"] == "cp_secret"
+    assert exists_result["summary"]["exists"] == true
+    assert exists_result["summary"]["envFallback"] == true
+    assert exists_result["summary"]["cleanup"]["includesSecretValues"] == false
 
     assert {:ok, list_result} = SecretsList.handle(%{}, %{})
     assert Enum.any?(list_result["secrets"], &(&1["name"] == "cp_secret"))
+    assert list_result["summary"]["secretCount"] >= 1
+    assert is_map(list_result["summary"]["providerCounts"])
+    assert list_result["summary"]["cleanup"]["includesSecretValues"] == false
+    assert list_result["summary"]["cleanup"]["includesRawKeyMaterial"] == false
     refute inspect(list_result) =~ "\"v1\""
 
     assert {:ok, status_result} = SecretsStatus.handle(%{}, %{})
     assert status_result["configured"] == true
+    assert status_result["healthy"] == true
+    assert status_result["source"] == "env"
+    assert is_boolean(status_result["fileFallback"])
+
+    assert is_nil(status_result["keychainErrorKind"]) or
+             is_binary(status_result["keychainErrorKind"])
+
     assert status_result["count"] >= 1
+    assert status_result["cleanup"]["includesSecretValues"] == false
+    assert status_result["cleanup"]["includesRawKeyMaterial"] == false
+    assert status_result["summary"]["action"] == "secrets.status"
+    assert status_result["summary"]["configured"] == status_result["configured"]
+    assert status_result["summary"]["healthy"] == status_result["healthy"]
+    assert status_result["summary"]["source"] == status_result["source"]
+    assert status_result["summary"]["secretCount"] == status_result["count"]
+    assert status_result["summary"]["cleanup"] == status_result["cleanup"]
 
     assert {:ok, delete_result} = SecretsDelete.handle(%{"name" => "cp_secret"}, %{})
     assert delete_result["ok"] == true
+    assert delete_result["summary"]["name"] == "cp_secret"
+    assert delete_result["summary"]["deleted"] == true
+    assert delete_result["summary"]["cleanup"]["includesSecretValues"] == false
 
     assert {:ok, exists_result_after} =
              SecretsExists.handle(%{"name" => "cp_secret", "envFallback" => false}, %{})
 
     assert exists_result_after["exists"] == false
+    assert exists_result_after["summary"]["exists"] == false
+    assert exists_result_after["summary"]["envFallback"] == false
   end
 
   test "set rejects missing or invalid params" do

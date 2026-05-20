@@ -34,34 +34,58 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
     tasks =
       fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit)
 
-    {:ok,
-     %{
-       "tasks" => tasks,
-       "total" => length(tasks),
-       "filters" => %{
-         "runId" => run_id,
-         "agentId" => agent_id,
-         "limit" => limit,
-         "includeEvents" => include_events,
-         "includeRecord" => include_record,
-         "eventLimit" => event_limit
-       }
-     }}
+    filters = %{
+      "runId" => run_id,
+      "agentId" => agent_id,
+      "limit" => limit,
+      "includeEvents" => include_events,
+      "includeRecord" => include_record,
+      "eventLimit" => event_limit
+    }
+
+    {:ok, response(tasks, filters)}
   rescue
     _ ->
-      {:ok,
-       %{
-         "tasks" => [],
-         "total" => 0,
-         "filters" => %{
-           "runId" => nil,
-           "agentId" => nil,
-           "limit" => @default_limit,
-           "includeEvents" => false,
-           "includeRecord" => false,
-           "eventLimit" => @default_event_limit
-         }
-       }}
+      filters = %{
+        "runId" => nil,
+        "agentId" => nil,
+        "limit" => @default_limit,
+        "includeEvents" => false,
+        "includeRecord" => false,
+        "eventLimit" => @default_event_limit
+      }
+
+      {:ok, response([], filters)}
+  end
+
+  defp response(tasks, filters) do
+    %{
+      "tasks" => tasks,
+      "total" => length(tasks),
+      "filters" => filters,
+      "summary" => summary(tasks, filters)
+    }
+  end
+
+  defp summary(tasks, filters) do
+    %{
+      "count" => length(tasks),
+      "statusCounts" => count_by(tasks, "status"),
+      "engineCounts" => count_by(tasks, "engine"),
+      "roleCounts" => count_by(tasks, "role"),
+      "agentCount" => unique_count(tasks, "agentId"),
+      "runCount" => unique_run_count(tasks),
+      "eventCount" => sum_integer(tasks, "eventCount"),
+      "reasoningCount" => sum_integer(tasks, "reasoningCount"),
+      "filtersApplied" => filters_applied(filters),
+      "cleanup" => %{
+        "includesTaskEvents" => filters["includeEvents"] == true,
+        "includesTaskRecords" => filters["includeRecord"] == true,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit) do
@@ -154,6 +178,45 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
 
   defp task_sort_key(task) do
     task["startedAtMs"] || task["updatedAtMs"] || task["createdAtMs"] || 0
+  end
+
+  defp count_by(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> Enum.frequencies()
+  end
+
+  defp unique_count(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp unique_run_count(tasks) do
+    tasks
+    |> Enum.flat_map(fn task -> [task["runId"], task["parentRunId"]] end)
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp sum_integer(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.filter(&is_integer/1)
+    |> Enum.sum()
+  end
+
+  defp filters_applied(filters) do
+    filters
+    |> Enum.reject(fn {key, value} ->
+      key in ["limit", "eventLimit", "includeEvents", "includeRecord"] or blank?(value)
+    end)
+    |> Enum.map(fn {key, _value} -> key end)
+    |> Enum.sort()
   end
 
   defp derive_task_status(record) do
@@ -354,6 +417,10 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
   end
 
   defp get_map(_map, _key), do: nil
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
 
   defp to_ms(nil), do: nil
   defp to_ms(ms) when is_integer(ms) and ms > 9_999_999_999, do: ms

@@ -25,7 +25,8 @@ defmodule LemonControlPlane.Methods.CronUpdate do
            %{
              "id" => job.id,
              "updated" => true,
-             "nextRunAtMs" => job.next_run_at_ms
+             "nextRunAtMs" => job.next_run_at_ms,
+             "summary" => summary(job, patch)
            }}
 
         {:error, :not_found} ->
@@ -33,6 +34,12 @@ defmodule LemonControlPlane.Methods.CronUpdate do
 
         {:error, {:immutable_fields, fields}} ->
           {:error, {:invalid_request, immutable_fields_message(fields), nil}}
+
+        {:error, {:invalid_schedule, reason}} ->
+          {:error, {:invalid_request, "Invalid schedule: #{reason}", nil}}
+
+        {:error, {:invalid_target, reason}} ->
+          {:error, {:invalid_request, reason, nil}}
 
         {:error, reason} ->
           {:error, {:internal_error, inspect(reason), nil}}
@@ -46,9 +53,14 @@ defmodule LemonControlPlane.Methods.CronUpdate do
     |> maybe_put(:schedule, params["schedule"])
     |> maybe_put(:enabled, params["enabled"])
     |> maybe_put(:prompt, params["prompt"])
+    |> maybe_put(:command, params["command"])
+    |> maybe_put(:cwd, params["cwd"])
+    |> maybe_put(:env, params["env"])
     |> maybe_put(:timezone, params["timezone"])
     |> maybe_put(:jitter_sec, params["jitterSec"])
     |> maybe_put(:timeout_ms, params["timeoutMs"])
+    |> maybe_put(:max_retries, params["maxRetries"])
+    |> maybe_put(:retry_backoff_ms, params["retryBackoffMs"])
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -82,5 +94,30 @@ defmodule LemonControlPlane.Methods.CronUpdate do
 
   defp immutable_fields_message(fields) do
     "Immutable fields cannot be updated: #{Enum.map_join(fields, ", ", &Atom.to_string/1)}"
+  end
+
+  defp summary(job, patch) do
+    %{
+      "jobId" => job.id,
+      "mode" => job |> LemonAutomation.CronJob.execution_mode() |> Atom.to_string(),
+      "updated" => true,
+      "changedFields" => patch |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort(),
+      "promptBytes" => byte_size(job.prompt || ""),
+      "commandBytes" => byte_size(job.command || ""),
+      "targetTextReturned" => false,
+      "cleanup" => cleanup_summary()
+    }
+  end
+
+  defp cleanup_summary do
+    %{
+      "includesPromptText" => false,
+      "includesCommandText" => false,
+      "includesOutputText" => false,
+      "includesErrorText" => false,
+      "includesMessageBodies" => false,
+      "includesCredentials" => false,
+      "includesSecretValues" => false
+    }
   end
 end

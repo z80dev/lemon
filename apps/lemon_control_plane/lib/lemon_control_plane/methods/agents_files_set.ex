@@ -47,8 +47,24 @@ defmodule LemonControlPlane.Methods.AgentsFilesSet do
            "agentId" => agent_id,
            "fileName" => file_name,
            "size" => byte_size(content),
-           "updatedAt" => file.updated_at_ms
+           "updatedAt" => file.updated_at_ms,
+           "summary" => summary(agent_id, file_name, content, file_type)
          }}
     end
+  end
+
+  defp summary(agent_id, file_name, content, file_type) do
+    %{
+      "agentId" => agent_id,
+      "fileName" => file_name,
+      "type" => to_string(file_type),
+      "sizeBytes" => byte_size(content),
+      "updated" => true,
+      "cleanup" => %{
+        "includesFileContent" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

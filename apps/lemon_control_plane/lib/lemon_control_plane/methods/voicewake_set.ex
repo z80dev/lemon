@@ -28,9 +28,9 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
 
       config = %{
         enabled: enabled,
-        keyword: params["keyword"] || existing[:keyword] || "hey lemon",
-        sensitivity: params["sensitivity"] || existing[:sensitivity] || 0.5,
-        backend: params["backend"] || existing[:backend] || "porcupine",
+        keyword: params["keyword"] || get_field(existing, :keyword) || "hey lemon",
+        sensitivity: params["sensitivity"] || get_field(existing, :sensitivity) || 0.5,
+        backend: params["backend"] || get_field(existing, :backend) || "porcupine",
         updated_at_ms: System.system_time(:millisecond)
       }
 
@@ -46,8 +46,35 @@ defmodule LemonControlPlane.Methods.VoicewakeSet do
       {:ok,
        %{
          "enabled" => config.enabled,
-         "keyword" => config.keyword
+         "keyword" => config.keyword,
+         "sensitivity" => config.sensitivity,
+         "backend" => config.backend,
+         "updatedAtMs" => config.updated_at_ms,
+         "summary" => summary(config)
        }}
+    end
+  end
+
+  defp summary(config) do
+    %{
+      "enabled" => config.enabled,
+      "backend" => config.backend,
+      "keywordConfigured" => is_binary(config.keyword) and config.keyword != "",
+      "sensitivityConfigured" => not is_nil(config.sensitivity),
+      "cleanup" => %{
+        "includesAudio" => false,
+        "includesTranscript" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp get_field(map, key) when is_atom(key) and is_map(map) do
+    cond do
+      Map.has_key?(map, key) -> Map.get(map, key)
+      Map.has_key?(map, Atom.to_string(key)) -> Map.get(map, Atom.to_string(key))
+      true -> nil
     end
   end
 end

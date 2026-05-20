@@ -62,7 +62,20 @@ defmodule LemonControlPlane.Methods.DevicePairRequest do
          %{
            "pairingId" => pairing_id,
            "code" => code,
-           "expiresAt" => expires_at
+           "expiresAt" => expires_at,
+           "summary" => %{
+             "pairingId" => pairing_id,
+             "deviceType" => device_type,
+             "expiresAt" => expires_at,
+             "credentialDelivery" => %{
+               "includesPairingCode" => true
+             },
+             "cleanup" => %{
+               "includesDeviceToken" => false,
+               "includesChallengeToken" => false,
+               "includesSecretValues" => false
+             }
+           }
          }}
     end
   end

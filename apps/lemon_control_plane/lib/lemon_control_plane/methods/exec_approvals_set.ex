@@ -37,7 +37,20 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
         # Pre-approval mode: store specific tool+action approvals
         case set_approvals(approvals) do
           {:ok, count} ->
-            {:ok, %{"success" => true, "approvals_set" => count}}
+            {:ok,
+             %{
+               "success" => true,
+               "approvals_set" => count,
+               "summary" => %{
+                 "mode" => "approvals",
+                 "approvalsSet" => count,
+                 "requestedApprovalCount" => list_count(approvals),
+                 "cleanup" => %{
+                   "includesActions" => false,
+                   "includesSecretValues" => false
+                 }
+               }
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, "Failed to set approvals", reason}}
@@ -47,7 +60,18 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
         # Policy mode: store tool-level policy and also pre-approve "allow" tools
         case set_approval_policy(policy) do
           :ok ->
-            {:ok, %{"success" => true}}
+            {:ok,
+             %{
+               "success" => true,
+               "summary" => %{
+                 "mode" => "policy",
+                 "policyToolCount" => map_count(policy),
+                 "cleanup" => %{
+                   "includesActions" => false,
+                   "includesSecretValues" => false
+                 }
+               }
+             }}
 
           {:error, reason} ->
             {:error, {:internal_error, "Failed to set policy", reason}}
@@ -117,4 +141,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalsSet do
   end
 
   defp hash_action(_), do: :any
+
+  defp list_count(value) when is_list(value), do: length(value)
+  defp list_count(_), do: 0
+
+  defp map_count(value) when is_map(value), do: map_size(value)
+  defp map_count(_), do: 0
 end

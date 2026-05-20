@@ -29,15 +29,29 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolve do
         decision_atom = parse_decision(decision)
 
         if is_nil(decision_atom) do
-          {:error, {:invalid_request, "Invalid decision. Must be one of: approve_once, approve_session, approve_agent, approve_global, deny", nil}}
+          {:error,
+           {:invalid_request,
+            "Invalid decision. Must be one of: approve_once, approve_session, approve_agent, approve_global, deny",
+            nil}}
         else
           LemonCore.ExecApprovals.resolve(approval_id, decision_atom)
 
-          {:ok, %{
-            "resolved" => true,
-            "approvalId" => approval_id,
-            "decision" => decision
-          }}
+          {:ok,
+           %{
+             "resolved" => true,
+             "approvalId" => approval_id,
+             "decision" => decision,
+             "summary" => %{
+               "approvalId" => approval_id,
+               "resolved" => true,
+               "decision" => Atom.to_string(decision_atom),
+               "cleanup" => %{
+                 "includesAction" => false,
+                 "includesRationale" => false,
+                 "includesSecretValues" => false
+               }
+             }
+           }}
         end
     end
   end

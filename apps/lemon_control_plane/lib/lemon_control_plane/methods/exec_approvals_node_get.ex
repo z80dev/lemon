@@ -24,7 +24,14 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeGet do
     else
       policy = get_node_policy(node_id)
       approvals = get_node_approvals(node_id)
-      {:ok, %{"nodeId" => node_id, "policy" => policy, "approvals" => approvals}}
+
+      {:ok,
+       %{
+         "nodeId" => node_id,
+         "policy" => policy,
+         "approvals" => approvals,
+         "summary" => summary(node_id, policy, approvals)
+       }}
     end
   end
 
@@ -53,5 +60,29 @@ defmodule LemonControlPlane.Methods.ExecApprovalsNodeGet do
     end)
   rescue
     _ -> []
+  end
+
+  defp summary(node_id, policy, approvals) do
+    %{
+      "nodeId" => node_id,
+      "policyCount" => map_size(policy),
+      "approvalCount" => length(approvals),
+      "approvalToolCounts" => count_by(approvals, "tool"),
+      "cleanup" => %{
+        "includesPolicy" => true,
+        "includesApprovalHashes" => true,
+        "includesActionBodies" => false,
+        "includesPendingActions" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp count_by(items, key) do
+    items
+    |> Enum.map(&Map.get(&1, key))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
   end
 end

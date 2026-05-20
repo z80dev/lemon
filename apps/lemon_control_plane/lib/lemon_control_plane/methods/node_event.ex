@@ -58,13 +58,17 @@ defmodule LemonControlPlane.Methods.NodeEvent do
       if is_nil(event_type) or event_type == "" do
         {:error, Errors.invalid_request("eventType is required")}
       else
-        case validate_and_convert_event_type(event_type) do
-          {:ok, atom_type, is_custom} ->
-            node_id = auth[:client_id] || auth.client_id
-            emit_node_event(event_type, atom_type, payload, node_id, is_custom)
+        if is_map(payload) do
+          case validate_and_convert_event_type(event_type) do
+            {:ok, atom_type, is_custom} ->
+              node_id = auth[:client_id] || auth.client_id
+              emit_node_event(event_type, atom_type, payload, node_id, is_custom)
 
-          {:error, reason} ->
-            {:error, Errors.invalid_request(reason)}
+            {:error, reason} ->
+              {:error, Errors.invalid_request(reason)}
+          end
+        else
+          {:error, Errors.invalid_request("payload must be an object")}
         end
       end
     end
@@ -122,7 +126,19 @@ defmodule LemonControlPlane.Methods.NodeEvent do
     {:ok,
      %{
        "eventType" => original_type,
-       "broadcast" => true
+       "broadcast" => true,
+       "summary" => %{
+         "eventType" => original_type,
+         "nodeId" => node_id,
+         "custom" => is_custom,
+         "payloadKeyCount" => map_size(payload),
+         "cleanup" => %{
+           "includesPayload" => false,
+           "includesMessageBodies" => false,
+           "includesCredentials" => false,
+           "includesSecretValues" => false
+         }
+       }
      }}
   end
 end

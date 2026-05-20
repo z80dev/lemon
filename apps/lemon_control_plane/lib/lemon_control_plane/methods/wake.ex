@@ -37,7 +37,8 @@ defmodule LemonControlPlane.Methods.Wake do
              %{
                "runId" => run_id,
                "agentId" => agent_id,
-               "triggered" => true
+               "triggered" => true,
+               "summary" => summary(agent_id, run_id, session_key, prompt)
              }}
 
           {:error, reason} ->
@@ -64,7 +65,8 @@ defmodule LemonControlPlane.Methods.Wake do
                %{
                  "runId" => run_id,
                  "agentId" => agent_id,
-                 "triggered" => true
+                 "triggered" => true,
+                 "summary" => summary(agent_id, run_id, session_key, prompt)
                }}
 
             {:error, reason} ->
@@ -75,5 +77,22 @@ defmodule LemonControlPlane.Methods.Wake do
         end
       end
     end
+  end
+
+  defp summary(agent_id, run_id, session_key, prompt) do
+    %{
+      "action" => name(),
+      "triggered" => true,
+      "agentIdReturned" => is_binary(agent_id) and agent_id != "",
+      "runIdReturned" => is_binary(run_id) and run_id != "",
+      "sessionKeyReturned" => is_binary(session_key) and session_key != "",
+      "promptBytes" => byte_size(prompt || ""),
+      "cleanup" => %{
+        "includesPrompt" => false,
+        "includesMessageText" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

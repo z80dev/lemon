@@ -30,13 +30,28 @@ defmodule LemonControlPlane.Methods.SkillsBins do
             _ -> []
           end
         end)
-        |> Enum.uniq_by(& &1[:name] || &1["name"])
+        |> Enum.uniq_by(&(&1[:name] || &1["name"]))
         |> Enum.map(&bin_to_map/1)
       else
         []
       end
 
-    {:ok, %{"bins" => bins}}
+    {:ok,
+     %{
+       "bins" => bins,
+       "summary" => %{
+         "action" => name(),
+         "binCount" => length(bins),
+         "requiredCount" => Enum.count(bins, &(&1["required"] == true)),
+         "cwdReturned" => false,
+         "cleanup" => %{
+           "includesCwd" => false,
+           "includesSkillSources" => false,
+           "includesEnvironmentValues" => false,
+           "includesSecretValues" => false
+         }
+       }
+     }}
   end
 
   defp bin_to_map(bin) when is_map(bin) do

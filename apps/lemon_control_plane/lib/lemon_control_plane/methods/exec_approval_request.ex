@@ -59,8 +59,24 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
         {:ok,
          %{
            "approvalId" => approval_id,
-           "expiresAtMs" => expires_at_ms
+           "expiresAtMs" => expires_at_ms,
+           "summary" => %{
+             "approvalId" => approval_id,
+             "tool" => tool,
+             "hasRunId" => not is_nil(run_id),
+             "hasSessionKey" => not is_nil(session_key),
+             "actionKeyCount" => action_key_count(action),
+             "expiresAtMs" => expires_at_ms,
+             "cleanup" => %{
+               "includesAction" => false,
+               "includesRationale" => false,
+               "includesSecretValues" => false
+             }
+           }
          }}
     end
   end
+
+  defp action_key_count(action) when is_map(action), do: map_size(action)
+  defp action_key_count(_), do: 0
 end

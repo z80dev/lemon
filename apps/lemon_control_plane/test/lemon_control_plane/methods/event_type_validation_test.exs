@@ -71,6 +71,8 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
 
         assert {:ok, response} = result
         assert response["broadcast"] == true
+        assert response["summary"]["eventType"] == event_type
+        assert response["summary"]["cleanup"]["includesPayload"] == false
       end
     end
 
@@ -81,6 +83,8 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
 
       assert response["broadcast"] == true
       assert response["eventType"] == "custom_node_metric"
+      assert response["summary"]["custom"] == true
+      assert response["summary"]["payloadKeyCount"] == 1
     end
 
     test "requires node role" do

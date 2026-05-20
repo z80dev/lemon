@@ -30,11 +30,32 @@ defmodule LemonControlPlane.Methods.SessionsActive do
           :none -> nil
         end
 
-      {:ok, %{"sessionKey" => session_key, "runId" => run_id}}
+      {:ok,
+       %{
+         "sessionKey" => session_key,
+         "runId" => run_id,
+         "summary" => summary(session_key, run_id)
+       }}
     end
   rescue
     _ ->
       key = (params || %{})["sessionKey"]
-      {:ok, %{"sessionKey" => key, "runId" => nil}}
+      {:ok, %{"sessionKey" => key, "runId" => nil, "summary" => summary(key, nil)}}
+  end
+
+  defp summary(session_key, run_id) do
+    %{
+      "action" => "sessions.active",
+      "active" => is_binary(run_id) and run_id != "",
+      "sessionKeyReturned" => is_binary(session_key) and session_key != "",
+      "runIdReturned" => is_binary(run_id) and run_id != "",
+      "cleanup" => %{
+        "includesRunRecord" => false,
+        "includesRunEvents" => false,
+        "includesMessageText" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 end

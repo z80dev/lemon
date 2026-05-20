@@ -24,7 +24,23 @@ defmodule LemonControlPlane.Methods.SessionsDelete do
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.PolicyStore.delete_session(session_key)
 
-      {:ok, %{"deleted" => true, "sessionKey" => session_key}}
+      {:ok,
+       %{
+         "deleted" => true,
+         "sessionKey" => session_key,
+         "summary" => %{
+           "sessionKey" => session_key,
+           "deleted" => true,
+           "cleanup" => %{
+             "deletedRunSession" => true,
+             "deletedChatState" => true,
+             "deletedSessionPolicy" => true,
+             "includesMessages" => false,
+             "includesPolicy" => false,
+             "includesSecretValues" => false
+           }
+         }
+       }}
     end
   end
 end

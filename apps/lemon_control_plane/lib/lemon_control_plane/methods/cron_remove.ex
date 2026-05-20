@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.CronRemove do
     with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
       case LemonAutomation.CronManager.remove(job_id) do
         :ok ->
-          {:ok, %{"removed" => true, "id" => job_id}}
+          {:ok, %{"removed" => true, "id" => job_id, "summary" => summary(job_id)}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Cron job not found: #{job_id}", nil}}
@@ -27,5 +27,26 @@ defmodule LemonControlPlane.Methods.CronRemove do
           {:error, {:internal_error, inspect(reason), nil}}
       end
     end
+  end
+
+  defp summary(job_id) do
+    %{
+      "jobId" => job_id,
+      "removed" => true,
+      "rawIdsReturned" => true,
+      "cleanup" => cleanup_summary()
+    }
+  end
+
+  defp cleanup_summary do
+    %{
+      "includesPromptText" => false,
+      "includesCommandText" => false,
+      "includesOutputText" => false,
+      "includesErrorText" => false,
+      "includesMessageBodies" => false,
+      "includesCredentials" => false,
+      "includesSecretValues" => false
+    }
   end
 end

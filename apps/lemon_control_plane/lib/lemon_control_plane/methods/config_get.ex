@@ -46,12 +46,47 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     if key do
       # Get specific key
       value = get_config_value(key)
-      {:ok, %{"key" => key, "value" => value}}
+      redacted = redact_config_value(key, value)
+      {:ok, %{"key" => key, "value" => redacted, "summary" => summary(key, redacted)}}
     else
       # Get all config
       config = get_all_config()
-      {:ok, config}
+      {:ok, Map.put(config, "summary", summary(config))}
     end
+  end
+
+  defp summary(key, redacted_value) do
+    sensitive? = sensitive_key?(key)
+
+    %{
+      "requestedKey" => key,
+      "keyCount" => 1,
+      "found" => not is_nil(redacted_value),
+      "sensitive" => sensitive?,
+      "valueReturned" => not sensitive? and not is_nil(redacted_value),
+      "cleanup" => %{
+        "includesSensitiveValues" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp summary(config) when is_map(config) do
+    sensitive_key_count =
+      config
+      |> Map.keys()
+      |> Enum.count(&sensitive_key?/1)
+
+    %{
+      "keyCount" => map_size(config),
+      "sensitiveKeyCount" => sensitive_key_count,
+      "cleanup" => %{
+        "includesSensitiveValues" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp get_config_value(key) do
@@ -102,10 +137,42 @@ defmodule LemonControlPlane.Methods.ConfigGet do
       end)
 
     Map.merge(app_config, stored_map)
+    |> redact_config_map()
   rescue
     _ -> %{}
   end
 
   defp format_config_value(value) when is_atom(value), do: to_string(value)
   defp format_config_value(value), do: value
+
+  defp redact_config_map(config) when is_map(config) do
+    Enum.into(config, %{}, fn {key, value} ->
+      {key, redact_config_value(key, value)}
+    end)
+  end
+
+  defp redact_config_value(key, value) do
+    cond do
+      is_nil(value) ->
+        nil
+
+      sensitive_key?(key) ->
+        %{"redacted" => true, "kind" => "secret"}
+
+      is_map(value) ->
+        redact_config_map(value)
+
+      true ->
+        value
+    end
+  end
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      fn marker -> String.contains?(normalized, marker) end
+    )
+  end
 end

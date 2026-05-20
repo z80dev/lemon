@@ -114,7 +114,8 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
        %{
          "skillKey" => skill_key,
          "enabled" => current_enabled,
-         "env" => env
+         "env" => redact_env(env),
+         "summary" => update_summary(skill_key, current_enabled, env, false)
        }}
     end
   end
@@ -141,7 +142,8 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
              "enabled" => entry.enabled,
              "name" => entry.name,
              "source" => to_string(entry.source),
-             "updated" => true
+             "updated" => true,
+             "summary" => update_summary(entry.key, entry.enabled, nil, true)
            }}
 
         {:error, reason} ->
@@ -150,5 +152,52 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
     else
       {:error, Errors.not_implemented("LemonSkills.Installer not available")}
     end
+  end
+
+  defp update_summary(skill_key, enabled, env, version_update?) do
+    env_keys =
+      env
+      |> case do
+        value when is_map(value) -> Map.keys(value)
+        _ -> []
+      end
+      |> Enum.map(&to_string/1)
+      |> Enum.sort()
+
+    %{
+      "action" => name(),
+      "skillKeyReturned" => is_binary(skill_key) and skill_key != "",
+      "enabledReturned" => not is_nil(enabled),
+      "versionUpdate" => version_update?,
+      "envKeyCount" => length(env_keys),
+      "envKeys" => env_keys,
+      "cleanup" => %{
+        "includesEnvironmentValues" => is_map(env) and map_size(env) > 0,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false,
+        "includesApprovalContext" => false
+      }
+    }
+  end
+
+  defp redact_env(env) when is_map(env) do
+    Map.new(env, fn {key, value} ->
+      if sensitive_key?(key) do
+        {key, %{"redacted" => true, "kind" => "secret"}}
+      else
+        {key, value}
+      end
+    end)
+  end
+
+  defp redact_env(env), do: env
+
+  defp sensitive_key?(key) do
+    normalized = key |> to_string() |> String.downcase()
+
+    Enum.any?(
+      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
+      &String.contains?(normalized, &1)
+    )
   end
 end

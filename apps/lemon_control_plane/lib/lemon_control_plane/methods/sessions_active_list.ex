@@ -32,19 +32,52 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
       |> Enum.filter(&(&1[:active?] == true))
       |> Enum.map(&format_session/1)
 
+    filters = %{
+      "agentId" => agent_id,
+      "limit" => limit,
+      "route" => format_route_filter(route)
+    }
+
     {:ok,
      %{
        "sessions" => sessions,
        "total" => length(sessions),
-       "filters" => %{
-         "agentId" => agent_id,
-         "limit" => limit,
-         "route" => format_route_filter(route)
-       }
+       "filters" => filters,
+       "summary" => summary(sessions, filters)
      }}
   rescue
     e ->
       {:error, {:internal_error, "Failed to list active sessions", Exception.message(e)}}
+  end
+
+  defp summary(sessions, filters) do
+    updated_values =
+      sessions
+      |> Enum.map(& &1["updatedAtMs"])
+      |> Enum.filter(&is_integer/1)
+
+    %{
+      "count" => length(sessions),
+      "activeCount" => Enum.count(sessions, &(&1["active"] == true)),
+      "agentCount" => unique_count(sessions, "agentId"),
+      "channelCounts" => count_by(sessions, "channelId"),
+      "kindCounts" => count_by(sessions, "kind"),
+      "peerKindCounts" => count_by(sessions, "peerKind"),
+      "targetCount" => unique_count(sessions, "target"),
+      "harnessCount" => Enum.count(sessions, &is_map(&1["harness"])),
+      "runCount" => sum_integer(sessions, "runCount"),
+      "oldestUpdatedAtMs" => min_or_nil(updated_values),
+      "newestUpdatedAtMs" => max_or_nil(updated_values),
+      "filtersApplied" => filters_applied(filters),
+      "cleanup" => %{
+        "includesHarnessSnapshots" => Enum.any?(sessions, &is_map(&1["harness"])),
+        "includesMessages" => false,
+        "includesRunEvents" => false,
+        "includesRunRecords" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
   end
 
   defp format_session(session) do
@@ -111,11 +144,9 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   end
 
   defp checkpoint_progress(session_key) do
-    if Code.ensure_loaded?(CodingAgent.Checkpoint) do
-      session_key
-      |> CodingAgent.Checkpoint.stats()
-      |> stringify_map_keys()
-    end
+    session_key
+    |> LemonCore.Checkpoint.stats()
+    |> stringify_map_keys()
   rescue
     _ -> nil
   catch
@@ -249,6 +280,51 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   defp format_route_filter(route) when is_map(route), do: format_route(route)
   defp format_route_filter(_), do: %{}
 
+  defp count_by(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> Enum.frequencies()
+  end
+
+  defp unique_count(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+    |> MapSet.size()
+  end
+
+  defp sum_integer(rows, key) do
+    rows
+    |> Enum.map(& &1[key])
+    |> Enum.filter(&is_integer/1)
+    |> Enum.sum()
+  end
+
+  defp filters_applied(filters) do
+    route_applied =
+      case Map.get(filters, "route") do
+        route when is_map(route) and map_size(route) > 0 -> ["route"]
+        _ -> []
+      end
+
+    scalar_applied =
+      filters
+      |> Enum.reject(fn {key, value} -> key in ["limit", "route"] or blank?(value) end)
+      |> Enum.map(fn {key, _value} -> key end)
+
+    (scalar_applied ++ route_applied)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp min_or_nil([]), do: nil
+  defp min_or_nil(values), do: Enum.min(values)
+
+  defp max_or_nil([]), do: nil
+  defp max_or_nil(values), do: Enum.max(values)
+
   defp route_value(route, primary_atom, primary_string) do
     map_get(route, primary_atom) || map_get(route, primary_string)
   end
@@ -308,4 +384,8 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   end
 
   defp map_get(_, _), do: nil
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
 end

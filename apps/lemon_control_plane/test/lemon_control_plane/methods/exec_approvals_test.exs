@@ -5,6 +5,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
   alias LemonControlPlane.Methods.ExecApprovalsNodeSet
   alias LemonControlPlane.Methods.ExecApprovalsGet
   alias LemonControlPlane.Methods.ExecApprovalsNodeGet
+  alias LemonControlPlane.Methods.ExecApprovalRequest
   alias LemonControlPlane.Methods.ExecApprovalResolve
 
   setup do
@@ -45,6 +46,34 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
     end
   end
 
+  describe "ExecApprovalRequest" do
+    test "returns bounded approval request summary" do
+      {:ok, result} =
+        ExecApprovalRequest.handle(
+          %{
+            "runId" => "run-summary",
+            "sessionKey" => "agent:test:main",
+            "tool" => "bash",
+            "action" => %{"command" => "echo secret", "token" => "should-not-leak"},
+            "rationale" => "needs shell"
+          },
+          %{}
+        )
+
+      assert is_binary(result["approvalId"])
+      assert result["summary"]["approvalId"] == result["approvalId"]
+      assert result["summary"]["tool"] == "bash"
+      assert result["summary"]["hasRunId"] == true
+      assert result["summary"]["hasSessionKey"] == true
+      assert result["summary"]["actionKeyCount"] == 2
+      assert result["summary"]["cleanup"]["includesAction"] == false
+      assert result["summary"]["cleanup"]["includesRationale"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "should-not-leak"
+      refute inspect(result) =~ "needs shell"
+    end
+  end
+
   describe "ExecApprovalsSet" do
     test "method name is correct" do
       assert ExecApprovalsSet.name() == "exec.approvals.set"
@@ -62,6 +91,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       {:ok, result} = ExecApprovalsSet.handle(%{"policy" => policy}, %{})
 
       assert result["success"] == true
+      assert result["summary"]["mode"] == "policy"
+      assert result["summary"]["policyToolCount"] == 2
+      assert result["summary"]["cleanup"]["includesActions"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
 
       # Verify the policy map was stored
       stored_map = LemonCore.Store.get(:exec_approvals_policy_map, :global)
@@ -83,6 +116,13 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       assert result["success"] == true
       assert result["approvals_set"] == 2
+      assert result["summary"]["mode"] == "approvals"
+      assert result["summary"]["approvalsSet"] == 2
+      assert result["summary"]["requestedApprovalCount"] == 2
+      assert result["summary"]["cleanup"]["includesActions"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "npm test"
+      refute inspect(result) =~ "npm build"
 
       # Verify the approvals were stored with correct action hashes
       action1 = %{"command" => "npm test"}
@@ -97,14 +137,15 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       {:ok, _} = ExecApprovalsSet.handle(%{"policy" => %{"bash" => "allow"}}, %{})
 
       # Request approval - should return immediately
-      result = LemonCore.ExecApprovals.request(%{
-        run_id: "test-run",
-        session_key: "agent:test:main",
-        tool: "bash",
-        action: %{command: "echo hello"},
-        rationale: "test",
-        expires_in_ms: 100
-      })
+      result =
+        LemonCore.ExecApprovals.request(%{
+          run_id: "test-run",
+          session_key: "agent:test:main",
+          tool: "bash",
+          action: %{command: "echo hello"},
+          rationale: "test",
+          expires_in_ms: 100
+        })
 
       assert {:ok, :approved, :global} = result
     end
@@ -119,14 +160,15 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
         )
 
       # Request with the same action should be approved
-      result = LemonCore.ExecApprovals.request(%{
-        run_id: "test-run",
-        session_key: "agent:test:main",
-        tool: "bash",
-        action: action,
-        rationale: "test",
-        expires_in_ms: 100
-      })
+      result =
+        LemonCore.ExecApprovals.request(%{
+          run_id: "test-run",
+          session_key: "agent:test:main",
+          tool: "bash",
+          action: action,
+          rationale: "test",
+          expires_in_ms: 100
+        })
 
       assert {:ok, :approved, :global} = result
     end
@@ -158,6 +200,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       assert result["success"] == true
       assert result["nodeId"] == node_id
+      assert result["summary"]["nodeId"] == node_id
+      assert result["summary"]["mode"] == "policy"
+      assert result["summary"]["policyToolCount"] == 2
+      assert result["summary"]["cleanup"]["includesActions"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
 
       # Verify bash is pre-approved for this node
       bash_approval = LemonCore.Store.get(:exec_approvals_policy_node, {node_id, "bash", :any})
@@ -168,6 +215,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
     test "pre-approves specific tool+action combinations for node" do
       node_id = "node-456"
+
       approvals = [
         %{"tool" => "bash", "action" => %{"command" => "make build"}}
       ]
@@ -180,6 +228,13 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       assert result["success"] == true
       assert result["approvals_set"] == 1
+      assert result["summary"]["nodeId"] == node_id
+      assert result["summary"]["mode"] == "approvals"
+      assert result["summary"]["approvalsSet"] == 1
+      assert result["summary"]["requestedApprovalCount"] == 1
+      assert result["summary"]["cleanup"]["includesActions"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
+      refute inspect(result) =~ "make build"
 
       # Verify the approval was stored with correct action hash
       action = %{"command" => "make build"}
@@ -200,15 +255,16 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
         )
 
       # Request with node_id should be approved
-      result = LemonCore.ExecApprovals.request(%{
-        run_id: "test-run",
-        session_key: "agent:test:main",
-        node_id: node_id,
-        tool: "bash",
-        action: %{command: "echo node"},
-        rationale: "test",
-        expires_in_ms: 100
-      })
+      result =
+        LemonCore.ExecApprovals.request(%{
+          run_id: "test-run",
+          session_key: "agent:test:main",
+          node_id: node_id,
+          tool: "bash",
+          action: %{command: "echo node"},
+          rationale: "test",
+          expires_in_ms: 100
+        })
 
       assert {:ok, :approved, :node} = result
     end
@@ -232,10 +288,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
     end
 
     test "validates decision values" do
-      result = ExecApprovalResolve.handle(
-        %{"approvalId" => "approval-1", "decision" => "invalid_decision"},
-        %{}
-      )
+      result =
+        ExecApprovalResolve.handle(
+          %{"approvalId" => "approval-1", "decision" => "invalid_decision"},
+          %{}
+        )
 
       assert {:error, {:invalid_request, message, _}} = result
       assert message =~ "Invalid decision"
@@ -244,6 +301,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
     test "accepts camelCase decision values" do
       # Create a pending approval
       approval_id = LemonCore.Id.approval_id()
+
       pending = %{
         id: approval_id,
         run_id: "run-camel",
@@ -258,16 +316,24 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      {:ok, result} = ExecApprovalResolve.handle(
-        %{"approvalId" => approval_id, "decision" => "approveOnce"},
-        %{}
-      )
+      {:ok, result} =
+        ExecApprovalResolve.handle(
+          %{"approvalId" => approval_id, "decision" => "approveOnce"},
+          %{}
+        )
 
       assert result["resolved"] == true
+      assert result["summary"]["approvalId"] == approval_id
+      assert result["summary"]["resolved"] == true
+      assert result["summary"]["decision"] == "approve_once"
+      assert result["summary"]["cleanup"]["includesAction"] == false
+      assert result["summary"]["cleanup"]["includesRationale"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "accepts snake_case decision values" do
       approval_id = LemonCore.Id.approval_id()
+
       pending = %{
         id: approval_id,
         run_id: "run-snake",
@@ -282,16 +348,19 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      {:ok, result} = ExecApprovalResolve.handle(
-        %{"approvalId" => approval_id, "decision" => "approve_session"},
-        %{}
-      )
+      {:ok, result} =
+        ExecApprovalResolve.handle(
+          %{"approvalId" => approval_id, "decision" => "approve_session"},
+          %{}
+        )
 
       assert result["resolved"] == true
+      assert result["summary"]["decision"] == "approve_session"
     end
 
     test "resolves pending approval and removes from pending" do
       approval_id = LemonCore.Id.approval_id()
+
       pending = %{
         id: approval_id,
         run_id: "run-remove",
@@ -306,10 +375,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      {:ok, _} = ExecApprovalResolve.handle(
-        %{"approvalId" => approval_id, "decision" => "deny"},
-        %{}
-      )
+      {:ok, _} =
+        ExecApprovalResolve.handle(
+          %{"approvalId" => approval_id, "decision" => "deny"},
+          %{}
+        )
 
       # Pending approval should be removed
       assert LemonCore.Store.get(:exec_approvals_pending, approval_id) == nil
@@ -328,6 +398,65 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       {:ok, result} = ExecApprovalsGet.handle(%{}, %{})
 
       assert result["policy"] == policy
+    end
+
+    test "returns active pending approvals with structured action metadata" do
+      active_id = LemonCore.Id.approval_id()
+      expired_id = LemonCore.Id.approval_id()
+      now_ms = LemonCore.Clock.now_ms()
+
+      LemonCore.Store.put(:exec_approvals_pending, active_id, %{
+        id: active_id,
+        run_id: "run-oauth",
+        session_key: "agent:oauth:main",
+        agent_id: "oauth",
+        tool: "mcp_mcp_oauth",
+        action: %{
+          type: "mcp_oauth_authorization",
+          authorization_url: "http://127.0.0.1:4000/oauth",
+          nested: %{state_hash: "abc123", api_key: "should-not-leak"}
+        },
+        rationale: "MCP OAuth authorization required",
+        requested_at_ms: now_ms,
+        expires_at_ms: nil
+      })
+
+      LemonCore.Store.put(:exec_approvals_pending, expired_id, %{
+        "id" => expired_id,
+        "run_id" => "run-expired",
+        "session_key" => "agent:expired:main",
+        "tool" => "bash",
+        "action" => %{"cmd" => "echo stale"},
+        "rationale" => "expired",
+        "requested_at_ms" => now_ms - 10_000,
+        "expires_at_ms" => now_ms - 1
+      })
+
+      {:ok, result} = ExecApprovalsGet.handle(%{}, %{})
+
+      assert [pending] = result["pending"]
+      assert pending["id"] == active_id
+      assert pending["runId"] == "run-oauth"
+      assert pending["sessionKey"] == "agent:oauth:main"
+      assert pending["agentId"] == "oauth"
+      assert pending["tool"] == "mcp_mcp_oauth"
+      assert pending["expiresAtMs"] == nil
+      assert pending["action"]["type"] == "mcp_oauth_authorization"
+      assert pending["action"]["authorization_url"] == "http://127.0.0.1:4000/oauth"
+      assert pending["action"]["nested"]["state_hash"] == "abc123"
+      assert pending["action"]["nested"]["api_key"] == %{"redacted" => true, "kind" => "secret"}
+      refute inspect(result) =~ "should-not-leak"
+      assert result["summary"]["policyCount"] == 0
+      assert result["summary"]["approvalCount"] == 0
+      assert result["summary"]["pendingCount"] == 1
+      assert result["summary"]["pendingToolCounts"]["mcp_mcp_oauth"] == 1
+      assert result["summary"]["pendingAgentCounts"]["oauth"] == 1
+      assert result["summary"]["expiredPendingOmitted"] == true
+      assert result["summary"]["cleanup"]["includesPendingActions"] == true
+      assert result["summary"]["cleanup"]["redactsPendingActionSecretKeys"] == true
+      assert result["summary"]["cleanup"]["includesRationales"] == true
+      assert result["summary"]["cleanup"]["includesCredentials"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
   end
 
@@ -351,6 +480,15 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
       assert result["nodeId"] == node_id
       assert result["policy"] == policy
+      assert result["summary"]["nodeId"] == node_id
+      assert result["summary"]["policyCount"] == 1
+      assert result["summary"]["approvalCount"] == 1
+      assert result["summary"]["approvalToolCounts"]["bash"] == 1
+      assert result["summary"]["cleanup"]["includesPolicy"] == true
+      assert result["summary"]["cleanup"]["includesApprovalHashes"] == true
+      assert result["summary"]["cleanup"]["includesActionBodies"] == false
+      assert result["summary"]["cleanup"]["includesCredentials"] == false
+      assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
   end
 

@@ -22,7 +22,7 @@ defmodule LemonControlPlane.Methods.NodeList do
       |> Enum.map(fn {_id, node} -> format_node(node) end)
       |> Enum.sort_by(& &1["name"])
 
-    {:ok, %{"nodes" => nodes}}
+    {:ok, %{"nodes" => nodes, "summary" => summary(nodes)}}
   end
 
   defp format_node(node) do
@@ -42,5 +42,39 @@ defmodule LemonControlPlane.Methods.NodeList do
   # This handles JSONL reload where keys become strings
   defp get_field(map, key) when is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp summary(nodes) do
+    %{
+      "nodeCount" => length(nodes),
+      "statusCounts" => count_by(nodes, "status"),
+      "typeCounts" => count_by(nodes, "type"),
+      "capabilityCounts" => capability_counts(nodes),
+      "cleanup" => %{
+        "includesCapabilities" => true,
+        "includesInvocationResults" => false,
+        "includesPairingSecrets" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp count_by(nodes, key) do
+    nodes
+    |> Enum.map(&Map.get(&1, key))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+  end
+
+  defp capability_counts(nodes) do
+    nodes
+    |> Enum.flat_map(fn node ->
+      node
+      |> Map.get("capabilities", %{})
+      |> Map.keys()
+    end)
+    |> Enum.map(&to_string/1)
+    |> Enum.frequencies()
   end
 end

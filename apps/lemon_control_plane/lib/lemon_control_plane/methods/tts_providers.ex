@@ -39,7 +39,21 @@ defmodule LemonControlPlane.Methods.TtsProviders do
       }
     ]
 
-    {:ok, %{"providers" => providers}}
+    {:ok, %{"providers" => providers, "summary" => summary(providers)}}
+  end
+
+  defp summary(providers) do
+    %{
+      "providerCount" => length(providers),
+      "availableCount" => Enum.count(providers, &(&1["available"] == true)),
+      "providerIds" => Enum.map(providers, & &1["id"]),
+      "voiceCount" => Enum.reduce(providers, 0, &(&2 + length(&1["voices"] || []))),
+      "cleanup" => %{
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false,
+        "includesRawProviderErrors" => false
+      }
+    }
   end
 
   defp get_system_voices do

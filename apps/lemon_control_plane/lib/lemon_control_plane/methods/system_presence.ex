@@ -21,13 +21,40 @@ defmodule LemonControlPlane.Methods.SystemPresence do
   end
 
   defp build_presence(ctx) do
+    connections = count_connections()
+    active_runs = count_active_runs()
+    timestamp = System.system_time(:millisecond)
+    health = get_health_status()
+    resources = get_resource_usage()
+
     %{
       "connId" => ctx[:conn_id],
-      "connections" => count_connections(),
-      "activeRuns" => count_active_runs(),
-      "timestamp" => System.system_time(:millisecond),
-      "health" => get_health_status(),
-      "resources" => get_resource_usage()
+      "connections" => connections,
+      "activeRuns" => active_runs,
+      "timestamp" => timestamp,
+      "health" => health,
+      "resources" => resources,
+      "summary" => summary(connections, active_runs, timestamp, health, resources)
+    }
+  end
+
+  defp summary(connections, active_runs, timestamp, health, resources) do
+    %{
+      "connectionCount" => connections,
+      "activeRunCount" => active_runs,
+      "healthStatus" => health["status"],
+      "timestampMs" => timestamp,
+      "memoryTotal" => resources["memoryTotal"],
+      "processCount" => resources["processCount"],
+      "schedulerCount" => resources["schedulers"],
+      "cleanup" => %{
+        "includesCurrentConnectionId" => true,
+        "includesOtherConnectionIds" => false,
+        "includesRawProcessState" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
     }
   end
 

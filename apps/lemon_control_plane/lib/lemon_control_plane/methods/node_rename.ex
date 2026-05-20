@@ -42,9 +42,23 @@ defmodule LemonControlPlane.Methods.NodeRename do
              %{
                "nodeId" => node_id,
                "name" => new_name,
-               "renamed" => true
+               "renamed" => true,
+               "summary" => %{
+                 "nodeId" => node_id,
+                 "renamed" => true,
+                 "nameChanged" => old_name(node) != new_name,
+                 "cleanup" => %{
+                   "includesPreviousName" => false,
+                   "includesCapabilities" => false,
+                   "includesMetadata" => false,
+                   "includesCredentials" => false,
+                   "includesSecretValues" => false
+                 }
+               }
              }}
         end
     end
   end
+
+  defp old_name(node) when is_map(node), do: Map.get(node, :name) || Map.get(node, "name")
 end

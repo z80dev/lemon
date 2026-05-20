@@ -54,9 +54,34 @@ defmodule LemonControlPlane.Methods.Agent do
   def handle(params, ctx) do
     with {:ok, validated} <- validate_params(params),
          {:ok, result} <- submit_run(validated, ctx) do
-      {:ok, result}
+      {:ok, Map.put(result, "summary", summary(validated, result))}
     end
   end
+
+  defp summary(params, result) do
+    %{
+      "agentId" => params.agent_id,
+      "sessionKey" => result["session_key"],
+      "runId" => result["run_id"],
+      "queueMode" => to_string(params.queue_mode),
+      "promptBytes" => byte_size(params.prompt),
+      "hasCwd" => present?(params.cwd),
+      "hasEngineOverride" => present?(params.engine_id),
+      "hasModelOverride" => present?(params.model),
+      "hasToolPolicy" => is_map(params.tool_policy) and map_size(params.tool_policy) > 0,
+      "hasIdempotencyKey" => present?(params.idempotency_key),
+      "cleanup" => %{
+        "includesPromptText" => false,
+        "includesMessageBodies" => false,
+        "includesCredentials" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(nil), do: false
+  defp present?(_value), do: true
 
   defp validate_params(nil) do
     {:error, Errors.invalid_params("params is required")}

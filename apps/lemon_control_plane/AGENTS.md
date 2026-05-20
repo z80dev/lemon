@@ -72,7 +72,10 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 |--------|------|---------|
 | `LemonControlPlane` | `lib/lemon_control_plane.ex` | Main module, protocol/server version |
 | `LemonControlPlane.Application` | `lib/lemon_control_plane/application.ex` | OTP supervision tree |
-| `LemonControlPlane.HTTP.Router` | `lib/lemon_control_plane/http/router.ex` | HTTP routing (Bandit/Plug): `/ws`, `/healthz` |
+| `LemonControlPlane.HTTP.Router` | `lib/lemon_control_plane/http/router.ex` | HTTP routing (Bandit/Plug): `/ws`, `/healthz`, preview `/v1` OpenAI-compatible endpoints, preview `/acp` JSON-RPC endpoint |
+| `LemonControlPlane.OpenAICompat` | `lib/lemon_control_plane/openai_compat.ex` | Preview `/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/runs/*`, and stored response adapter over Lemon model metadata, router-submitted runs, optional `agent.wait` synchronous completion, SSE streaming with redacted tool progress, run-store response retrieval, `supportsVision` model metadata, redacted URL/file-id image metadata plus data URL and opt-in allowlisted URL runtime image pass-through with known text-only model rejection before submission, redacted run status, and cancellation dispatch |
+| `LemonControlPlane.ACP` | `lib/lemon_control_plane/acp.ex` | Preview Agent Client Protocol JSON-RPC bridge for initialize, store-backed session lifecycle, text/resource-link prompt submission through Lemon router runs, wait/queued prompt behavior, run-bus `session/update` projection, ACP filesystem client-request summaries, cancel/close, and honest capability negotiation |
+| `LemonControlPlane.ACP.NDJSON` | `lib/lemon_control_plane/acp/ndjson.ex` | Newline-delimited JSON transport helper used by `scripts/lemon_acp_stdio.exs` for spawned ACP stdio clients, including intermediate `session/update` notification lines and permission/read/write/delete/rename client requests while prompt waits are active |
 | `LemonControlPlane.WS.Connection` | `lib/lemon_control_plane/ws/connection.ex` | WebSocket connection handler (`WebSock` behaviour) |
 | `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
@@ -84,7 +87,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
-| `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param schema validation before dispatch; `validate/2` |
+| `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
 
 ## JSON-RPC Method Structure
 
@@ -180,88 +183,93 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `health` | none | Basic health check |
-| `status` | read | System status (connections, runs, channels, skills) |
-| `introspection.snapshot` | read | Consolidated snapshot of agents, sessions, channels, transports (includes `activeSessions` harness progress projection) |
-| `logs.tail` | read | Tail recent log lines |
-| `models.list` | read | List available AI models |
-| `usage.status` | read | Current usage summary |
-| `usage.cost` | read | Cost breakdown for a date range |
-| `system-presence` | read | Current presence data |
-| `system-event` | write | Emit a system event |
-| `system.reload` | admin | Runtime reload of module/app/extension/all scopes; `compile: true` recompiles source first on mix-run nodes |
-| `update.run` | admin | Trigger a system update |
+| `health` | none | Public runtime health with BEAM scheduler/memory summary |
+| `status` | read | System status with connections, runs, channels, skills, BEAM VM capacity counters, and cleanup summary |
+| `introspection.snapshot` | read | Consolidated snapshot of agents, sessions, channels, transports with section summary (includes `activeSessions` harness progress projection) |
+| `logs.tail` | read | Tail recent log lines with filter summary, cleanup flags, and sensitive log-value redaction |
+| `models.list` | read | List available AI models plus capability/provider summaries |
+| `providers.status` | read | Redacted provider credential readiness, route preview, fallback candidates, config-shape diagnostics, live fallback proof status, and top-level summary |
+| `memory.status` | read | Redacted memory-provider registry metadata plus provider health and searchable-scope summaries |
+| `proofs.status` | read | Redacted live-proof diagnostics with top-level counts and launch-gate summaries for Discord DM, Discord client-click, provider media, and terminal backends |
+| `extensions.status` | read | Redacted extension/plugin load, conflict, provider, WASM diagnostics, and host/runtime summary |
+| `usage.status` | read | Current usage, provider, quota, and redaction-safe summary backed by `LemonCore.UsageDiagnostics` |
+| `usage.cost` | read | Cost breakdown for a date range plus cleanup summary |
+| `system-presence` | read | Current presence/resource data plus summary/cleanup flags |
+| `system-event` | write | Emit a bounded admin system event with target validation plus summary/cleanup flags |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes with lifecycle summary; `compile: true` recompiles source first on mix-run nodes |
+| `update.run` | admin | Trigger a system update with version/check-only/apply summary and cleanup flags |
 
 ### Session Management
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `sessions.list` | read | List all sessions with pagination |
-| `sessions.active` | read | Get currently active session |
-| `sessions.active.list` | read | List all active sessions; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
-| `sessions.preview` | read | Preview session messages |
-| `sessions.patch` | admin | Modify session (toolPolicy, model, thinkingLevel) |
-| `sessions.reset` | admin | Clear session history |
-| `sessions.delete` | admin | Delete a session |
-| `sessions.compact` | admin | Compact session storage |
-| `session.detail` | read | Deep session/run internals (tool calls, optional raw run events, run records) |
+| `sessions.list` | read | List all sessions with pagination plus summary and cleanup flags |
+| `sessions.active` | read | Get currently active session plus active-run cleanup summary |
+| `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
+| `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
+| `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
+| `sessions.reset` | admin | Clear session history plus cleanup summary |
+| `sessions.delete` | admin | Delete a session plus cleanup summary |
+| `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
+| `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 
 ### Monitoring / Introspection
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `runs.active.list` | read | Active run list from `LemonRouter.RunRegistry` |
-| `runs.recent.list` | read | Recent completed/errored/aborted runs |
-| `run.graph.get` | read | Parent/child run graph with optional per-node run-store records/events and introspection |
-| `run.introspection.list` | read | Introspection timeline for one run (optional run-store internals) |
-| `tasks.active.list` | read | Active task/subagent records from `CodingAgent.TaskStore` |
-| `tasks.recent.list` | read | Recent terminal task records with status/error classification |
+| `runs.active.list` | read | Active run list from `LemonRouter.RunRegistry` plus summary and cleanup flags |
+| `runs.recent.list` | read | Recent completed/errored/aborted runs plus status/duration summary and cleanup flags |
+| `run.graph.get` | read | Parent/child run graph with optional per-node run-store records/events and introspection plus return-state summary and sensitive-internal redaction |
+| `run.introspection.list` | read | Introspection timeline for one run plus raw-internal return-state summary and sensitive payload redaction |
+| `tasks.active.list` | read | Active task/subagent records from `CodingAgent.TaskStore` plus summary and include/cleanup flags |
+| `tasks.recent.list` | read | Recent terminal task records with status/error classification plus summary and include/cleanup flags |
 
 `tasks.active.list` / `tasks.recent.list` infer missing `engine` from task record metadata and task event payloads (for example `details.engine`) when the persisted task record has no explicit engine field.
+The run/task list methods also include compact summaries for status, engine, agent/session/run, event, reasoning, and duration counts so non-Web clients can monitor orchestration without fetching run graphs or raw task records.
 
 ### Agent Management
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `agent` | write | Submit an agent run (requires `prompt`) |
-| `agent.wait` | write | Submit and wait for completion |
-| `agent.progress` | read | Get progress for active session |
-| `agents.list` | read | List available agents |
-| `agent.identity.get` | read | Get agent capabilities/identity |
-| `agent.inbox.send` | write | Send message to agent inbox with routing |
-| `agent.targets.list` | read | List agent routing targets |
-| `agent.directory.list` | read | List agent directory entries |
-| `agent.endpoints.list` | read | List agent HTTP endpoints |
-| `agent.endpoints.set` | write | Configure agent endpoint |
-| `agent.endpoints.delete` | write | Remove agent endpoint |
-| `agents.files.list` | read | List agent files |
-| `agents.files.get` | read | Get file content |
-| `agents.files.set` | admin | Set file content |
+| `agent` | write | Submit an agent run with prompt-cleanup summary |
+| `agent.wait` | read | Wait for run completion with bounded result summary and sensitive answer/error redaction |
+| `agent.progress` | read | Get progress for active session plus bounded progress summary |
+| `agents.list` | read | List available agents plus directory summary and cleanup flags |
+| `agent.identity.get` | read | Get agent capabilities/identity plus capability and cleanup summary |
+| `agent.inbox.send` | write | Send message to agent inbox with routing plus prompt-cleanup summary |
+| `agent.targets.list` | read | List agent routing targets plus summary and cleanup flags |
+| `agent.directory.list` | read | List agent directory entries plus session summary and cleanup flags |
+| `agent.endpoints.list` | read | List agent HTTP endpoints plus route summary |
+| `agent.endpoints.set` | write | Configure agent endpoint plus route cleanup summary |
+| `agent.endpoints.delete` | write | Remove agent endpoint plus deletion cleanup summary |
+| `agents.files.list` | read | List agent files plus file-count and cleanup summary |
+| `agents.files.get` | read | Get file content plus bounded content-return summary |
+| `agents.files.set` | admin | Set file content plus content-cleanup summary |
 
 ### Chat
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `chat.send` | write | Send message to session; returns `runId` and `sessionKey` |
-| `chat.abort` | write | Abort a running session or run |
-| `chat.history` | read | Get chat history for a session |
-| `send` | write | Send a message to a channel (no agent run) |
+| `chat.send` | write | Send message to session; returns `runId`, `sessionKey`, and prompt-cleanup summary |
+| `chat.abort` | write | Abort a running session or run plus target cleanup summary |
+| `chat.history` | read | Get chat history for a session with summary, `beforeId` pagination, optional preview truncation, and sensitive-preview redaction when full text is disabled |
+| `send` | write | Send a message to a channel (no agent run) plus delivery cleanup summary |
 
 ### Configuration and Secrets
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `config.get` | read | Get config value(s) |
-| `config.set` | admin | Set config value |
-| `config.patch` | admin | Partial config update |
-| `config.schema` | read | Get config schema |
-| `config.reload` | admin | Reload configuration |
-| `system.reload` | admin | Runtime reload of module/app/extension/all scopes; `compile: true` recompiles source first on mix-run nodes |
-| `secrets.list` | read | List secret metadata (no values) |
-| `secrets.set` | admin | Store secret |
-| `secrets.delete` | admin | Remove secret |
-| `secrets.exists` | read | Check if secret exists |
-| `secrets.status` | read | Get secrets store status |
+| `config.get` | read | Get config value(s) with sensitive stored values redacted plus cleanup summary |
+| `config.set` | admin | Set config value with sensitive response values redacted plus cleanup summary |
+| `config.patch` | admin | Partial config update plus value-cleanup summary |
+| `config.schema` | read | Get config schema plus property summary |
+| `config.reload` | admin | Reload configuration plus lifecycle and cleanup summary |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes with lifecycle summary; `compile: true` recompiles source first on mix-run nodes |
+| `secrets.list` | read | List secret metadata plus no-value cleanup summary |
+| `secrets.set` | admin | Store secret plus no-value cleanup summary |
+| `secrets.delete` | admin | Remove secret plus no-value cleanup summary |
+| `secrets.exists` | read | Check if secret exists plus no-value cleanup summary |
+| `secrets.status` | read | Get redacted secrets store health, fallback, count, and cleanup summary |
 
 Config keys are whitelisted in `ConfigGet` to prevent atom table exhaustion. Secrets are stored via `LemonCore.Secrets` and never returned in plaintext.
 
@@ -269,108 +277,155 @@ Config keys are whitelisted in `ConfigGet` to prevent atom table exhaustion. Sec
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `cron.list` | read | List cron jobs |
-| `cron.add` | admin | Add a cron job (requires name, schedule, agentId, sessionKey, prompt) |
-| `cron.update` | admin | Update a cron job |
-| `cron.remove` | admin | Remove a cron job |
-| `cron.run` | admin | Manually trigger a cron job |
-| `cron.runs` | read | List runs for a job (optional output/meta/run-store/introspection payloads) |
-| `cron.status` | read | Cron system status + active/recent run counters |
+| `cron.list` | read | List cron jobs with redacted prompt/command summaries unless `includeTargetText` is true |
+| `cron.add` | admin | Add a cron job with target byte counts and cleanup summaries |
+| `cron.update` | admin | Update a cron job with changed-field and cleanup summaries |
+| `cron.pause` | admin | Pause a cron job by disabling future scheduled launches with cleanup summaries |
+| `cron.resume` | admin | Resume a paused cron job with cleanup summaries |
+| `cron.abort` | admin | Abort an active cron run by run id with raw-id and cleanup summaries |
+| `cron.audit` | read | List durable cron lifecycle audit events with operator-facing raw-id and cleanup summaries |
+| `cron.remove` | admin | Remove a cron job with raw-id and cleanup summaries |
+| `cron.run` | admin | Manually trigger a cron job with raw-id and cleanup summaries |
+| `cron.runs` | read | List runs for a job with include-option summaries, cleanup flags, and sensitive output redaction |
+| `cron.status` | read | Cron system status + active/recent run, retry, scheduler-lock, suppression, stale-recovery, audit counters, and cleanup summaries |
 
-`cron.update` only supports mutable fields (`name`, `schedule`, `enabled`, `prompt`, `timezone`, `jitterSec`, `timeoutMs`). Attempts to update immutable routing fields (`agentId`, `sessionKey`) return `invalid_request`.
+`cron.add` and `cron.update` accept 5-field cron expressions plus supported shorthands such as `every 30m`, `hourly`, `every 2h`, `daily at 9am`, `weekdays at 09:30`, and `weekly monday at 8am`; shorthands are stored as normalized cron expressions, and interval shorthands must divide the enclosing cron field exactly. `cron.add` accepts either prompt jobs (`agentId`, `sessionKey`, `prompt`) or operator-owned no-agent command jobs (`command`, optional `cwd` and `env`); the two target types are mutually exclusive, and write responses return prompt/command byte counts plus cleanup summaries without raw target text. `cron.update` preserves the target type: prompt jobs can update `prompt`, command jobs can update `command`, `cwd`, and `env`, and routing fields (`agentId`, `sessionKey`) remain immutable. Other mutable fields are `name`, `schedule`, `enabled`, `timezone`, `jitterSec`, `timeoutMs`, `maxRetries`, and `retryBackoffMs`. Attempts to update immutable routing fields return `invalid_request`; invalid schedule or target patches also return `invalid_request`. `cron.list` redacts prompt and command text by default, returning byte counts and cleanup summaries; pass `includeTargetText: true` only for trusted operator views that need the raw target text. `cron.pause` and `cron.resume` are explicit lifecycle aliases around `enabled: false/true`. `cron.run` and `cron.remove` return raw ids plus cleanup summaries without prompt, command, output, or error text. `cron.runs` returns run-history summaries with status counts, output/error byte counts, preview/full-output flags, include flags for meta/run-record/introspection payloads, and cleanup metadata that makes operator-requested output previews or internals explicit while redacting sensitive output, error, metadata, run-record, and introspection values. `cron.abort` operates on a cron run id, routes to router cancellation when the underlying Lemon run is still active, persists terminal `aborted` status, and returns raw ids with cleanup summaries but no prompt/command/output/error text. `cron.status` exposes BEAM scheduler-health counters for active locks, failed runs, retry runs, suppressed slots, stale recoveries, scheduled retries, status counts, trigger counts, audit action counts, and cleanup summaries confirming prompt, command, output, error, credential, and secret text are not included. `cron.audit` supports `jobId`, `runId`, `cronRunId`, `action`, `sinceMs`, and `limit` filters, returns raw ids and lifecycle reason text to authorized control-plane clients, and exposes summary flags that distinguish those operator fields from prompt/command/output/error/secret cleanup.
+
+### Kanban
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `kanban.board.create` | write | Create a board plus board return-state summary |
+| `kanban.board.list` | read | List boards plus filter, status-count, and cleanup summary |
+| `kanban.board.get` | read | Get one board with tasks plus task-count/status and cleanup summary |
+| `kanban.board.archive` | write | Archive a board plus archive-state summary |
+| `kanban.task.create` | write | Create a task plus task/dependency/comment cleanup summary |
+| `kanban.task.update` | write | Update a task plus task/run/session return-state summary |
+| `kanban.task.comment` | write | Add a task comment plus comment-count summary |
+| `kanban.dispatcher.start` | write | Start a board dispatcher plus worker/concurrency summary |
+| `kanban.dispatcher.status` | read | Read dispatcher state plus running/worker summary |
+| `kanban.dispatcher.stop` | write | Stop a dispatcher plus stopped-state summary |
+
+Kanban board and task methods intentionally return operator-authored names,
+titles, descriptions, comments, metadata, session keys, and run ids. Their
+summaries make those returned fields explicit so non-Web clients can decide
+when to render the full payload.
 
 ### Exec Approvals
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `exec.approvals.get` | approvals | Get approval policy for an agent |
-| `exec.approvals.set` | approvals | Set approval policy for an agent |
-| `exec.approvals.node.get` | approvals | Get approval policy for a node |
-| `exec.approvals.node.set` | approvals | Set approval policy for a node |
-| `exec.approval.request` | approvals | Request an approval for a tool use |
-| `exec.approval.resolve` | approvals | Resolve a pending approval |
+| `exec.approvals.get` | approvals | Get approval policy plus active pending approvals with summary and redacted structured `action` metadata for operator surfaces such as MCP OAuth |
+| `exec.approvals.set` | approvals | Set global approval policy plus mode summary and cleanup flags |
+| `exec.approvals.node.get` | approvals | Get approval policy for a node plus summary and cleanup flags |
+| `exec.approvals.node.set` | approvals | Set node approval policy plus mode summary and cleanup flags |
+| `exec.approval.request` | approvals | Request an approval for a tool use plus action cleanup summary |
+| `exec.approval.resolve` | approvals | Resolve a pending approval plus decision cleanup summary |
 
 ### Node Management
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `node.list` | read | List paired nodes |
-| `node.describe` | read | Get node details |
-| `node.rename` | write | Rename a node |
-| `node.invoke` | write | Invoke a method on a node |
-| `node.invoke.result` | invoke | Node reports result of an invocation (node-only) |
-| `node.event` | event | Node sends an event (node-only) |
-| `node.pair.request` | pairing | Request to pair a node |
-| `node.pair.list` | pairing | List pending pairing requests |
-| `node.pair.approve` | pairing | Approve a pairing request |
-| `node.pair.reject` | pairing | Reject a pairing request |
-| `node.pair.verify` | pairing | Verify a pairing code |
+| `node.list` | read | List paired nodes plus summary and cleanup flags |
+| `node.describe` | read | Get node details with redacted metadata summary and cleanup flags |
+| `node.rename` | write | Rename a node plus summary and cleanup flags |
+| `node.invoke` | write | Invoke a method on a node plus arg/result cleanup summary |
+| `node.invoke.result` | invoke | Node reports result of an invocation (node-only) plus result/error cleanup summary |
+| `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
+| `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
+| `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
+| `node.pair.approve` | pairing | Approve a pairing request plus token/challenge delivery summary |
+| `node.pair.reject` | pairing | Reject a pairing request plus cleanup flags |
+| `node.pair.verify` | pairing | Verify a pairing code plus status cleanup summary |
 
 ### Channels and Transports
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `channels.status` | read | Status of all configured channels |
-| `transports.status` | read | Status of all configured transports |
-| `channels.logout` | admin | Logout from a channel |
+| `channels.status` | read | Status of configured channel adapters plus Telegram/Discord diagnostics, proof, shared launch-gate readiness, compact gate status/reason maps, and cleanup summaries |
+| `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
+| `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |
 
 ### Skills
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `skills.status` | read | List skills and their status |
-| `skills.bins` | invoke | Get skill bin paths (node-only) |
-| `skills.install` | admin | Install a skill |
-| `skills.update` | admin | Update/configure a skill |
+| `skills.status` | read | List skills with readiness details plus activation/source/missing-requirement summaries |
+| `skills.bins` | invoke | Get skill bin paths plus bin/requirement counts and cleanup summary |
+| `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
+| `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
 
 ### Voice / TTS (capability-gated)
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `voicewake.get` | read | Get voicewake settings |
-| `voicewake.set` | write | Set voicewake enabled/keyword |
-| `tts.status` | read | TTS status |
-| `tts.providers` | read | List TTS providers |
-| `tts.enable` | write | Enable TTS |
-| `tts.disable` | write | Disable TTS |
-| `tts.convert` | write | Convert text to speech |
-| `tts.set-provider` | write | Set active TTS provider |
+| `voicewake.get` | read | Get voicewake settings plus config summary and redaction flags |
+| `voicewake.set` | write | Set voicewake enabled/keyword plus audio/transcript cleanup summary |
+| `tts.status` | read | TTS status plus active-provider readiness, provider counts, and redaction flags |
+| `tts.providers` | read | List TTS providers plus provider/voice summary |
+| `tts.enable` | write | Enable TTS plus config-write cleanup summary |
+| `tts.disable` | write | Disable TTS plus config-write cleanup summary |
+| `tts.convert` | write | Convert text to speech plus provider/format/audio-byte cleanup summary |
+| `tts.set-provider` | write | Set active TTS provider plus config-write cleanup summary |
 
 ### Device Pairing (capability-gated)
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `device.pair.request` | pairing | Request to pair a device |
-| `device.pair.approve` | pairing | Approve a device pairing |
-| `device.pair.reject` | pairing | Reject a device pairing |
-| `connect.challenge` | none | Exchange pairing challenge for a session token |
+| `device.pair.request` | pairing | Request to pair a device plus pairing-code delivery summary |
+| `device.pair.approve` | pairing | Approve a device pairing plus token/challenge delivery summary |
+| `device.pair.reject` | pairing | Reject a device pairing plus cleanup flags |
+| `connect.challenge` | none | Exchange pairing challenge for a session token plus token-delivery summary |
 
 ### Automation
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `wake` | write | Wake an agent |
-| `set-heartbeats` | write | Enable/configure heartbeat monitoring |
-| `last-heartbeat` | read | Get last heartbeat for an agent |
-| `talk.mode` | write | Set talk mode for a session |
-| `browser.request` | write | Send a request to a paired browser node |
+| `wake` | write | Wake an agent plus returned-id, prompt-byte, and cleanup summary |
+| `set-heartbeats` | write | Enable/configure heartbeat monitoring plus summary and prompt cleanup flags |
+| `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
+| `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
+| `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
+| `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `checkpoint.status` | read | Inspect redacted checkpoint-store metadata plus filtered lifecycle event counts/history |
+| `checkpoint.diff` | read | Preview filesystem changes for a checkpoint with path/diff cleanup summary |
+| `checkpoint.restore` | write | Restore all or selected checkpoint paths with restore cleanup summary |
+| `lsp.diagnostics.status` | read | Inspect redacted diagnostics checker capability metadata plus recent LSP proof artifacts/checks and summary |
+| `lsp.server.start` | write | Start a supervised LSP stdio session with session cleanup summary |
+| `lsp.server.initialize` | write | Run initialize and send the LSP initialized notification with protocol cleanup summary |
+| `lsp.document.open` | write | Send a textDocument/didOpen notification with document cleanup summary |
+| `lsp.document.change` | write | Send a textDocument/didChange notification with document cleanup summary |
+| `lsp.document.close` | write | Send a textDocument/didClose notification with document cleanup summary |
+| `lsp.server.request` | write | Send a JSON-RPC request over a supervised LSP stdio session with protocol cleanup summary |
+| `lsp.server.stop` | write | Stop a supervised LSP stdio session with session cleanup summary |
+| `terminal.backends.status` | read | Inspect registered terminal backend metadata, capabilities, policy, live proof state, Docker hardening, and top-level summary |
+| `goal.set` | write | Set the durable goal for a session with redacted objective summaries |
+| `goal.status` | read | Inspect one goal or list durable goals with redacted objective summaries |
+| `goal.pause` | write | Pause the durable goal for a session with redacted objective summaries |
+| `goal.resume` | write | Resume the durable goal for a session with redacted objective summaries |
+| `goal.continue` | write | Submit one supervised continuation run for an active goal with cleanup summaries |
+| `goal.loop.once` | write | Run one preview judge tick for an active goal with cleanup summaries |
+| `goal.loop.start` | write | Start a bounded supervised autonomous goal loop with cleanup summaries; pass `auto: true` to persist opt-in scheduling |
+| `goal.loop.status` | read | Inspect the bounded goal loop and persisted auto state for a session with cleanup summaries |
+| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop with cleanup summaries and disable persisted auto scheduling |
+| `goal.clear` | write | Clear the durable goal for a session with cleanup summaries |
 
 ### Wizard (capability-gated)
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `wizard.start` | admin | Start a wizard flow |
-| `wizard.step` | admin | Advance wizard step |
-| `wizard.cancel` | admin | Cancel a wizard |
+| `wizard.start` | admin | Start a wizard flow plus step-count and cleanup summary |
+| `wizard.step` | admin | Advance wizard step plus current-step/data-key summary with sensitive response data redacted |
+| `wizard.cancel` | admin | Cancel a wizard plus cancellation cleanup summary |
 
 ### Events and Subscriptions
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `events.subscribe` | read | Subscribe to event topics (run, system, cron, etc.) |
-| `events.unsubscribe` | read | Unsubscribe from event topics |
-| `events.subscriptions.list` | read | List current subscriptions |
-| `events.ingest` | write | Ingest external events |
+| `events.subscribe` | read | Subscribe to event topics (run, session, system, cron, etc.) plus delivery filtering, summary/cleanup flags, and tracked connection state |
+| `events.unsubscribe` | read | Unsubscribe from event topics or clear all per-connection subscriptions plus summary/cleanup flags |
+| `events.subscriptions.list` | read | List current subscriptions plus run/session subscription summary and cleanup flags |
+| `events.ingest` | write | Ingest bounded external events with target validation plus summary/cleanup flags |
 
 ## Authentication and Authorization
 
@@ -495,15 +550,16 @@ State-versioned events include a `stateVersion` map for client reconciliation (`
 
 | Event | Trigger |
 |-------|---------|
-| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta`) |
+| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta` failure fields such as `error_type` and `exit_code`) |
 | `chat` | Chat delta/streaming content |
 | `presence` | Connection count changed |
 | `tick` | Heartbeat tick (from `:tick` or `:cron_tick` bus events) |
 | `heartbeat` | Agent heartbeat or heartbeat alert |
-| `exec.approval.requested` | Approval needed |
-| `exec.approval.resolved` | Approval decided |
+| `exec.approval.requested` | Approval needed, including structured `action` metadata for operator UI controls such as MCP OAuth links |
+| `exec.approval.resolved` | Approval decided or timed out, including approval id, decision, and pending approval metadata when available |
 | `cron` | Cron job started/completed |
 | `cron.job` | Cron job created/updated/deleted |
+| `cron.audit` | Cron lifecycle audit event recorded |
 | `task.started` | Subtask/subagent started |
 | `task.completed` | Subtask/subagent completed |
 | `task.error` | Subtask/subagent errored |
@@ -548,7 +604,7 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 
 ## EventBridge
 
-`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `cron`, `system`, `nodes`, `presence`) plus dynamic `run:*` topics. It maps bus event types to WS event names and fans out to all connected clients via a `Task.Supervisor`. Subscribe to run events with `EventBridge.subscribe_run(run_id)`.
+`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each WebSocket connection then applies its own topic filter before pushing the event frame. New connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
 
 Key bus-event-to-WS-event mappings:
 
@@ -558,13 +614,16 @@ Key bus-event-to-WS-event mappings:
 | `:run_completed` | `agent` (type: completed) |
 | `:delta` | `chat` |
 | `:engine_action` | `agent` (type: tool_use) |
-| `:approval_requested` | `exec.approval.requested` |
-| `:approval_resolved` | `exec.approval.resolved` |
+| `:goal_set` / `:goal_paused` / `:goal_resumed` / `:goal_completed` / `:goal_cleared` | `goal` |
+| `:goal_continuation_submitted` / `:goal_loop_verdict` / `:goal_loop_status` | `goal` |
+| `:approval_requested` | `exec.approval.requested` with pending approval `action` metadata |
+| `:approval_resolved` | `exec.approval.resolved` with approval id, decision, and pending approval metadata when available; timeouts use `decision: "timeout"` |
 | `:cron_run_started` | `cron` (type: started) |
 | `:cron_run_completed` | `cron` (type: completed) |
 | `:cron_job_created` | `cron.job` (type: created) |
 | `:cron_job_updated` | `cron.job` (type: updated) |
 | `:cron_job_deleted` | `cron.job` (type: deleted) |
+| `:cron_lifecycle_action` | `cron.audit` |
 | `:tick` / `:cron_tick` | `tick` |
 | `:presence_changed` | `presence` |
 | `:task_started` | `task.started` |
@@ -616,7 +675,8 @@ mix test --grep "name/0 returns correct method name"
 
 1. Add the bus event type mapping in `EventBridge.map_event_type/3`.
 2. Add the event name to `Protocol.Frames.supported_events/0`.
-3. Optionally add state version tracking in `EventBridge.state_version_key_for/1` if the event affects reconciliation state.
+3. Add an event payload schema to `Protocol.Schemas` (`@event_schemas`) when clients depend on the event shape.
+4. Optionally add state version tracking in `EventBridge.state_version_key_for/1` if the event affects reconciliation state.
 
 ### Test a Method Directly
 
@@ -672,6 +732,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `methods/secrets_methods_test.exs` | Secrets CRUD |
 | `methods/skills_methods_test.exs` | Skills status, install, update |
 | `methods/system_methods_test.exs` | System event, presence |
+| `methods/config_reload_test.exs` | Config reload lifecycle summaries |
 | `methods/system_reload_test.exs` | System reload scopes |
 | `methods/heartbeat_methods_test.exs` | Heartbeat/wake methods |
 | `methods/sessions_patch_test.exs` | Session patching |

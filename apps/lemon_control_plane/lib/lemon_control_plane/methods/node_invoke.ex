@@ -75,7 +75,21 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
                  "invokeId" => invoke_id,
                  "nodeId" => node_id,
                  "method" => method,
-                 "status" => "pending"
+                 "status" => "pending",
+                 "summary" => %{
+                   "nodeId" => node_id,
+                   "method" => method,
+                   "status" => "pending",
+                   "timeoutMs" => timeout_ms,
+                   "argKeyCount" => arg_key_count(args),
+                   "cleanup" => %{
+                     "includesArgs" => false,
+                     "includesResult" => false,
+                     "includesError" => false,
+                     "includesCredentials" => false,
+                     "includesSecretValues" => false
+                   }
+                 }
                }}
             end
         end
@@ -87,4 +101,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   defp get_field(map, key) when is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
+
+  defp arg_key_count(args) when is_map(args), do: map_size(args)
+  defp arg_key_count(_), do: 0
 end

@@ -11,6 +11,9 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       assert "agent" in events
       assert "chat" in events
 
+      # Durable goal events
+      assert "goal" in events
+
       # System events
       assert "presence" in events
       assert "tick" in events
@@ -22,6 +25,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       # Cron events
       assert "cron" in events
       assert "cron.job" in events
+      assert "cron.audit" in events
 
       # Task / run-graph events
       assert "task.started" in events
@@ -54,7 +58,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       unique_events = Enum.uniq(events)
 
       assert length(events) == length(unique_events),
-        "Duplicate events found: #{inspect(events -- unique_events)}"
+             "Duplicate events found: #{inspect(events -- unique_events)}"
     end
   end
 
@@ -65,7 +69,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       # :run_started -> "agent"
       event = %LemonCore.Event{
         type: :run_started,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{run_id: "run-1", engine: "claude"},
         meta: %{session_key: "sess-1"}
       }
@@ -78,7 +82,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps delta to chat" do
       event = %LemonCore.Event{
         type: :delta,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{run_id: "run-1", seq: 1, text: "Hello"},
         meta: %{}
       }
@@ -89,14 +93,14 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps approval events" do
       requested = %LemonCore.Event{
         type: :approval_requested,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{id: "apr-1", run_id: "run-1", tool: "bash"},
         meta: %{}
       }
 
       resolved = %LemonCore.Event{
         type: :approval_resolved,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{approval_id: "apr-1", decision: :approved},
         meta: %{}
       }
@@ -108,28 +112,28 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps node events" do
       pair_requested = %LemonCore.Event{
         type: :node_pair_requested,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{pairing_id: "pair-1", code: "123456"},
         meta: %{}
       }
 
       pair_resolved = %LemonCore.Event{
         type: :node_pair_resolved,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{pairing_id: "pair-1", node_id: "node-1", approved: true},
         meta: %{}
       }
 
       invoke_request = %LemonCore.Event{
         type: :node_invoke_request,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{invoke_id: "inv-1", node_id: "node-1", method: "execute"},
         meta: %{}
       }
 
       invoke_completed = %LemonCore.Event{
         type: :node_invoke_completed,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{invoke_id: "inv-1", node_id: "node-1", ok: true, result: %{}},
         meta: %{}
       }
@@ -143,14 +147,14 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps device events" do
       device_requested = %LemonCore.Event{
         type: :device_pair_requested,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{pairing_id: "dpair-1", device_type: "mobile"},
         meta: %{}
       }
 
       device_resolved = %LemonCore.Event{
         type: :device_pair_resolved,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{pairing_id: "dpair-1", status: :approved},
         meta: %{}
       }
@@ -162,7 +166,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps voicewake events" do
       voicewake = %LemonCore.Event{
         type: :voicewake_changed,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{enabled: true, keyword: "hey lemon"},
         meta: %{}
       }
@@ -173,14 +177,14 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps system events" do
       shutdown = %LemonCore.Event{
         type: :shutdown,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{reason: :restart},
         meta: %{}
       }
 
       health = %LemonCore.Event{
         type: :health_changed,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{status: :healthy},
         meta: %{}
       }
@@ -192,14 +196,14 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "maps heartbeat events" do
       heartbeat = %LemonCore.Event{
         type: :heartbeat,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{agent_id: "agent-1", status: :ok},
         meta: %{}
       }
 
       alert = %LemonCore.Event{
         type: :heartbeat_alert,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{agent_id: "agent-1", response: "detected issue"},
         meta: %{}
       }
@@ -247,42 +251,76 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
 
       # All these events should have mappings in EventBridge
       mapped_events = [
-        "agent",       # :run_started, :run_completed
-        "chat",        # :delta
-        "presence",    # :presence_changed
-        "tick",        # :tick, :cron_tick
-        "talk.mode",   # :talk_mode_changed
-        "shutdown",    # :shutdown
-        "health",      # :health_changed
-        "heartbeat",   # :heartbeat, :heartbeat_alert
-        "cron",        # :cron_run_started, :cron_run_completed
-        "cron.job",    # :cron_job_created, :cron_job_updated, :cron_job_deleted
-        "task.started", # :task_started
-        "task.completed", # :task_completed
-        "task.error", # :task_error
-        "task.timeout", # :task_timeout
-        "task.aborted", # :task_aborted
-        "run.graph.changed", # :run_graph_changed
-        "node.pair.requested",    # :node_pair_requested
-        "node.pair.resolved",     # :node_pair_resolved
-        "node.invoke.request",    # :node_invoke_request
-        "node.invoke.completed",  # :node_invoke_completed
-        "device.pair.requested",  # :device_pair_requested
-        "device.pair.resolved",   # :device_pair_resolved
-        "voicewake.changed",      # :voicewake_changed
-        "exec.approval.requested", # :approval_requested
-        "exec.approval.resolved",  # :approval_resolved
-        "custom"       # :custom_event
+        # :run_started, :run_completed
+        "agent",
+        # :delta
+        "chat",
+        # :goal_set, :goal_continuation_submitted, :goal_loop_verdict
+        "goal",
+        # :presence_changed
+        "presence",
+        # :tick, :cron_tick
+        "tick",
+        # :talk_mode_changed
+        "talk.mode",
+        # :shutdown
+        "shutdown",
+        # :health_changed
+        "health",
+        # :heartbeat, :heartbeat_alert
+        "heartbeat",
+        # :metrics
+        "metrics",
+        # :log
+        "log",
+        # :cron_run_started, :cron_run_completed
+        "cron",
+        # :cron_job_created, :cron_job_updated, :cron_job_deleted
+        "cron.job",
+        # :cron_lifecycle_action
+        "cron.audit",
+        # :task_started
+        "task.started",
+        # :task_completed
+        "task.completed",
+        # :task_error
+        "task.error",
+        # :task_timeout
+        "task.timeout",
+        # :task_aborted
+        "task.aborted",
+        # :run_graph_changed
+        "run.graph.changed",
+        # :node_pair_requested
+        "node.pair.requested",
+        # :node_pair_resolved
+        "node.pair.resolved",
+        # :node_invoke_request
+        "node.invoke.request",
+        # :node_invoke_completed
+        "node.invoke.completed",
+        # :device_pair_requested
+        "device.pair.requested",
+        # :device_pair_resolved
+        "device.pair.resolved",
+        # :voicewake_changed
+        "voicewake.changed",
+        # :approval_requested
+        "exec.approval.requested",
+        # :approval_resolved
+        "exec.approval.resolved",
+        # :custom_event
+        "custom"
       ]
 
       for event <- mapped_events do
         assert event in supported,
-          "Event #{event} should be in supported_events"
+               "Event #{event} should be in supported_events"
       end
 
       for event <- supported do
         assert event in mapped_events,
-          "Supported event #{event} should have documented mapping"
+               "Supported event #{event} should have documented mapping"
       end
     end
   end
@@ -291,7 +329,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
     test "custom_event type structure is correct" do
       event = %LemonCore.Event{
         type: :custom_event,
-        ts_ms: 1234567890,
+        ts_ms: 1_234_567_890,
         payload: %{custom_event_type: "custom_my_event", data: "test"},
         meta: %{original_event_type: "custom_my_event"}
       }

@@ -56,39 +56,82 @@ defmodule LemonControlPlane.Methods.IntrospectionSnapshot do
       [directory_error, active_error, channels_error, transports_error]
       |> Enum.reject(&is_nil/1)
 
+    includes = %{
+      "agents" => include_agents?,
+      "sessions" => include_sessions?,
+      "activeSessions" => include_active_sessions?,
+      "channels" => include_channels?,
+      "transports" => include_transports?
+    }
+
+    filters = %{
+      "agentId" => agent_id,
+      "route" => format_route_filter(route),
+      "limit" => limit,
+      "sessionLimit" => session_limit,
+      "activeLimit" => active_limit
+    }
+
+    counts = %{
+      "agents" => length(agents),
+      "sessions" => length(sessions),
+      "activeSessions" => length(active_sessions),
+      "channels" => length(channels),
+      "transports" => length(transports),
+      "enabledTransports" => Enum.count(transports, &(&1["enabled"] == true))
+    }
+
+    runs = run_counts()
+
     {:ok,
      %{
        "generatedAtMs" => System.system_time(:millisecond),
-       "includes" => %{
-         "agents" => include_agents?,
-         "sessions" => include_sessions?,
-         "activeSessions" => include_active_sessions?,
-         "channels" => include_channels?,
-         "transports" => include_transports?
-       },
-       "filters" => %{
-         "agentId" => agent_id,
-         "route" => format_route_filter(route),
-         "limit" => limit,
-         "sessionLimit" => session_limit,
-         "activeLimit" => active_limit
-       },
+       "includes" => includes,
+       "filters" => filters,
        "agents" => agents,
        "sessions" => sessions,
        "activeSessions" => active_sessions,
        "channels" => channels,
        "transports" => transports,
-       "runs" => run_counts(),
-       "counts" => %{
-         "agents" => length(agents),
-         "sessions" => length(sessions),
-         "activeSessions" => length(active_sessions),
-         "channels" => length(channels),
-         "transports" => length(transports),
-         "enabledTransports" => Enum.count(transports, &(&1["enabled"] == true))
-       },
-       "errors" => errors
+       "runs" => runs,
+       "counts" => counts,
+       "errors" => errors,
+       "summary" => summary(includes, filters, counts, runs, active_sessions, errors)
      }}
+  end
+
+  defp summary(includes, filters, counts, runs, active_sessions, errors) do
+    %{
+      "action" => "introspection.snapshot",
+      "includes" => includes,
+      "filtersApplied" => applied_filters(filters),
+      "counts" => counts,
+      "runs" => runs,
+      "errorCount" => length(errors),
+      "harnessCount" => Enum.count(active_sessions, &is_map(&1["harness"])),
+      "cleanup" => %{
+        "includesAgentRecords" => includes["agents"],
+        "includesSessionRecords" => includes["sessions"],
+        "includesActiveSessionRecords" => includes["activeSessions"],
+        "includesHarnessSnapshots" => Enum.any?(active_sessions, &is_map(&1["harness"])),
+        "includesChannelStatus" => includes["channels"],
+        "includesTransportStatus" => includes["transports"],
+        "includesErrorDetails" => errors != [],
+        "includesMessageText" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp applied_filters(filters) do
+    filters
+    |> Enum.filter(fn
+      {"route", route} when is_map(route) -> map_size(route) > 0
+      {_key, value} -> not is_nil(value)
+    end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
   end
 
   defp fetch_directory_snapshot(false, false, _agent_id, _route, _limit, _ctx),

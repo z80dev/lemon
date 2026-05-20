@@ -27,6 +27,32 @@ defmodule LemonControlPlane.Methods.TtsDisable do
 
     TtsStore.put(config)
 
-    {:ok, %{"enabled" => false}}
+    {:ok,
+     %{
+       "enabled" => false,
+       "summary" => summary(false, get_field(config, :provider))
+     }}
+  end
+
+  defp summary(enabled, provider) do
+    %{
+      "action" => "disable",
+      "enabled" => enabled,
+      "provider" => provider,
+      "cleanup" => %{
+        "includesInputText" => false,
+        "includesAudio" => false,
+        "includesCredentialValues" => false,
+        "includesSecretValues" => false
+      }
+    }
+  end
+
+  defp get_field(map, key) when is_atom(key) and is_map(map) do
+    cond do
+      Map.has_key?(map, key) -> Map.get(map, key)
+      Map.has_key?(map, Atom.to_string(key)) -> Map.get(map, Atom.to_string(key))
+      true -> nil
+    end
   end
 end
