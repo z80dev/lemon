@@ -1,11 +1,11 @@
-defmodule LemonChannels.Telegram.KnownTargetStore do
+defmodule LemonChannels.Discord.KnownTargetStore do
   @moduledoc """
-  Typed wrapper for Telegram known-target metadata.
+  Typed wrapper for Discord known-target metadata.
   """
 
   alias LemonCore.Store
 
-  @table :telegram_known_targets
+  @table :discord_known_targets
 
   @spec get(term()) :: term()
   def get(key), do: Store.get(@table, key)

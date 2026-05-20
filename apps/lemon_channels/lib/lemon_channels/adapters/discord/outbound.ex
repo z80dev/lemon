@@ -10,6 +10,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   alias Nostrum.Api.Message, as: NostrumMessage
 
   @max_content_chars 1_900
+  @max_file_count 10
 
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
@@ -40,6 +41,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
 
     edit_params =
       %{content: first}
+      |> put_safe_allowed_mentions()
       |> maybe_put_components(components)
 
     with {:ok, channel_id} <- peer_channel_id(payload),
@@ -152,6 +154,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       when is_integer(channel_id) and is_binary(content) do
     params =
       %{content: content, components: components}
+      |> put_safe_allowed_mentions()
       |> maybe_put_reply(opts)
 
     case message_api().create(channel_id, params) do
@@ -171,6 +174,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       when is_integer(channel_id) and is_integer(message_id) do
     params =
       %{content: content, components: components}
+      |> put_safe_allowed_mentions()
 
     case message_api().edit(channel_id, message_id, params) do
       {:ok, result} -> {:ok, %{message_id: extract_message_id(result) || message_id}}
@@ -187,7 +191,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
   # ============================================================================
 
   defp text_params(content, payload) do
-    params = %{content: content}
+    params = %{content: content} |> put_safe_allowed_mentions()
 
     params =
       case normalize_id(payload.reply_to) do
@@ -206,7 +210,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
 
   defp send_extra_chunks(channel_id, chunks) do
     Enum.reduce_while(chunks, {:ok, []}, fn chunk, {:ok, ids} ->
-      case message_api().create(channel_id, %{content: chunk}) do
+      case message_api().create(channel_id, %{content: chunk} |> put_safe_allowed_mentions()) do
         {:ok, result} ->
           {:cont, {:ok, ids ++ [extract_message_id(result)]}}
 
@@ -246,6 +250,10 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
 
   defp maybe_put_components(params, _), do: params
 
+  defp put_safe_allowed_mentions(params) do
+    Map.put(params, :allowed_mentions, :none)
+  end
+
   defp maybe_put_reply(params, opts) do
     case Keyword.get(opts, :reply_to) do
       nil ->
@@ -275,6 +283,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       {:ok, body} ->
         params =
           %{content: caption, files: [%{body: body, name: filename}]}
+          |> put_safe_allowed_mentions()
           |> maybe_put_reply_from_payload(payload)
 
         {:ok, params}
@@ -295,7 +304,84 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
     )
   end
 
+  defp file_params(%{files: files} = content, payload) when is_list(files) do
+    batch_file_params(files, content[:caption], payload)
+  end
+
+  defp file_params(%{"files" => files} = content, payload) when is_list(files) do
+    batch_file_params(files, content["caption"], payload)
+  end
+
   defp file_params(other, _payload), do: {:error, {:discord_file_failed, other}}
+
+  defp batch_file_params(files, caption, payload) do
+    with :ok <- validate_file_count(files),
+         {:ok, normalized_files} <- normalize_batch_files(files),
+         {:ok, uploaded_files} <- read_batch_files(normalized_files) do
+      content = batch_caption(caption, normalized_files)
+
+      params =
+        %{content: content, files: uploaded_files}
+        |> put_safe_allowed_mentions()
+        |> maybe_put_reply_from_payload(payload)
+
+      {:ok, params}
+    end
+  end
+
+  defp validate_file_count([]), do: {:error, :discord_file_batch_empty}
+
+  defp validate_file_count(files) when length(files) > @max_file_count,
+    do: {:error, {:discord_file_batch_too_large, @max_file_count}}
+
+  defp validate_file_count(_files), do: :ok
+
+  defp normalize_batch_files(files) do
+    Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
+      case normalize_batch_file(file) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_batch_file(%{path: path} = file) when is_binary(path) and path != "" do
+    filename =
+      if is_binary(file[:filename]) and file[:filename] != "",
+        do: file[:filename],
+        else: Path.basename(path)
+
+    {:ok, %{path: path, filename: filename}}
+  end
+
+  defp normalize_batch_file(%{"path" => path} = file) when is_binary(path) and path != "" do
+    normalize_batch_file(%{path: path, filename: file["filename"]})
+  end
+
+  defp normalize_batch_file(other), do: {:error, {:discord_file_failed, other}}
+
+  defp read_batch_files(files) do
+    Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
+      case File.read(file.path) do
+        {:ok, body} ->
+          {:cont, {:ok, [%{body: body, name: file.filename} | acc]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:discord_file_read_failed, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, uploaded_files} -> {:ok, Enum.reverse(uploaded_files)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp batch_caption(caption, _files) when is_binary(caption) and caption != "", do: caption
+  defp batch_caption(_caption, [_ | _] = files), do: "Uploaded #{length(files)} files"
 
   defp maybe_put_reply_from_payload(params, payload) do
     case normalize_id(payload.reply_to) do

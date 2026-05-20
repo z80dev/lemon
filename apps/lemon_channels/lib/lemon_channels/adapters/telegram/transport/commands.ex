@@ -15,12 +15,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   def new_command?(text, bot_username), do: telegram_command?(text, "new", bot_username)
   def resume_command?(text, bot_username), do: telegram_command?(text, "resume", bot_username)
   def model_command?(text, bot_username), do: telegram_command?(text, "model", bot_username)
+  def goal_command?(text, bot_username), do: telegram_command?(text, "goal", bot_username)
+  def kanban_command?(text, bot_username), do: telegram_command?(text, "kanban", bot_username)
+  def media_command?(text, bot_username), do: telegram_command?(text, "media", bot_username)
   def thinking_command?(text, bot_username), do: telegram_command?(text, "thinking", bot_username)
   def reload_command?(text, bot_username), do: telegram_command?(text, "reload", bot_username)
   def trigger_command?(text, bot_username), do: telegram_command?(text, "trigger", bot_username)
   def cwd_command?(text, bot_username), do: telegram_command?(text, "cwd", bot_username)
   def topic_command?(text, bot_username), do: telegram_command?(text, "topic", bot_username)
   def file_command?(text, bot_username), do: telegram_command?(text, "file", bot_username)
+
+  def checkpoint_command?(text, bot_username),
+    do: telegram_command?(text, "checkpoint", bot_username)
+
+  def rollback_command?(text, bot_username), do: telegram_command?(text, "rollback", bot_username)
 
   # ---------------------------------------------------------------------------
   # Message entry / joining helpers

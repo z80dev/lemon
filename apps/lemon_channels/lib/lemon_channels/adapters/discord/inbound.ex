@@ -19,7 +19,8 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
   @spec normalize_message(map(), binary(), map()) :: {:ok, InboundMessage.t()} | {:error, term()}
   def normalize_message(message, account_id, raw)
       when is_map(message) and is_binary(account_id) do
-    channel_id = fetch_id(message, :channel_id)
+    thread_id = fetch_thread_id(message, raw)
+    channel_id = fetch_channel_id(message, raw, thread_id)
 
     sender =
       message
@@ -29,8 +30,6 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     guild_id = fetch_id(message, :guild_id)
     message_id = fetch_id(message, :id)
     reply_to_id = fetch_reply_to_id(message)
-    thread_id = fetch_thread_id(message)
-
     peer_kind = if guild_id, do: :group, else: :dm
 
     text =
@@ -86,7 +85,8 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
       %{
         id: Integer.to_string(id),
         username: fetch_binary(author, :username),
-        display_name: fetch_binary(author, :global_name) || fetch_binary(author, :username)
+        display_name: fetch_binary(author, :global_name) || fetch_binary(author, :username),
+        bot: fetch_bool(author, :bot)
       }
     else
       nil
@@ -101,21 +101,43 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     |> fetch_id(:id)
   end
 
-  defp fetch_thread_id(message) do
+  defp fetch_channel_id(message, raw, thread_id) do
+    channel = fetch_channel_context(message, raw)
+
+    case {thread_id, fetch_id(channel, :parent_id)} do
+      {id, parent_id} when is_integer(id) and is_integer(parent_id) -> parent_id
+      _ -> fetch_id(message, :channel_id)
+    end
+  end
+
+  defp fetch_thread_id(message, raw) do
     case fetch_id(message, :thread_id) do
       id when is_integer(id) ->
         id
 
       _ ->
-        # For forum threads: the message's channel IS the thread.
-        # Detect by checking if the message has a thread object or if
-        # the channel type indicates a thread (11 = public, 12 = private, 15 = forum).
         thread = fetch_map(message, :thread)
 
         case fetch_id(thread, :id) do
-          id when is_integer(id) -> id
-          _ -> nil
+          id when is_integer(id) ->
+            id
+
+          _ ->
+            channel = fetch_channel_context(message, raw)
+
+            case {fetch_id(message, :channel_id),
+                  Map.get(channel, :type) || Map.get(channel, "type")} do
+              {id, type} when is_integer(id) and type in [10, 11, 12] -> id
+              _ -> nil
+            end
         end
+    end
+  end
+
+  defp fetch_channel_context(message, raw) do
+    case fetch_map(message, :channel) do
+      map when map != %{} -> map
+      _ -> fetch_map(raw, :channel)
     end
   end
 
@@ -183,6 +205,19 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     case Map.get(map, key) || Map.get(map, Atom.to_string(key)) do
       value when is_binary(value) and value != "" -> value
       _ -> nil
+    end
+  end
+
+  defp fetch_bool(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      value when is_boolean(value) ->
+        value
+
+      _ ->
+        case Map.get(map, Atom.to_string(key)) do
+          value when is_boolean(value) -> value
+          _ -> false
+        end
     end
   end
 

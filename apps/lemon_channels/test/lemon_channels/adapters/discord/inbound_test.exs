@@ -47,4 +47,25 @@ defmodule LemonChannels.Adapters.Discord.InboundTest do
     assert inbound.peer.kind == :dm
     assert inbound.meta.guild_id == nil
   end
+
+  test "normalizes thread channel messages with parent channel and thread id" do
+    raw = %{
+      message: %{
+        "id" => "33",
+        "channel_id" => "555",
+        "guild_id" => "777",
+        "content" => "thread hello",
+        "author" => %{"id" => "99", "username" => "user"}
+      },
+      channel: %{"id" => "555", "type" => 11, "parent_id" => "123"},
+      account_id: "default"
+    }
+
+    assert {:ok, inbound} = Inbound.normalize(raw)
+    assert inbound.peer.kind == :group
+    assert inbound.peer.id == "123"
+    assert inbound.peer.thread_id == "555"
+    assert inbound.meta.channel_id == 123
+    assert inbound.meta.thread_id == 555
+  end
 end

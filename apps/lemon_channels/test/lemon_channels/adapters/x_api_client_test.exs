@@ -87,6 +87,61 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
     refute_received {:req, "/2/users/me/mentions"}
   end
 
+  test "search_recent uses bearer-only credentials without token refresh" do
+    Application.put_env(:lemon_channels, XAPI, bearer_token: "search-bearer-token")
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:req, conn.request_path, conn.query_string, conn.req_headers})
+
+      case conn.request_path do
+        "/2/tweets/search/recent" ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{
+              "data" => [
+                %{
+                  "id" => "1860000000000000001",
+                  "author_id" => "42",
+                  "text" => "Lemon on BEAM",
+                  "created_at" => "2026-05-18T01:02:03.000Z"
+                }
+              ],
+              "includes" => %{
+                "users" => [
+                  %{"id" => "42", "username" => "lemon_agent", "name" => "Lemon"}
+                ]
+              },
+              "meta" => %{"result_count" => 1, "next_token" => "next-page"}
+            })
+          )
+
+        unexpected ->
+          flunk("unexpected request path: #{unexpected}")
+      end
+    end)
+
+    assert {:ok, %{"meta" => %{"result_count" => 1}}} =
+             Client.search_recent("lemon lang:en",
+               limit: 2,
+               sort_order: "recency",
+               next_token: "cursor"
+             )
+
+    assert_receive {:req, "/2/tweets/search/recent", query, headers}
+    decoded = URI.decode_query(query)
+
+    assert decoded["query"] == "lemon lang:en"
+    assert decoded["max_results"] == "10"
+    assert decoded["sort_order"] == "recency"
+    assert decoded["next_token"] == "cursor"
+    assert {"authorization", "Bearer search-bearer-token"} in headers
+
+    refute_received {:req, "/2/oauth2/token", _, _}
+  end
+
   test "get_mentions resolves user id via users/me when default account id is not set" do
     configure_oauth2()
     start_token_manager!()

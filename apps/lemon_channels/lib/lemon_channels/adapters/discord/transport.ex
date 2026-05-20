@@ -22,17 +22,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
+  alias LemonChannels.Discord.KnownTargetStore
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
 
   alias LemonCore.{
     ChatStateStore,
+    Event,
     InboundMessage,
     ProjectBindingStore,
     ResumeToken,
     RouterBridge,
     Secrets,
-    SessionKey
+    SessionKey,
+    Store
   }
 
   alias Nostrum.Api.{ApplicationCommand, Interaction}
@@ -49,6 +52,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @debounce_ms 1_000
   @default_dedupe_ttl 600_000
   @dedupe_table :lemon_channels_discord_dedupe
+  @persistent_dedupe_scope "discord_inbound"
+  @known_target_refresh_ms 30_000
 
   # Discord slash commands
   @lemon_command %{
@@ -123,6 +128,332 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     type: 1
   }
 
+  @checkpoint_command %{
+    name: "checkpoint",
+    description: "Inspect or restore Lemon checkpoints",
+    type: 1,
+    options: [
+      %{
+        type: 1,
+        name: "status",
+        description: "Show redacted checkpoint status"
+      },
+      %{
+        type: 1,
+        name: "events",
+        description: "Show redacted checkpoint event history",
+        options: [
+          %{
+            type: 4,
+            name: "limit",
+            description: "Maximum events to show",
+            required: false,
+            min_value: 1,
+            max_value: 20
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "diff",
+        description: "Show a redacted checkpoint diff preview",
+        options: [
+          %{type: 3, name: "checkpoint_id", description: "Checkpoint id", required: true}
+        ]
+      },
+      %{
+        type: 1,
+        name: "restore",
+        description: "Restore a checkpoint",
+        options: [
+          %{type: 3, name: "checkpoint_id", description: "Checkpoint id", required: true},
+          %{
+            type: 5,
+            name: "confirm",
+            description: "Must be true to restore files",
+            required: true
+          }
+        ]
+      }
+    ]
+  }
+
+  @rollback_command %{
+    @checkpoint_command
+    | name: "rollback",
+      description: "Rollback Lemon checkpoint changes"
+  }
+
+  @goal_command %{
+    name: "goal",
+    description: "Show or set the current session goal",
+    type: 1,
+    options: [
+      %{
+        type: 1,
+        name: "set",
+        description: "Set the current session goal",
+        options: [
+          %{
+            type: 3,
+            name: "objective",
+            description: "Goal objective",
+            required: true
+          },
+          %{
+            type: 4,
+            name: "max_continuations",
+            description: "Maximum automatic continuations before Lemon pauses",
+            required: false,
+            min_value: 0
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "clear",
+        description: "Clear the current session goal"
+      },
+      %{
+        type: 1,
+        name: "pause",
+        description: "Pause the current session goal"
+      },
+      %{
+        type: 1,
+        name: "resume",
+        description: "Resume the current session goal"
+      },
+      %{
+        type: 1,
+        name: "continue",
+        description: "Submit one continuation for the current session goal",
+        options: [
+          %{
+            type: 4,
+            name: "max_continuations",
+            description: "Maximum automatic continuations before Lemon pauses",
+            required: false,
+            min_value: 0
+          },
+          %{
+            type: 3,
+            name: "model",
+            description: "Worker model override",
+            required: false
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "loop_once",
+        description: "Run one goal judge tick",
+        options: [
+          %{
+            type: 3,
+            name: "judge_model",
+            description: "Judge model override",
+            required: false
+          },
+          %{
+            type: 3,
+            name: "judge_failure_policy",
+            description: "pause, continueOnce, or needsInput",
+            required: false
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "loop_start",
+        description: "Start a bounded goal loop",
+        options: [
+          %{
+            type: 5,
+            name: "auto",
+            description: "Persist auto scheduling until stopped or the goal pauses/completes",
+            required: false
+          },
+          %{
+            type: 4,
+            name: "max_ticks",
+            description: "Maximum judge ticks",
+            required: false,
+            min_value: 1
+          },
+          %{
+            type: 4,
+            name: "max_continuations",
+            description: "Maximum automatic continuations before Lemon pauses",
+            required: false,
+            min_value: 0
+          },
+          %{
+            type: 3,
+            name: "judge_model",
+            description: "Judge model override",
+            required: false
+          },
+          %{
+            type: 3,
+            name: "judge_failure_policy",
+            description: "pause, continueOnce, or needsInput",
+            required: false
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "loop_status",
+        description: "Show the current goal loop"
+      },
+      %{
+        type: 1,
+        name: "loop_stop",
+        description: "Stop the current goal loop"
+      },
+      %{
+        type: 1,
+        name: "status",
+        description: "Show the current session goal"
+      }
+    ]
+  }
+
+  @kanban_command %{
+    name: "kanban",
+    description: "Manage durable Lemon kanban boards",
+    type: 1,
+    options: [
+      %{
+        type: 1,
+        name: "boards",
+        description: "List kanban boards",
+        options: [
+          %{type: 3, name: "status", description: "Board status", required: false},
+          %{type: 3, name: "owner", description: "Board owner", required: false},
+          %{
+            type: 4,
+            name: "limit",
+            description: "Maximum boards to show",
+            required: false,
+            min_value: 1
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "create",
+        description: "Create a kanban board",
+        options: [
+          %{type: 3, name: "name", description: "Board name", required: true},
+          %{type: 3, name: "workspace", description: "Workspace path", required: false}
+        ]
+      },
+      %{
+        type: 1,
+        name: "show",
+        description: "Show redacted board tasks",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true},
+          %{
+            type: 4,
+            name: "limit",
+            description: "Maximum tasks to show",
+            required: false,
+            min_value: 1
+          }
+        ]
+      },
+      %{
+        type: 1,
+        name: "archive",
+        description: "Archive a kanban board",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true}
+        ]
+      },
+      %{
+        type: 1,
+        name: "task_create",
+        description: "Create a board task",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true},
+          %{type: 3, name: "title", description: "Task title", required: true},
+          %{type: 3, name: "priority", description: "Task priority", required: false},
+          %{type: 3, name: "assignee", description: "Task assignee", required: false},
+          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+        ]
+      },
+      %{
+        type: 1,
+        name: "task_update",
+        description: "Update a board task",
+        options: [
+          %{type: 3, name: "task_id", description: "Task id", required: true},
+          %{type: 3, name: "status", description: "Task status", required: false},
+          %{type: 3, name: "priority", description: "Task priority", required: false},
+          %{type: 3, name: "assignee", description: "Task assignee", required: false},
+          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+        ]
+      },
+      %{
+        type: 1,
+        name: "comment",
+        description: "Add a redacted task comment",
+        options: [
+          %{type: 3, name: "task_id", description: "Task id", required: true},
+          %{type: 3, name: "body", description: "Comment body", required: true}
+        ]
+      },
+      %{
+        type: 1,
+        name: "dispatch_start",
+        description: "Start a board dispatcher",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true},
+          %{
+            type: 4,
+            name: "max_concurrency",
+            description: "Maximum concurrent tasks",
+            required: false,
+            min_value: 1
+          },
+          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+        ]
+      },
+      %{
+        type: 1,
+        name: "dispatch_status",
+        description: "Show board dispatcher status",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true}
+        ]
+      },
+      %{
+        type: 1,
+        name: "dispatch_stop",
+        description: "Stop a board dispatcher",
+        options: [
+          %{type: 3, name: "board_id", description: "Board id", required: true}
+        ]
+      }
+    ]
+  }
+
+  @media_command %{
+    name: "media",
+    description: "Inspect redacted Lemon media jobs",
+    type: 1,
+    options: [
+      %{
+        type: 1,
+        name: "status",
+        description: "Show redacted media job status"
+      }
+    ]
+  }
+
   @trigger_command %{
     name: "trigger",
     description: "Control message trigger mode",
@@ -193,6 +524,53 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       }
     ]
   }
+
+  def slash_commands do
+    [
+      @lemon_command,
+      @session_command,
+      @model_command,
+      @thinking_command,
+      @resume_command,
+      @cancel_command,
+      @checkpoint_command,
+      @rollback_command,
+      @goal_command,
+      @kanban_command,
+      @media_command,
+      @trigger_command,
+      @cwd_command,
+      @reload_command,
+      @topic_command,
+      @file_command
+    ]
+  end
+
+  def kanban_command_schema, do: @kanban_command
+  def checkpoint_command_schema, do: @checkpoint_command
+  def rollback_command_schema, do: @rollback_command
+  def media_command_schema, do: @media_command
+
+  def slash_command_args_for_interaction(interaction) do
+    name = interaction |> map_get(:data) |> map_get(:name)
+
+    case name do
+      "checkpoint" ->
+        {:ok, %{command: "checkpoint", args: checkpoint_interaction_args(interaction)}}
+
+      "rollback" ->
+        {:ok, %{command: "rollback", args: checkpoint_interaction_args(interaction)}}
+
+      "kanban" ->
+        {:ok, %{command: "kanban", args: kanban_interaction_args(interaction)}}
+
+      "media" ->
+        {:ok, %{command: "media", args: media_interaction_args(interaction)}}
+
+      _ ->
+        {:error, :unsupported_command}
+    end
+  end
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -388,6 +766,22 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
+  def handle_info(%LemonCore.Event{type: type, meta: meta} = event, state)
+      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] do
+    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
+
+    with %{channel_id: channel_id, thread_id: thread_id} <-
+           Map.get(state.reaction_runs, session_key),
+         text when is_binary(text) <- LemonChannels.CheckpointStatusMessage.event_text(event) do
+      target_channel_id = thread_id || channel_id
+      _ = send_checkpoint_event_message(state, target_channel_id, text)
+    end
+
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
+
   def handle_info({:discord_event, {:THREAD_CREATE, thread, _ws_state}}, state) do
     state = maybe_handle_thread_create(thread, state)
     {:noreply, state}
@@ -405,6 +799,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          true <- allowed_inbound?(inbound, state),
          true <- binding_allowed?(inbound, state),
          :new <- check_dedupe(inbound, state) do
+      _ = maybe_index_known_target(state, inbound, message)
       handle_inbound_message(state, inbound)
     else
       :seen ->
@@ -422,7 +817,38 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp check_dedupe(inbound, state) do
     key = TransportShared.inbound_message_dedupe_key(inbound)
-    LemonCore.Dedupe.Ets.check_and_mark(@dedupe_table, key, state.dedupe_ttl_ms)
+
+    case LemonCore.Dedupe.Ets.check_and_mark(@dedupe_table, key, state.dedupe_ttl_ms) do
+      :seen -> :seen
+      :new -> check_and_mark_persistent_dedupe(inbound, key, state)
+    end
+  end
+
+  defp check_and_mark_persistent_dedupe(inbound, key, state) do
+    store_key = persistent_dedupe_key(inbound, key)
+    now = Event.now_ms()
+
+    case Store.get(:idempotency, store_key) do
+      %{"inserted_at_ms" => inserted_at_ms} when is_integer(inserted_at_ms) ->
+        if now - inserted_at_ms <= state.dedupe_ttl_ms do
+          :seen
+        else
+          :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
+          :new
+        end
+
+      _ ->
+        :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
+        :new
+    end
+  rescue
+    _ -> :new
+  end
+
+  defp persistent_dedupe_key(inbound, key) do
+    account_id = inbound.account_id || "default"
+    encoded = key |> :erlang.term_to_binary() |> Base.url_encode64(padding: false)
+    "#{@persistent_dedupe_scope}:#{account_id}:#{encoded}"
   end
 
   defp handle_inbound_message(state, inbound) do
@@ -656,6 +1082,21 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       "cancel" ->
         handle_cancel_interaction(interaction, state)
+
+      "checkpoint" ->
+        handle_checkpoint_interaction(interaction, state)
+
+      "rollback" ->
+        handle_rollback_interaction(interaction, state)
+
+      "goal" ->
+        handle_goal_interaction(interaction, state)
+
+      "kanban" ->
+        handle_kanban_interaction(interaction, state)
+
+      "media" ->
+        handle_media_interaction(interaction, state)
 
       "trigger" ->
         handle_trigger_interaction(interaction, state)
@@ -1208,6 +1649,289 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     state
   end
 
+  defp handle_checkpoint_interaction(interaction, state) do
+    args = checkpoint_interaction_args(interaction)
+
+    scope = %ChatScope{
+      transport: :discord,
+      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      topic_id: interaction_thread_id(interaction)
+    }
+
+    respond_ephemeral(
+      interaction,
+      LemonChannels.CheckpointStatusMessage.handle(args,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        session_key: interaction_session_key(interaction, state)
+      )
+    )
+
+    state
+  end
+
+  defp handle_rollback_interaction(interaction, state) do
+    args = checkpoint_interaction_args(interaction)
+
+    scope = %ChatScope{
+      transport: :discord,
+      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      topic_id: interaction_thread_id(interaction)
+    }
+
+    respond_ephemeral(
+      interaction,
+      LemonChannels.CheckpointStatusMessage.handle_rollback(args,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        session_key: interaction_session_key(interaction, state)
+      )
+    )
+
+    state
+  end
+
+  defp handle_goal_interaction(interaction, state) do
+    session_key = interaction_session_key(interaction, state)
+    subcommand = session_subcommand(interaction) || "status"
+
+    args =
+      case subcommand do
+        "set" ->
+          objective = nested_option_value(interaction, "set", "objective")
+          max_continuations = nested_option_value(interaction, "set", "max_continuations")
+
+          budget_arg =
+            if is_integer(max_continuations),
+              do: " --max-continuations #{max_continuations}",
+              else: ""
+
+          if is_binary(objective), do: "set#{budget_arg} " <> objective, else: "set"
+
+        "clear" ->
+          "clear"
+
+        "pause" ->
+          "pause"
+
+        "resume" ->
+          "resume"
+
+        "continue" ->
+          "continue" <> goal_interaction_options(interaction, "continue")
+
+        "loop_once" ->
+          "loop once" <> goal_interaction_options(interaction, "loop_once")
+
+        "loop_start" ->
+          "loop start" <> goal_interaction_options(interaction, "loop_start")
+
+        "loop_status" ->
+          "loop status"
+
+        "loop_stop" ->
+          "loop stop"
+
+        _ ->
+          "status"
+      end
+
+    scope = %ChatScope{
+      transport: :discord,
+      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      topic_id: interaction_thread_id(interaction)
+    }
+
+    respond_ephemeral(
+      interaction,
+      LemonChannels.GoalStatusMessage.handle(session_key, args,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        meta: %{transport: "discord"}
+      )
+    )
+
+    state
+  end
+
+  defp handle_kanban_interaction(interaction, state) do
+    args = kanban_interaction_args(interaction)
+
+    scope = %ChatScope{
+      transport: :discord,
+      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      topic_id: interaction_thread_id(interaction)
+    }
+
+    agent_id = BindingResolver.resolve_agent_id(scope)
+
+    respond_ephemeral(
+      interaction,
+      LemonChannels.KanbanStatusMessage.handle(args,
+        owner: agent_id,
+        author: agent_id,
+        worker_id: agent_id,
+        workspace: BindingResolver.resolve_cwd(scope),
+        meta: %{transport: "discord"}
+      )
+    )
+
+    state
+  end
+
+  defp handle_media_interaction(interaction, state) do
+    args = media_interaction_args(interaction)
+
+    respond_ephemeral(interaction, LemonChannels.MediaStatusMessage.handle(args))
+
+    state
+  end
+
+  defp checkpoint_interaction_args(interaction) do
+    subcommand = session_subcommand(interaction) || "status"
+
+    case subcommand do
+      "events" ->
+        "events" <> value_arg(nested_option_value(interaction, "events", "limit"))
+
+      "diff" ->
+        "diff" <> value_arg(nested_option_value(interaction, "diff", "checkpoint_id"))
+
+      "restore" ->
+        checkpoint_id = nested_option_value(interaction, "restore", "checkpoint_id")
+        confirm? = nested_option_value(interaction, "restore", "confirm") == true
+        confirm_arg = if confirm?, do: " confirm", else: ""
+        "restore" <> value_arg(checkpoint_id) <> confirm_arg
+
+      _ ->
+        "status"
+    end
+  end
+
+  defp kanban_interaction_args(interaction) do
+    subcommand = session_subcommand(interaction) || "boards"
+
+    case subcommand do
+      "boards" ->
+        "boards" <> kanban_interaction_options(interaction, "boards", [:status, :owner, :limit])
+
+      "create" ->
+        name = nested_option_value(interaction, "create", "name")
+
+        "create" <>
+          kanban_interaction_options(interaction, "create", [:workspace]) <> value_arg(name)
+
+      "show" ->
+        board_id = nested_option_value(interaction, "show", "board_id")
+
+        "show" <>
+          value_arg(board_id) <> kanban_interaction_options(interaction, "show", [:limit])
+
+      "archive" ->
+        "archive" <> value_arg(nested_option_value(interaction, "archive", "board_id"))
+
+      "task_create" ->
+        board_id = nested_option_value(interaction, "task_create", "board_id")
+        title = nested_option_value(interaction, "task_create", "title")
+
+        "task create" <>
+          value_arg(board_id) <>
+          kanban_interaction_options(interaction, "task_create", [
+            :priority,
+            :assignee,
+            :worker_profile
+          ]) <> value_arg(title)
+
+      "task_update" ->
+        task_id = nested_option_value(interaction, "task_update", "task_id")
+
+        "task update" <>
+          value_arg(task_id) <>
+          kanban_interaction_options(interaction, "task_update", [
+            :status,
+            :priority,
+            :assignee,
+            :worker_profile
+          ])
+
+      "comment" ->
+        task_id = nested_option_value(interaction, "comment", "task_id")
+        body = nested_option_value(interaction, "comment", "body")
+        "comment" <> value_arg(task_id) <> value_arg(body)
+
+      "dispatch_start" ->
+        board_id = nested_option_value(interaction, "dispatch_start", "board_id")
+
+        "dispatch start" <>
+          value_arg(board_id) <>
+          kanban_interaction_options(interaction, "dispatch_start", [
+            :max_concurrency,
+            :worker_profile
+          ])
+
+      "dispatch_status" ->
+        "dispatch status" <>
+          value_arg(nested_option_value(interaction, "dispatch_status", "board_id"))
+
+      "dispatch_stop" ->
+        "dispatch stop" <>
+          value_arg(nested_option_value(interaction, "dispatch_stop", "board_id"))
+
+      _ ->
+        ""
+    end
+  end
+
+  defp media_interaction_args(interaction) do
+    subcommand = session_subcommand(interaction) || "status"
+    if subcommand == "status", do: "status", else: ""
+  end
+
+  defp kanban_interaction_options(interaction, subcommand, names) do
+    names
+    |> Enum.map(fn name ->
+      option_arg(
+        "--#{String.replace(to_string(name), "_", "-")}",
+        nested_option_value(interaction, subcommand, to_string(name))
+      )
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> ""
+      args -> " " <> Enum.join(args, " ")
+    end
+  end
+
+  defp value_arg(nil), do: ""
+  defp value_arg(""), do: ""
+  defp value_arg(value), do: " #{value}"
+
+  defp goal_interaction_options(interaction, subcommand) do
+    [
+      option_arg(
+        "--max-continuations",
+        nested_option_value(interaction, subcommand, "max_continuations")
+      ),
+      option_arg("--max-ticks", nested_option_value(interaction, subcommand, "max_ticks")),
+      auto_arg(nested_option_value(interaction, subcommand, "auto")),
+      option_arg("--judge-model", nested_option_value(interaction, subcommand, "judge_model")),
+      option_arg(
+        "--judge-failure-policy",
+        nested_option_value(interaction, subcommand, "judge_failure_policy")
+      ),
+      option_arg("--model", nested_option_value(interaction, subcommand, "model"))
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> ""
+      args -> " " <> Enum.join(args, " ")
+    end
+  end
+
+  defp option_arg(_flag, nil), do: nil
+  defp option_arg(_flag, ""), do: nil
+  defp option_arg(flag, value), do: "#{flag} #{value}"
+
+  defp auto_arg(true), do: "--auto"
+  defp auto_arg(_), do: nil
+
   defp handle_cancel_component(interaction, custom_id) do
     run_id = String.trim_leading(custom_id, @cancel_callback_prefix <> ":")
 
@@ -1651,7 +2375,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         account_id = state.account_id || "default"
 
         if is_integer(channel_id) do
-          trigger = TriggerMode.resolve(account_id, channel_id, thread_id)
+          trigger = resolve_trigger_mode(account_id, channel_id, thread_id)
           trigger.mode == :mentions and not explicit_mention?(state, inbound)
         else
           false
@@ -1662,6 +2386,22 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   rescue
     _ -> false
+  end
+
+  defp resolve_trigger_mode(account_id, channel_id, nil) do
+    primary = TriggerMode.resolve(account_id, channel_id, nil)
+
+    if primary.mode == :mentions do
+      fallback = TriggerMode.resolve(account_id, channel_id, channel_id)
+
+      if fallback.source == :topic, do: fallback, else: primary
+    else
+      primary
+    end
+  end
+
+  defp resolve_trigger_mode(account_id, channel_id, thread_id) do
+    TriggerMode.resolve(account_id, channel_id, thread_id)
   end
 
   defp explicit_mention?(state, inbound) do
@@ -1754,11 +2494,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       [id, decision] when id != "" and decision != "" ->
         parsed =
           case decision do
-            "once" -> {:once, %{scope: :once}}
-            "deny" -> {:deny, %{}}
-            "session" -> {:approve, %{scope: :session}}
-            "agent" -> {:approve, %{scope: :agent}}
-            "global" -> {:approve, %{scope: :global}}
+            "once" -> :approve_once
+            "deny" -> :deny
+            "session" -> :approve_session
+            "agent" -> :approve_agent
+            "global" -> :approve_global
             _ -> nil
           end
 
@@ -1771,9 +2511,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp parse_approval_callback(_), do: {nil, nil}
 
-  defp decision_label({:once, _}), do: "Approved (once)"
-  defp decision_label({:deny, _}), do: "Denied"
-  defp decision_label({:approve, %{scope: scope}}), do: "Approved (#{scope})"
+  defp decision_label(:approve_once), do: "Approved (once)"
+  defp decision_label(:deny), do: "Denied"
+  defp decision_label(:approve_session), do: "Approved (session)"
+  defp decision_label(:approve_agent), do: "Approved (agent)"
+  defp decision_label(:approve_global), do: "Approved (global)"
   defp decision_label(_), do: "Unknown"
 
   defp format_action(action) when is_map(action) do
@@ -2244,7 +2986,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp respond_ephemeral(interaction, content) do
     payload = %{
       type: 4,
-      data: %{content: content, flags: 64}
+      data: %{content: content, flags: 64, allowed_mentions: safe_allowed_mentions()}
     }
 
     _ = safe_interaction_response(interaction, payload)
@@ -2256,7 +2998,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     payload = %{
       type: 4,
-      data: %{content: content, components: components, flags: flags}
+      data: %{
+        content: content,
+        components: components,
+        flags: flags,
+        allowed_mentions: safe_allowed_mentions()
+      }
     }
 
     _ = safe_interaction_response(interaction, payload)
@@ -2266,7 +3013,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp update_interaction(interaction, content, components) do
     payload = %{
       type: 7,
-      data: %{content: content, components: components}
+      data: %{content: content, components: components, allowed_mentions: safe_allowed_mentions()}
     }
 
     _ = safe_interaction_response(interaction, payload)
@@ -2279,28 +3026,177 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp safe_interaction_response(interaction, payload) do
-    Interaction.create_response(interaction, payload)
+    result =
+      case Application.get_env(:lemon_channels, :discord_interaction_responder) do
+        responder when is_function(responder, 2) -> responder.(interaction, payload)
+        {mod, fun} when is_atom(mod) and is_atom(fun) -> apply(mod, fun, [interaction, payload])
+        _ -> Interaction.create_response(interaction, payload)
+      end
+
+    record_slash_client_click_proof(interaction, payload, :completed)
+    result
   rescue
     error ->
+      record_slash_client_click_proof(interaction, payload, :failed)
       Logger.warning("discord interaction response failed: #{inspect(error)}")
       :ok
   end
+
+  defp record_slash_client_click_proof(interaction, payload, status) do
+    if real_slash_client_interaction?(interaction) do
+      now = DateTime.utc_now()
+      command = interaction |> map_get(:data) |> map_get(:name) |> safe_proof_value("unknown")
+      response_type = map_get(payload, :type)
+      safe_mentions = safe_interaction_mentions?(payload)
+      completed_count = if status == :completed and safe_mentions, do: 2, else: 1
+      failed_count = if status == :completed and safe_mentions, do: 0, else: 1
+
+      proof = %{
+        proof: "discord_slash_client_click",
+        proof_object: "lemon.discord_slash_client_click",
+        proof_scope: "discord_slash_client_click_observed",
+        status: if(failed_count == 0, do: "completed", else: "failed"),
+        completed_count: completed_count,
+        failed_count: failed_count,
+        skipped_count: 0,
+        generated_at: DateTime.to_iso8601(now),
+        coverage: %{
+          registered_command_count: length(slash_commands()),
+          client_click_command_count: 1,
+          real_client_click_proof: failed_count == 0
+        },
+        checks: [
+          %{
+            name: "discord_slash_client_click_observed",
+            status: "completed",
+            proof_scope: "discord slash client click observed"
+          },
+          %{
+            name: "discord_slash_client_click_safe_mentions",
+            status: if(safe_mentions, do: "completed", else: "failed"),
+            proof_scope: "discord slash client click observed"
+          }
+        ],
+        details: %{
+          command: command,
+          interaction_type: map_get(interaction, :type),
+          response_type: response_type,
+          ephemeral_response: ephemeral_response?(payload),
+          safe_mentions_disabled: safe_mentions,
+          live_fields: %{
+            application_id_present: present?(map_get(interaction, :application_id)),
+            token_present: present?(map_get(interaction, :token)),
+            member_present: present?(map_get(interaction, :member)),
+            user_present: present?(map_get(interaction, :user))
+          }
+        },
+        cleanup: %{
+          includes_raw_bot_tokens: false,
+          includes_raw_interaction_tokens: false,
+          includes_raw_application_ids: false,
+          includes_raw_channel_ids: false,
+          includes_raw_user_ids: false,
+          includes_raw_message_bodies: false
+        }
+      }
+
+      write_slash_client_click_proof(proof, now)
+    end
+  rescue
+    error ->
+      Logger.debug("discord slash client-click proof write failed: #{inspect(error)}")
+      :ok
+  end
+
+  defp real_slash_client_interaction?(interaction) do
+    map_get(interaction, :type) == 2 and
+      present?(map_get(interaction, :application_id)) and
+      present?(map_get(interaction, :token))
+  end
+
+  defp write_slash_client_click_proof(proof, now) do
+    dir =
+      Application.get_env(
+        :lemon_channels,
+        :discord_client_click_proof_dir,
+        Path.join([File.cwd!(), ".lemon", "proofs"])
+      )
+
+    File.mkdir_p!(dir)
+    json = Jason.encode!(proof, pretty: true)
+    latest = Path.join(dir, "discord-slash-client-click-proof-latest.json")
+
+    archive =
+      Path.join(
+        dir,
+        "discord-slash-client-click-proof-" <>
+          (now |> DateTime.to_iso8601() |> String.replace(~r/[:.]/, "-")) <> ".json"
+      )
+
+    File.write!(latest, json <> "\n")
+    File.write!(archive, json <> "\n")
+    :ok
+  end
+
+  defp safe_interaction_mentions?(%{data: data}) when is_map(data) do
+    case map_get(data, :allowed_mentions) do
+      %{parse: [], replied_user: false} -> true
+      %{"parse" => [], "replied_user" => false} -> true
+      _ -> false
+    end
+  end
+
+  defp safe_interaction_mentions?(%{type: 6}), do: true
+  defp safe_interaction_mentions?(_), do: false
+
+  defp ephemeral_response?(payload) do
+    flags =
+      payload
+      |> map_get(:data)
+      |> map_get(:flags)
+
+    is_integer(flags) and Bitwise.band(flags, 64) == 64
+  end
+
+  defp safe_proof_value(value, default) when is_binary(value) do
+    if String.match?(value, ~r/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), do: value, else: default
+  end
+
+  defp safe_proof_value(_value, default), do: default
 
   defp send_followup(interaction, content) do
     token = map_get(interaction, :token)
     app_id = map_get(interaction, :application_id)
 
     if is_binary(token) and app_id do
-      Nostrum.Api.Webhook.execute(app_id, token, %{content: content, flags: 64})
+      Nostrum.Api.Webhook.execute(app_id, token, %{
+        content: content,
+        flags: 64,
+        allowed_mentions: safe_allowed_mentions()
+      })
     end
   rescue
     _ -> :ok
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
-    Nostrum.Api.Message.create(channel_id, %{content: text})
+    Nostrum.Api.Message.create(channel_id, %{
+      content: text,
+      allowed_mentions: safe_allowed_mentions()
+    })
   rescue
     _ -> :ok
+  end
+
+  defp safe_allowed_mentions, do: %{parse: [], replied_user: false}
+
+  defp send_checkpoint_event_message(%{checkpoint_event_sender: sender}, channel_id, text)
+       when is_function(sender, 2) do
+    sender.(channel_id, text)
+  end
+
+  defp send_checkpoint_event_message(_state, channel_id, text) do
+    send_channel_message(channel_id, text)
   end
 
   # ============================================================================
@@ -2532,6 +3428,74 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
+  defp maybe_index_known_target(state, %InboundMessage{} = inbound, message) do
+    account_id = state.account_id || inbound.account_id || "default"
+    channel_id = inbound.meta[:channel_id] |> parse_id()
+    thread_id = inbound.meta[:thread_id] |> parse_id()
+
+    with true <- is_binary(account_id) and account_id != "",
+         true <- is_integer(channel_id) do
+      key = {account_id, channel_id, thread_id}
+      existing = KnownTargetStore.get(key) || %{}
+      now = System.system_time(:millisecond)
+
+      channel = map_get(message, :channel)
+      thread = map_get(message, :thread)
+      channel_type = map_get(channel, :type) |> parse_id()
+      thread_channel? = channel_type in [10, 11, 12]
+
+      entry =
+        %{
+          channel_id: "discord",
+          account_id: account_id,
+          peer_kind: inbound.peer.kind |> to_string(),
+          peer_id: Integer.to_string(channel_id),
+          thread_id: maybe_to_string(thread_id),
+          discord_channel_id: channel_id,
+          discord_thread_id: thread_id,
+          guild_id: inbound.meta[:guild_id] |> parse_id(),
+          channel_name:
+            coalesce_text(
+              if(thread_channel?, do: nil, else: map_get(channel, :name)),
+              existing,
+              :channel_name
+            ),
+          thread_name:
+            coalesce_text(
+              map_get(thread, :name) || if(thread_channel?, do: map_get(channel, :name)),
+              existing,
+              :thread_name
+            ),
+          updated_at_ms: now,
+          first_seen_at_ms: field(existing, :first_seen_at_ms) || now
+        }
+        |> maybe_put(:last_message_id, inbound.meta[:user_msg_id] |> parse_id())
+
+      if should_persist_known_target?(existing, entry, now) do
+        _ = KnownTargetStore.put(key, entry)
+      end
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp coalesce_text(value, _existing, _key) when is_binary(value) and value != "", do: value
+  defp coalesce_text(_value, existing, key), do: field(existing, key)
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp field(_map, _key), do: nil
+
+  defp should_persist_known_target?(existing, entry, now) do
+    field_changed?(existing, entry, :channel_name) or
+      field_changed?(existing, entry, :thread_name) or
+      field_changed?(existing, entry, :peer_kind) or
+      now - (field(existing, :updated_at_ms) || 0) >= @known_target_refresh_ms
+  end
+
+  defp field_changed?(existing, entry, key), do: field(existing, key) != Map.get(entry, key)
+
   # ============================================================================
   # Access Checks
   # ============================================================================
@@ -2584,21 +3548,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp register_slash_commands do
-    commands = [
-      @lemon_command,
-      @session_command,
-      @model_command,
-      @thinking_command,
-      @resume_command,
-      @cancel_command,
-      @trigger_command,
-      @cwd_command,
-      @reload_command,
-      @topic_command,
-      @file_command
-    ]
-
-    for cmd <- commands do
+    for cmd <- slash_commands() do
       _ =
         try do
           ApplicationCommand.create_global_command(cmd)
@@ -2757,6 +3707,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if trimmed == "", do: nil, else: trimmed
   end
 
+  defp normalize_blank(value) when is_integer(value) or is_boolean(value), do: value
   defp normalize_blank(_), do: nil
 
   defp maybe_to_string(value) when is_integer(value), do: Integer.to_string(value)
@@ -2768,6 +3719,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp map_get(_, _), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(nil), do: false
+  defp present?(_), do: true
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

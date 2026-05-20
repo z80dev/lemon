@@ -114,6 +114,27 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
   end
 
   @doc """
+  Search recent public X posts.
+  """
+  @spec search_recent(String.t(), keyword()) :: {:ok, map()} | {:error, api_error()}
+  def search_recent(query, opts \\ []) do
+    with_credentials(fn credentials ->
+      params = search_params(query, opts)
+
+      case request(:get, "#{@api_base}/tweets/search/recent", credentials, params: params) do
+        {:ok, %{status: 200, body: body}} ->
+          {:ok, body}
+
+        {:ok, %{status: status, body: body}} ->
+          {:error, {:api_error, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   Delete a tweet.
   """
   @spec delete_tweet(String.t()) :: {:ok, map()} | {:error, api_error()}
@@ -376,6 +397,42 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
   end
 
   defp clamp_mentions_limit(_), do: 10
+
+  defp search_params(query, opts) do
+    [
+      query: query,
+      max_results: clamp_search_limit(opts[:limit]),
+      "tweet.fields":
+        "created_at,author_id,conversation_id,lang,public_metrics,referenced_tweets",
+      expansions: "author_id",
+      "user.fields": "username,name,verified"
+    ]
+    |> maybe_put_param(:sort_order, opts[:sort_order])
+    |> maybe_put_param(:since_id, opts[:since_id])
+    |> maybe_put_param(:until_id, opts[:until_id])
+    |> maybe_put_param(:next_token, opts[:next_token])
+  end
+
+  defp clamp_search_limit(nil), do: 10
+
+  defp clamp_search_limit(limit) when is_integer(limit) do
+    limit
+    |> max(10)
+    |> min(100)
+  end
+
+  defp clamp_search_limit(limit) when is_binary(limit) do
+    case Integer.parse(String.trim(limit)) do
+      {parsed, ""} -> clamp_search_limit(parsed)
+      _ -> 10
+    end
+  end
+
+  defp clamp_search_limit(_), do: 10
+
+  defp maybe_put_param(params, _key, nil), do: params
+  defp maybe_put_param(params, _key, ""), do: params
+  defp maybe_put_param(params, key, value), do: Keyword.put(params, key, value)
 
   @spec oauth_headers(atom(), String.t(), credentials(), keyword()) ::
           [{String.t(), String.t()}]

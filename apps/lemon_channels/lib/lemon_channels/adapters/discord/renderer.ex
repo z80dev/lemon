@@ -4,8 +4,13 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
   """
 
   alias LemonChannels.Adapters.Discord.StatusRenderer
+  alias LemonChannels.GatewayConfig
   alias LemonChannels.{OutboundPayload, Outbox, PresentationState}
+  alias LemonChannels.Outbox.Chunker
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
+
+  @default_max_download_bytes 25 * 1024 * 1024
+  @safe_text_chunk_chars 1_900
 
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}
   def dispatch(%DeliveryIntent{} = intent) do
@@ -35,11 +40,46 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
          seq <- extract_seq(intent),
          state <- PresentationState.get(route, intent.run_id, surface),
          components = StatusRenderer.components(intent),
-         text_hash = text_hash({text, components}) do
-      if duplicate?(state, seq, text_hash) do
+         chunks <- normalize_text(intent, text),
+         text_hash = text_hash({chunks, components, final_file_signature(intent)}) do
+      if duplicate?(state, intent.kind, seq, text_hash) do
         :ok
       else
-        send_text(intent, route, state, surface, seq, text_hash, text, components)
+        case send_text_chunks(intent, route, state, surface, seq, text_hash, chunks, components) do
+          :ok ->
+            maybe_dispatch_auto_send_files(intent)
+
+          other ->
+            other
+        end
+      end
+    end
+  end
+
+  defp send_text_chunks(intent, route, state, surface, seq, text_hash, [single], components) do
+    send_text(intent, route, state, surface, seq, text_hash, single, components)
+  end
+
+  defp send_text_chunks(intent, route, state, surface, seq, text_hash, [first | rest], components) do
+    meta =
+      intent
+      |> intent_meta(components)
+      |> put_followup_reply_to(optional_reply_to(intent))
+
+    if is_reference(state.pending_create_ref) or is_reference(state.pending_edit_ref) do
+      PresentationState.defer_chunks(
+        route,
+        intent.run_id,
+        surface,
+        [first | rest],
+        seq,
+        text_hash,
+        meta
+      )
+    else
+      case send_text(intent, route, state, surface, seq, text_hash, first, components) do
+        :ok -> PresentationState.stage_followups(route, intent.run_id, surface, rest, meta)
+        other -> other
       end
     end
   end
@@ -109,7 +149,7 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
 
         case Outbox.enqueue(payload) do
           {:ok, _ref} ->
-            maybe_dispatch_auto_send_files(intent)
+            :ok
 
           {:error, :duplicate} ->
             :ok
@@ -118,6 +158,33 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
             {:error, reason}
         end
     end
+  end
+
+  defp normalize_text(%DeliveryIntent{kind: kind}, text)
+       when kind in [:stream_snapshot, :tool_status_snapshot] do
+    [truncate_text(text)]
+  rescue
+    _ -> [text]
+  end
+
+  defp normalize_text(_intent, text) do
+    Chunker.chunk(text, chunk_size: text_chunk_size())
+  rescue
+    _ -> [text]
+  end
+
+  defp truncate_text(text) do
+    chunk_size = text_chunk_size()
+
+    if String.length(text) <= chunk_size do
+      text
+    else
+      String.slice(text, 0, chunk_size)
+    end
+  end
+
+  defp text_chunk_size do
+    min(Chunker.chunk_size_for("discord"), @safe_text_chunk_chars)
   end
 
   defp dispatch_files(
@@ -201,6 +268,9 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
     if is_list(components), do: Map.put(base, :components, components), else: base
   end
 
+  defp put_followup_reply_to(meta, nil), do: meta
+  defp put_followup_reply_to(meta, reply_to), do: Map.put(meta, :followup_reply_to, reply_to)
+
   defp optional_reply_to(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
     value = meta[:user_msg_id] || meta["user_msg_id"] || meta[:reply_to] || meta["reply_to"]
@@ -215,7 +285,8 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
     %{
       path: path,
       filename: file[:filename] || Path.basename(path),
-      caption: file[:caption]
+      caption: file[:caption],
+      source: file[:source]
     }
   end
 
@@ -223,15 +294,42 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
     %{
       path: path,
       filename: file["filename"] || Path.basename(path),
-      caption: file["caption"]
+      caption: file["caption"],
+      source: file["source"]
     }
   end
 
   defp normalize_attachment(_), do: nil
 
-  defp duplicate?(state, seq, text_hash) do
-    state.last_seq == seq and state.last_text_hash == text_hash
+  defp final_file_signature(%DeliveryIntent{kind: kind} = intent)
+       when kind in [:stream_finalize, :final_text] do
+    meta = intent.meta || %{}
+
+    case meta[:auto_send_files] || meta["auto_send_files"] do
+      files when is_list(files) ->
+        files
+        |> Enum.map(&normalize_attachment/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(fn file -> {file.path, file.filename, file.source} end)
+
+      _ ->
+        []
+    end
   end
+
+  defp final_file_signature(_intent), do: []
+
+  defp duplicate?(state, kind, seq, text_hash) do
+    (state.last_seq == seq and state.last_text_hash == text_hash) or
+      finalize_repeat?(state, kind, seq, text_hash)
+  end
+
+  defp finalize_repeat?(state, kind, seq, text_hash)
+       when kind in [:stream_finalize, :final_text] do
+    state.last_text_hash == text_hash and is_integer(state.last_seq) and seq >= state.last_seq
+  end
+
+  defp finalize_repeat?(_state, _kind, _seq, _text_hash), do: false
 
   defp text_hash(value), do: :erlang.phash2(value)
 
@@ -255,17 +353,106 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
 
   defp auto_send_files(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
+    cfg = auto_send_generated_config()
 
     case meta[:auto_send_files] || meta["auto_send_files"] do
       files when is_list(files) ->
-        files
-        |> Enum.map(&normalize_attachment/1)
-        |> Enum.reject(&is_nil/1)
+        filter_auto_send_files(files, cfg)
 
       _ ->
         []
     end
   end
+
+  defp filter_auto_send_files(files, cfg) when is_list(files) do
+    {explicit, generated} =
+      files
+      |> Enum.map(&normalize_attachment/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.split_with(&(attachment_source(&1) == :explicit))
+
+    generated =
+      if cfg.enabled do
+        generated
+        |> Enum.take(-cfg.max_files)
+        |> Enum.filter(&file_size_within_limit?(&1.path, cfg.max_bytes))
+      else
+        []
+      end
+
+    explicit ++ generated
+  end
+
+  defp filter_auto_send_files(_files, _cfg), do: []
+
+  defp attachment_source(%{source: source}) when source in [:explicit, :generated], do: source
+  defp attachment_source(%{source: "explicit"}), do: :explicit
+  defp attachment_source(%{source: "generated"}), do: :generated
+  defp attachment_source(%{"source" => source}) when source in [:explicit, :generated], do: source
+  defp attachment_source(%{"source" => "explicit"}), do: :explicit
+  defp attachment_source(%{"source" => "generated"}), do: :generated
+  defp attachment_source(_file), do: :explicit
+
+  defp file_size_within_limit?(path, max_bytes)
+       when is_binary(path) and is_integer(max_bytes) and max_bytes > 0 do
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular, size: size}} -> size <= max_bytes
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp file_size_within_limit?(_path, _max_bytes), do: false
+
+  defp auto_send_generated_config do
+    discord_cfg = GatewayConfig.get(:discord, %{}) || %{}
+    files_cfg = (discord_cfg[:files] || discord_cfg["files"] || %{}) |> normalize_map()
+
+    %{
+      enabled:
+        truthy?(files_cfg[:enabled] || files_cfg["enabled"]) and
+          truthy?(
+            files_cfg[:auto_send_generated_files] ||
+              files_cfg["auto_send_generated_files"] ||
+              files_cfg[:auto_send_generated_images] || files_cfg["auto_send_generated_images"]
+          ),
+      max_files:
+        positive_int_or(
+          files_cfg[:auto_send_generated_max_files] || files_cfg["auto_send_generated_max_files"],
+          3
+        ),
+      max_bytes:
+        positive_int_or(
+          files_cfg[:max_download_bytes] || files_cfg["max_download_bytes"],
+          @default_max_download_bytes
+        )
+    }
+  rescue
+    _ -> %{enabled: false, max_files: 3, max_bytes: @default_max_download_bytes}
+  end
+
+  defp normalize_map(value) when is_map(value), do: value
+
+  defp normalize_map(value) when is_list(value) do
+    if Keyword.keyword?(value), do: Enum.into(value, %{}), else: %{}
+  end
+
+  defp normalize_map(_), do: %{}
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_), do: false
+
+  defp positive_int_or(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_int_or(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_int_or(_value, default), do: default
 
   defp pending_resume(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}

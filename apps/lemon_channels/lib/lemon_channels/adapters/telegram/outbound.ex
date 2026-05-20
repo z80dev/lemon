@@ -595,7 +595,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       ".gif" -> true
       ".webp" -> true
       ".bmp" -> true
-      ".svg" -> true
       ".tif" -> true
       ".tiff" -> true
       ".heic" -> true

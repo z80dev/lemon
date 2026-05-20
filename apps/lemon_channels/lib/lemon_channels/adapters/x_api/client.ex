@@ -5,6 +5,7 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   Handles:
   - Tweet posting
   - Tweet deletion
+  - Recent public search
   - Media uploads (images)
   - Reply threading
   - Rate limit handling with exponential backoff
@@ -138,6 +139,27 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   @doc """
+  Search recent public X posts.
+  """
+  def search_recent(query, opts \\ []) do
+    case search_auth_method() do
+      {:bearer, token} ->
+        do_search_recent(query, token, opts)
+
+      :oauth2 ->
+        with {:ok, token} <- get_access_token() do
+          do_search_recent(query, token, opts)
+        end
+
+      :oauth1 ->
+        LemonChannels.Adapters.XAPI.OAuth1Client.search_recent(query, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Delete a tweet.
   """
   def delete_tweet(tweet_id) do
@@ -156,6 +178,25 @@ defmodule LemonChannels.Adapters.XAPI.Client do
 
   defp get_access_token do
     LemonChannels.Adapters.XAPI.TokenManager.get_access_token()
+  end
+
+  defp search_auth_method do
+    config = LemonChannels.Adapters.XAPI.config()
+
+    cond do
+      present?(config[:bearer_token]) ->
+        {:bearer, config[:bearer_token]}
+
+      LemonChannels.Adapters.XAPI.configured?() and
+          LemonChannels.Adapters.XAPI.auth_method() == :oauth2 ->
+        :oauth2
+
+      LemonChannels.Adapters.XAPI.configured?() ->
+        :oauth1
+
+      true ->
+        {:error, :not_configured}
+    end
   end
 
   defp build_tweet(%OutboundPayload{content: text} = payload) do
@@ -346,7 +387,8 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   @doc false
-  def chunk_binary(data, chunk_size) when is_binary(data) and is_integer(chunk_size) and chunk_size > 0 do
+  def chunk_binary(data, chunk_size)
+      when is_binary(data) and is_integer(chunk_size) and chunk_size > 0 do
     do_chunk_binary(data, chunk_size, [])
   end
 
@@ -424,6 +466,36 @@ defmodule LemonChannels.Adapters.XAPI.Client do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp do_search_recent(query, token, opts) do
+    params = search_params(query, opts)
+
+    case request(:get, "#{@api_base}/tweets/search/recent", token, params: params) do
+      {:ok, %{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:api_error, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp search_params(query, opts) do
+    [
+      query: query,
+      max_results: clamp_search_limit(opts[:limit]),
+      "tweet.fields":
+        "created_at,author_id,conversation_id,lang,public_metrics,referenced_tweets",
+      expansions: "author_id",
+      "user.fields": "username,name,verified"
+    ]
+    |> maybe_put_param(:sort_order, opts[:sort_order])
+    |> maybe_put_param(:since_id, opts[:since_id])
+    |> maybe_put_param(:until_id, opts[:until_id])
+    |> maybe_put_param(:next_token, opts[:next_token])
   end
 
   defp resolve_mentions_user_id(token, opts) do
@@ -515,6 +587,30 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   defp clamp_mentions_limit(_), do: 10
+
+  defp clamp_search_limit(nil), do: 10
+
+  defp clamp_search_limit(limit) when is_integer(limit) do
+    limit
+    |> max(10)
+    |> min(100)
+  end
+
+  defp clamp_search_limit(limit) when is_binary(limit) do
+    case Integer.parse(String.trim(limit)) do
+      {parsed, ""} -> clamp_search_limit(parsed)
+      _ -> 10
+    end
+  end
+
+  defp clamp_search_limit(_), do: 10
+
+  defp maybe_put_param(params, _key, nil), do: params
+  defp maybe_put_param(params, _key, ""), do: params
+  defp maybe_put_param(params, key, value), do: Keyword.put(params, key, value)
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
 
   defp maybe_add_reply(tweet, nil), do: tweet
 

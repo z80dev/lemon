@@ -5,6 +5,8 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
   alias LemonChannels.{PresentationState, Registry}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
+  @gateway_config_key :"Elixir.LemonGateway.Config"
+
   defmodule TelegramRendererPlugin do
     @behaviour LemonChannels.Plugin
 
@@ -558,6 +560,84 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                    1_000
   end
 
+  test "dispatch/1 requires opt-in before auto-sending generated Telegram files" do
+    route = route("893")
+    run_id = "run-#{System.unique_integer([:positive])}"
+    path = temp_file!("telegram-renderer-generated-file", "hello")
+
+    assert :ok =
+             Renderer.dispatch(
+               intent(
+                 run_id,
+                 route,
+                 :final_text,
+                 %{text: "done"},
+                 %{
+                   auto_send_files: [
+                     %{
+                       "path" => path,
+                       "filename" => "generated.svg",
+                       "caption" => "artifact",
+                       "source" => "generated"
+                     }
+                   ]
+                 }
+               )
+             )
+
+    assert_receive {:delivered, %LemonChannels.OutboundPayload{kind: :text}}, 1_000
+    refute_receive {:delivered, %LemonChannels.OutboundPayload{kind: :file}}, 150
+  end
+
+  test "dispatch/1 auto-sends generated Telegram media files behind files config" do
+    route = route("894")
+    run_id = "run-#{System.unique_integer([:positive])}"
+    path = temp_file!("telegram-renderer-generated-video", "mp4")
+
+    with_telegram_files_config(
+      %{
+        enabled: true,
+        auto_send_generated_files: true,
+        auto_send_generated_max_files: 1,
+        max_download_bytes: 20
+      },
+      fn ->
+        assert :ok =
+                 Renderer.dispatch(
+                   intent(
+                     run_id,
+                     route,
+                     :final_text,
+                     %{text: "done"},
+                     %{
+                       auto_send_files: [
+                         %{
+                           path: path,
+                           filename: "generated-preview.mp4",
+                           caption: "video artifact",
+                           source: :generated
+                         }
+                       ]
+                     }
+                   )
+                 )
+      end
+    )
+
+    assert_receive {:delivered, %LemonChannels.OutboundPayload{kind: :text}}, 1_000
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      kind: :file,
+                      content: %{
+                        path: ^path,
+                        filename: "generated-preview.mp4",
+                        caption: "video artifact"
+                      }
+                    }},
+                   1_000
+  end
+
   test "dispatch/1 clears duplicate edit refs so later edits are not blocked" do
     route = route("891")
     run_id = "run-#{System.unique_integer([:positive])}"
@@ -629,6 +709,53 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
                    150
   end
 
+  test "dispatch/1 does not suppress same final text when auto-send files are added" do
+    route = route("895")
+    run_id = "run-#{System.unique_integer([:positive])}"
+    path = temp_file!("telegram-renderer-late-file", "artifact")
+
+    assert :ok =
+             Renderer.dispatch(
+               intent(run_id, route, :final_text, %{text: "stable final", seq: 2})
+             )
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      kind: :text,
+                      content: "stable final"
+                    }},
+                   1_000
+
+    assert eventually(fn ->
+             PresentationState.get(route, run_id, :answer).platform_message_id == 3101
+           end)
+
+    assert :ok =
+             Renderer.dispatch(
+               intent(
+                 run_id,
+                 route,
+                 :final_text,
+                 %{text: "stable final", seq: 3},
+                 %{auto_send_files: [%{path: path, filename: "late.txt"}]}
+               )
+             )
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      kind: :edit,
+                      content: %{text: "stable final"}
+                    }},
+                   1_000
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      kind: :file,
+                      content: %{path: ^path, filename: "late.txt"}
+                    }},
+                   1_000
+  end
+
   defp route(peer_id) do
     %DeliveryRoute{
       channel_id: "telegram",
@@ -648,6 +775,31 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
       body: body,
       meta: meta
     }
+  end
+
+  defp temp_file!(prefix, content) do
+    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}.txt")
+    File.write!(path, content)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  defp with_telegram_files_config(files_config, fun) do
+    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    config = previous || %{}
+    telegram = Map.get(config, :telegram) || Map.get(config, "telegram") || %{}
+    next = Map.put(config, :telegram, Map.put(telegram, :files, files_config))
+
+    try do
+      Application.put_env(:lemon_gateway, @gateway_config_key, next)
+      fun.()
+    after
+      if previous == nil do
+        Application.delete_env(:lemon_gateway, @gateway_config_key)
+      else
+        Application.put_env(:lemon_gateway, @gateway_config_key, previous)
+      end
+    end
   end
 
   defp eventually(fun, attempts \\ 20)

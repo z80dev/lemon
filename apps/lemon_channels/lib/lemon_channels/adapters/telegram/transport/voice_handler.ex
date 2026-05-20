@@ -35,7 +35,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
           {:skip, state}
         end
 
-      not is_binary(state.voice_transcription_api_key) or state.voice_transcription_api_key == "" ->
+      voice_requires_api_key?(state) and
+          (not is_binary(state.voice_transcription_api_key) or
+             state.voice_transcription_api_key == "") ->
         _ =
           maybe_send_voice_error(
             state,
@@ -85,6 +87,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
         mime_type = voice[:mime_type] || voice["mime_type"]
 
         transcriber.transcribe(%{
+          provider: voice_transcription_provider(state),
           model: state.voice_transcription_model,
           base_url: state.voice_transcription_base_url,
           api_key: state.voice_transcription_api_key,
@@ -142,6 +145,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.VoiceHandler do
       {:error, :voice_too_large}
     else
       :ok
+    end
+  end
+
+  defp voice_requires_api_key?(state) do
+    voice_transcription_provider(state) != "local_transcript"
+  end
+
+  defp voice_transcription_provider(state) do
+    case Map.get(state, :voice_transcription_provider) do
+      provider when is_binary(provider) and provider != "" -> provider
+      _ -> "openai_transcribe"
     end
   end
 

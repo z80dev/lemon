@@ -13,6 +13,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
   @type callbacks :: %{
           bot_username: binary() | nil,
           handle_cwd_command: (map(), map() -> map()),
+          handle_checkpoint_command: (map(), map() -> map()),
+          handle_goal_command: (map(), map() -> map()),
+          handle_kanban_command: (map(), map() -> map()),
+          handle_media_command: (map(), map() -> map()),
           handle_media_auto_put: (map(), map() -> map()),
           handle_model_command: (map(), map() -> map()),
           handle_new_session: (map(), map(), binary() | nil -> map()),
@@ -55,6 +59,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
         Commands.file_command?(original_text, bot_username) ->
           FileOperations.handle_file_command(state, inbound)
+
+        Commands.checkpoint_command?(original_text, bot_username) or
+            Commands.rollback_command?(original_text, bot_username) ->
+          callbacks.handle_checkpoint_command.(state, inbound)
+
+        Commands.goal_command?(original_text, bot_username) ->
+          callbacks.handle_goal_command.(state, inbound)
+
+        Commands.kanban_command?(original_text, bot_username) ->
+          callbacks.handle_kanban_command.(state, inbound)
+
+        Commands.media_command?(original_text, bot_username) ->
+          callbacks.handle_media_command.(state, inbound)
 
         FileOperations.should_auto_put_media?(state, inbound) ->
           if MediaGroups.media_group_member?(inbound) do

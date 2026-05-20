@@ -271,6 +271,34 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert opts[:message_thread_id] == 777
   end
 
+  test "file: svg paths use send_document because Telegram rejects svg photos" do
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
+
+    path =
+      Path.join(System.tmp_dir!(), "outbound-image-#{System.unique_integer([:positive])}.svg")
+
+    File.write!(path, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{path: path, caption: "Generated image"},
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_document, 123, ^path, opts}
+    assert opts[:caption] == "Generated image"
+    assert opts[:reply_to_message_id] == 456
+    assert opts[:message_thread_id] == 777
+    refute_received {:send_photo, 123, ^path, _opts}
+  end
+
   test "file: non-image paths fallback to send_document" do
     put_telegram_config(%{
       bot_token: "token",

@@ -38,7 +38,8 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
          seq <- extract_seq(intent),
          chunks <- normalize_text(intent, text),
          state <- PresentationState.get(route, intent.run_id, surface),
-         text_hash = text_hash({chunks, status_reply_markup(intent)}) do
+         text_hash =
+           text_hash({chunks, status_reply_markup(intent), final_file_signature(intent)}) do
       if duplicate?(state, intent.kind, seq, text_hash) do
         :ok
       else
@@ -351,6 +352,24 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp normalize_attachment(_), do: nil
 
+  defp final_file_signature(%DeliveryIntent{kind: kind} = intent)
+       when kind in [:stream_finalize, :final_text] do
+    meta = intent.meta || %{}
+
+    case meta[:auto_send_files] || meta["auto_send_files"] do
+      files when is_list(files) ->
+        files
+        |> Enum.map(&normalize_attachment/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(fn file -> {file.path, file.filename, file.source} end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp final_file_signature(_intent), do: []
+
   defp build_file_content([file]) do
     %{path: file.path, filename: file.filename, caption: file.caption}
   end
@@ -427,7 +446,11 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   defp filter_auto_send_files(_files, _cfg), do: []
 
   defp attachment_source(%{source: source}) when source in [:explicit, :generated], do: source
+  defp attachment_source(%{source: "explicit"}), do: :explicit
+  defp attachment_source(%{source: "generated"}), do: :generated
   defp attachment_source(%{"source" => source}) when source in [:explicit, :generated], do: source
+  defp attachment_source(%{"source" => "explicit"}), do: :explicit
+  defp attachment_source(%{"source" => "generated"}), do: :generated
   defp attachment_source(_file), do: :explicit
 
   defp file_size_within_limit?(path, max_bytes)
@@ -507,7 +530,7 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   defp resume_token_like?(_), do: false
 
   defp duplicate?(state, kind, seq, text_hash) do
-    state.last_seq == seq and state.last_text_hash == text_hash or
+    (state.last_seq == seq and state.last_text_hash == text_hash) or
       finalize_repeat?(state, kind, seq, text_hash)
   end
 
@@ -579,7 +602,9 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       enabled:
         truthy?(files_cfg[:enabled] || files_cfg["enabled"]) and
           truthy?(
-            files_cfg[:auto_send_generated_images] || files_cfg["auto_send_generated_images"]
+            files_cfg[:auto_send_generated_files] ||
+              files_cfg["auto_send_generated_files"] ||
+              files_cfg[:auto_send_generated_images] || files_cfg["auto_send_generated_images"]
           ),
       max_files:
         positive_int_or(

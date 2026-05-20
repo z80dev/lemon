@@ -176,6 +176,17 @@ defmodule LemonChannels.Adapters.XAPI do
   end
 
   @doc """
+  Check if the adapter has credentials that can read/search public X posts.
+
+  Public search can use an app bearer token without write-capable user tokens,
+  while posting and mentions still require OAuth credentials.
+  """
+  def search_configured? do
+    conf = config()
+    present?(conf[:bearer_token]) or configured?()
+  end
+
+  @doc """
   Returns which auth method is being used.
   """
   def auth_method do

@@ -107,6 +107,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
               account_id: account_id,
               voice_transcription: cfg_get(config, :voice_transcription, false),
+              voice_transcription_provider:
+                cfg_get(config, :voice_transcription_provider, "openai_transcribe"),
               voice_transcription_model:
                 cfg_get(config, :voice_transcription_model, "gpt-4o-mini-transcribe"),
               voice_transcription_base_url:
@@ -281,6 +283,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> {:noreply, state}
   end
 
+  def handle_info(%LemonCore.Event{type: type, meta: meta} = event, state)
+      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] do
+    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
+
+    with %{chat_id: chat_id, thread_id: thread_id, user_msg_id: user_msg_id} <-
+           Map.get(state.reaction_runs, session_key),
+         text when is_binary(text) <- LemonChannels.CheckpointStatusMessage.event_text(event) do
+      _ = send_checkpoint_event_message(state, chat_id, thread_id, user_msg_id, text)
+    end
+
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -333,6 +350,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     CommandRouter.handle_inbound_message(state, inbound, %{
       bot_username: state.bot_username,
       handle_cwd_command: &handle_cwd_command/2,
+      handle_checkpoint_command: &handle_checkpoint_command/2,
+      handle_goal_command: &handle_goal_command/2,
+      handle_kanban_command: &handle_kanban_command/2,
+      handle_media_command: &handle_media_command/2,
       handle_media_auto_put: &handle_media_auto_put/2,
       handle_model_command: &ModelPicker.handle_model_command/2,
       handle_new_session: &handle_new_session/3,
@@ -1041,6 +1062,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> :ok
   end
 
+  defp send_checkpoint_event_message(
+         %{checkpoint_event_sender: sender},
+         chat_id,
+         thread_id,
+         user_msg_id,
+         text
+       )
+       when is_function(sender, 4) do
+    sender.(chat_id, thread_id, user_msg_id, text)
+  end
+
+  defp send_checkpoint_event_message(state, chat_id, thread_id, user_msg_id, text) do
+    send_system_message(state, chat_id, thread_id, user_msg_id, text)
+  end
+
   defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do
     bot_id = parse_int(bot_id) || bot_id
     bot_username = normalize_bot_username(bot_username)
@@ -1158,6 +1194,122 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       state
     end
+  rescue
+    _ -> state
+  end
+
+  defp handle_checkpoint_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      text = inbound.message.text || ""
+      rollback? = Commands.rollback_command?(text, state.bot_username)
+
+      args =
+        Commands.telegram_command_args(text, if(rollback?, do: "rollback", else: "checkpoint"))
+
+      agent_id = BindingResolver.resolve_agent_id(scope)
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          checkpoint_message(args, rollback?,
+            agent_id: agent_id,
+            session_key: session_key
+          )
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp checkpoint_message(args, true, opts),
+    do: LemonChannels.CheckpointStatusMessage.handle_rollback(args, opts)
+
+  defp checkpoint_message(args, false, opts),
+    do: LemonChannels.CheckpointStatusMessage.handle(args, opts)
+
+  defp handle_goal_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      args = Commands.telegram_command_args(inbound.message.text || "", "goal")
+      agent_id = BindingResolver.resolve_agent_id(scope)
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          LemonChannels.GoalStatusMessage.handle(session_key, args,
+            agent_id: agent_id,
+            meta: %{transport: "telegram"}
+          )
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_kanban_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      args = Commands.telegram_command_args(inbound.message.text || "", "kanban")
+      agent_id = BindingResolver.resolve_agent_id(scope)
+      workspace = BindingResolver.resolve_cwd(scope)
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          LemonChannels.KanbanStatusMessage.handle(args,
+            owner: agent_id,
+            author: agent_id,
+            worker_id: agent_id,
+            workspace: workspace,
+            meta: %{transport: "telegram"}
+          )
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_media_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      args = Commands.telegram_command_args(inbound.message.text || "", "media")
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          LemonChannels.MediaStatusMessage.handle(args)
+        )
+    end
+
+    state
   rescue
     _ -> state
   end

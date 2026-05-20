@@ -187,6 +187,28 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     assert msg.meta[:voice_transcribed] == true
   end
 
+  test "local voice transcription provider routes without api key" do
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: VoiceMockAPI,
+          poll_interval_ms: 10,
+          debounce_ms: 10,
+          voice_transcription: true,
+          voice_transcription_provider: "local_transcript",
+          voice_max_bytes: 10_000
+        }
+      )
+
+    VoiceMockAPI.set_updates([voice_update()])
+
+    assert_receive {:inbound, msg}, 200
+    assert msg.message.text =~ "local voice transcript preview"
+    assert msg.message.text =~ "5 bytes"
+    assert msg.meta[:voice_transcribed] == true
+  end
+
   test "voice disabled replies and skips routing" do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(

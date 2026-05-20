@@ -122,6 +122,16 @@ defmodule LemonChannels.Adapters.XAPITest do
     assert config[:refresh_token] == "env-refresh-token"
   end
 
+  test "search_configured?/0 accepts bearer-token-only search credentials" do
+    System.put_env("X_API_BEARER_TOKEN", "env-bearer-token")
+
+    assert XAPI.search_configured?()
+    refute XAPI.configured?()
+
+    config = XAPI.config()
+    assert config[:bearer_token] == "env-bearer-token"
+  end
+
   test "environment fallback still works when app config has nil runtime values" do
     Application.put_env(:lemon_channels, XAPI,
       client_id: nil,
