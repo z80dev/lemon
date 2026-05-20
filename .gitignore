@@ -15,6 +15,11 @@
 # Temporary files, for example, from tests.
 /tmp/
 .lemon/skill/
+.lemon/browser-artifacts/
+.lemon/browser-smoke/
+.lemon/media-artifacts/
+.lemon/media-jobs/
+.lemon/proofs/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
