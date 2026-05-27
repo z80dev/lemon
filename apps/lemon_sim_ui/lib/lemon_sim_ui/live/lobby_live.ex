@@ -10,12 +10,24 @@ defmodule LemonSimUi.LobbyLive do
   use LemonSimUi, :live_view
 
   alias LemonSimUi.{SimHelpers, SimManager}
-  alias LemonSim.Store
+  alias LemonSim.{Event, State, Store}
+
+  @vending_bench_artifact_registry Path.join(
+                                     System.tmp_dir!(),
+                                     "lemon_vending_bench_artifact_registry.json"
+                                   )
+  @vending_bench_artifact_refresh_ms 5_000
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       LemonCore.Bus.subscribe(SimManager.lobby_topic())
+
+      Process.send_after(
+        self(),
+        :vending_bench_artifact_refresh,
+        @vending_bench_artifact_refresh_ms
+      )
     end
 
     {:ok,
@@ -27,6 +39,18 @@ defmodule LemonSimUi.LobbyLive do
 
   @impl true
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
+    {:noreply, assign(socket, sims: build_lobby_list())}
+  end
+
+  def handle_info(:vending_bench_artifact_refresh, socket) do
+    if connected?(socket) do
+      Process.send_after(
+        self(),
+        :vending_bench_artifact_refresh,
+        @vending_bench_artifact_refresh_ms
+      )
+    end
+
     {:noreply, assign(socket, sims: build_lobby_list())}
   end
 
@@ -109,8 +133,15 @@ defmodule LemonSimUi.LobbyLive do
   defp build_lobby_list do
     running = SimManager.list_running() |> MapSet.new()
 
-    Store.list_states()
-    |> Enum.filter(fn state -> state.sim_id in running end)
+    managed_states =
+      Store.list_states()
+      |> Enum.filter(fn state -> state.sim_id in running end)
+
+    artifact_states =
+      vending_bench_artifact_states()
+      |> Enum.reject(fn state -> state.sim_id in running end)
+
+    (managed_states ++ artifact_states)
     |> Enum.map(fn state ->
       summary = SimHelpers.sim_summary(state)
       players = LemonCore.MapHelpers.get_key(state.world, :players)
@@ -124,5 +155,60 @@ defmodule LemonSimUi.LobbyLive do
       Map.put(summary, :player_count, player_count)
     end)
     |> Enum.sort_by(& &1.last_activity, :desc)
+  end
+
+  defp vending_bench_artifact_states do
+    @vending_bench_artifact_registry
+    |> read_registry()
+    |> Enum.flat_map(fn {sim_id, artifact_dir} ->
+      case load_artifact_state(sim_id, artifact_dir) do
+        %State{} = state -> [state]
+        nil -> []
+      end
+    end)
+  end
+
+  defp read_registry(path) do
+    with {:ok, body} <- File.read(path),
+         {:ok, registry} when is_map(registry) <- Jason.decode(body) do
+      registry
+    else
+      _ -> %{}
+    end
+  end
+
+  defp load_artifact_state(sim_id, artifact_dir) when is_binary(artifact_dir) do
+    with {:ok, body} <- File.read(Path.join(artifact_dir, "final_world.json")),
+         {:ok, world} when is_map(world) <- Jason.decode(body),
+         "in_progress" <- LemonCore.MapHelpers.get_key(world, :status) do
+      State.new(
+        sim_id: sim_id,
+        world: world,
+        recent_events: recent_artifact_events(artifact_dir),
+        meta: %{artifact_dir: artifact_dir}
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  defp load_artifact_state(_sim_id, _artifact_dir), do: nil
+
+  defp recent_artifact_events(artifact_dir) do
+    case File.read(Path.join(artifact_dir, "events.jsonl")) do
+      {:ok, body} ->
+        body
+        |> String.split("\n", trim: true)
+        |> Enum.take(-25)
+        |> Enum.flat_map(fn line ->
+          case Jason.decode(line) do
+            {:ok, event} -> [Event.new(event)]
+            _ -> []
+          end
+        end)
+
+      _ ->
+        []
+    end
   end
 end
