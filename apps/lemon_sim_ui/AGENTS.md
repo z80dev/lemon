@@ -55,7 +55,7 @@ lib/
         auction_board.ex                   Lot/bidder display for :auction
         diplomacy_board.ex                 Territory/faction display for :diplomacy
         dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
-        vending_bench_board.ex             VendingBench broadcast view, operations, supplier/fault signals, and scorecard display
+        vending_bench_board.ex             VendingBench broadcast view, Arena standings, operations, supplier/fault signals, and scorecard display
 test/
   lemon_sim_ui/
     live/
@@ -83,7 +83,7 @@ test/
 | `lib/lemon_sim_ui/live/components/plan_history.ex` | `LemonSimUi.Live.Components.PlanHistory` | Stateless component; renders `plan_history` as collapsible steps |
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
 | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
-| `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | VendingBench broadcast view, machine, supplier, refund, fault, and scorecard display |
+| `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | VendingBench broadcast view, Arena standings, machine, supplier, refund, fault, trade, and scorecard display |
 
 ## Common Modification Patterns
 

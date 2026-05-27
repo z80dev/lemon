@@ -128,6 +128,12 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         machine_fault_reports: [
           %{description: "coin return sticks intermittently", severity: "medium", day: 3}
         ],
+        arena_agents: [
+          %{id: "alex", name: "Alex Market", money_balance: 520.25, units_sold: 11},
+          %{id: "blair", name: "Blair Snacks", money_balance: 501.5, units_sold: 9}
+        ],
+        arena_messages: [%{kind: "arena_message_sent"}],
+        arena_trades: [%{kind: "arena_trade_completed"}],
         refunds_paid: 2.5,
         physical_worker_last_report: %{summary: "Collected cash and topped off A1."},
         physical_worker_run_count: 2,
@@ -153,6 +159,11 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Run Rate"
       assert html =~ "Refund Heat"
       assert html =~ "Risk Flags"
+      assert html =~ "ARENA STANDINGS"
+      assert html =~ "Same location"
+      assert html =~ "Alex Market"
+      assert html =~ "1 messages"
+      assert html =~ "1 trades"
       assert html =~ "Collected cash and topped off A1."
       assert html =~ "Sparkling Water"
       assert html =~ "D4"

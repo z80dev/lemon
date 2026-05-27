@@ -47,6 +47,11 @@ Phase 1 adds:
   target for the original Vending-Bench: operator strategy, physical-worker
   execution, suppliers, inventory, demand, pricing, incidents, and objective
   net-worth scoring.
+- `LemonSim.Examples.VendingBench.Arena` is the Vending-Bench 2 / Arena
+  follow-on surface: several operators run independent vending businesses in
+  the same location, shared item prices create demand pressure, agents can
+  message and trade, and the leaderboard scores each agent by final money
+  balance.
 
 Run them with:
 
@@ -71,6 +76,15 @@ net-worth score, and applies 10-day unpaid-fee bankruptcy.
 mix lemon.sim.vending_bench --preset paper --sim-id vb_paper
 ```
 
+Vending-Bench 2 runs use `--preset v2`, which keeps the 365-day horizon and
+uses money balance as the primary score. Add `--arena` for the multi-agent
+Arena variant. The deterministic baseline supports up to five named operators
+without model credentials:
+
+```bash
+mix lemon.sim.vending_bench --preset v2 --arena --offline-strategy baseline --arena-agents 5 --sim-id vb_arena
+```
+
 The offline mode writes `final_world.json`, `events.jsonl`, `actions.jsonl`,
 `supplier_messages.json`, `worker_history.json`, `operator_transcript.json`,
 `reminders.json`, `scorecard.json`, `replay.json`, `replay.html`, and
@@ -87,6 +101,12 @@ directories can rebuild the replay browser with:
 ```bash
 mix lemon.sim.vending_bench_replay apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 ```
+
+Arena artifact directories write `final_world.json`, `arena_world.json`,
+`arena_events.jsonl`, `arena_actions.jsonl`, `arena_scorecard.json`, and
+`arena_report.md`. The arena runner registers the artifact directory in the
+same VendingBench checkpoint registry, so `/watch/<sim_id>` can render the
+multi-agent standings from the saved `final_world.json`.
 
 Interrupted live runs can resume from the latest checkpointed artifact bundle:
 

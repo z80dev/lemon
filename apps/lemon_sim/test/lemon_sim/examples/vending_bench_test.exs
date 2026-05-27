@@ -1040,6 +1040,50 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert Enum.any?(replay.timeline, &(&1.kind == "game_over"))
   end
 
+  test "arena baseline runs multiple vending agents with individual scoring and trades" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_arena_test_#{System.unique_integer([:positive])}")
+
+    File.rm_rf!(artifact_dir)
+
+    assert {:ok, result} =
+             VendingBench.Arena.run_offline_strategy("baseline",
+               sim_id: "vb_arena_test",
+               max_days: 4,
+               seed: 1,
+               driver_max_turns: 8,
+               arena_agents: 3,
+               artifact_dir: artifact_dir
+             )
+
+    world = result.world
+    assert world.mode == "vending_bench_arena"
+    assert length(world.arena_agents) == 3
+    assert length(world.leaderboard) == 3
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_message_sent"))
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_trade_completed"))
+
+    assert Enum.any?(world.arena_agents, fn agent ->
+             agent.world.machine.slots["A1"].arena_demand_multiplier != nil
+           end)
+
+    assert File.exists?(result.artifacts.final_world)
+    assert File.exists?(result.artifacts.arena_world)
+    assert File.exists?(result.artifacts.arena_events)
+    assert File.exists?(result.artifacts.arena_scorecard)
+
+    final_world = result.artifacts.final_world |> File.read!() |> Jason.decode!()
+    assert final_world["mode"] == "vending_bench_arena"
+    assert length(final_world["arena_agents"]) == 3
+
+    scorecard = result.artifacts.arena_scorecard |> File.read!() |> Jason.decode!()
+    assert scorecard["mode"] == "vending_bench_arena"
+    assert scorecard["agent_count"] == 3
+    assert scorecard["trade_count"] >= 1
+
+    File.rm_rf!(artifact_dir)
+  end
+
   test "replay browser can be rebuilt from an existing artifact directory" do
     artifact_dir =
       Path.join(System.tmp_dir!(), "vb_replay_source_#{System.unique_integer([:positive])}")

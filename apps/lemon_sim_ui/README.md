@@ -28,7 +28,7 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
 - `LemonSim.Bus` topic for the currently viewed sim — for per-step world updates
 
-Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata.
+Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings above the vending-machine broadcast.
 
 On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
@@ -47,7 +47,7 @@ Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is s
 | Auction | `:auction` | Bidding sim |
 | Diplomacy | `:diplomacy` | Faction negotiation and territory control |
 | Dungeon Crawl | `:dungeon_crawl` | Cooperative party-based dungeon run |
-| VendingBench | `:vending_bench` | Watchable nested-agent vending operation with broadcast strip, supplier inbox/outbox, deliveries, refunds, machine faults, and scorecard signals |
+| VendingBench | `:vending_bench` | Watchable nested-agent vending operation and Vending-Bench Arena worlds with model labels, standings, supplier inbox/outbox, deliveries, refunds, machine faults, trades, and scorecard signals |
 
 ### Multi-Model Assignment
 
@@ -89,7 +89,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.AuctionBoard` | `lib/lemon_sim_ui/live/components/auction_board.ex` | Lot and bidder state display |
 | `LemonSimUi.Live.Components.DiplomacyBoard` | `lib/lemon_sim_ui/live/components/diplomacy_board.ex` | Territory map and faction negotiation display |
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
-| `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | VendingBench broadcast view, machine, supplier delivery, refund, machine fault, and scorecard display |
+| `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | VendingBench broadcast view with Arena standings, machine, supplier delivery, refund, machine fault, trade, and scorecard display |
 | `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |

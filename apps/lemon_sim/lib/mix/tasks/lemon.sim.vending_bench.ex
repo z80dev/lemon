@@ -14,7 +14,9 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     * `--seed` - Random seed for deterministic runs
     * `--sim-id` - Explicit simulation id for deterministic artifact names/content
     * `--worker-model` - Separate model for physical worker
-    * `--preset` - Run preset: ci, paper
+    * `--preset` - Run preset: ci, paper, v2
+    * `--arena` - Run deterministic Vending-Bench Arena mode
+    * `--arena-agents` - Number of arena agents, up to 5 for the baseline
     * `--offline-strategy` - Deterministic strategy to run without model credentials
     * `--artifact-dir` - Directory for offline run artifacts
     * `--resume-artifact-dir` - Resume a live run from a checkpoint artifact directory
@@ -34,6 +36,8 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     sim_id: :string,
     worker_model: :string,
     preset: :string,
+    arena: :boolean,
+    arena_agents: :integer,
     offline_strategy: :string,
     artifact_dir: :string,
     resume_artifact_dir: :string,
@@ -68,6 +72,14 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     result = run_mode(opts, run_opts)
 
     case result do
+      {:ok, %{artifacts: artifacts, world: %{mode: "vending_bench_arena"}}}
+      when is_map(artifacts) ->
+        Mix.shell().info("Arena artifacts written to #{Path.dirname(artifacts.final_world)}")
+        :ok
+
+      {:ok, %{world: %{mode: "vending_bench_arena"}}} ->
+        :ok
+
       {:ok, %{artifacts: artifacts}} ->
         Mix.shell().info("Offline artifacts written to #{Path.dirname(artifacts.final_world)}")
         :ok
@@ -86,6 +98,13 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   defp run_mode(opts, run_opts) do
     cond do
+      opts[:arena] ->
+        strategy = opts[:offline_strategy] || "baseline"
+
+        run_opts
+        |> maybe_put(:arena_agents, opts[:arena_agents])
+        |> then(&LemonSim.Examples.VendingBench.Arena.run_offline_strategy(strategy, &1))
+
       opts[:offline_strategy] ->
         LemonSim.Examples.VendingBench.run_offline_strategy(opts[:offline_strategy], run_opts)
 
@@ -120,8 +139,14 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     |> Keyword.put(:driver_max_turns, 2_000)
   end
 
+  defp apply_preset(opts, "v2") do
+    opts
+    |> Keyword.put(:max_days, 365)
+    |> Keyword.put(:driver_max_turns, 4_000)
+  end
+
   defp apply_preset(_opts, preset) do
-    Mix.shell().error("Unknown preset #{preset}. Expected one of: ci, paper")
+    Mix.shell().error("Unknown preset #{preset}. Expected one of: ci, paper, v2")
     exit({:shutdown, 1})
   end
 

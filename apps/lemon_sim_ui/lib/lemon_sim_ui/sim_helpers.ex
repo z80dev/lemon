@@ -7,31 +7,88 @@ defmodule LemonSimUi.SimHelpers do
   alias LemonSim.State
 
   @spec infer_domain_type(State.t()) ::
-          :tic_tac_toe | :skirmish | :werewolf | :stock_market | :survivor | :space_station
-          | :auction | :diplomacy | :dungeon_crawl | :courtroom | :startup_incubator
-          | :intel_network | :legislature | :pandemic | :murder_mystery | :supply_chain
-          | :vending_bench | :unknown
+          :tic_tac_toe
+          | :skirmish
+          | :werewolf
+          | :stock_market
+          | :survivor
+          | :space_station
+          | :auction
+          | :diplomacy
+          | :dungeon_crawl
+          | :courtroom
+          | :startup_incubator
+          | :intel_network
+          | :legislature
+          | :pandemic
+          | :murder_mystery
+          | :supply_chain
+          | :vending_bench
+          | :unknown
   def infer_domain_type(%State{world: world}) do
     cond do
-      Map.has_key?(world, :board) or Map.has_key?(world, "board") -> :tic_tac_toe
-      Map.has_key?(world, :units) or Map.has_key?(world, "units") -> :skirmish
-      Map.has_key?(world, :stocks) or Map.has_key?(world, "stocks") -> :stock_market
-      Map.has_key?(world, :systems) or Map.has_key?(world, "systems") -> :space_station
-      Map.has_key?(world, :tribes) or Map.has_key?(world, "tribes") -> :survivor
-      Map.has_key?(world, :auction_schedule) or Map.has_key?(world, "auction_schedule") -> :auction
-      Map.has_key?(world, :case_file) or Map.has_key?(world, "case_file") -> :courtroom
-      Map.has_key?(world, :startups) or Map.has_key?(world, "startups") -> :startup_incubator
-      Map.has_key?(world, :intel_pool) or Map.has_key?(world, "intel_pool") -> :intel_network
-      Map.has_key?(world, :bills) or Map.has_key?(world, "bills") -> :legislature
-      Map.has_key?(world, :disease_params) or Map.has_key?(world, "disease_params") -> :pandemic
-      Map.has_key?(world, :crime_solution) or Map.has_key?(world, "crime_solution") -> :murder_mystery
-      Map.has_key?(world, :tiers) or Map.has_key?(world, "tiers") -> :supply_chain
-      Map.has_key?(world, :machine) or Map.has_key?(world, "machine") -> :vending_bench
-      Map.has_key?(world, :territories) or Map.has_key?(world, "territories") -> :diplomacy
-      Map.has_key?(world, :rooms) or Map.has_key?(world, "rooms") -> :dungeon_crawl
-      Map.has_key?(world, :day_number) or Map.has_key?(world, "day_number") -> :werewolf
-      Map.has_key?(world, :players) or Map.has_key?(world, "players") -> :werewolf
-      true -> :unknown
+      Map.has_key?(world, :board) or Map.has_key?(world, "board") ->
+        :tic_tac_toe
+
+      Map.has_key?(world, :units) or Map.has_key?(world, "units") ->
+        :skirmish
+
+      Map.has_key?(world, :stocks) or Map.has_key?(world, "stocks") ->
+        :stock_market
+
+      Map.has_key?(world, :systems) or Map.has_key?(world, "systems") ->
+        :space_station
+
+      Map.has_key?(world, :tribes) or Map.has_key?(world, "tribes") ->
+        :survivor
+
+      Map.has_key?(world, :auction_schedule) or Map.has_key?(world, "auction_schedule") ->
+        :auction
+
+      Map.has_key?(world, :case_file) or Map.has_key?(world, "case_file") ->
+        :courtroom
+
+      Map.has_key?(world, :startups) or Map.has_key?(world, "startups") ->
+        :startup_incubator
+
+      Map.has_key?(world, :intel_pool) or Map.has_key?(world, "intel_pool") ->
+        :intel_network
+
+      Map.has_key?(world, :bills) or Map.has_key?(world, "bills") ->
+        :legislature
+
+      Map.has_key?(world, :disease_params) or Map.has_key?(world, "disease_params") ->
+        :pandemic
+
+      Map.has_key?(world, :crime_solution) or Map.has_key?(world, "crime_solution") ->
+        :murder_mystery
+
+      Map.has_key?(world, :tiers) or Map.has_key?(world, "tiers") ->
+        :supply_chain
+
+      MapHelpers.get_key(world, :mode) == "vending_bench_arena" ->
+        :vending_bench
+
+      Map.has_key?(world, :arena_agents) or Map.has_key?(world, "arena_agents") ->
+        :vending_bench
+
+      Map.has_key?(world, :machine) or Map.has_key?(world, "machine") ->
+        :vending_bench
+
+      Map.has_key?(world, :territories) or Map.has_key?(world, "territories") ->
+        :diplomacy
+
+      Map.has_key?(world, :rooms) or Map.has_key?(world, "rooms") ->
+        :dungeon_crawl
+
+      Map.has_key?(world, :day_number) or Map.has_key?(world, "day_number") ->
+        :werewolf
+
+      Map.has_key?(world, :players) or Map.has_key?(world, "players") ->
+        :werewolf
+
+      true ->
+        :unknown
     end
   end
 
@@ -237,7 +294,7 @@ defmodule LemonSimUi.SimHelpers do
       :vending_bench ->
         day = MapHelpers.get_key(state.world, :day_number) || 1
         max_days = MapHelpers.get_key(state.world, :max_days) || 30
-        balance = MapHelpers.get_key(state.world, :bank_balance) || 0.0
+        balance = vending_bench_balance(state.world)
         status = MapHelpers.get_key(state.world, :status)
 
         case status do
@@ -248,6 +305,21 @@ defmodule LemonSimUi.SimHelpers do
 
       :unknown ->
         "v#{state.version}"
+    end
+  end
+
+  defp vending_bench_balance(world) do
+    case MapHelpers.get_key(world, :bank_balance) do
+      nil ->
+        world
+        |> MapHelpers.get_key(:leaderboard)
+        |> case do
+          [leader | _] -> MapHelpers.get_key(leader, :money_balance) || 0.0
+          _ -> 0.0
+        end
+
+      balance ->
+        balance
     end
   end
 
@@ -305,22 +377,38 @@ defmodule LemonSimUi.SimHelpers do
   def domain_label(_), do: "Unknown"
 
   @spec domain_badge_color(atom()) :: String.t()
-  def domain_badge_color(:tic_tac_toe), do: "bg-violet-900/60 text-violet-300 border-violet-500/30"
+  def domain_badge_color(:tic_tac_toe),
+    do: "bg-violet-900/60 text-violet-300 border-violet-500/30"
+
   def domain_badge_color(:skirmish), do: "bg-orange-900/60 text-orange-300 border-orange-500/30"
-  def domain_badge_color(:werewolf), do: "bg-fuchsia-900/60 text-fuchsia-300 border-fuchsia-500/30"
-  def domain_badge_color(:stock_market), do: "bg-emerald-900/60 text-emerald-300 border-emerald-500/30"
+
+  def domain_badge_color(:werewolf),
+    do: "bg-fuchsia-900/60 text-fuchsia-300 border-fuchsia-500/30"
+
+  def domain_badge_color(:stock_market),
+    do: "bg-emerald-900/60 text-emerald-300 border-emerald-500/30"
+
   def domain_badge_color(:survivor), do: "bg-amber-900/60 text-amber-300 border-amber-500/30"
   def domain_badge_color(:space_station), do: "bg-cyan-900/60 text-cyan-300 border-cyan-500/30"
   def domain_badge_color(:auction), do: "bg-yellow-900/60 text-yellow-300 border-yellow-500/30"
   def domain_badge_color(:diplomacy), do: "bg-rose-900/60 text-rose-300 border-rose-500/30"
-  def domain_badge_color(:dungeon_crawl), do: "bg-purple-900/60 text-purple-300 border-purple-500/30"
+
+  def domain_badge_color(:dungeon_crawl),
+    do: "bg-purple-900/60 text-purple-300 border-purple-500/30"
+
   def domain_badge_color(:courtroom), do: "bg-slate-900/60 text-slate-300 border-slate-500/30"
-  def domain_badge_color(:startup_incubator), do: "bg-lime-900/60 text-lime-300 border-lime-500/30"
+
+  def domain_badge_color(:startup_incubator),
+    do: "bg-lime-900/60 text-lime-300 border-lime-500/30"
+
   def domain_badge_color(:intel_network), do: "bg-teal-900/60 text-teal-300 border-teal-500/30"
   def domain_badge_color(:legislature), do: "bg-blue-900/60 text-blue-300 border-blue-500/30"
   def domain_badge_color(:pandemic), do: "bg-red-900/60 text-red-300 border-red-500/30"
   def domain_badge_color(:murder_mystery), do: "bg-zinc-900/60 text-zinc-300 border-zinc-500/30"
-  def domain_badge_color(:supply_chain), do: "bg-indigo-900/60 text-indigo-300 border-indigo-500/30"
+
+  def domain_badge_color(:supply_chain),
+    do: "bg-indigo-900/60 text-indigo-300 border-indigo-500/30"
+
   def domain_badge_color(:vending_bench), do: "bg-green-900/60 text-green-300 border-green-500/30"
   def domain_badge_color(_), do: "bg-gray-800/60 text-gray-400 border-gray-600/30"
 end

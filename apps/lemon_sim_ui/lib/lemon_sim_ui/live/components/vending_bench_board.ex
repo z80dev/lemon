@@ -8,36 +8,40 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
   def render(assigns) do
     world = assigns.world
-    performance = LemonSim.Examples.VendingBench.Performance.summarize(world)
+    arena_agents = MapHelpers.get_key(world, :arena_agents) || []
+    arena_messages = MapHelpers.get_key(world, :arena_messages) || []
+    arena_trades = MapHelpers.get_key(world, :arena_trades) || []
+    display_world = arena_display_world(world, arena_agents)
+    performance = LemonSim.Examples.VendingBench.Performance.summarize(display_world)
 
     status = MapHelpers.get_key(world, :status) || "in_progress"
-    phase = MapHelpers.get_key(world, :phase) || "operating"
+    phase = MapHelpers.get_key(display_world, :phase) || "operating"
     day_number = MapHelpers.get_key(world, :day_number) || 1
-    time_minutes = MapHelpers.get_key(world, :time_minutes) || 0
+    time_minutes = MapHelpers.get_key(display_world, :time_minutes) || 0
     max_days = MapHelpers.get_key(world, :max_days) || 30
-    bank_balance = MapHelpers.get_key(world, :bank_balance) || 0
-    cash_in_machine = MapHelpers.get_key(world, :cash_in_machine) || 0
-    daily_fee = MapHelpers.get_key(world, :daily_fee) || 0
-    machine = MapHelpers.get_key(world, :machine) || %{}
+    bank_balance = MapHelpers.get_key(display_world, :bank_balance) || 0
+    cash_in_machine = MapHelpers.get_key(display_world, :cash_in_machine) || 0
+    daily_fee = MapHelpers.get_key(display_world, :daily_fee) || 0
+    machine = MapHelpers.get_key(display_world, :machine) || %{}
     slots = MapHelpers.get_key(machine, :slots) || %{}
-    storage = MapHelpers.get_key(world, :storage) || %{}
+    storage = MapHelpers.get_key(display_world, :storage) || %{}
     storage_inventory = MapHelpers.get_key(storage, :inventory) || %{}
     storage_capacity = MapHelpers.get_key(storage, :capacity_units) || 160
     storage_used = Enum.reduce(storage_inventory, 0, fn {_item_id, qty}, acc -> acc + qty end)
-    catalog = MapHelpers.get_key(world, :catalog) || %{}
-    inbox = MapHelpers.get_key(world, :inbox) || []
-    outbox = MapHelpers.get_key(world, :outbox) || []
-    reminders = MapHelpers.get_key(world, :reminders) || []
+    catalog = MapHelpers.get_key(display_world, :catalog) || %{}
+    inbox = MapHelpers.get_key(display_world, :inbox) || []
+    outbox = MapHelpers.get_key(display_world, :outbox) || []
+    reminders = MapHelpers.get_key(display_world, :reminders) || []
     open_reminders = Enum.reject(reminders, &(get_val(&1, :status, "open") == "done"))
-    pending_deliveries = MapHelpers.get_key(world, :pending_deliveries) || []
-    recent_sales = MapHelpers.get_key(world, :recent_sales) || []
-    customer_complaints = MapHelpers.get_key(world, :customer_complaints) || []
-    supplier_incidents = MapHelpers.get_key(world, :supplier_incident_history) || []
-    physical_worker_last_report = MapHelpers.get_key(world, :physical_worker_last_report)
-    physical_worker_run_count = MapHelpers.get_key(world, :physical_worker_run_count) || 0
-    machine_fault_reports = MapHelpers.get_key(world, :machine_fault_reports) || []
-    weather = MapHelpers.get_key(world, :weather)
-    season = MapHelpers.get_key(world, :season)
+    pending_deliveries = MapHelpers.get_key(display_world, :pending_deliveries) || []
+    recent_sales = MapHelpers.get_key(display_world, :recent_sales) || []
+    customer_complaints = MapHelpers.get_key(display_world, :customer_complaints) || []
+    supplier_incidents = MapHelpers.get_key(display_world, :supplier_incident_history) || []
+    physical_worker_last_report = MapHelpers.get_key(display_world, :physical_worker_last_report)
+    physical_worker_run_count = MapHelpers.get_key(display_world, :physical_worker_run_count) || 0
+    machine_fault_reports = MapHelpers.get_key(display_world, :machine_fault_reports) || []
+    weather = MapHelpers.get_key(display_world, :weather)
+    season = MapHelpers.get_key(display_world, :season)
     weather_kind = get_val(weather, :kind, nil)
     season_name = get_val(season, :name, nil)
     runtime_models = MapHelpers.get_key(world, :runtime_models) || %{}
@@ -49,7 +53,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     progress_percent = progress_percent(day_number, max_days)
     top_product = top_product_name(recent_sales, catalog)
     headline = broadcast_headline(performance, pending_deliveries, customer_complaints)
-    story_beats = story_beats(world, performance, top_product)
+    story_beats = story_beats(world, display_world, performance, top_product)
 
     # Time formatting
     time_display = format_time(time_minutes)
@@ -101,6 +105,9 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       |> assign(:physical_worker_last_report, physical_worker_last_report)
       |> assign(:physical_worker_run_count, physical_worker_run_count)
       |> assign(:machine_fault_reports, machine_fault_reports)
+      |> assign(:arena_agents, arena_agents)
+      |> assign(:arena_messages, arena_messages)
+      |> assign(:arena_trades, arena_trades)
       |> assign(:weather, weather)
       |> assign(:season, season)
       |> assign(:weather_kind, weather_kind)
@@ -267,6 +274,30 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
           </div>
         </div>
       </div>
+
+      <%= if @arena_agents != [] do %>
+        <div style="padding: 12px 20px; border-bottom: 1px solid #1a3024; background: #10110c;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap;">
+            <div style="font-size: 10px; letter-spacing: 2px; color: #fbbf24; font-weight: 900;">ARENA STANDINGS</div>
+            <div style="font-size: 10px; color: #bfa76a;">Same location · individual scoring · price pressure active · <%= length(@arena_messages) %> messages · <%= length(@arena_trades) %> trades</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">
+            <%= for {agent, rank} <- Enum.with_index(@arena_agents, 1) do %>
+              <div style="border: 1px solid rgba(251,191,36,0.25); border-radius: 8px; background: rgba(251,191,36,0.06); padding: 10px 12px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
+                  <span style="font-size: 10px; color: #fbbf24; font-weight: 900;">#<%= rank %></span>
+                  <span style="font-size: 10px; color: #bfa76a; font-family: monospace;"><%= get_val(agent, :id, "?") %></span>
+                </div>
+                <div style="font-size: 13px; color: #e8f0ea; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><%= get_val(agent, :name, "Agent") %></div>
+                <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 7px;">
+                  <span style="font-size: 18px; color: #34d399; font-family: monospace; font-weight: 900;">$<%= format_money(get_val(agent, :money_balance, 0)) %></span>
+                  <span style="font-size: 10px; color: #80a894;"><%= get_val(agent, :units_sold, 0) %> sold</span>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
 
       <!-- Main Layout: left sidebar | center machine | right panels -->
       <div class="vb-main-grid">
@@ -745,15 +776,48 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     end
   end
 
-  defp story_beats(world, performance, top_product) do
+  defp arena_display_world(world, []) do
+    world
+  end
+
+  defp arena_display_world(world, [leader | _]) do
+    case {MapHelpers.get_key(world, :machine), get_val(leader, :world, nil)} do
+      {nil, leader_world} when is_map(leader_world) ->
+        leader_world
+
+      {%{} = machine, leader_world} when map_size(machine) == 0 and is_map(leader_world) ->
+        leader_world
+
+      _ ->
+        world
+    end
+  end
+
+  defp story_beats(world, display_world, performance, top_product) do
     [
-      "Bank $#{format_money(get_val(world, :bank_balance, 0))}",
+      "Bank $#{format_money(get_val(display_world, :bank_balance, 0))}",
       "money balance $#{format_money(performance.score_modes.money_balance)}",
       "Top seller #{top_product}",
       "#{performance.units_sold} units sold",
       "#{performance.supplier_incident_count} supplier incident(s)",
       "#{performance.worker_trip_count} worker trip(s)"
     ]
+    |> maybe_append_arena_beats(world)
+  end
+
+  defp maybe_append_arena_beats(beats, world) do
+    agents = get_val(world, :arena_agents, [])
+
+    if agents == [] do
+      beats
+    else
+      beats ++
+        [
+          "#{length(agents)} agents competing",
+          "#{length(get_val(world, :arena_messages, []))} arena message(s)",
+          "#{length(get_val(world, :arena_trades, []))} arena trade(s)"
+        ]
+    end
   end
 
   defp runtime_model_label(runtime_models, role, world, fallback_key) do

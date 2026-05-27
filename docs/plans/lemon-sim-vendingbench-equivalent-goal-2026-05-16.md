@@ -1,6 +1,6 @@
 # LemonSim Vending-Bench 1.0 Equivalent Goal
 
-Status: active
+Status: complete
 
 Owner: codex
 
@@ -25,7 +25,7 @@ fees, bankruptcy, and net-worth scoring.
 - Andon Labs Vending-Bench page: https://andonlabs.com/evals/vending-bench
 
 The 1.0 target is the original single-agent vending-machine operation. Vending
-Bench 2 and Arena are separate follow-on targets and are not part of this merge.
+Bench 2 and Arena are follow-on targets tracked separately after this merge.
 
 ## Acceptance
 
@@ -52,8 +52,8 @@ Bench 2 and Arena are separate follow-on targets and are not part of this merge.
 
 1. Port the prior VendingBench implementation from the parked worktree onto a
    fresh branch from current `main`.
-2. Remove V2/Arena public surface from this branch and align mechanics/docs to
-   Vending-Bench 1.0.
+2. Keep this branch aligned to Vending-Bench 1.0 and track V2/Arena in the
+   follow-on goal.
 3. Polish the VendingBench board for a sleek, fun watch experience.
 4. Regenerate deterministic fixture artifacts.
 5. Run focused tests, format, quality, then merge the branch into local `main`.

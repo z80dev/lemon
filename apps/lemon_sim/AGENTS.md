@@ -63,6 +63,11 @@ mission targets change.
   file-memory notes. Worker-only physical tools can remove expired storage
   inventory and report machine faults, with authoritative updater validation
   before world state changes.
+- Vending-Bench 2 uses `mix lemon.sim.vending_bench --preset v2`; add
+  `--arena --offline-strategy baseline --arena-agents N` for the multi-agent
+  Arena surface. Arena runs keep individual machine/world state per operator,
+  apply shared-location price pressure, record inter-agent messages/trades, and
+  score the leaderboard by money balance.
 
 ## Key Files
 
