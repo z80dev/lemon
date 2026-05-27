@@ -1114,6 +1114,10 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.exists?(Path.join(artifact_dir, "replay.html"))
     assert File.read!(Path.join(artifact_dir, "report.md")) =~ "VendingBench Live Run Report"
     assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "game_over"
+
+    final_world = artifact_dir |> Path.join("final_world.json") |> File.read!() |> Jason.decode!()
+    assert final_world["runtime_models"]["operator"]["label"] == "openai:operator"
+    assert final_world["runtime_models"]["physical_worker"]["label"] == "openai:operator"
   end
 
   test "live-style run checkpoints artifacts before a driver turn limit" do
@@ -1164,6 +1168,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
     final_world = artifact_dir |> Path.join("final_world.json") |> File.read!() |> Jason.decode!()
     assert final_world["day_number"] == 2
     assert final_world["status"] == "in_progress"
+    assert final_world["runtime_models"]["operator"]["label"] == "openai:operator"
   end
 
   test "live-style run persists each checkpoint for spectator views" do

@@ -40,6 +40,12 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     season = MapHelpers.get_key(world, :season)
     weather_kind = get_val(weather, :kind, nil)
     season_name = get_val(season, :name, nil)
+    runtime_models = MapHelpers.get_key(world, :runtime_models) || %{}
+    operator_model_label = runtime_model_label(runtime_models, :operator, world, :operator_model)
+
+    physical_worker_model_label =
+      runtime_model_label(runtime_models, :physical_worker, world, :physical_worker_model)
+
     progress_percent = progress_percent(day_number, max_days)
     top_product = top_product_name(recent_sales, catalog)
     headline = broadcast_headline(performance, pending_deliveries, customer_complaints)
@@ -99,6 +105,8 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       |> assign(:season, season)
       |> assign(:weather_kind, weather_kind)
       |> assign(:season_name, season_name)
+      |> assign(:operator_model_label, operator_model_label)
+      |> assign(:physical_worker_model_label, physical_worker_model_label)
       |> assign(:progress_percent, progress_percent)
       |> assign(:top_product, top_product)
       |> assign(:headline, headline)
@@ -196,6 +204,16 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
           <% end %>
           <%= if @weather_kind do %>
             <span style="font-size: 11px; color: #4a7c62;"><%= weather_icon(@weather_kind) %> <%= humanize(to_string(@weather_kind)) %></span>
+          <% end %>
+          <%= if @operator_model_label do %>
+            <span style="font-size: 10px; color: #9fcfb8; border: 1px solid #1f3a2b; border-radius: 999px; padding: 3px 8px; background: #0b1711;">
+              OP <span style="font-family: monospace; color: #e8f0ea;"><%= @operator_model_label %></span>
+            </span>
+          <% end %>
+          <%= if @physical_worker_model_label do %>
+            <span style="font-size: 10px; color: #9fcfb8; border: 1px solid #1f3a2b; border-radius: 999px; padding: 3px 8px; background: #0b1711;">
+              WORKER <span style="font-family: monospace; color: #e8f0ea;"><%= @physical_worker_model_label %></span>
+            </span>
           <% end %>
         </div>
         <div style="display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap;">
@@ -736,6 +754,47 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       "#{performance.supplier_incident_count} supplier incident(s)",
       "#{performance.worker_trip_count} worker trip(s)"
     ]
+  end
+
+  defp runtime_model_label(runtime_models, role, world, fallback_key) do
+    runtime_models
+    |> get_val(role, nil)
+    |> model_label()
+    |> case do
+      nil -> world |> get_val(fallback_key, nil) |> model_label()
+      label -> label
+    end
+  end
+
+  defp model_label(nil), do: nil
+
+  defp model_label(model) when is_binary(model) do
+    trimmed = String.trim(model)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp model_label(model) when is_atom(model), do: Atom.to_string(model)
+
+  defp model_label(model) when is_map(model) do
+    get_val(model, :label, nil) ||
+      compact_model_label(
+        get_val(model, :provider, nil),
+        get_val(model, :id, get_val(model, :name, nil))
+      )
+  end
+
+  defp model_label(model), do: model |> to_string() |> model_label()
+
+  defp compact_model_label(provider, id) do
+    provider = model_label(provider)
+    id = model_label(id)
+
+    cond do
+      id in [nil, ""] -> provider
+      provider in [nil, ""] -> id
+      String.starts_with?(id, provider <> ":") -> id
+      true -> provider <> ":" <> id
+    end
   end
 
   defp to_int(value, _default) when is_integer(value), do: value

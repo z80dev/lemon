@@ -131,6 +131,10 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         refunds_paid: 2.5,
         physical_worker_last_report: %{summary: "Collected cash and topped off A1."},
         physical_worker_run_count: 2,
+        runtime_models: %{
+          operator: %{label: "zai:glm-5-turbo"},
+          physical_worker: %{label: "openai:gpt-5-mini"}
+        },
         weather: %{kind: "hot", demand_multiplier: 1.3},
         season: %{name: "late_spring", demand_multiplier: 1.1}
       }
@@ -141,6 +145,10 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Hot"
       assert html =~ "VENDBENCH LIVE"
       assert html =~ "RUN"
+      assert html =~ "OP"
+      assert html =~ "zai:glm-5-turbo"
+      assert html =~ "WORKER"
+      assert html =~ "openai:gpt-5-mini"
       assert html =~ "Top Seller"
       assert html =~ "Run Rate"
       assert html =~ "Refund Heat"

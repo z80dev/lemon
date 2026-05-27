@@ -62,6 +62,8 @@ defmodule LemonSim.Examples.VendingBench do
 
     weather = DemandModel.generate_weather(1, seed)
     season = DemandModel.season_for_day(1)
+    operator_model = Keyword.get(opts, :model)
+    physical_worker_model = Keyword.get(opts, :physical_worker_model, operator_model)
 
     %{
       status: "in_progress",
@@ -109,8 +111,9 @@ defmodule LemonSim.Examples.VendingBench do
       season: season,
       operator_run_count: 0,
       physical_worker_run_count: 0,
-      operator_model: Keyword.get(opts, :model),
-      physical_worker_model: Keyword.get(opts, :physical_worker_model, Keyword.get(opts, :model)),
+      operator_model: operator_model,
+      physical_worker_model: physical_worker_model,
+      runtime_models: runtime_models(operator_model, physical_worker_model),
       operator_memory_namespace: "#{Keyword.get(opts, :sim_id, "vb")}/operator",
       physical_worker_memory_namespace: "#{Keyword.get(opts, :sim_id, "vb")}/physical_worker",
       physical_worker_last_report: nil,
@@ -458,13 +461,19 @@ defmodule LemonSim.Examples.VendingBench do
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
-    state = initial_state(opts)
-    world = state.world
-
     run_opts =
       default_opts(opts)
       |> Keyword.merge(opts)
       |> with_provider_throttle()
+
+    state =
+      opts
+      |> maybe_put(:model, Keyword.get(run_opts, :model))
+      |> maybe_put(:physical_worker_model, Keyword.get(run_opts, :physical_worker_model))
+      |> initial_state()
+      |> stamp_runtime_models(run_opts)
+
+    world = state.world
 
     IO.puts("Starting Vending Bench Simulation")
     IO.puts("Starting balance: $#{format_price(get(world, :bank_balance, 500.0))}")
@@ -483,6 +492,7 @@ defmodule LemonSim.Examples.VendingBench do
         |> Keyword.put_new(:artifact_dir, artifact_dir)
         |> with_provider_throttle()
 
+      state = stamp_runtime_models(state, run_opts)
       world = state.world
 
       IO.puts("Resuming Vending Bench Simulation")
@@ -635,6 +645,73 @@ defmodule LemonSim.Examples.VendingBench do
     status = MapHelpers.get_key(state.world, :status)
     status in ["complete", "bankrupt"]
   end
+
+  defp stamp_runtime_models(%State{} = state, run_opts) do
+    operator_model = Keyword.get(run_opts, :model, get(state.world, :operator_model))
+
+    physical_worker_model =
+      Keyword.get(
+        run_opts,
+        :physical_worker_model,
+        get(state.world, :physical_worker_model, operator_model)
+      )
+
+    world =
+      state.world
+      |> Map.put(:operator_model, operator_model)
+      |> Map.put(:physical_worker_model, physical_worker_model)
+      |> Map.put(:runtime_models, runtime_models(operator_model, physical_worker_model))
+
+    %{state | world: world}
+  end
+
+  defp runtime_models(operator_model, physical_worker_model) do
+    %{
+      operator: model_descriptor(operator_model),
+      physical_worker: model_descriptor(physical_worker_model)
+    }
+  end
+
+  defp model_descriptor(nil), do: nil
+
+  defp model_descriptor(%{} = model) do
+    provider = get(model, :provider)
+    id = get(model, :id, get(model, :name))
+    label = model_label(provider, id)
+
+    %{
+      provider: model_part(provider),
+      id: model_part(id),
+      label: label
+    }
+  end
+
+  defp model_descriptor(model),
+    do: %{provider: nil, id: model_part(model), label: model_part(model)}
+
+  defp model_label(provider, id) do
+    provider = model_part(provider)
+    id = model_part(id)
+
+    cond do
+      id in [nil, ""] ->
+        provider
+
+      provider in [nil, ""] ->
+        id
+
+      String.starts_with?(id, provider <> ":") ->
+        id
+
+      true ->
+        provider <> ":" <> id
+    end
+  end
+
+  defp model_part(nil), do: nil
+  defp model_part(value) when is_atom(value), do: Atom.to_string(value)
+  defp model_part(value) when is_binary(value), do: value
+  defp model_part(value), do: to_string(value)
 
   defp run_live_collecting_artifacts(state, run_opts, events, actions, turn) do
     max_turns = Keyword.get(run_opts, :driver_max_turns, Keyword.get(run_opts, :max_turns, 50))
