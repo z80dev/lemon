@@ -7,6 +7,7 @@ defmodule LemonSim.GameHelpers.ConfigTest do
   setup do
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
+    System.delete_env("OPENAI_API_KEY")
     System.delete_env("OPENAI_CODEX_API_KEY")
     System.delete_env("CHATGPT_TOKEN")
     System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
@@ -17,6 +18,7 @@ defmodule LemonSim.GameHelpers.ConfigTest do
 
     on_exit(fn ->
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      System.delete_env("OPENAI_API_KEY")
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
       System.delete_env("GOOGLE_GEMINI_CLI_API_KEY")
@@ -79,6 +81,15 @@ defmodule LemonSim.GameHelpers.ConfigTest do
     assert {:ok, decoded} = Jason.decode(resolved)
     assert decoded["token"] == "gemini-access-token"
     assert decoded["projectId"] == "managed-proj-123"
+  end
+
+  test "openai resolves standard default secret without explicit provider config" do
+    assert {:ok, _} = Secrets.set("llm_openai_api_key", "openai-default-secret")
+
+    config = %{providers: LemonCore.Config.Providers.resolve(%{})}
+
+    assert Config.resolve_provider_api_key!(:openai, config, "vending_bench") ==
+             "openai-default-secret"
   end
 
   test "openai-codex resolves configured oauth_secret from Lemon secrets" do

@@ -396,6 +396,12 @@
     max_age_days: 30
   },
   %{
+    path: "docs/plans/lemon-sim-vendingbench-equivalent-goal-2026-05-16.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-16],
+    max_age_days: 30
+  },
+  %{
     path: "docs/user-guide/rollout.md",
     owner: "@z80",
     last_reviewed: ~D[2026-05-16],

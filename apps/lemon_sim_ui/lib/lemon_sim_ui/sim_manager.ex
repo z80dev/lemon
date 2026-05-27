@@ -622,7 +622,7 @@ defmodule LemonSimUi.SimManager do
 
     support_tool_matcher = fn tool ->
       String.starts_with?(tool.name, "memory_") or
-        tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory review_recent_sales)
+        tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder send_supplier_message send_supplier_email)
     end
 
     run_opts =

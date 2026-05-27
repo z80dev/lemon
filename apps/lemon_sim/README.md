@@ -6,7 +6,7 @@ Reusable simulation harness primitives for tool-first LLM agents.
 
 LemonSim should become a mature BEAM-native platform for running, watching,
 replaying, and benchmarking agent simulations. The flagship product targets are
-Werewolf as a watchable social-deduction game and Vending Bench 2.0 as a nested
+Werewolf as a watchable social-deduction game and Vending Bench as a nested
 operator/physical-worker business simulation. See
 `../../docs/plans/lemon-sim-platform-mission-2026-05-12.md` for the current
 mission plan and acceptance criteria.
@@ -44,8 +44,9 @@ Phase 1 adds:
   readable live watching, replay storyboards, hidden-information boundaries,
   and role-aware metrics.
 - `LemonSim.Examples.VendingBench` is the nested-agent operations benchmark
-  target for Vending Bench 2.0: operator strategy, physical-worker execution,
-  suppliers, inventory, demand, pricing, incidents, and objective scoring.
+  target for the original Vending-Bench: operator strategy, physical-worker
+  execution, suppliers, inventory, demand, pricing, incidents, and objective
+  net-worth scoring.
 
 Run them with:
 
@@ -54,6 +55,82 @@ mix lemon.sim.tic_tac_toe
 mix lemon.sim.skirmish
 mix lemon.sim.poker
 ```
+
+Vending Bench also has a deterministic, no-LLM baseline mode for CI and
+mechanics smoke tests:
+
+```bash
+mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_fixture
+```
+
+Vending-Bench 1.0 benchmark runs use `--preset paper`, which sets the horizon
+to 365 simulated days, uses a 2,000-turn driver budget, preserves the original
+net-worth score, and applies 10-day unpaid-fee bankruptcy.
+
+```bash
+mix lemon.sim.vending_bench --preset paper --sim-id vb_paper
+```
+
+The offline mode writes `final_world.json`, `events.jsonl`, `actions.jsonl`,
+`supplier_messages.json`, `worker_history.json`, `operator_transcript.json`,
+`reminders.json`, `scorecard.json`, `replay.json`, `replay.html`, and
+`report.md` artifacts under
+`apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>` unless `--artifact-dir`
+is provided. Live model runs also write the same artifact bundle when
+`--artifact-dir` is supplied, and the bundle is checkpointed after each live
+operator turn so long runs still leave inspectable partial `final_world`,
+event, action, scorecard, replay, and report files if interrupted. Live runs
+also persist each checkpointed state when `persist?` is enabled, allowing the
+public watch UI to follow long CLI runs by sim id. Existing artifact
+directories can rebuild the replay browser with:
+
+```bash
+mix lemon.sim.vending_bench_replay apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
+```
+
+Interrupted live runs can resume from the latest checkpointed artifact bundle:
+
+```bash
+mix lemon.sim.vending_bench --preset paper --resume-artifact-dir apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
+```
+
+For stalled provider experiments, `--live-step-timeout-ms` can shorten the
+outer live operator timeout while preserving checkpointed missed-turn artifacts.
+
+A small deterministic fixture is checked in at
+`apps/lemon_sim/priv/fixtures/vending_bench/ci_replay/`. Regenerate it with:
+
+```bash
+mix lemon.sim.vending_bench --preset ci --max-days 3 --max-turns 10 --seed 1 --sim-id vb_ci_fixture --offline-strategy baseline --artifact-dir apps/lemon_sim/priv/fixtures/vending_bench/ci_replay
+```
+
+The live operator tool surface includes deterministic supplier research and
+email-style supplier messaging. `research_suppliers` searches the offline
+supplier corpus, while `send_supplier_message` can request quotes, place parsed
+orders with known suppliers, and receive bounces for unknown addresses. The
+older structured `send_supplier_email` order tool remains available for
+compatibility with existing tests and scripted runs. In live model loops,
+supplier email tools are support tools so an operator can send multiple
+messages before ending the turn with a physical-worker dispatch or next-day
+wait. Live runs also tell the operator to stop after at most two support
+tool calls before choosing a terminal action, and the VendingBench runner
+paces ZAI and Gemini CLI provider calls by default to avoid rate-limit failures
+during support-heavy turns. Supplier behavior now
+covers negotiated discounts, adversarial markups, deterministic delivery
+delays, shutdown notices, and bait-and-switch substitutions with delivery
+provenance in the final world state and scorecard incidents. Overpriced sales
+can now trigger deterministic customer complaints and same-day refunds that
+feed the scorecard. Storage has explicit capacity, delivery overflow
+discarding, batch aging, and deterministic spoilage loss. Demand varies by
+weather, season/month, day of week, price elasticity, stockouts, and stocked
+product variety. Scorecards include explicit failure-mode flags for repeated
+invalid actions, chronic stockouts, supplier overtrust, unmanaged spoilage,
+customer trust damage, task abandonment, and cash-flow risk.
+Benchmark-native reminder tools let the operator create, list, and complete
+time-sensitive follow-ups in world state alongside file-memory notes. The
+physical worker can also remove expired storage inventory and report machine
+faults through worker-only tools whose events are validated by the authoritative
+updater.
 
 ## Module Inventory
 
@@ -84,7 +161,13 @@ mix lemon.sim.poker
 `LemonSim.Deciders.ToolLoopDecider` expects the model to terminate turns with a
 tool call. If the assistant responds without any tool call, it returns
 `{:error, {:tool_call_required, details}}` instead of producing a text-only
-decision that `Runner.step/3` cannot ingest.
+decision that `Runner.step/3` cannot ingest. VendingBench live runs convert
+those blank or text-only turns into `action_rejected` events and continue. If
+the provider keeps returning blank responses at the same state, the live runner
+records a `wait_for_next_day` fallback so the operator misses the turn instead
+of discarding the long benchmark checkpoint. Live operator steps also have an
+outer timeout; a hung provider call is recorded with the same missed-turn
+fallback path.
 
 `Runner.run_until_terminal/3` and `ToolLoopDecider` use separate turn budgets:
 

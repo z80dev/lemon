@@ -8,7 +8,7 @@ Use this app when you need a fresh-context-per-decision loop backed by structure
 
 The product mission is broader than test harnessing: LemonSim should become the
 BEAM-native platform for simulations people can watch, replay, and benchmark.
-Werewolf is the flagship watchable social-deduction game, and Vending Bench 2.0
+Werewolf is the flagship watchable social-deduction game, and Vending Bench
 is the flagship nested operator/physical-worker business simulation. Keep
 `docs/plans/lemon-sim-platform-mission-2026-05-12.md` current when these
 mission targets change.
@@ -22,10 +22,47 @@ mission targets change.
 - `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
   social-deduction game: readable phases, hidden-information discipline,
   replay/storyboard artifacts, and objective role/model metrics.
-- `LemonSim.Examples.VendingBench` is the Vending Bench 2.0 target: a full
-  30-day nested-agent business simulation with operator strategy, physical
-  worker execution, suppliers, inventory, demand, incidents, UI, replay, and
-  scorecard evidence.
+- `LemonSim.Examples.VendingBench` is the Vending-Bench 1.0 target: a full
+  nested-agent business simulation with operator strategy, physical worker
+  execution, suppliers, inventory, demand, incidents, UI, replay, and
+  scorecard evidence. It supports deterministic offline baseline runs through
+  `mix lemon.sim.vending_bench --preset ci --offline-strategy baseline`.
+  Benchmark mode is `--preset paper` with a 365-day horizon, a 2,000-turn
+  driver budget, 10-day unpaid-fee bankruptcy, and primary net-worth scoring.
+  Offline runs write replay files plus supplier message, worker history,
+  reminder, and operator transcript JSON artifacts; existing artifact
+  directories can be rebuilt with `mix lemon.sim.vending_bench_replay DIR`.
+  Live runs with `artifact_dir` checkpoint the artifact bundle after each
+  operator turn so long runs leave partial worlds, events, scorecards,
+  and replay browsers before terminal completion. Live checkpoints also persist
+  state when `persist?` is enabled so `/watch/:sim_id` can follow CLI runs.
+  Use `--resume-artifact-dir DIR` to continue a live run from the latest
+  checkpoint after an interruption. VendingBench converts blank/text-only live
+  model turns into benchmark-visible `action_rejected` events; repeated blank
+  responses at the same state fall back to `wait_for_next_day`, recording that
+  the operator missed the turn instead of losing the long run. Hung live model
+  steps use the same missed-turn fallback after the outer step timeout, which
+  the CLI can tune with `--live-step-timeout-ms` for stalled provider proof
+  runs.
+  A checked-in deterministic replay fixture lives under
+  `priv/fixtures/vending_bench/ci_replay/`.
+  Supplier discovery now includes deterministic `research_suppliers`,
+  `send_supplier_message`, and `send_supplier_email` support tools with inbox/outbox
+  persistence, known-supplier order confirmation, unknown-address bounces,
+  negotiated discounts, deterministic delivery delays, shutdown notices, and
+  bait-and-switch delivery provenance. Live VendingBench runs pace ZAI and
+  Gemini CLI provider calls by default and prompt the operator to end each turn
+  after at most two support-tool calls. Customer complaints/refunds are modeled
+  from overpriced sales and included in the scorecard. Storage capacity,
+  delivery overflow, batch aging, spoilage loss, day-of-week/month effects, and
+  product-variety demand effects are part of the benchmark state and scorecard.
+  Scorecards also expose objective failure-mode flags for invalid actions,
+  stockouts, supplier overtrust, spoilage, customer trust damage, task
+  abandonment, and cash-flow risk. Benchmark-native reminder tools create,
+  list, and complete time-sensitive follow-ups in world state alongside
+  file-memory notes. Worker-only physical tools can remove expired storage
+  inventory and report machine faults, with authoritative updater validation
+  before world state changes.
 
 ## Key Files
 

@@ -52,6 +52,59 @@ defmodule LemonSimUi.SpectatorLiveTest do
     LemonSim.Store.delete_state("test_spectator_ww")
   end
 
+  test "renders spectator view for vending bench sim", %{conn: conn} do
+    state =
+      LemonSim.Examples.VendingBench.initial_state(
+        sim_id: "test_spectator_vb",
+        max_days: 365
+      )
+
+    LemonSim.Store.put_state(state)
+
+    {:ok, _view, html} = live(conn, "/watch/test_spectator_vb")
+    assert html =~ "test_spectator_vb"
+    assert html =~ "VendingBench"
+    assert html =~ "VENDBENCH LIVE"
+    assert html =~ "Day 1/365"
+    refute html =~ "Abort Sim"
+    refute html =~ "RAW_STATE_DUMP"
+    refute html =~ "AGENT STRATEGY"
+    refute html =~ "DATA BANKS"
+
+    LemonSim.Store.delete_state("test_spectator_vb")
+  end
+
+  test "renders vending bench spectator view from checkpoint artifacts", %{conn: conn} do
+    sim_id = "test_spectator_vb_artifact"
+
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "test_spectator_vb_artifact_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+    LemonSim.Store.delete_state(sim_id)
+
+    assert {:ok, _result} =
+             LemonSim.Examples.VendingBench.run_offline_strategy("baseline",
+               sim_id: sim_id,
+               max_days: 2,
+               seed: 1,
+               driver_max_turns: 4,
+               artifact_dir: artifact_dir
+             )
+
+    LemonSim.Store.delete_state(sim_id)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ sim_id
+    assert html =~ "VendingBench"
+    assert html =~ "VENDBENCH LIVE"
+
+    File.rm_rf!(artifact_dir)
+  end
+
   test "renders character profiles in bio strip when present", %{conn: conn} do
     world = LemonSim.Examples.Werewolf.initial_world(player_count: 5)
 

@@ -1,0 +1,39 @@
+{
+  "active_failure_mode_count": 1,
+  "average_margin": 58.5,
+  "bankruptcy_day": null,
+  "cash_in_machine": 21.75,
+  "cash_on_hand": 417.3,
+  "coordination_failures": 8,
+  "customer_complaint_count": 0,
+  "day_number": 3,
+  "days_without_sales": 0,
+  "failure_modes": {
+    "cash_flow_risk": false,
+    "chronic_stockouts": false,
+    "customer_trust_damage": false,
+    "repeated_invalid_actions": true,
+    "supplier_overtrust": false,
+    "task_abandonment": false,
+    "unmanaged_spoilage": false
+  },
+  "inventory_value_wholesale": 105.85,
+  "net_worth": 544.9,
+  "price_change_count": 8,
+  "refunds_paid": 0.0,
+  "score_modes": {
+    "lemon_operational_score": 32.65,
+    "money_balance": 417.3,
+    "v1_net_worth": 544.9
+  },
+  "sim_id": "vb_ci_fixture",
+  "spoilage_loss": 0.0,
+  "spoiled_units": 0,
+  "status": "complete",
+  "stockout_count": 0,
+  "storage_overflow_units": 0,
+  "supplier_count_used": 2,
+  "supplier_incident_count": 0,
+  "units_sold": 37,
+  "worker_trip_count": 2
+}

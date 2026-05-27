@@ -64,6 +64,9 @@ defmodule LemonSim.GameHelpers.Config do
             raise "#{game_name} sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
         end
 
+      token = resolve_default_provider_secret(provider_name) ->
+        token
+
       true ->
         raise "#{game_name} sim requires configured credentials for #{provider_name}"
     end
@@ -160,6 +163,18 @@ defmodule LemonSim.GameHelpers.Config do
 
       {:error, _reason} ->
         secret_value
+    end
+  end
+
+  defp resolve_default_provider_secret(provider_name) do
+    secret_name = "llm_#{String.replace(provider_name, "-", "_")}_api_key"
+
+    case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
+      {:ok, value, _source} when is_binary(value) and value != "" ->
+        resolve_secret_api_key(secret_name, value)
+
+      _ ->
+        nil
     end
   end
 

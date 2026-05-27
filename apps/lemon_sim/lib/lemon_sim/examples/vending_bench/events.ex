@@ -31,14 +31,56 @@ defmodule LemonSim.Examples.VendingBench.Events do
     Event.new("operator_reviewed_sales", %{"sales_count" => sales_count})
   end
 
-  def supplier_email_sent(supplier_id, item_id, quantity, cost, delivery_day) do
-    Event.new("supplier_email_sent", %{
-      "supplier_id" => supplier_id,
-      "item_id" => item_id,
-      "quantity" => quantity,
-      "cost" => cost,
-      "delivery_day" => delivery_day
+  def operator_researched_suppliers(query, result_count) do
+    Event.new("operator_researched_suppliers", %{
+      "query" => query,
+      "result_count" => result_count
     })
+  end
+
+  def operator_created_reminder(reminder_id, day, text) do
+    Event.new("operator_created_reminder", %{
+      "reminder_id" => reminder_id,
+      "day" => day,
+      "text" => text
+    })
+  end
+
+  def operator_listed_reminders(reminder_count) do
+    Event.new("operator_listed_reminders", %{"reminder_count" => reminder_count})
+  end
+
+  def operator_completed_reminder(reminder_id) do
+    Event.new("operator_completed_reminder", %{"reminder_id" => reminder_id})
+  end
+
+  def supplier_message_sent(to, subject, body) do
+    Event.new("supplier_message_sent", %{
+      "to" => to,
+      "subject" => subject,
+      "body" => body
+    })
+  end
+
+  def supplier_email_sent(
+        supplier_id,
+        item_id,
+        quantity,
+        cost,
+        delivery_day,
+        extra_payload \\ %{}
+      ) do
+    payload =
+      %{
+        "supplier_id" => supplier_id,
+        "item_id" => item_id,
+        "quantity" => quantity,
+        "cost" => cost,
+        "delivery_day" => delivery_day
+      }
+      |> Map.merge(Map.new(extra_payload))
+
+    Event.new("supplier_email_sent", payload)
   end
 
   def physical_worker_run_requested(instructions) do
@@ -80,6 +122,23 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
+  def expired_inventory_removed(item_id, quantity, loss, day) do
+    Event.new("expired_inventory_removed", %{
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "loss" => loss,
+      "day" => day
+    })
+  end
+
+  def machine_fault_reported(description, severity, day) do
+    Event.new("machine_fault_reported", %{
+      "description" => description,
+      "severity" => severity,
+      "day" => day
+    })
+  end
+
   def physical_worker_finished(summary, tool_calls, extra_payload \\ %{}) do
     payload =
       %{
@@ -111,6 +170,16 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
+  def customer_refund_paid(item_id, quantity, amount, reason, day) do
+    Event.new("customer_refund_paid", %{
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "amount" => amount,
+      "reason" => reason,
+      "day" => day
+    })
+  end
+
   def delivery_arrived(supplier_id, item_id, quantity, day) do
     Event.new("delivery_arrived", %{
       "supplier_id" => supplier_id,
@@ -120,10 +189,28 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
-  def supplier_reply_received(supplier_id, message) do
+  def storage_overflow_discarded(item_id, quantity, day) do
+    Event.new("storage_overflow_discarded", %{
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "day" => day
+    })
+  end
+
+  def inventory_spoiled(item_id, quantity, loss, day) do
+    Event.new("inventory_spoiled", %{
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "loss" => loss,
+      "day" => day
+    })
+  end
+
+  def supplier_reply_received(supplier_id, message, metadata \\ %{}) do
     Event.new("supplier_reply_received", %{
       "supplier_id" => supplier_id,
-      "message" => message
+      "message" => message,
+      "metadata" => metadata
     })
   end
 

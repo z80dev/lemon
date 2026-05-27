@@ -158,7 +158,8 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
 
     You operate on-site only. You do not order inventory or manage the bank beyond
     collecting cash already in the machine. You may inspect inventory, stock slots,
-    collect cash, set prices, and keep private worker notes.
+    collect cash, set prices, remove expired storage items, report machine faults,
+    and keep private worker notes.
 
     ## Current Machine State
     #{slot_text}
@@ -173,7 +174,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
 
     ## Rules
     - You may use get_inventory and memory tools freely.
-    - You may perform multiple operational actions in one visit: stock_products, collect_cash, set_price.
+    - You may perform multiple operational actions in one visit: stock_products, collect_cash, set_price, remove_expired_inventory, report_machine_fault.
     - Maintain a consistent local view across your actions during this visit.
     - Only stock items that are currently in storage.
     - Do not mix different products in a single slot.
@@ -191,6 +192,8 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
         stock_products_tool(local_state),
         collect_cash_tool(local_state),
         set_price_tool(local_state),
+        remove_expired_inventory_tool(local_state),
+        report_machine_fault_tool(local_state),
         finish_visit_tool()
       ]
   end
@@ -240,12 +243,22 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
             |> Enum.join("\n")
           end
 
+        expired_lines =
+          expired_storage(snapshot)
+          |> Enum.map(fn {item_id, quantity} -> "#{item_id}: #{quantity} expired unit(s)" end)
+          |> Enum.join("\n")
+
+        expired_text = if expired_lines == "", do: "(none)", else: expired_lines
+
         text = """
         Machine Slots:
         #{slot_lines}
 
         Storage:
         #{storage_lines}
+
+        Expired Storage:
+        #{expired_text}
 
         Cash in machine: $#{format_price(snapshot.cash_in_machine)}
         """
@@ -263,6 +276,115 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
            },
            trust: :trusted
          }}
+      end
+    }
+  end
+
+  defp remove_expired_inventory_tool(local_state) do
+    %AgentTool{
+      name: "remove_expired_inventory",
+      description: "Discard expired inventory from storage during the worker visit.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "item_id" => %{"type" => "string", "description" => "Expired item id to discard"},
+          "quantity" => %{"type" => "integer", "description" => "Expired units to discard"}
+        },
+        "required" => ["item_id", "quantity"],
+        "additionalProperties" => false
+      },
+      label: "Remove Expired Inventory",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        item_id = Map.get(params, "item_id", "")
+        quantity = Map.get(params, "quantity", 0)
+        snapshot = snapshot(local_state)
+        storage_qty = Map.get(snapshot.storage_inventory, item_id, 0)
+        expired_qty = Map.get(expired_storage(snapshot), item_id, 0)
+
+        cond do
+          quantity <= 0 ->
+            rejected_result("physical_worker", "Removed quantity must be positive")
+
+          storage_qty < quantity ->
+            rejected_result(
+              "physical_worker",
+              "Only #{storage_qty} units of #{item_id} are available in storage"
+            )
+
+          expired_qty < quantity ->
+            rejected_result(
+              "physical_worker",
+              "Only #{expired_qty} expired units of #{item_id} are available to discard"
+            )
+
+          true ->
+            item_info = Map.get(snapshot.catalog, item_id, %{})
+            loss = Float.round(Map.get(item_info, :wholesale_cost, 0.0) * quantity, 2)
+
+            update_snapshot(local_state, fn current ->
+              storage_qty = Map.get(current.storage_inventory, item_id, 0)
+
+              %{
+                current
+                | storage_inventory:
+                    Map.put(current.storage_inventory, item_id, max(0, storage_qty - quantity)),
+                  storage_batches: remove_from_batches(current.storage_batches, item_id, quantity)
+              }
+            end)
+
+            {:ok,
+             %AgentToolResult{
+               content: [
+                 AgentCore.text_content(
+                   "Discarded #{quantity} expired units of #{item_id} from storage"
+                 )
+               ],
+               details: %{
+                 "event" =>
+                   Events.expired_inventory_removed(item_id, quantity, loss, snapshot.day_number)
+               },
+               trust: :trusted
+             }}
+        end
+      end
+    }
+  end
+
+  defp report_machine_fault_tool(local_state) do
+    %AgentTool{
+      name: "report_machine_fault",
+      description: "Report a machine fault or maintenance issue observed on site.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "description" => %{"type" => "string", "description" => "Fault description"},
+          "severity" => %{
+            "type" => "string",
+            "description" => "Fault severity such as low, medium, or high"
+          }
+        },
+        "required" => ["description"],
+        "additionalProperties" => false
+      },
+      label: "Report Machine Fault",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        description = params |> Map.get("description", "") |> to_string() |> String.trim()
+        severity = params |> Map.get("severity", "low") |> to_string() |> String.trim()
+        snapshot = snapshot(local_state)
+
+        if description == "" do
+          rejected_result("physical_worker", "Fault description is required")
+        else
+          {:ok,
+           %AgentToolResult{
+             content: [AgentCore.text_content("Reported #{severity} fault: #{description}")],
+             details: %{
+               "event" =>
+                 Events.machine_fault_reported(description, severity, snapshot.day_number)
+             },
+             trust: :trusted
+           }}
+        end
       end
     }
   end
@@ -473,8 +595,10 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
 
   defp build_local_snapshot(world) do
     %{
+      day_number: get(world, :day_number, 1),
       machine_slots: get(get(world, :machine, %{}), :slots, %{}),
       storage_inventory: get(get(world, :storage, %{}), :inventory, %{}),
+      storage_batches: get(get(world, :storage, %{}), :batches, []),
       cash_in_machine: get(world, :cash_in_machine, 0.0),
       catalog: get(world, :catalog, %{})
     }
@@ -688,6 +812,40 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
         is_error: is_error
       }
     end)
+  end
+
+  defp expired_storage(snapshot) do
+    Enum.reduce(snapshot.storage_batches, %{}, fn batch, acc ->
+      item_id = get(batch, :item_id)
+      quantity = get(batch, :quantity, 0)
+      received_day = get(batch, :received_day, snapshot.day_number)
+      item_info = Map.get(snapshot.catalog, item_id, %{})
+      shelf_life_days = Map.get(item_info, :shelf_life_days, 365)
+
+      if quantity > 0 and snapshot.day_number - received_day > shelf_life_days do
+        Map.put(acc, item_id, Map.get(acc, item_id, 0) + quantity)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp remove_from_batches(batches, item_id, quantity) do
+    {updated_batches, _remaining} =
+      Enum.map_reduce(batches, quantity, fn batch, remaining ->
+        cond do
+          remaining <= 0 or get(batch, :item_id) != item_id ->
+            {batch, remaining}
+
+          get(batch, :quantity, 0) <= remaining ->
+            {Map.put(batch, :quantity, 0), remaining - get(batch, :quantity, 0)}
+
+          true ->
+            {Map.put(batch, :quantity, get(batch, :quantity, 0) - remaining), 0}
+        end
+      end)
+
+    Enum.reject(updated_batches, &(get(&1, :quantity, 0) <= 0))
   end
 
   defp normalize_stream_options(%StreamOptions{} = opts), do: opts

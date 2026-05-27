@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VendingBench Replay vb_ci_fixture</title>
+  <style>
+    body { margin: 0; background: #0a0f0d; color: #e8f0ea; font-family: system-ui, sans-serif; }
+    main { max-width: 1040px; margin: 0 auto; padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .muted { color: #80a894; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0; }
+    .metric { border: 1px solid #1a3024; border-radius: 8px; padding: 12px; background: #0f1a14; }
+    .metric span { display: block; color: #80a894; font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; color: #6ee7b7; font-size: 20px; }
+    ol { list-style: none; padding: 0; margin: 0; border: 1px solid #1a3024; border-radius: 8px; overflow: hidden; }
+    li { display: grid; grid-template-columns: 56px 190px 1fr; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #13251b; }
+    li:last-child { border-bottom: 0; }
+    .day, .kind { color: #10b981; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .summary { color: #d8efe4; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>VendingBench Replay</h1>
+    <div class="muted">vb_ci_fixture · complete · day 3</div>
+    <section class="grid">
+      <div class="metric"><span>V1 net worth</span><strong>$544.90</strong></div>
+      <div class="metric"><span>Money balance</span><strong>$417.30</strong></div>
+      <div class="metric"><span>Operational score</span><strong>32.65</strong></div>
+      <div class="metric"><span>Events</span><strong>68</strong></div>
+      <div class="metric"><span>Refunds</span><strong>$0.00</strong></div>
+      <div class="metric"><span>Supplier incidents</span><strong>0</strong></div>
+    </section>
+    <h2>Timeline</h2>
+    <ol>
+      <li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 24x water from freshco for $9.60; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 24x cola from freshco for $13.20; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 16x chips from snackworld for $12.80; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 20x candy_bar from snackworld for $12.00; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 12x energy_drink from freshco for $18.00; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 12x sparkling_water from freshco for $13.20; delivery day 2</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">next_day_waited</span>
+  <span class="summary">next_day_waited: %{}</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 24x water from freshco</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 24x cola from freshco</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 16x chips from snackworld</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 20x candy_bar from snackworld</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 12x energy_drink from freshco</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 12x sparkling_water from freshco</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">daily_fee_charged</span>
+  <span class="summary">daily_fee_charged: %{&quot;amount&quot; =&gt; 2.0, &quot;new_balance&quot; =&gt; 419.2}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">weather_changed</span>
+  <span class="summary">weather_changed: %{&quot;demand_multiplier&quot; =&gt; 1.0, &quot;kind&quot; =&gt; &quot;mild&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">day_advanced</span>
+  <span class="summary">Advanced from day 1 to day 2</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">physical_worker_run_requested</span>
+  <span class="summary">physical_worker_run_requested: %{&quot;instructions&quot; =&gt; &quot;Run baseline restock, pricing, and cash collection checklist.&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 12, &quot;item_id&quot; =&gt; &quot;water&quot;, &quot;quantity&quot; =&gt; 12, &quot;slot_id&quot; =&gt; &quot;A1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 12, &quot;item_id&quot; =&gt; &quot;cola&quot;, &quot;quantity&quot; =&gt; 12, &quot;slot_id&quot; =&gt; &quot;A2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 10, &quot;item_id&quot; =&gt; &quot;chips&quot;, &quot;quantity&quot; =&gt; 10, &quot;slot_id&quot; =&gt; &quot;B1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 10, &quot;item_id&quot; =&gt; &quot;candy_bar&quot;, &quot;quantity&quot; =&gt; 10, &quot;slot_id&quot; =&gt; &quot;B2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot stock energy_drink in C1; small items require a small slot&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot stock sparkling_water in C2; small items require a small slot&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.25, &quot;old_price&quot; =&gt; 0.0, &quot;slot_id&quot; =&gt; &quot;A1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.75, &quot;old_price&quot; =&gt; 0.0, &quot;slot_id&quot; =&gt; &quot;A2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 2.0, &quot;old_price&quot; =&gt; 0.0, &quot;slot_id&quot; =&gt; &quot;B1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.5, &quot;old_price&quot; =&gt; 0.0, &quot;slot_id&quot; =&gt; &quot;B2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot price empty slot C1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot price empty slot C2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">physical_worker_finished</span>
+  <span class="summary">Worker finished: Baseline stocked 6 slot(s), repriced 6 slot(s), collected $0.00.</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">next_day_waited</span>
+  <span class="summary">next_day_waited: %{}</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 7x water from A1 for $8.75</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 5x cola from A2 for $8.75</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 5x chips from B1 for $10.00</span>
+</li>
+
+<li>
+  <span class="day">D2</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 6x candy_bar from B2 for $9.00</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">daily_fee_charged</span>
+  <span class="summary">daily_fee_charged: %{&quot;amount&quot; =&gt; 2.0, &quot;new_balance&quot; =&gt; 417.2}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">weather_changed</span>
+  <span class="summary">weather_changed: %{&quot;demand_multiplier&quot; =&gt; 0.7, &quot;kind&quot; =&gt; &quot;rainy&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">day_advanced</span>
+  <span class="summary">Advanced from day 2 to day 3</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 24x water from freshco for $9.60; delivery day 4</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 16x chips from snackworld for $12.80; delivery day 4</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">supplier_email_sent</span>
+  <span class="summary">Ordered 20x candy_bar from snackworld for $12.00; delivery day 4</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">physical_worker_run_requested</span>
+  <span class="summary">physical_worker_run_requested: %{&quot;instructions&quot; =&gt; &quot;Run baseline restock, pricing, and cash collection checklist.&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 7, &quot;item_id&quot; =&gt; &quot;water&quot;, &quot;quantity&quot; =&gt; 7, &quot;slot_id&quot; =&gt; &quot;A1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 5, &quot;item_id&quot; =&gt; &quot;cola&quot;, &quot;quantity&quot; =&gt; 5, &quot;slot_id&quot; =&gt; &quot;A2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 5, &quot;item_id&quot; =&gt; &quot;chips&quot;, &quot;quantity&quot; =&gt; 5, &quot;slot_id&quot; =&gt; &quot;B1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">machine_stocked</span>
+  <span class="summary">machine_stocked: %{&quot;from_storage&quot; =&gt; 6, &quot;item_id&quot; =&gt; &quot;candy_bar&quot;, &quot;quantity&quot; =&gt; 6, &quot;slot_id&quot; =&gt; &quot;B2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot stock energy_drink in C1; small items require a small slot&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot stock sparkling_water in C2; small items require a small slot&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.25, &quot;old_price&quot; =&gt; 1.25, &quot;slot_id&quot; =&gt; &quot;A1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.75, &quot;old_price&quot; =&gt; 1.75, &quot;slot_id&quot; =&gt; &quot;A2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 2.0, &quot;old_price&quot; =&gt; 2.0, &quot;slot_id&quot; =&gt; &quot;B1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">price_set</span>
+  <span class="summary">price_set: %{&quot;new_price&quot; =&gt; 1.5, &quot;old_price&quot; =&gt; 1.5, &quot;slot_id&quot; =&gt; &quot;B2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot price empty slot C1&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">action_rejected</span>
+  <span class="summary">action_rejected: %{&quot;actor_id&quot; =&gt; &quot;physical_worker&quot;, &quot;reason&quot; =&gt; &quot;Cannot price empty slot C2&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">cash_collected</span>
+  <span class="summary">cash_collected: %{&quot;amount&quot; =&gt; 36.5}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">physical_worker_finished</span>
+  <span class="summary">Worker finished: Baseline stocked 6 slot(s), repriced 6 slot(s), collected $36.50.</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">next_day_waited</span>
+  <span class="summary">next_day_waited: %{}</span>
+</li>
+
+<li>
+  <span class="day">D3</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 5x water from A1 for $6.25</span>
+</li>
+
+<li>
+  <span class="day">D3</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 2x cola from A2 for $3.50</span>
+</li>
+
+<li>
+  <span class="day">D3</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 3x chips from B1 for $6.00</span>
+</li>
+
+<li>
+  <span class="day">D3</span>
+  <span class="kind">sale_realized</span>
+  <span class="summary">Sold 4x candy_bar from B2 for $6.00</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 24x water from freshco</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 16x chips from snackworld</span>
+</li>
+
+<li>
+  <span class="day">D4</span>
+  <span class="kind">delivery_arrived</span>
+  <span class="summary">Delivered 20x candy_bar from snackworld</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">daily_fee_charged</span>
+  <span class="summary">daily_fee_charged: %{&quot;amount&quot; =&gt; 2.0, &quot;new_balance&quot; =&gt; 417.3}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">weather_changed</span>
+  <span class="summary">weather_changed: %{&quot;demand_multiplier&quot; =&gt; 1.0, &quot;kind&quot; =&gt; &quot;mild&quot;}</span>
+</li>
+
+<li>
+  <span class="day">D?</span>
+  <span class="kind">day_advanced</span>
+  <span class="summary">Advanced from day 3 to day 4</span>
+</li>
+
+<li>
+  <span class="day">D3</span>
+  <span class="kind">game_over</span>
+  <span class="summary">Game over: completed</span>
+</li>
+
+    </ol>
+  </main>
+</body>
+</html>

@@ -6,7 +6,7 @@
 
 - launching simulations via `SimManager`
 - driving the runner loop (calling `LemonSim.Runner.step/3` in a supervised task)
-- rendering live state in the browser via the public `LobbyLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` werewolf watcher
+- rendering live state in the browser via the public `LobbyLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
 - accepting human-player moves for interactive domains
 
@@ -55,6 +55,7 @@ lib/
         auction_board.ex                   Lot/bidder display for :auction
         diplomacy_board.ex                 Territory/faction display for :diplomacy
         dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
+        vending_bench_board.ex             VendingBench broadcast view, operations, supplier/fault signals, and scorecard display
 test/
   lemon_sim_ui/
     live/
@@ -72,7 +73,7 @@ test/
 | `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; `start_sim/2`, `stop_sim/1`, `resume_sim/1`, `list_running/0`, `submit_human_move/2`, auto-loop controls |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims and links to spectator pages |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/admin` and `/admin/sims/:sim_id`; handles sim launch and admin/detail flows |
-| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable werewolf watcher for `/watch/:sim_id`; subscribes to sim + lobby updates |
+| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf and VendingBench, subscribes to sim/lobby updates, and refreshes CLI VendingBench runs from checkpoint artifacts |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
 | `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public load-balancer/smoke-test health check |
@@ -82,6 +83,7 @@ test/
 | `lib/lemon_sim_ui/live/components/plan_history.ex` | `LemonSimUi.Live.Components.PlanHistory` | Stateless component; renders `plan_history` as collapsible steps |
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
 | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
+| `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | VendingBench broadcast view, machine, supplier, refund, fault, and scorecard display |
 
 ## Common Modification Patterns
 

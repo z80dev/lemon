@@ -12,7 +12,13 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     * `--max-days` - Maximum number of simulated days (default: 30)
     * `--max-turns` - Maximum decision turns (default: 300)
     * `--seed` - Random seed for deterministic runs
+    * `--sim-id` - Explicit simulation id for deterministic artifact names/content
     * `--worker-model` - Separate model for physical worker
+    * `--preset` - Run preset: ci, paper
+    * `--offline-strategy` - Deterministic strategy to run without model credentials
+    * `--artifact-dir` - Directory for offline run artifacts
+    * `--resume-artifact-dir` - Resume a live run from a checkpoint artifact directory
+    * `--live-step-timeout-ms` - Outer timeout for one live operator step
     * `--persist` - Persist final state (default: true)
     * `--help` - Show this help
   """
@@ -25,7 +31,13 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     model: :string,
     max_days: :integer,
     seed: :integer,
+    sim_id: :string,
     worker_model: :string,
+    preset: :string,
+    offline_strategy: :string,
+    artifact_dir: :string,
+    resume_artifact_dir: :string,
+    live_step_timeout_ms: :integer,
     help: :boolean
   ]
 
@@ -44,14 +56,22 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
   defp run_simulation(opts) do
     run_opts =
       []
+      |> apply_preset(opts[:preset])
       |> maybe_put(:max_days, opts[:max_days])
       |> maybe_put(:seed, opts[:seed])
+      |> maybe_put(:sim_id, opts[:sim_id])
       |> maybe_put(:persist?, opts[:persist])
       |> maybe_put(:driver_max_turns, opts[:max_turns])
-      |> maybe_put_model(opts[:model])
-      |> maybe_put_worker_model(opts[:worker_model])
+      |> maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
 
-    case LemonSim.Examples.VendingBench.run(run_opts) do
+    result = run_mode(opts, run_opts)
+
+    case result do
+      {:ok, %{artifacts: artifacts}} ->
+        Mix.shell().info("Offline artifacts written to #{Path.dirname(artifacts.final_world)}")
+        :ok
+
       {:ok, _state} ->
         :ok
 
@@ -63,6 +83,47 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp run_mode(opts, run_opts) do
+    cond do
+      opts[:offline_strategy] ->
+        LemonSim.Examples.VendingBench.run_offline_strategy(opts[:offline_strategy], run_opts)
+
+      opts[:resume_artifact_dir] ->
+        run_opts
+        |> maybe_put_model(opts[:model])
+        |> maybe_put_worker_model(opts[:worker_model])
+        |> then(
+          &LemonSim.Examples.VendingBench.resume_from_artifacts(opts[:resume_artifact_dir], &1)
+        )
+
+      true ->
+        run_opts
+        |> maybe_put_model(opts[:model])
+        |> maybe_put_worker_model(opts[:worker_model])
+        |> LemonSim.Examples.VendingBench.run()
+    end
+  end
+
+  defp apply_preset(opts, nil), do: opts
+
+  defp apply_preset(opts, "ci") do
+    opts
+    |> Keyword.put(:max_days, 7)
+    |> Keyword.put(:driver_max_turns, 25)
+    |> Keyword.put(:persist?, false)
+  end
+
+  defp apply_preset(opts, "paper") do
+    opts
+    |> Keyword.put(:max_days, 365)
+    |> Keyword.put(:driver_max_turns, 2_000)
+  end
+
+  defp apply_preset(_opts, preset) do
+    Mix.shell().error("Unknown preset #{preset}. Expected one of: ci, paper")
+    exit({:shutdown, 1})
+  end
 
   defp maybe_put_model(opts, nil), do: opts
 

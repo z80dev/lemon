@@ -1,25 +1,32 @@
 defmodule LemonSimUi.SpectatorLive do
   @moduledoc """
-  Read-only spectator view for watching live AI werewolf games.
+  Read-only spectator view for watching live AI games.
 
   Provides a clean, entertainment-focused interface without admin controls,
   raw state dumps, or operational noise. Shows the game board, character
-  profiles, and narrative events in real-time.
+  profiles, and narrative events in real-time for supported domains.
   """
 
   use LemonSimUi, :live_view
 
   alias LemonSimUi.{SimHelpers, WerewolfPlayback}
-  alias LemonSim.{Store, Bus}
+  alias LemonSim.{Bus, Event, State, Store}
 
   alias LemonSimUi.Live.Components.{
     WerewolfBoard,
+    VendingBenchBoard,
     EventLog
   }
 
+  @vending_bench_artifact_registry Path.join(
+                                     System.tmp_dir!(),
+                                     "lemon_vending_bench_artifact_registry.json"
+                                   )
+  @vending_bench_artifact_refresh_ms 5_000
+
   @impl true
   def mount(%{"sim_id" => sim_id}, _session, socket) do
-    state = Store.get_state(sim_id)
+    {state, artifact_dir} = load_state(sim_id)
 
     case state do
       nil ->
@@ -33,33 +40,43 @@ defmodule LemonSimUi.SpectatorLive do
            supported: false,
            playback: nil,
            playback_timer_ref: nil,
+           artifact_dir: nil,
+           artifact_timer_ref: nil,
            running: false,
            page_title: "Not Found"
          )}
 
       state ->
         domain_type = SimHelpers.infer_domain_type(state)
-        supported = domain_type == :werewolf
+        supported = domain_type in [:werewolf, :vending_bench]
 
         if connected?(socket) && supported do
           LemonCore.Bus.subscribe(LemonSimUi.SimManager.lobby_topic())
           Bus.subscribe(sim_id)
         end
 
-        running = sim_id in LemonSimUi.SimManager.list_running()
+        running =
+          sim_id in LemonSimUi.SimManager.list_running() or
+            (is_binary(artifact_dir) and artifact_running?(state))
 
-        {:ok,
-         assign(socket,
-           sim_id: sim_id,
-           state: state,
-           domain_type: domain_type,
-           supported: supported,
-           playback: if(supported, do: WerewolfPlayback.new(state), else: nil),
-           playback_timer_ref: nil,
-           running: running,
-           game_over_redirect: false,
-           page_title: "Watch: #{sim_id}"
-         )}
+        socket =
+          socket
+          |> assign(
+            sim_id: sim_id,
+            state: state,
+            domain_type: domain_type,
+            supported: supported,
+            playback: if(supported, do: WerewolfPlayback.new(state), else: nil),
+            playback_timer_ref: nil,
+            artifact_dir: artifact_dir,
+            artifact_timer_ref: nil,
+            running: running,
+            game_over_redirect: false,
+            page_title: "Watch: #{sim_id}"
+          )
+          |> maybe_schedule_artifact_refresh()
+
+        {:ok, socket}
     end
   end
 
@@ -132,6 +149,27 @@ defmodule LemonSimUi.SpectatorLive do
     end
   end
 
+  def handle_info({:vending_bench_artifact_refresh, ref}, socket) do
+    if socket.assigns[:artifact_timer_ref] == ref and socket.assigns[:artifact_dir] do
+      state =
+        load_artifact_state_from_dir(socket.assigns.sim_id, socket.assigns.artifact_dir) ||
+          socket.assigns.state
+
+      socket =
+        socket
+        |> assign(
+          state: state,
+          running: artifact_running?(state),
+          artifact_timer_ref: nil
+        )
+        |> maybe_schedule_artifact_refresh()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   @impl true
@@ -144,11 +182,19 @@ defmodule LemonSimUi.SpectatorLive do
         <% !@supported -> %>
           <.not_supported sim_id={@sim_id} domain_type={@domain_type} />
         <% true -> %>
-          <.spectator_view
-            state={@state}
-            sim_id={@sim_id}
-            running={@running}
-          />
+          <%= if @domain_type == :vending_bench do %>
+            <.vending_spectator_view
+              state={@state}
+              sim_id={@sim_id}
+              running={@running}
+            />
+          <% else %>
+            <.spectator_view
+              state={@state}
+              sim_id={@sim_id}
+              running={@running}
+            />
+          <% end %>
           <div :if={@game_over_redirect} class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center">
             <div class="text-center glass-panel p-10 rounded-2xl max-w-md">
               <h2 class="text-2xl font-bold text-white mb-3">Game Over</h2>
@@ -200,11 +246,66 @@ defmodule LemonSimUi.SpectatorLive do
           <span class="text-fuchsia-400">{SimHelpers.domain_label(@domain_type)}</span> simulation.
         </p>
         <p class="text-slate-500 text-sm">
-          Spectator mode is currently only available for Werewolf games.
+          Spectator mode is currently available for Werewolf and VendingBench games.
         </p>
         <a href="/" class="inline-block mt-6 glass-button px-6 py-2 rounded-lg text-sm">
           Back to Dashboard
         </a>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+
+  defp vending_spectator_view(assigns) do
+    world = assigns.state.world
+    day_number = LemonCore.MapHelpers.get_key(world, :day_number) || 1
+    max_days = LemonCore.MapHelpers.get_key(world, :max_days) || 30
+    phase = LemonCore.MapHelpers.get_key(world, :phase) || "operating"
+
+    assigns =
+      assigns
+      |> assign(:day_number, day_number)
+      |> assign(:max_days, max_days)
+      |> assign(:phase, phase)
+
+    ~H"""
+    <div class="flex flex-col min-h-screen bg-[#0a0f0d] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/60 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-emerald-400">VendingBench</span>
+              <span class="text-slate-600">|</span>
+              <span>Day {@day_number}/{@max_days}</span>
+              <span class="text-slate-600">|</span>
+              <span class="capitalize">{format_phase(@phase)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
+        <VendingBenchBoard.render world={@state.world} interactive={false} />
       </div>
     </div>
     """
@@ -276,10 +377,7 @@ defmodule LemonSimUi.SpectatorLive do
       <div class="flex-1 flex flex-col overflow-hidden">
         <%!-- Game board (full width) --%>
         <div class="flex-1 overflow-hidden">
-          <WerewolfBoard.render
-            world={@state.world}
-            interactive={false}
-          />
+          <WerewolfBoard.render world={@state.world} interactive={false} />
         </div>
 
         <%!-- Character bio strip --%>
@@ -364,7 +462,7 @@ defmodule LemonSimUi.SpectatorLive do
   defp status_badge(_, _), do: "bg-emerald-900/40 text-emerald-400 border-emerald-500/30"
 
   defp queue_werewolf_state(socket, updated_state) do
-    if socket.assigns.supported do
+    if socket.assigns.domain_type == :werewolf do
       playback =
         socket.assigns.playback
         |> Kernel.||(WerewolfPlayback.new(socket.assigns.state))
@@ -418,6 +516,94 @@ defmodule LemonSimUi.SpectatorLive do
       end
     end)
   end
+
+  defp load_state(sim_id) do
+    case load_artifact_state(sim_id) do
+      {%State{}, _artifact_dir} = artifact_state ->
+        artifact_state
+
+      _ ->
+        case Store.get_state(sim_id) do
+          nil -> {nil, nil}
+          %State{} = state -> {state, nil}
+        end
+    end
+  end
+
+  defp load_artifact_state(sim_id) do
+    with artifact_dir when is_binary(artifact_dir) <- artifact_dir_for_sim(sim_id),
+         %State{} = state <- load_artifact_state_from_dir(sim_id, artifact_dir) do
+      {state, artifact_dir}
+    else
+      _ -> {nil, nil}
+    end
+  end
+
+  defp artifact_dir_for_sim(sim_id) do
+    with {:ok, body} <- File.read(@vending_bench_artifact_registry),
+         {:ok, registry} when is_map(registry) <- Jason.decode(body),
+         artifact_dir when is_binary(artifact_dir) <- Map.get(registry, sim_id),
+         true <- File.exists?(Path.join(artifact_dir, "final_world.json")) do
+      artifact_dir
+    else
+      _ -> nil
+    end
+  end
+
+  defp load_artifact_state_from_dir(sim_id, artifact_dir) do
+    with {:ok, body} <- File.read(Path.join(artifact_dir, "final_world.json")),
+         {:ok, world} when is_map(world) <- Jason.decode(body) do
+      State.new(
+        sim_id: sim_id,
+        world: world,
+        recent_events: recent_artifact_events(artifact_dir),
+        meta: %{artifact_dir: artifact_dir}
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  defp recent_artifact_events(artifact_dir) do
+    case File.read(Path.join(artifact_dir, "events.jsonl")) do
+      {:ok, body} ->
+        body
+        |> String.split("\n", trim: true)
+        |> Enum.take(-25)
+        |> Enum.flat_map(fn line ->
+          case Jason.decode(line) do
+            {:ok, event} -> [Event.new(event)]
+            _ -> []
+          end
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp maybe_schedule_artifact_refresh(socket) do
+    if connected?(socket) && socket.assigns[:artifact_dir] &&
+         artifact_running?(socket.assigns.state) do
+      ref = make_ref()
+
+      Process.send_after(
+        self(),
+        {:vending_bench_artifact_refresh, ref},
+        @vending_bench_artifact_refresh_ms
+      )
+
+      assign(socket, artifact_timer_ref: ref)
+    else
+      socket
+    end
+  end
+
+  defp artifact_running?(%State{} = state) do
+    LemonCore.MapHelpers.get_key(state.world, :status) == "in_progress"
+  end
+
+  defp artifact_running?(_state), do: false
 
   defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do
     case Map.get(payload, :state, Map.get(payload, "state")) do

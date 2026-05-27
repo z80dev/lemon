@@ -85,7 +85,13 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
             "A2" => %{slot_type: "small", item_id: nil, inventory: 0, price: nil}
           }
         },
-        storage: %{inventory: %{"chips" => 8}},
+        storage: %{
+          inventory: %{"chips" => 8},
+          capacity_units: 20,
+          spoiled_units: 3,
+          overflow_units: 2,
+          spoilage_loss: 2.7
+        },
         catalog: %{
           "sparkling_water" => %{display_name: "Sparkling Water"},
           "chips" => %{display_name: "Chips"}
@@ -93,12 +99,36 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         inbox: [
           %{from: "freshco", subject: "Order Delivered", body: "Your order arrived."}
         ],
+        outbox: [
+          %{to: "sales@switcheroo.example", subject: "Sparkling water order"}
+        ],
+        reminders: [
+          %{id: "rem_1", day: 4, text: "Check delayed water delivery", status: "open"}
+        ],
         pending_deliveries: [
-          %{supplier_id: "snackworld", item_id: "chips", quantity: 8, delivery_day: 4}
+          %{
+            supplier_id: "snackworld",
+            item_id: "water",
+            ordered_item_id: "sparkling_water",
+            substituted_item_id: "water",
+            quantity: 8,
+            delivery_day: 4,
+            delivery_delay_days: 1
+          }
         ],
         recent_sales: [
           %{slot_id: "A1", item_id: "sparkling_water", quantity: 2, revenue: 5.0, day: 3}
         ],
+        customer_complaints: [
+          %{item_id: "sparkling_water", amount: 2.5, reason: "customer_complaint_overpriced_sale"}
+        ],
+        supplier_incident_history: [
+          %{supplier_id: "switcheroo", ordered_item_id: "sparkling_water"}
+        ],
+        machine_fault_reports: [
+          %{description: "coin return sticks intermittently", severity: "medium", day: 3}
+        ],
+        refunds_paid: 2.5,
         physical_worker_last_report: %{summary: "Collected cash and topped off A1."},
         physical_worker_run_count: 2,
         weather: %{kind: "hot", demand_multiplier: 1.3},
@@ -109,11 +139,31 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
       assert html =~ "Late Spring"
       assert html =~ "Hot"
+      assert html =~ "VENDBENCH LIVE"
+      assert html =~ "RUN"
+      assert html =~ "Top Seller"
+      assert html =~ "Run Rate"
+      assert html =~ "Refund Heat"
+      assert html =~ "Risk Flags"
       assert html =~ "Collected cash and topped off A1."
       assert html =~ "Sparkling Water"
       assert html =~ "D4"
       assert html =~ "A1"
       assert html =~ "$5.00"
+      assert html =~ "Refunds Paid"
+      assert html =~ "Spoilage Loss"
+      assert html =~ "Spoiled Units"
+      assert html =~ "Overflow Units"
+      assert html =~ "Failure Modes"
+      assert html =~ "Open Reminders"
+      assert html =~ "Check delayed water delivery"
+      assert html =~ "(8/20)"
+      assert html =~ "Supplier Issues"
+      assert html =~ "Customer Complaints"
+      assert html =~ "Machine Faults"
+      assert html =~ "coin return sticks intermittently"
+      assert html =~ "Substituted Sparkling Water"
+      assert html =~ "Delayed 1d"
     end
   end
 

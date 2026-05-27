@@ -17,7 +17,10 @@ config :lemon_automation,
   goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
 
 config :lemon_web, LemonWeb.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4080],
+  http: [
+    ip: {127, 0, 0, 1},
+    port: String.to_integer(System.get_env("LEMON_WEB_PORT") || "4080")
+  ],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -26,7 +29,10 @@ config :lemon_web, LemonWeb.Endpoint,
   watchers: []
 
 config :lemon_sim_ui, LemonSimUi.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4090],
+  http: [
+    ip: {127, 0, 0, 1},
+    port: String.to_integer(System.get_env("LEMON_SIM_UI_PORT") || "4090")
+  ],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

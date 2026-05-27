@@ -1,8 +1,8 @@
 defmodule LemonSim.Examples.VendingBenchTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall}
-  alias LemonSim.Runner
+  alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
+  alias LemonSim.{DecisionFrame, Runner}
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.ActionSpace
   alias LemonSim.Examples.VendingBench.PhysicalWorker
@@ -12,6 +12,45 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert state.world.operator_memory_namespace == "#{state.sim_id}/operator"
     assert state.world.physical_worker_memory_namespace == "#{state.sim_id}/physical_worker"
+  end
+
+  test "operator prompt reflects the configured benchmark horizon" do
+    state = VendingBench.initial_state(sim_id: "vb_prompt_horizon", max_days: 365)
+    frame = DecisionFrame.from_state(state)
+
+    assert {:ok, context} =
+             LemonSim.Projectors.SectionedProjector.project(
+               frame,
+               [],
+               VendingBench.projector_opts()
+             )
+
+    assert [%UserMessage{content: prompt}] = context.messages
+    assert state.intent.goal =~ "over 365 days"
+    assert prompt =~ "over 365 simulated days"
+    assert prompt =~ "by day 365"
+    assert prompt =~ "After at most 2 support tool calls"
+    refute prompt =~ "day 30"
+  end
+
+  test "initial machine uses Vending-Bench small and large rows" do
+    slots = VendingBench.initial_world().machine.slots
+
+    assert slots["A1"].slot_type == "small"
+    assert slots["B3"].slot_type == "small"
+    assert slots["C1"].slot_type == "large"
+    assert slots["D3"].slot_type == "large"
+  end
+
+  test "default live options bound the inner decision loop for long runs" do
+    opts =
+      VendingBench.default_opts(
+        model: fake_model("operator"),
+        stream_options: %{},
+        complete_fn: fn _model, _context, _stream_opts -> flunk("unused") end
+      )
+
+    assert opts[:decision_max_turns] == 4
   end
 
   test "support-tool events are preserved alongside the terminal action" do
@@ -106,6 +145,259 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert result.state.world.bank_balance == 500.0
     assert result.state.world.pending_deliveries == []
     assert result.state.world.coordination_failures == 1
+  end
+
+  test "supplier research support tool can precede an email-style supplier order" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_message")
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-research",
+             name: "research_suppliers",
+             arguments: %{"query" => "beverage suppliers"}
+           },
+           %ToolCall{
+             type: :tool_call,
+             id: "call-message",
+             name: "send_supplier_message",
+             arguments: %{
+               "to" => "orders@freshco.example",
+               "subject" => "Water order",
+               "body" => "Please order 24 water for the vending machine."
+             }
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               VendingBench.modules(),
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               tool_policy: VendingBench.ToolPolicy,
+               support_tool_matcher: &support_tool?/1
+             )
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "operator_researched_suppliers",
+             "supplier_message_sent",
+             "supplier_reply_received",
+             "supplier_email_sent"
+           ]
+
+    assert result.state.world.supplier_research_history != []
+    assert [%{to: "orders@freshco.example"}] = result.state.world.outbox
+    assert Enum.any?(result.state.world.inbox, &(&1.subject == "Order confirmed"))
+
+    assert [%{supplier_id: "freshco", item_id: "water", quantity: 24}] =
+             result.state.world.pending_deliveries
+
+    assert result.state.world.bank_balance == 490.4
+  end
+
+  test "unknown supplier messages bounce into the inbox without failing the step" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_bounce")
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-bounce",
+             name: "send_supplier_message",
+             arguments: %{
+               "to" => "orders@fake-supplier.example",
+               "subject" => "Quote request",
+               "body" => "Can you quote bottled water?"
+             }
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               VendingBench.modules(),
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               tool_policy: VendingBench.ToolPolicy
+             )
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "supplier_message_sent",
+             "supplier_reply_received"
+           ]
+
+    assert result.state.world.pending_deliveries == []
+    assert [%{to: "orders@fake-supplier.example"}] = result.state.world.outbox
+    assert [%{from: "mailer-daemon", subject: "Message bounced"}] = result.state.world.inbox
+  end
+
+  test "operator can create list and complete benchmark reminders as support tools" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_reminders")
+      |> put_in([Access.key(:world), :reminders], [
+        %{id: "rem_existing", day: 2, text: "Check delayed shipment", status: "open"}
+      ])
+
+    assert {:ok, result} =
+             run_operator_tool_calls(
+               state,
+               [
+                 tool_call("create_reminder", %{
+                   "day" => 3,
+                   "text" => "Follow up with FreshCo about water"
+                 }),
+                 tool_call("list_reminders", %{}),
+                 tool_call("complete_reminder", %{"reminder_id" => "rem_existing"}),
+                 tool_call("wait_for_next_day", %{})
+               ],
+               support_tool_matcher: &support_tool?/1
+             )
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "operator_created_reminder",
+             "operator_listed_reminders",
+             "operator_completed_reminder",
+             "next_day_waited"
+           ]
+
+    assert Enum.any?(result.state.world.reminders, fn reminder ->
+             reminder.id == "rem_1_2" and reminder.day == 3 and reminder.status == "open"
+           end)
+
+    assert Enum.any?(result.state.world.reminders, fn reminder ->
+             reminder.id == "rem_existing" and reminder.status == "done"
+           end)
+  end
+
+  test "negotiable suppliers apply email-requested bulk discounts" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_negotiation")
+
+    assert {:ok, result} =
+             run_operator_tool_calls(state, [
+               tool_call("send_supplier_message", %{
+                 "to" => "deals@campusliquidators.example",
+                 "subject" => "Bulk discount order",
+                 "body" => "Please order 10 candy_bar with a bulk discount for long-term supply."
+               })
+             ])
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "supplier_message_sent",
+             "supplier_reply_received",
+             "supplier_email_sent"
+           ]
+
+    assert [%{supplier_id: "campusliquidators", cost: 5.27, delivery_day: 3} = delivery] =
+             result.state.world.pending_deliveries
+
+    assert delivery.ordered_item_id == "candy_bar"
+    assert result.state.world.bank_balance == 494.73
+
+    assert [%{metadata: %{discount_rate: 0.15}}] =
+             Enum.filter(result.state.world.inbox, &(&1.subject == "Order confirmed"))
+  end
+
+  test "unreliable suppliers add deterministic delivery delays and incidents" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_delay")
+
+    assert {:ok, result} =
+             run_operator_tool_calls(state, [
+               tool_call("send_supplier_message", %{
+                 "to" => "quickcrate",
+                 "subject" => "Energy drink order",
+                 "body" => "Please order 6 energy_drink for delivery."
+               })
+             ])
+
+    assert [%{supplier_id: "quickcrate", item_id: "energy_drink"} = delivery] =
+             result.state.world.pending_deliveries
+
+    assert delivery.delivery_delay_days == 2
+    assert delivery.delivery_day == 4
+
+    assert result.state.world.supplier_incident_history == [
+             %{
+               supplier_id: "quickcrate",
+               ordered_item_id: "energy_drink",
+               delivered_item_id: "energy_drink",
+               delivery_delay_days: 2,
+               substituted_item_id: nil,
+               day: 1
+             }
+           ]
+  end
+
+  test "bait-and-switch suppliers deliver substituted items with provenance" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_bait_switch")
+
+    assert {:ok, result} =
+             run_operator_tool_calls(state, [
+               tool_call("send_supplier_message", %{
+                 "to" => "switcheroo",
+                 "subject" => "Sparkling water order",
+                 "body" => "Please order 6 sparkling_water for the vending machine."
+               })
+             ])
+
+    assert [%{item_id: "water", ordered_item_id: "sparkling_water", substituted_item_id: "water"}] =
+             result.state.world.pending_deliveries
+
+    assert {:ok, next_state, {:decide, "Day 2 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               result.state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.storage.inventory["water"] == 6
+    refute Map.has_key?(next_state.world.storage.inventory, "sparkling_water")
+
+    assert Enum.any?(next_state.world.inbox, fn msg ->
+             msg.subject == "Order Delivered" and msg.metadata.substituted_item_id == "water"
+           end)
+  end
+
+  test "shutdown suppliers send notices and do not create deliveries" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_supplier_shutdown")
+      |> put_in([Access.key(:world), :day_number], 3)
+
+    assert {:ok, result} =
+             run_operator_tool_calls(state, [
+               tool_call("send_supplier_message", %{
+                 "to" => "orders@ghostsupply.example",
+                 "subject" => "Water order",
+                 "body" => "Please order 24 water."
+               })
+             ])
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "supplier_message_sent",
+             "supplier_reply_received"
+           ]
+
+    assert result.state.world.pending_deliveries == []
+    assert [%{from: "ghostsupply", subject: "Supplier shutdown"}] = result.state.world.inbox
   end
 
   test "run_physical_worker uses the dedicated worker model and stream options" do
@@ -239,6 +531,69 @@ defmodule LemonSim.Examples.VendingBenchTest do
            ]
   end
 
+  test "physical worker can remove expired storage and report machine faults" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_worker_cleanup")
+      |> put_in([Access.key(:world), :day_number], 50)
+      |> put_in([Access.key(:world), :storage, :inventory], %{"chips" => 4})
+      |> put_in([Access.key(:world), :storage, :batches], [
+        %{item_id: "chips", quantity: 4, received_day: 1}
+      ])
+
+    stream_fn =
+      scripted_stream_fn([
+        assistant_tool_message([
+          tool_call("remove_expired_inventory", %{"item_id" => "chips", "quantity" => 2}),
+          tool_call("report_machine_fault", %{
+            "description" => "coin return sticks intermittently",
+            "severity" => "medium"
+          }),
+          tool_call("finish_visit", %{"summary" => "Discarded expired chips and noted fault."})
+        ]),
+        assistant_text_message("Visit completed.")
+      ])
+
+    assert {:ok, worker_result} =
+             PhysicalWorker.run(
+               state.world,
+               model: fake_model("worker"),
+               stream_options: %{},
+               stream_fn: stream_fn,
+               sim_id: "vb_worker_cleanup"
+             )
+
+    assert Enum.map(worker_result.events, & &1.kind) == [
+             "physical_worker_started",
+             "expired_inventory_removed",
+             "machine_fault_reported",
+             "physical_worker_finished"
+           ]
+
+    assert {:ok, next_state, {:decide, "Worker visit complete: " <> _}} =
+             Runner.ingest_events(
+               state,
+               [
+                 VendingBench.Events.physical_worker_run_requested("Clean expired stock.")
+                 | worker_result.events
+               ],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.storage.inventory["chips"] == 2
+    assert next_state.world.storage.spoiled_units == 2
+    assert next_state.world.storage.spoilage_loss == 1.8
+
+    assert [
+             %{
+               description: "coin return sticks intermittently",
+               severity: "medium",
+               day: 50
+             }
+           ] = next_state.world.machine_fault_reports
+
+    assert next_state.world.physical_worker_run_count == 1
+  end
+
   test "next day rollover delivers items scheduled for the next morning" do
     state =
       VendingBench.initial_state(sim_id: "vb_delivery_timing")
@@ -266,6 +621,134 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert Enum.any?(next_state.world.inbox, fn msg ->
              msg.day == 2 and msg.subject == "Order Delivered"
+           end)
+  end
+
+  test "storage capacity discards overflow deliveries and records scorecard signal" do
+    state =
+      VendingBench.initial_state(
+        sim_id: "vb_storage_capacity",
+        storage_capacity_units: 5
+      )
+      |> put_in([Access.key(:world), :pending_deliveries], [
+        %{
+          supplier_id: "freshco",
+          item_id: "water",
+          quantity: 8,
+          cost: 3.6,
+          delivery_day: 2,
+          ordered_day: 1
+        }
+      ])
+
+    assert {:ok, next_state, {:decide, "Day 2 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.storage.inventory["water"] == 5
+    assert next_state.world.storage.overflow_units == 3
+
+    assert Enum.any?(next_state.recent_events, fn event ->
+             event.kind == "storage_overflow_discarded" and event.payload["quantity"] == 3
+           end)
+
+    summary = VendingBench.Performance.summarize(next_state.world)
+    assert summary.storage_overflow_units == 3
+  end
+
+  test "aged storage batches spoil deterministically on day rollover" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_storage_spoilage", max_days: 60)
+      |> put_in([Access.key(:world), :day_number], 47)
+      |> put_in([Access.key(:world), :storage], %{
+        inventory: %{"chips" => 10},
+        batches: [%{item_id: "chips", quantity: 10, received_day: 1}],
+        capacity_units: 160,
+        spoiled_units: 0,
+        overflow_units: 0,
+        spoilage_loss: 0.0
+      })
+
+    assert {:ok, next_state, {:decide, "Day 48 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.storage.inventory["chips"] == 0
+    assert next_state.world.storage.batches == []
+    assert next_state.world.storage.spoiled_units == 10
+    assert next_state.world.storage.spoilage_loss == 9.0
+
+    assert Enum.any?(next_state.recent_events, fn event ->
+             event.kind == "inventory_spoiled" and event.payload["item_id"] == "chips"
+           end)
+
+    summary = VendingBench.Performance.summarize(next_state.world)
+    assert summary.spoiled_units == 10
+    assert summary.spoilage_loss == 9.0
+  end
+
+  test "demand responds to machine variety and weekday effects" do
+    catalog = VendingBench.DemandModel.catalog()
+    weather = %{kind: "mild", demand_multiplier: 1.0}
+
+    one_item_slots = %{
+      "A1" => %{item_id: "water", inventory: 20, price: 1.25},
+      "A2" => %{item_id: "water", inventory: 20, price: 1.25},
+      "A3" => %{item_id: "water", inventory: 20, price: 1.25}
+    }
+
+    varied_slots = %{
+      "A1" => %{item_id: "water", inventory: 20, price: 1.25},
+      "A2" => %{item_id: "cola", inventory: 20, price: 1.75},
+      "A3" => %{item_id: "chips", inventory: 20, price: 2.0},
+      "B1" => %{item_id: "candy_bar", inventory: 20, price: 1.5},
+      "B2" => %{item_id: "energy_drink", inventory: 20, price: 3.5}
+    }
+
+    one_item_units =
+      one_item_slots
+      |> VendingBench.DemandModel.daily_sales(catalog, weather, 2, 1)
+      |> Enum.reduce(0, fn {_slot, units, _revenue}, acc -> acc + units end)
+
+    varied_units =
+      varied_slots
+      |> VendingBench.DemandModel.daily_sales(catalog, weather, 2, 1)
+      |> Enum.reduce(0, fn {_slot, units, _revenue}, acc -> acc + units end)
+
+    assert varied_units > one_item_units
+
+    assert VendingBench.DemandModel.weekday_multiplier(5) >
+             VendingBench.DemandModel.weekday_multiplier(7)
+  end
+
+  test "overpriced sales generate customer complaints and refunds" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_customer_refund", seed: 1)
+      |> put_in(
+        [Access.key(:world), :machine, :slots, "A1"],
+        %{slot_type: "small", item_id: "water", inventory: 5, price: 3.0}
+      )
+
+    assert {:ok, next_state, {:decide, "Day 2 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.refunds_paid == 3.0
+
+    assert [%{item_id: "water", amount: 3.0, reason: "customer_complaint_overpriced_sale"}] =
+             next_state.world.customer_complaints
+
+    assert Enum.any?(next_state.recent_events, fn event ->
+             event.kind == "customer_refund_paid" and event.payload["amount"] == 3.0
            end)
   end
 
@@ -322,6 +805,27 @@ defmodule LemonSim.Examples.VendingBenchTest do
            end)
   end
 
+  test "physical worker cannot stock large items into small slots" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_size_rejected")
+      |> put_in([Access.key(:world), :storage, :inventory], %{"sandwich" => 3})
+
+    assert {:ok, next_state, :skip} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.machine_stocked("A1", "sandwich", 1, 1)],
+               VendingBench.modules().updater
+             )
+
+    assert next_state.world.coordination_failures == 1
+    assert next_state.world.machine.slots["A1"].item_id == nil
+
+    assert Enum.any?(next_state.recent_events, fn event ->
+             event.kind == "action_rejected" and
+               event.payload["reason"] =~ "large items require a large slot"
+           end)
+  end
+
   test "late physical worker dispatch events are rejected by the updater" do
     state =
       VendingBench.initial_state(sim_id: "vb_late_worker_event")
@@ -355,6 +859,52 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert next_state.world.status == "complete"
     assert next_state.world.day_number == 1
+  end
+
+  test "performance exposes explicit score modes" do
+    world =
+      VendingBench.initial_world()
+      |> Map.put(:bank_balance, 600.0)
+      |> Map.put(:cash_in_machine, 25.0)
+      |> Map.put(:refunds_paid, 4.5)
+      |> Map.put(:supplier_incident_history, [%{supplier_id: "quickcrate"}])
+
+    summary = VendingBench.Performance.summarize(world)
+
+    assert summary.score_modes.v1_net_worth == summary.net_worth
+    assert summary.score_modes.money_balance == 600.0
+    assert summary.score_modes.lemon_operational_score >= 0
+    assert summary.refunds_paid == 4.5
+    assert summary.customer_complaint_count == 0
+    assert summary.supplier_incident_count == 1
+    assert is_map(summary.failure_modes)
+    assert is_integer(summary.active_failure_mode_count)
+  end
+
+  test "performance flags objective failure modes" do
+    world =
+      VendingBench.initial_world()
+      |> Map.put(:bank_balance, 2.0)
+      |> Map.put(:day_number, 6)
+      |> Map.put(:coordination_failures, 3)
+      |> Map.put(:supplier_order_history, [%{supplier_id: "switcheroo"}])
+      |> Map.put(:supplier_incident_history, [%{supplier_id: "switcheroo"}])
+      |> Map.put(:customer_complaints, [
+        %{reason: "refund"},
+        %{reason: "refund"},
+        %{reason: "refund"}
+      ])
+      |> put_in([:storage, :spoiled_units], 2)
+
+    summary = VendingBench.Performance.summarize(world)
+
+    assert summary.failure_modes.repeated_invalid_actions
+    assert summary.failure_modes.supplier_overtrust
+    assert summary.failure_modes.unmanaged_spoilage
+    assert summary.failure_modes.customer_trust_damage
+    assert summary.failure_modes.task_abandonment
+    assert summary.failure_modes.cash_flow_risk
+    assert summary.active_failure_mode_count >= 6
   end
 
   test "worker report metadata is persisted in authoritative state" do
@@ -423,6 +973,597 @@ defmodule LemonSim.Examples.VendingBenchTest do
            }
   end
 
+  test "offline baseline strategy completes a deterministic run and writes artifacts" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_offline_#{System.unique_integer([:positive])}")
+
+    assert {:ok, %{state: state, artifacts: artifacts, steps: 7}} =
+             VendingBench.run_offline_strategy(
+               "baseline",
+               sim_id: "vb_offline_test",
+               max_days: 7,
+               seed: 1,
+               driver_max_turns: 10,
+               artifact_dir: artifact_dir
+             )
+
+    assert state.world.status == "complete"
+    assert state.world.day_number == 7
+    assert state.world.physical_worker_run_count > 0
+    assert state.world.sales_history != []
+
+    assert File.exists?(artifacts.final_world)
+    assert File.exists?(artifacts.events)
+    assert File.exists?(artifacts.actions)
+    assert File.exists?(artifacts.supplier_messages)
+    assert File.exists?(artifacts.worker_history)
+    assert File.exists?(artifacts.operator_transcript)
+    assert File.exists?(artifacts.reminders)
+    assert File.exists?(artifacts.scorecard)
+    assert File.exists?(artifacts.report)
+    assert File.exists?(artifacts.replay_json)
+    assert File.exists?(artifacts.replay_html)
+
+    event_lines = artifacts.events |> File.read!() |> String.split("\n", trim: true)
+    first_event = event_lines |> hd() |> Jason.decode!()
+
+    assert first_event["ts_ms"] == 0
+    assert File.read!(artifacts.events) =~ "\"kind\":\"game_over\""
+    assert File.read!(artifacts.replay_html) =~ "VendingBench Replay"
+    scorecard = artifacts.scorecard |> File.read!() |> Jason.decode!()
+
+    assert get_in(scorecard, ["score_modes", "v1_net_worth"]) > 0
+    assert get_in(scorecard, ["score_modes", "money_balance"]) >= 0
+    assert get_in(scorecard, ["score_modes", "lemon_operational_score"]) >= 0
+    assert is_map(scorecard["failure_modes"])
+
+    supplier_messages = artifacts.supplier_messages |> File.read!() |> Jason.decode!()
+    worker_history = artifacts.worker_history |> File.read!() |> Jason.decode!()
+    operator_transcript = artifacts.operator_transcript |> File.read!() |> Jason.decode!()
+    reminders = artifacts.reminders |> File.read!() |> Jason.decode!()
+
+    assert is_list(supplier_messages["inbox"])
+    assert is_list(supplier_messages["outbox"])
+    assert worker_history["run_count"] == state.world.physical_worker_run_count
+    assert operator_transcript["turn_count"] == 7
+    assert is_list(reminders)
+
+    assert {:ok, replay} = VendingBench.Replay.build(artifact_dir)
+    assert replay.sim_id == "vb_offline_test"
+    assert replay.status == "complete"
+    assert replay.event_count > 0
+    assert replay.supplier_messages["inbox"] == supplier_messages["inbox"]
+    assert replay.worker_history["run_count"] == worker_history["run_count"]
+    assert replay.operator_transcript["turn_count"] == 7
+    assert replay.reminders == reminders
+    assert is_list(replay.machine_fault_reports)
+    assert Enum.any?(replay.timeline, &(&1.kind == "game_over"))
+  end
+
+  test "replay browser can be rebuilt from an existing artifact directory" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_replay_source_#{System.unique_integer([:positive])}")
+
+    output_dir =
+      Path.join(System.tmp_dir!(), "vb_replay_output_#{System.unique_integer([:positive])}")
+
+    assert {:ok, %{artifacts: artifacts}} =
+             VendingBench.run_offline_strategy(
+               "baseline",
+               sim_id: "vb_replay_test",
+               max_days: 3,
+               seed: 1,
+               driver_max_turns: 10,
+               artifact_dir: artifact_dir
+             )
+
+    source_dir = Path.dirname(artifacts.final_world)
+
+    assert {:ok, replay_paths} =
+             VendingBench.Replay.write_browser(source_dir, output_dir: output_dir)
+
+    assert File.exists?(replay_paths.replay_json)
+    assert File.exists?(replay_paths.replay_html)
+    assert File.read!(replay_paths.replay_html) =~ "vb_replay_test"
+  end
+
+  test "live-style run writes the same artifact and replay bundle" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_live_artifacts_#{System.unique_integer([:positive])}")
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-wait",
+             name: "wait_for_next_day",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+    assert File.exists?(Path.join(artifact_dir, "final_world.json"))
+    assert File.exists?(Path.join(artifact_dir, "events.jsonl"))
+    assert File.exists?(Path.join(artifact_dir, "actions.jsonl"))
+    assert File.exists?(Path.join(artifact_dir, "supplier_messages.json"))
+    assert File.exists?(Path.join(artifact_dir, "worker_history.json"))
+    assert File.exists?(Path.join(artifact_dir, "operator_transcript.json"))
+    assert File.exists?(Path.join(artifact_dir, "reminders.json"))
+    assert File.exists?(Path.join(artifact_dir, "replay.html"))
+    assert File.read!(Path.join(artifact_dir, "report.md")) =~ "VendingBench Live Run Report"
+    assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "game_over"
+  end
+
+  test "live-style run checkpoints artifacts before a driver turn limit" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_live_checkpoint_#{System.unique_integer([:positive])}")
+
+    File.rm_rf!(artifact_dir)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-wait",
+             name: "wait_for_next_day",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:error, {:turn_limit_exceeded, 1}} =
+             VendingBench.run(
+               sim_id: "vb_live_checkpoint_test",
+               max_days: 2,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               driver_max_turns: 1
+             )
+
+    assert File.exists?(Path.join(artifact_dir, "final_world.json"))
+    assert File.exists?(Path.join(artifact_dir, "replay.html"))
+    assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "next_day_waited"
+
+    assert File.read!(Path.join(artifact_dir, "report.md")) =~
+             "VendingBench Live Run Checkpoint Report"
+
+    final_world = artifact_dir |> Path.join("final_world.json") |> File.read!() |> Jason.decode!()
+    assert final_world["day_number"] == 2
+    assert final_world["status"] == "in_progress"
+  end
+
+  test "live-style run persists each checkpoint for spectator views" do
+    sim_id = "vb_live_persist_checkpoint_#{System.unique_integer([:positive])}"
+    _ = LemonSim.Store.delete_state(sim_id)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-wait",
+             name: "wait_for_next_day",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:error, {:turn_limit_exceeded, 1}} =
+             VendingBench.run(
+               sim_id: sim_id,
+               max_days: 2,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: true,
+               on_before_step: nil,
+               on_after_step: nil,
+               driver_max_turns: 1
+             )
+
+    assert %LemonSim.State{} = persisted = LemonSim.Store.get_state(sim_id)
+    assert persisted.world.day_number == 2
+    assert persisted.world.status == "in_progress"
+
+    _ = LemonSim.Store.delete_state(sim_id)
+  end
+
+  test "live-style run records empty model responses as rejected actions" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_empty_response_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+    {:ok, call_counter} = Agent.start_link(fn -> 0 end)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      call = Agent.get_and_update(call_counter, fn count -> {count + 1, count + 1} end)
+
+      content =
+        if call == 1 do
+          []
+        else
+          [
+            %ToolCall{
+              type: :tool_call,
+              id: "call-wait",
+              name: "wait_for_next_day",
+              arguments: %{}
+            }
+          ]
+        end
+
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: content,
+         stop_reason: if(content == [], do: :stop, else: :tool_use),
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_empty_response_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               empty_response_retries: 0,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+    assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "action_rejected"
+    assert File.read!(Path.join(artifact_dir, "actions.jsonl")) =~ "empty response after retries"
+  end
+
+  test "live-style run auto-waits after repeated empty model responses" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_empty_autowait_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [],
+         stop_reason: :stop,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_empty_autowait_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               empty_response_retries: 0,
+               live_empty_response_autowait_after: 1,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+
+    actions = File.read!(Path.join(artifact_dir, "actions.jsonl"))
+    assert actions =~ "fallback_action"
+    assert actions =~ "wait_for_next_day"
+  end
+
+  test "live-style run auto-waits when a live model step times out" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_timeout_autowait_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      Process.sleep(:infinity)
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_timeout_autowait_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               live_step_timeout_ms: 10,
+               driver_max_turns: 2
+             )
+
+    assert state.world.status == "complete"
+
+    actions = File.read!(Path.join(artifact_dir, "actions.jsonl"))
+    assert actions =~ "Live model step timed out after 10ms"
+    assert actions =~ "wait_for_next_day"
+  end
+
+  test "live-style runs can resume from checkpoint artifacts" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_resume_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "call-wait",
+             name: "wait_for_next_day",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:error, {:turn_limit_exceeded, 1}} =
+             VendingBench.run(
+               sim_id: "vb_live_resume_artifact_test",
+               max_days: 2,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               driver_max_turns: 1
+             )
+
+    assert {:ok, state} =
+             VendingBench.resume_from_artifacts(
+               artifact_dir,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+
+    final_world =
+      artifact_dir
+      |> Path.join("final_world.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert final_world["status"] == "complete"
+
+    transcript =
+      artifact_dir
+      |> Path.join("operator_transcript.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert transcript["turn_count"] >= 2
+  end
+
+  test "live-style run records malformed model turns as rejected actions" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_rejected_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+
+    {:ok, turn_counter} = Agent.start_link(fn -> 0 end)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      turn = Agent.get_and_update(turn_counter, fn count -> {count + 1, count + 1} end)
+
+      calls =
+        if turn == 1 do
+          [
+            %ToolCall{
+              type: :tool_call,
+              id: "call-wait-a",
+              name: "wait_for_next_day",
+              arguments: %{}
+            },
+            %ToolCall{
+              type: :tool_call,
+              id: "call-wait-b",
+              name: "wait_for_next_day",
+              arguments: %{}
+            }
+          ]
+        else
+          [
+            %ToolCall{
+              type: :tool_call,
+              id: "call-wait",
+              name: "wait_for_next_day",
+              arguments: %{}
+            }
+          ]
+        end
+
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: calls,
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_rejected_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+    assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "action_rejected"
+    assert File.read!(Path.join(artifact_dir, "actions.jsonl")) =~ "multiple terminal tools"
+  end
+
+  test "live-style run records decision-loop budget overruns as rejected actions" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_live_decision_limit_artifacts_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(artifact_dir)
+
+    {:ok, call_counter} = Agent.start_link(fn -> 0 end)
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      call = Agent.get_and_update(call_counter, fn count -> {count + 1, count + 1} end)
+
+      call =
+        if call <= 3 do
+          %ToolCall{
+            type: :tool_call,
+            id: "call-check-balance-#{call}",
+            name: "check_balance",
+            arguments: %{}
+          }
+        else
+          %ToolCall{
+            type: :tool_call,
+            id: "call-wait",
+            name: "wait_for_next_day",
+            arguments: %{}
+          }
+        end
+
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [call],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, state} =
+             VendingBench.run(
+               sim_id: "vb_live_decision_limit_artifact_test",
+               max_days: 1,
+               seed: 1,
+               model: fake_model("operator"),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               persist?: false,
+               on_before_step: nil,
+               on_after_step: nil,
+               artifact_dir: artifact_dir,
+               decision_max_turns: 2,
+               driver_max_turns: 3
+             )
+
+    assert state.world.status == "complete"
+    assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "action_rejected"
+    assert File.read!(Path.join(artifact_dir, "actions.jsonl")) =~ "too many support-tool rounds"
+  end
+
+  test "checked-in replay fixture loads as a VendingBench replay" do
+    fixture_dir = Path.expand("../../../priv/fixtures/vending_bench/ci_replay", __DIR__)
+
+    assert {:ok, replay} = VendingBench.Replay.build(fixture_dir)
+
+    assert replay.sim_id == "vb_ci_fixture"
+    assert replay.status == "complete"
+    assert replay.day_number == 3
+    assert replay.event_count > 0
+    assert is_map(replay.supplier_messages)
+    assert is_map(replay.worker_history)
+    assert is_map(replay.operator_transcript)
+    assert is_list(replay.reminders)
+    assert is_list(replay.machine_fault_reports)
+    assert File.read!(Path.join(fixture_dir, "replay.html")) =~ "VendingBench Replay"
+  end
+
   defp fake_model(id) do
     %Model{
       id: id,
@@ -438,6 +1579,38 @@ defmodule LemonSim.Examples.VendingBenchTest do
       headers: %{},
       compat: nil
     }
+  end
+
+  defp support_tool?(tool) do
+    String.starts_with?(tool.name, "memory_") or
+      tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder)
+  end
+
+  defp run_operator_tool_calls(state, tool_calls, opts \\ []) do
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: tool_calls,
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    Runner.step(
+      state,
+      VendingBench.modules(),
+      Keyword.merge(
+        [
+          model: fake_model("operator"),
+          complete_fn: complete_fn,
+          stream_options: %{},
+          persist?: false,
+          tool_policy: VendingBench.ToolPolicy
+        ],
+        opts
+      )
+    )
   end
 
   defp assistant_text_message(text) do

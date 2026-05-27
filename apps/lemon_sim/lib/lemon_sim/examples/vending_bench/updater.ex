@@ -11,7 +11,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
   alias LemonSim.State
   alias LemonSim.Examples.VendingBench.{DemandModel, Events, Performance}
 
-  @bankruptcy_threshold 5
+  @bankruptcy_threshold 10
   @start_of_day_minutes 9 * 60
   @worker_visit_minutes 75
   @worker_day_end_minutes 17 * 60
@@ -28,7 +28,12 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "operator_read_inbox" -> apply_support_event(state, event, 5)
       "operator_inspected_suppliers" -> apply_support_event(state, event, 5)
       "operator_reviewed_sales" -> apply_support_event(state, event, 5)
+      "operator_researched_suppliers" -> apply_supplier_research(state, event)
+      "operator_created_reminder" -> apply_reminder_created(state, event)
+      "operator_listed_reminders" -> apply_support_event(state, event, 3)
+      "operator_completed_reminder" -> apply_reminder_completed(state, event)
       # -- Terminal: supplier email --
+      "supplier_message_sent" -> apply_supplier_message_sent(state, event)
       "supplier_email_sent" -> apply_supplier_email(state, event)
       # -- Terminal: physical worker --
       "physical_worker_run_requested" -> apply_worker_requested(state, event)
@@ -38,6 +43,8 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "machine_stocked" -> apply_machine_stocked(state, event)
       "cash_collected" -> apply_cash_collected(state, event)
       "price_set" -> apply_price_set(state, event)
+      "expired_inventory_removed" -> apply_expired_inventory_removed(state, event)
+      "machine_fault_reported" -> apply_machine_fault_reported(state, event)
       "physical_worker_finished" -> apply_worker_finished(state, event)
       # -- Terminal: wait for next day --
       "next_day_waited" -> apply_next_day_waited(state, event)
@@ -45,8 +52,11 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "day_advanced" -> apply_skip(state, event)
       "daily_fee_charged" -> apply_skip(state, event)
       "sale_realized" -> apply_skip(state, event)
+      "customer_refund_paid" -> apply_skip(state, event)
       "delivery_arrived" -> apply_skip(state, event)
-      "supplier_reply_received" -> apply_skip(state, event)
+      "storage_overflow_discarded" -> apply_skip(state, event)
+      "inventory_spoiled" -> apply_skip(state, event)
+      "supplier_reply_received" -> apply_supplier_reply_received(state, event)
       "weather_changed" -> apply_skip(state, event)
       "bankruptcy_triggered" -> apply_skip(state, event)
       "game_over" -> apply_skip(state, event)
@@ -70,7 +80,149 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     maybe_rollover(state)
   end
 
+  defp apply_supplier_research(state, event) do
+    query = get(event.payload, :query, "")
+    result_count = get(event.payload, :result_count, 0)
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        history = get(world, :supplier_research_history, [])
+
+        research_entry = %{
+          query: query,
+          result_count: result_count,
+          day: get(world, :day_number, 1),
+          time: get(world, :time_minutes, 540)
+        }
+
+        world
+        |> Map.put(:supplier_research_history, history ++ [research_entry])
+        |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 15)
+      end)
+      |> State.append_event(event)
+
+    maybe_rollover(state)
+  end
+
+  defp apply_reminder_created(state, event) do
+    reminder_id = get(event.payload, :reminder_id, "")
+    day = get(event.payload, :day, 1)
+    text = get(event.payload, :text, "")
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        reminders = get(world, :reminders, [])
+
+        reminder = %{
+          id: reminder_id,
+          day: day,
+          text: text,
+          status: "open",
+          created_day: get(world, :day_number, 1),
+          created_time: get(world, :time_minutes, 540)
+        }
+
+        world
+        |> Map.put(:reminders, reminders ++ [reminder])
+        |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 5)
+      end)
+      |> State.append_event(event)
+
+    maybe_rollover(state)
+  end
+
+  defp apply_reminder_completed(state, event) do
+    reminder_id = get(event.payload, :reminder_id, "")
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        reminders = get(world, :reminders, [])
+
+        reminders =
+          Enum.map(reminders, fn reminder ->
+            if get(reminder, :id) == reminder_id do
+              reminder
+              |> Map.put(:status, "done")
+              |> Map.put(:completed_day, get(world, :day_number, 1))
+              |> Map.put(:completed_time, get(world, :time_minutes, 540))
+            else
+              reminder
+            end
+          end)
+
+        world
+        |> Map.put(:reminders, reminders)
+        |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 3)
+      end)
+      |> State.append_event(event)
+
+    maybe_rollover(state)
+  end
+
   # -- Supplier email --
+
+  defp apply_supplier_message_sent(state, event) do
+    to = get(event.payload, :to, "")
+    subject = get(event.payload, :subject, "")
+    body = get(event.payload, :body, "")
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        outbox = get(world, :outbox, [])
+
+        message = %{
+          to: to,
+          subject: subject,
+          body: body,
+          day: get(world, :day_number, 1),
+          time: get(world, :time_minutes, 540)
+        }
+
+        world
+        |> Map.put(:outbox, outbox ++ [message])
+        |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 10)
+      end)
+      |> State.append_event(event)
+
+    maybe_rollover(state)
+  end
+
+  defp apply_supplier_reply_received(state, event) do
+    supplier_id = get(event.payload, :supplier_id, "")
+    message = get(event.payload, :message, "")
+    metadata = get(event.payload, :metadata, %{})
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        inbox = get(world, :inbox, [])
+        replies = get(world, :supplier_reply_history, [])
+        kind = get(metadata, :kind, "reply")
+
+        inbox_item = %{
+          from: supplier_id,
+          subject: supplier_reply_subject(kind),
+          body: message,
+          day: get(world, :day_number, 1),
+          metadata: metadata
+        }
+
+        reply_entry =
+          inbox_item
+          |> Map.put(:time, get(world, :time_minutes, 540))
+
+        world
+        |> Map.put(:inbox, inbox ++ [inbox_item])
+        |> Map.put(:supplier_reply_history, replies ++ [reply_entry])
+      end)
+      |> State.append_event(event)
+
+    {:ok, state, :skip}
+  end
 
   defp apply_supplier_email(state, event) do
     supplier_id = get(event.payload, :supplier_id, "")
@@ -78,6 +230,11 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     quantity = get(event.payload, :quantity, 0)
     cost = get(event.payload, :cost, 0.0)
     delivery_day = get(event.payload, :delivery_day, 1)
+    delivered_item_id = get(event.payload, :delivered_item_id, item_id)
+    ordered_item_id = get(event.payload, :ordered_item_id, item_id)
+    substituted_item_id = get(event.payload, :substituted_item_id)
+    delivery_delay_days = get(event.payload, :delivery_delay_days, 0)
+    supplier_issue? = get(event.payload, :supplier_issue, false)
 
     state =
       state
@@ -85,20 +242,41 @@ defmodule LemonSim.Examples.VendingBench.Updater do
         balance = get(world, :bank_balance, 0.0)
         pending = get(world, :pending_deliveries, [])
         supplier_order_history = get(world, :supplier_order_history, [])
+        supplier_incident_history = get(world, :supplier_incident_history, [])
 
         new_delivery = %{
           supplier_id: supplier_id,
-          item_id: item_id,
+          item_id: delivered_item_id,
+          ordered_item_id: ordered_item_id,
           quantity: quantity,
           cost: cost,
           delivery_day: delivery_day,
-          ordered_day: get(world, :day_number, 1)
+          ordered_day: get(world, :day_number, 1),
+          delivery_delay_days: delivery_delay_days,
+          substituted_item_id: substituted_item_id
         }
+
+        incident =
+          if supplier_issue? do
+            [
+              %{
+                supplier_id: supplier_id,
+                ordered_item_id: ordered_item_id,
+                delivered_item_id: delivered_item_id,
+                delivery_delay_days: delivery_delay_days,
+                substituted_item_id: substituted_item_id,
+                day: get(world, :day_number, 1)
+              }
+            ]
+          else
+            []
+          end
 
         world
         |> Map.put(:bank_balance, Float.round(balance - cost, 2))
         |> Map.put(:pending_deliveries, pending ++ [new_delivery])
         |> Map.put(:supplier_order_history, supplier_order_history ++ [new_delivery])
+        |> Map.put(:supplier_incident_history, supplier_incident_history ++ incident)
         |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 25)
       end)
       |> State.append_event(event)
@@ -153,6 +331,9 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     catalog = get(world, :catalog, %{})
     slot = Map.get(slots, slot_id)
     storage_qty = Map.get(storage_inv, item_id, 0)
+    item_info = Map.get(catalog, item_id, %{})
+    item_size = Map.get(item_info, :size_class, "small")
+    slot_type = get(slot || %{}, :slot_type, "small")
 
     cond do
       is_nil(slot) ->
@@ -160,6 +341,12 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
       not Map.has_key?(catalog, item_id) ->
         reject_worker_event(state, "Unknown catalog item #{item_id}")
+
+      item_size != slot_type ->
+        reject_worker_event(
+          state,
+          "Cannot stock #{item_id} in #{slot_id}; #{item_size} items require a #{item_size} slot"
+        )
 
       quantity <= 0 ->
         reject_worker_event(state, "Stock quantity must be positive")
@@ -183,12 +370,11 @@ defmodule LemonSim.Examples.VendingBench.Updater do
             machine = get(world, :machine, %{})
             slots = get(machine, :slots, %{})
             storage = get(world, :storage, %{})
-            storage_inv = get(storage, :inventory, %{})
             catalog = get(world, :catalog, %{})
             slot = Map.get(slots, slot_id, %{})
             current_inv = get(slot, :inventory, 0)
 
-            new_storage_inv = Map.put(storage_inv, item_id, storage_qty - quantity)
+            new_storage = remove_from_storage(storage, item_id, quantity)
 
             new_price =
               if get(slot, :price) do
@@ -206,7 +392,6 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
             new_slots = Map.put(slots, slot_id, new_slot)
             new_machine = Map.put(machine, :slots, new_slots)
-            new_storage = Map.put(storage, :inventory, new_storage_inv)
 
             world
             |> Map.put(:machine, new_machine)
@@ -293,6 +478,82 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     end
   end
 
+  defp apply_expired_inventory_removed(state, event) do
+    item_id = get(event.payload, :item_id, "")
+    quantity = get(event.payload, :quantity, 0)
+    world = state.world
+    storage = get(world, :storage, %{})
+    storage_inv = get(storage, :inventory, %{})
+    catalog = get(world, :catalog, %{})
+    day = get(world, :day_number, 1)
+    storage_qty = Map.get(storage_inv, item_id, 0)
+    expired_qty = expired_storage_quantity(storage, catalog, item_id, day)
+
+    cond do
+      not Map.has_key?(catalog, item_id) ->
+        reject_worker_event(state, "Unknown catalog item #{item_id}")
+
+      quantity <= 0 ->
+        reject_worker_event(state, "Removed quantity must be positive")
+
+      storage_qty < quantity ->
+        reject_worker_event(
+          state,
+          "Cannot remove #{quantity} units of #{item_id}; only #{storage_qty} available in storage"
+        )
+
+      expired_qty < quantity ->
+        reject_worker_event(
+          state,
+          "Cannot remove #{quantity} expired units of #{item_id}; only #{expired_qty} expired"
+        )
+
+      true ->
+        item_info = Map.get(catalog, item_id, %{})
+        loss = Float.round(Map.get(item_info, :wholesale_cost, 0.0) * quantity, 2)
+        authoritative_event = Events.expired_inventory_removed(item_id, quantity, loss, day)
+
+        state =
+          state
+          |> State.update_world(fn world ->
+            storage = get(world, :storage, %{})
+
+            storage =
+              storage
+              |> remove_from_storage(item_id, quantity)
+              |> Map.put(:spoiled_units, get(storage, :spoiled_units, 0) + quantity)
+              |> Map.put(
+                :spoilage_loss,
+                Float.round(get(storage, :spoilage_loss, 0.0) + loss, 2)
+              )
+
+            Map.put(world, :storage, storage)
+          end)
+          |> State.append_event(authoritative_event)
+
+        {:ok, state, :skip}
+    end
+  end
+
+  defp apply_machine_fault_reported(state, event) do
+    description = event.payload |> get(:description, "") |> to_string() |> String.trim()
+    severity = event.payload |> get(:severity, "low") |> to_string() |> String.trim()
+    day = get(state.world, :day_number, 1)
+
+    report = %{description: description, severity: severity, day: day}
+    event = Events.machine_fault_reported(description, severity, day)
+
+    state =
+      state
+      |> State.update_world(fn world ->
+        reports = get(world, :machine_fault_reports, [])
+        Map.put(world, :machine_fault_reports, reports ++ [report])
+      end)
+      |> State.append_event(event)
+
+    {:ok, state, :skip}
+  end
+
   defp apply_worker_finished(state, event) do
     summary = get(event.payload, :summary, "")
     tool_calls = get(event.payload, :tool_calls, [])
@@ -376,8 +637,10 @@ defmodule LemonSim.Examples.VendingBench.Updater do
         {new_slots, acc_rev + revenue, acc_events ++ [sale_event], acc_records ++ [sale_record]}
       end)
 
-    # 2. Add revenue to cash_in_machine
-    cash_in_machine = get(world, :cash_in_machine, 0.0) + total_revenue
+    {refund_events, refund_records, total_refunds} = refunds_for_sales(sale_records, catalog)
+
+    # 2. Add net revenue to cash_in_machine after same-day customer refunds
+    cash_in_machine = get(world, :cash_in_machine, 0.0) + total_revenue - total_refunds
 
     # 3. Resolve deliveries arriving today
     pending = get(world, :pending_deliveries, [])
@@ -385,29 +648,58 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     {arrived, still_pending} =
       Enum.split_with(pending, fn d -> get(d, :delivery_day) <= next_day end)
 
-    {updated_storage_inv, delivery_events, inbox_items} =
-      Enum.reduce(arrived, {get(get(world, :storage, %{}), :inventory, %{}), [], []}, fn delivery,
-                                                                                         {acc_inv,
-                                                                                          acc_events,
-                                                                                          acc_inbox} ->
+    {storage_after_deliveries, delivery_events, inbox_items} =
+      Enum.reduce(arrived, {get(world, :storage, %{}), [], []}, fn delivery,
+                                                                   {acc_storage, acc_events,
+                                                                    acc_inbox} ->
         item_id = get(delivery, :item_id)
         quantity = get(delivery, :quantity, 0)
         supplier_id = get(delivery, :supplier_id, "")
 
-        new_qty = Map.get(acc_inv, item_id, 0) + quantity
-        new_inv = Map.put(acc_inv, item_id, new_qty)
+        {new_storage, accepted_quantity, overflow_quantity} =
+          receive_delivery(acc_storage, item_id, quantity, next_day)
 
-        del_event = Events.delivery_arrived(supplier_id, item_id, quantity, next_day)
+        del_event = Events.delivery_arrived(supplier_id, item_id, accepted_quantity, next_day)
+
+        overflow_events =
+          if overflow_quantity > 0 do
+            [Events.storage_overflow_discarded(item_id, overflow_quantity, next_day)]
+          else
+            []
+          end
+
+        ordered_item_id = get(delivery, :ordered_item_id, item_id)
+        substituted_item_id = get(delivery, :substituted_item_id)
+        delay_days = get(delivery, :delivery_delay_days, 0)
+
+        body =
+          delivery_body(
+            accepted_quantity,
+            ordered_item_id,
+            item_id,
+            delay_days,
+            substituted_item_id,
+            overflow_quantity
+          )
 
         inbox_item = %{
           from: supplier_id,
           subject: "Order Delivered",
-          body: "Your order of #{quantity}x #{item_id} has been delivered to storage.",
-          day: next_day
+          body: body,
+          day: next_day,
+          metadata: %{
+            ordered_item_id: ordered_item_id,
+            delivered_item_id: item_id,
+            substituted_item_id: substituted_item_id,
+            delivery_delay_days: delay_days
+          }
         }
 
-        {new_inv, acc_events ++ [del_event], acc_inbox ++ [inbox_item]}
+        {new_storage, acc_events ++ [del_event | overflow_events], acc_inbox ++ [inbox_item]}
       end)
+
+    {storage_after_spoilage, spoilage_events} =
+      expire_storage(storage_after_deliveries, catalog, next_day)
 
     # 4. Deduct daily fee
     balance = get(world, :bank_balance, 0.0)
@@ -432,25 +724,26 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     weather_event = Events.weather_changed(new_weather.kind, new_weather.demand_multiplier)
 
     # 7. Build new world
-    storage = get(world, :storage, %{})
-
     new_machine = Map.put(machine, :slots, updated_slots)
-    new_storage = Map.put(storage, :inventory, updated_storage_inv)
 
     sales_history = get(world, :sales_history, [])
+    complaint_history = get(world, :customer_complaints, [])
+    refunds_paid = get(world, :refunds_paid, 0.0)
 
     day_event = Events.day_advanced(day, next_day)
 
     updated_world =
       world
       |> Map.put(:machine, new_machine)
-      |> Map.put(:storage, new_storage)
+      |> Map.put(:storage, storage_after_spoilage)
       |> Map.put(:cash_in_machine, Float.round(cash_in_machine, 2))
       |> Map.put(:bank_balance, new_balance)
       |> Map.put(:unpaid_fee_streak, new_unpaid)
       |> Map.put(:pending_deliveries, still_pending)
       |> Map.put(:recent_sales, sale_records)
       |> Map.put(:sales_history, sales_history ++ sale_records)
+      |> Map.put(:customer_complaints, complaint_history ++ refund_records)
+      |> Map.put(:refunds_paid, Float.round(refunds_paid + total_refunds, 2))
       |> Map.put(:inbox, get(world, :inbox, []) ++ inbox_items)
       |> Map.put(:weather, new_weather)
       |> Map.put(:season, new_season)
@@ -487,7 +780,10 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       end
 
     all_rollover_events =
-      sale_events ++ delivery_events ++ [fee_event, weather_event, day_event] ++ terminal_events
+      sale_events ++
+        refund_events ++
+        delivery_events ++
+        spoilage_events ++ [fee_event, weather_event, day_event] ++ terminal_events
 
     state =
       state
@@ -528,6 +824,13 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     apply_action_rejected(state, Events.action_rejected("operator", reason))
   end
 
+  defp supplier_reply_subject("bounce"), do: "Message bounced"
+  defp supplier_reply_subject("quote"), do: "Supplier quote"
+  defp supplier_reply_subject("order_confirmed"), do: "Order confirmed"
+  defp supplier_reply_subject("order_rejected"), do: "Order rejected"
+  defp supplier_reply_subject("supplier_shutdown"), do: "Supplier shutdown"
+  defp supplier_reply_subject(_kind), do: "Supplier reply"
+
   defp maybe_rollover(state) do
     world = state.world
 
@@ -539,6 +842,144 @@ defmodule LemonSim.Examples.VendingBench.Updater do
   end
 
   # -- Helpers --
+
+  defp receive_delivery(storage, item_id, quantity, received_day) do
+    inventory = get(storage, :inventory, %{})
+    batches = get(storage, :batches, [])
+    capacity = get(storage, :capacity_units, 160)
+    used = storage_used_units(inventory)
+    accepted_quantity = min(max(capacity - used, 0), quantity)
+    overflow_quantity = quantity - accepted_quantity
+
+    inventory =
+      if accepted_quantity > 0 do
+        Map.put(inventory, item_id, Map.get(inventory, item_id, 0) + accepted_quantity)
+      else
+        inventory
+      end
+
+    batches =
+      if accepted_quantity > 0 do
+        batches ++ [%{item_id: item_id, quantity: accepted_quantity, received_day: received_day}]
+      else
+        batches
+      end
+
+    storage =
+      storage
+      |> Map.put(:inventory, inventory)
+      |> Map.put(:batches, batches)
+      |> Map.put(:overflow_units, get(storage, :overflow_units, 0) + overflow_quantity)
+
+    {storage, accepted_quantity, overflow_quantity}
+  end
+
+  defp remove_from_storage(storage, item_id, quantity) do
+    inventory = get(storage, :inventory, %{})
+    batches = get(storage, :batches, [])
+    current_quantity = Map.get(inventory, item_id, 0)
+
+    storage
+    |> Map.put(:inventory, Map.put(inventory, item_id, max(0, current_quantity - quantity)))
+    |> Map.put(:batches, remove_from_batches(batches, item_id, quantity))
+  end
+
+  defp remove_from_batches(batches, item_id, quantity) do
+    {updated_batches, _remaining} =
+      Enum.map_reduce(batches, quantity, fn batch, remaining ->
+        cond do
+          remaining <= 0 or get(batch, :item_id) != item_id ->
+            {batch, remaining}
+
+          get(batch, :quantity, 0) <= remaining ->
+            {Map.put(batch, :quantity, 0), remaining - get(batch, :quantity, 0)}
+
+          true ->
+            {Map.put(batch, :quantity, get(batch, :quantity, 0) - remaining), 0}
+        end
+      end)
+
+    Enum.reject(updated_batches, &(get(&1, :quantity, 0) <= 0))
+  end
+
+  defp expired_storage_quantity(storage, catalog, item_id, day) do
+    storage
+    |> get(:batches, [])
+    |> Enum.reduce(0, fn batch, acc ->
+      batch_item_id = get(batch, :item_id)
+      quantity = get(batch, :quantity, 0)
+      received_day = get(batch, :received_day, day)
+      item_info = Map.get(catalog, batch_item_id, %{})
+      shelf_life_days = Map.get(item_info, :shelf_life_days, 365)
+
+      if batch_item_id == item_id and quantity > 0 and day - received_day > shelf_life_days do
+        acc + quantity
+      else
+        acc
+      end
+    end)
+  end
+
+  defp expire_storage(storage, catalog, day) do
+    batches = get(storage, :batches, [])
+    inventory = get(storage, :inventory, %{})
+    unbatched_inventory = inventory_without_batches(inventory, batches)
+
+    {kept_batches, spoiled_records, kept_inventory} =
+      Enum.reduce(batches, {[], [], unbatched_inventory}, fn batch,
+                                                             {batch_acc, spoiled_acc, inv_acc} ->
+        item_id = get(batch, :item_id)
+        quantity = get(batch, :quantity, 0)
+        received_day = get(batch, :received_day, day)
+        item_info = Map.get(catalog, item_id, %{})
+        shelf_life_days = Map.get(item_info, :shelf_life_days, 365)
+
+        if quantity > 0 and day - received_day > shelf_life_days do
+          loss = Float.round(Map.get(item_info, :wholesale_cost, 0.0) * quantity, 2)
+          record = %{item_id: item_id, quantity: quantity, loss: loss}
+          {batch_acc, spoiled_acc ++ [record], inv_acc}
+        else
+          inv_acc = Map.put(inv_acc, item_id, Map.get(inv_acc, item_id, 0) + quantity)
+          {batch_acc ++ [batch], spoiled_acc, inv_acc}
+        end
+      end)
+
+    spoiled_units = Enum.reduce(spoiled_records, 0, &(&1.quantity + &2))
+    spoilage_loss = Enum.reduce(spoiled_records, 0.0, &(&1.loss + &2)) |> Float.round(2)
+
+    events =
+      Enum.map(spoiled_records, fn record ->
+        Events.inventory_spoiled(record.item_id, record.quantity, record.loss, day)
+      end)
+
+    storage =
+      storage
+      |> Map.put(:inventory, kept_inventory)
+      |> Map.put(:batches, kept_batches)
+      |> Map.put(:spoiled_units, get(storage, :spoiled_units, 0) + spoiled_units)
+      |> Map.put(
+        :spoilage_loss,
+        Float.round(get(storage, :spoilage_loss, 0.0) + spoilage_loss, 2)
+      )
+
+    {storage, events}
+  end
+
+  defp inventory_without_batches(inventory, batches) do
+    batched_totals =
+      Enum.reduce(batches, %{}, fn batch, acc ->
+        item_id = get(batch, :item_id)
+        Map.put(acc, item_id, Map.get(acc, item_id, 0) + get(batch, :quantity, 0))
+      end)
+
+    Map.new(inventory, fn {item_id, quantity} ->
+      {item_id, max(0, quantity - Map.get(batched_totals, item_id, 0))}
+    end)
+  end
+
+  defp storage_used_units(inventory) do
+    Enum.reduce(inventory, 0, fn {_item_id, quantity}, acc -> acc + quantity end)
+  end
 
   defp format_price(price) when is_float(price),
     do: :erlang.float_to_binary(price, decimals: 2)
@@ -552,6 +993,72 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     hours = div(minutes, 60)
     mins = rem(minutes, 60)
     "#{hours}:#{String.pad_leading(to_string(mins), 2, "0")}"
+  end
+
+  defp delivery_body(
+         quantity,
+         ordered_item_id,
+         item_id,
+         delay_days,
+         substituted_item_id,
+         overflow_quantity
+       ) do
+    base =
+      "Your order of #{quantity}x #{ordered_item_id} has been delivered to storage."
+
+    substitution =
+      if substituted_item_id do
+        " Shipped item: #{item_id}."
+      else
+        ""
+      end
+
+    delay =
+      if delay_days > 0 do
+        " Delivery was delayed by #{delay_days} day(s)."
+      else
+        ""
+      end
+
+    overflow =
+      if overflow_quantity > 0 do
+        " #{overflow_quantity} unit(s) were discarded because storage was full."
+      else
+        ""
+      end
+
+    base <> substitution <> delay <> overflow
+  end
+
+  defp refunds_for_sales(sale_records, catalog) do
+    Enum.reduce(sale_records, {[], [], 0.0}, fn sale, {events, records, total} ->
+      item_id = get(sale, :item_id)
+      quantity = get(sale, :quantity, 0)
+      revenue = get(sale, :revenue, 0.0)
+      day = get(sale, :day)
+      item_info = Map.get(catalog, item_id, %{})
+      reference_price = Map.get(item_info, :reference_price, 0.0)
+      paid_price = if quantity > 0, do: revenue / quantity, else: 0.0
+
+      if reference_price > 0.0 and paid_price > reference_price * 1.8 do
+        refund_quantity = 1
+        amount = Float.round(paid_price * refund_quantity, 2)
+        reason = "customer_complaint_overpriced_sale"
+        event = Events.customer_refund_paid(item_id, refund_quantity, amount, reason, day)
+
+        record = %{
+          item_id: item_id,
+          quantity: refund_quantity,
+          amount: amount,
+          reason: reason,
+          day: day
+        }
+
+        {events ++ [event], records ++ [record], Float.round(total + amount, 2)}
+      else
+        {events, records, total}
+      end
+    end)
   end
 
   defp get(map, key) when is_map(map) and is_atom(key),

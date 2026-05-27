@@ -98,7 +98,41 @@ defmodule LemonSim.Examples.VendingBench.Performance do
 
     worker_trip_count = get(world, :physical_worker_run_count, 0)
     coordination_failures = get(world, :coordination_failures, 0)
-    refunds_paid = 0.0
+    refunds_paid = get(world, :refunds_paid, 0.0)
+    supplier_incident_count = length(get(world, :supplier_incident_history, []))
+    customer_complaint_count = length(get(world, :customer_complaints, []))
+    spoiled_units = get(storage, :spoiled_units, 0)
+    storage_overflow_units = get(storage, :overflow_units, 0)
+    spoilage_loss = get(storage, :spoilage_loss, 0.0)
+    daily_fee = get(world, :daily_fee, 2.0)
+
+    failure_modes =
+      failure_modes(%{
+        bank_balance: bank_balance,
+        daily_fee: daily_fee,
+        units_sold: units_sold,
+        days_without_sales: days_without_sales,
+        stockout_count: stockout_count,
+        coordination_failures: coordination_failures,
+        supplier_count_used: supplier_count_used,
+        supplier_incident_count: supplier_incident_count,
+        spoiled_units: spoiled_units,
+        storage_overflow_units: storage_overflow_units,
+        customer_complaint_count: customer_complaint_count
+      })
+
+    operational_score =
+      calculate_operational_score(
+        net_worth,
+        units_sold,
+        average_margin,
+        days_without_sales,
+        stockout_count,
+        spoiled_units,
+        storage_overflow_units,
+        get(world, :coordination_failures, 0),
+        get(world, :status)
+      )
 
     bankruptcy_day =
       if get(world, :status) == "bankrupt" do
@@ -116,13 +150,63 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       days_without_sales: days_without_sales,
       average_margin: average_margin,
       refunds_paid: refunds_paid,
+      customer_complaint_count: customer_complaint_count,
+      spoiled_units: spoiled_units,
+      storage_overflow_units: storage_overflow_units,
+      spoilage_loss: spoilage_loss,
       stockout_count: stockout_count,
       price_change_count: price_change_count,
       supplier_count_used: supplier_count_used,
       worker_trip_count: worker_trip_count,
       coordination_failures: coordination_failures,
-      bankruptcy_day: bankruptcy_day
+      supplier_incident_count: supplier_incident_count,
+      failure_modes: failure_modes,
+      active_failure_mode_count: active_failure_mode_count(failure_modes),
+      bankruptcy_day: bankruptcy_day,
+      score_modes: %{
+        v1_net_worth: net_worth,
+        money_balance: bank_balance,
+        lemon_operational_score: operational_score
+      }
     }
+  end
+
+  defp failure_modes(metrics) do
+    %{
+      repeated_invalid_actions: metrics.coordination_failures >= 3,
+      chronic_stockouts: metrics.stockout_count >= 3,
+      supplier_overtrust:
+        metrics.supplier_incident_count > 0 and metrics.supplier_count_used <= 1,
+      unmanaged_spoilage: metrics.spoiled_units > 0 or metrics.storage_overflow_units > 0,
+      customer_trust_damage: metrics.customer_complaint_count >= 3,
+      task_abandonment: metrics.units_sold == 0 and metrics.days_without_sales >= 3,
+      cash_flow_risk: metrics.bank_balance < metrics.daily_fee * 3
+    }
+  end
+
+  defp active_failure_mode_count(failure_modes) do
+    Enum.count(failure_modes, fn {_mode, active?} -> active? end)
+  end
+
+  defp calculate_operational_score(
+         net_worth,
+         units_sold,
+         average_margin,
+         days_without_sales,
+         stockout_count,
+         spoiled_units,
+         storage_overflow_units,
+         coordination_failures,
+         status
+       ) do
+    penalty =
+      coordination_failures * 10 + days_without_sales * 2 + stockout_count + spoiled_units +
+        storage_overflow_units
+
+    status_penalty = if status == "bankrupt", do: 200, else: 0
+    base = net_worth - 500.0 + units_sold * 0.25 + average_margin
+
+    Float.round(max(0.0, base - penalty - status_penalty), 2)
   end
 
   defp get(map, key) when is_map(map) and is_atom(key),

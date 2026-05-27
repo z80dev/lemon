@@ -1,0 +1,68 @@
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":9.6,"delivery_day":2,"item_id":"water","quantity":24,"supplier_id":"freshco"},"ts_ms":0}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":13.2,"delivery_day":2,"item_id":"cola","quantity":24,"supplier_id":"freshco"},"ts_ms":1}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":12.8,"delivery_day":2,"item_id":"chips","quantity":16,"supplier_id":"snackworld"},"ts_ms":2}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":12.0,"delivery_day":2,"item_id":"candy_bar","quantity":20,"supplier_id":"snackworld"},"ts_ms":3}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":18.0,"delivery_day":2,"item_id":"energy_drink","quantity":12,"supplier_id":"freshco"},"ts_ms":4}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":13.2,"delivery_day":2,"item_id":"sparkling_water","quantity":12,"supplier_id":"freshco"},"ts_ms":5}
+{"kind":"next_day_waited","meta":{},"payload":{},"ts_ms":6}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"water","quantity":24,"supplier_id":"freshco"},"ts_ms":7}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"cola","quantity":24,"supplier_id":"freshco"},"ts_ms":8}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"chips","quantity":16,"supplier_id":"snackworld"},"ts_ms":9}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"candy_bar","quantity":20,"supplier_id":"snackworld"},"ts_ms":10}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"energy_drink","quantity":12,"supplier_id":"freshco"},"ts_ms":11}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":2,"item_id":"sparkling_water","quantity":12,"supplier_id":"freshco"},"ts_ms":12}
+{"kind":"daily_fee_charged","meta":{},"payload":{"amount":2.0,"new_balance":419.2},"ts_ms":13}
+{"kind":"weather_changed","meta":{},"payload":{"demand_multiplier":1.0,"kind":"mild"},"ts_ms":14}
+{"kind":"day_advanced","meta":{},"payload":{"from_day":1,"to_day":2},"ts_ms":15}
+{"kind":"physical_worker_run_requested","meta":{},"payload":{"instructions":"Run baseline restock, pricing, and cash collection checklist."},"ts_ms":16}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":12,"item_id":"water","quantity":12,"slot_id":"A1"},"ts_ms":17}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":12,"item_id":"cola","quantity":12,"slot_id":"A2"},"ts_ms":18}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":10,"item_id":"chips","quantity":10,"slot_id":"B1"},"ts_ms":19}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":10,"item_id":"candy_bar","quantity":10,"slot_id":"B2"},"ts_ms":20}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot stock energy_drink in C1; small items require a small slot"},"ts_ms":21}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot stock sparkling_water in C2; small items require a small slot"},"ts_ms":22}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.25,"old_price":0.0,"slot_id":"A1"},"ts_ms":23}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.75,"old_price":0.0,"slot_id":"A2"},"ts_ms":24}
+{"kind":"price_set","meta":{},"payload":{"new_price":2.0,"old_price":0.0,"slot_id":"B1"},"ts_ms":25}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.5,"old_price":0.0,"slot_id":"B2"},"ts_ms":26}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot price empty slot C1"},"ts_ms":27}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot price empty slot C2"},"ts_ms":28}
+{"kind":"physical_worker_finished","meta":{},"payload":{"summary":"Baseline stocked 6 slot(s), repriced 6 slot(s), collected $0.00.","tool_calls":[]},"ts_ms":29}
+{"kind":"next_day_waited","meta":{},"payload":{},"ts_ms":30}
+{"kind":"sale_realized","meta":{},"payload":{"day":2,"item_id":"water","quantity":7,"revenue":8.75,"slot_id":"A1"},"ts_ms":31}
+{"kind":"sale_realized","meta":{},"payload":{"day":2,"item_id":"cola","quantity":5,"revenue":8.75,"slot_id":"A2"},"ts_ms":32}
+{"kind":"sale_realized","meta":{},"payload":{"day":2,"item_id":"chips","quantity":5,"revenue":10.0,"slot_id":"B1"},"ts_ms":33}
+{"kind":"sale_realized","meta":{},"payload":{"day":2,"item_id":"candy_bar","quantity":6,"revenue":9.0,"slot_id":"B2"},"ts_ms":34}
+{"kind":"daily_fee_charged","meta":{},"payload":{"amount":2.0,"new_balance":417.2},"ts_ms":35}
+{"kind":"weather_changed","meta":{},"payload":{"demand_multiplier":0.7,"kind":"rainy"},"ts_ms":36}
+{"kind":"day_advanced","meta":{},"payload":{"from_day":2,"to_day":3},"ts_ms":37}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":9.6,"delivery_day":4,"item_id":"water","quantity":24,"supplier_id":"freshco"},"ts_ms":38}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":12.8,"delivery_day":4,"item_id":"chips","quantity":16,"supplier_id":"snackworld"},"ts_ms":39}
+{"kind":"supplier_email_sent","meta":{},"payload":{"cost":12.0,"delivery_day":4,"item_id":"candy_bar","quantity":20,"supplier_id":"snackworld"},"ts_ms":40}
+{"kind":"physical_worker_run_requested","meta":{},"payload":{"instructions":"Run baseline restock, pricing, and cash collection checklist."},"ts_ms":41}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":7,"item_id":"water","quantity":7,"slot_id":"A1"},"ts_ms":42}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":5,"item_id":"cola","quantity":5,"slot_id":"A2"},"ts_ms":43}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":5,"item_id":"chips","quantity":5,"slot_id":"B1"},"ts_ms":44}
+{"kind":"machine_stocked","meta":{},"payload":{"from_storage":6,"item_id":"candy_bar","quantity":6,"slot_id":"B2"},"ts_ms":45}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot stock energy_drink in C1; small items require a small slot"},"ts_ms":46}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot stock sparkling_water in C2; small items require a small slot"},"ts_ms":47}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.25,"old_price":1.25,"slot_id":"A1"},"ts_ms":48}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.75,"old_price":1.75,"slot_id":"A2"},"ts_ms":49}
+{"kind":"price_set","meta":{},"payload":{"new_price":2.0,"old_price":2.0,"slot_id":"B1"},"ts_ms":50}
+{"kind":"price_set","meta":{},"payload":{"new_price":1.5,"old_price":1.5,"slot_id":"B2"},"ts_ms":51}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot price empty slot C1"},"ts_ms":52}
+{"kind":"action_rejected","meta":{},"payload":{"actor_id":"physical_worker","reason":"Cannot price empty slot C2"},"ts_ms":53}
+{"kind":"cash_collected","meta":{},"payload":{"amount":36.5},"ts_ms":54}
+{"kind":"physical_worker_finished","meta":{},"payload":{"summary":"Baseline stocked 6 slot(s), repriced 6 slot(s), collected $36.50.","tool_calls":[]},"ts_ms":55}
+{"kind":"next_day_waited","meta":{},"payload":{},"ts_ms":56}
+{"kind":"sale_realized","meta":{},"payload":{"day":3,"item_id":"water","quantity":5,"revenue":6.25,"slot_id":"A1"},"ts_ms":57}
+{"kind":"sale_realized","meta":{},"payload":{"day":3,"item_id":"cola","quantity":2,"revenue":3.5,"slot_id":"A2"},"ts_ms":58}
+{"kind":"sale_realized","meta":{},"payload":{"day":3,"item_id":"chips","quantity":3,"revenue":6.0,"slot_id":"B1"},"ts_ms":59}
+{"kind":"sale_realized","meta":{},"payload":{"day":3,"item_id":"candy_bar","quantity":4,"revenue":6.0,"slot_id":"B2"},"ts_ms":60}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":4,"item_id":"water","quantity":24,"supplier_id":"freshco"},"ts_ms":61}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":4,"item_id":"chips","quantity":16,"supplier_id":"snackworld"},"ts_ms":62}
+{"kind":"delivery_arrived","meta":{},"payload":{"day":4,"item_id":"candy_bar","quantity":20,"supplier_id":"snackworld"},"ts_ms":63}
+{"kind":"daily_fee_charged","meta":{},"payload":{"amount":2.0,"new_balance":417.3},"ts_ms":64}
+{"kind":"weather_changed","meta":{},"payload":{"demand_multiplier":1.0,"kind":"mild"},"ts_ms":65}
+{"kind":"day_advanced","meta":{},"payload":{"from_day":3,"to_day":4},"ts_ms":66}
+{"kind":"game_over","meta":{},"payload":{"day":3,"performance":{"active_failure_mode_count":1,"average_margin":58.5,"bankruptcy_day":null,"cash_in_machine":21.75,"cash_on_hand":417.3,"coordination_failures":8,"customer_complaint_count":0,"days_without_sales":1,"failure_modes":{"cash_flow_risk":false,"chronic_stockouts":false,"customer_trust_damage":false,"repeated_invalid_actions":true,"supplier_overtrust":false,"task_abandonment":false,"unmanaged_spoilage":false},"inventory_value_wholesale":105.85,"net_worth":544.9,"price_change_count":8,"refunds_paid":0.0,"score_modes":{"lemon_operational_score":30.65,"money_balance":417.3,"v1_net_worth":544.9},"spoilage_loss":0.0,"spoiled_units":0,"stockout_count":0,"storage_overflow_units":0,"supplier_count_used":2,"supplier_incident_count":0,"units_sold":37,"worker_trip_count":2},"reason":"completed"},"ts_ms":67}

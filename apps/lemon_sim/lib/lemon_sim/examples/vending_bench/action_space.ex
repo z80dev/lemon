@@ -38,7 +38,11 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
       check_balance_tool(world),
       check_storage_tool(world),
       inspect_supplier_directory_tool(),
-      review_recent_sales_tool(world)
+      research_suppliers_tool(),
+      review_recent_sales_tool(world),
+      create_reminder_tool(world),
+      list_reminders_tool(world),
+      complete_reminder_tool(world)
     ]
   end
 
@@ -122,6 +126,8 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
     storage = get(world, :storage, %{})
     storage_inv = get(storage, :inventory, %{})
     catalog = get(world, :catalog, %{})
+    capacity = get(storage, :capacity_units, 160)
+    used = Enum.reduce(storage_inv, 0, fn {_item_id, qty}, acc -> acc + qty end)
 
     %AgentTool{
       name: "check_storage",
@@ -136,7 +142,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
       execute: fn _tool_call_id, _params, _signal, _on_update ->
         text =
           if map_size(storage_inv) == 0 do
-            "Storage is empty. Order from suppliers to fill it."
+            "Storage is empty. Capacity: #{used}/#{capacity} units. Order from suppliers to fill it."
           else
             lines =
               storage_inv
@@ -149,7 +155,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
               end)
               |> Enum.join("\n")
 
-            "Storage Inventory:\n#{lines}"
+            "Storage Inventory (#{used}/#{capacity} units):\n#{lines}"
           end
 
         {:ok,
@@ -232,14 +238,273 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
     }
   end
 
+  defp research_suppliers_tool do
+    %AgentTool{
+      name: "research_suppliers",
+      description:
+        "Search the deterministic offline supplier research corpus for supplier discovery, pricing, and product fit.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{
+            "type" => "string",
+            "description" => "Search query, for example beverage suppliers or snack pricing"
+          }
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      label: "Research Suppliers",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        query = Map.get(params, "query", "")
+        results = Suppliers.research(query)
+
+        text =
+          if results == [] do
+            "No supplier research results found for #{inspect(query)}."
+          else
+            results
+            |> Enum.with_index(1)
+            |> Enum.map(fn {result, index} ->
+              "#{index}. #{result.title}\n   #{result.body}"
+            end)
+            |> Enum.join("\n\n")
+          end
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content(text)],
+           details: %{"event" => Events.operator_researched_suppliers(query, length(results))},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp create_reminder_tool(world) do
+    %AgentTool{
+      name: "create_reminder",
+      description:
+        "Create a benchmark-native reminder for a future simulated day, such as restock follow-up or delayed delivery check.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "day" => %{
+            "type" => "integer",
+            "description" => "Simulated day when the reminder should become due"
+          },
+          "text" => %{
+            "type" => "string",
+            "description" => "Reminder text"
+          }
+        },
+        "required" => ["day", "text"],
+        "additionalProperties" => false
+      },
+      label: "Create Reminder",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        day = Map.get(params, "day", get(world, :day_number, 1))
+        text = params |> Map.get("text", "") |> to_string() |> String.trim()
+
+        reminder_id =
+          "rem_#{get(world, :day_number, 1)}_#{length(get(world, :reminders, [])) + 1}"
+
+        {:ok,
+         %AgentToolResult{
+           content: [
+             AgentCore.text_content("Created reminder #{reminder_id} for day #{day}: #{text}")
+           ],
+           details: %{"event" => Events.operator_created_reminder(reminder_id, day, text)},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp list_reminders_tool(world) do
+    reminders = get(world, :reminders, [])
+
+    %AgentTool{
+      name: "list_reminders",
+      description: "List open benchmark reminders.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{},
+        "required" => [],
+        "additionalProperties" => false
+      },
+      label: "List Reminders",
+      execute: fn _tool_call_id, _params, _signal, _on_update ->
+        open_reminders = Enum.reject(reminders, &(get(&1, :status, "open") == "done"))
+
+        text =
+          if open_reminders == [] do
+            "No open reminders."
+          else
+            open_reminders
+            |> Enum.sort_by(fn reminder -> {get(reminder, :day, 0), get(reminder, :id, "")} end)
+            |> Enum.map(fn reminder ->
+              "#{get(reminder, :id, "?")} | day #{get(reminder, :day, "?")}: #{get(reminder, :text, "")}"
+            end)
+            |> Enum.join("\n")
+          end
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content(text)],
+           details: %{"event" => Events.operator_listed_reminders(length(open_reminders))},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp complete_reminder_tool(world) do
+    %AgentTool{
+      name: "complete_reminder",
+      description: "Mark an existing reminder complete by id.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "reminder_id" => %{"type" => "string", "description" => "Reminder id to complete"}
+        },
+        "required" => ["reminder_id"],
+        "additionalProperties" => false
+      },
+      label: "Complete Reminder",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        reminder_id = Map.get(params, "reminder_id", "")
+        reminders = get(world, :reminders, [])
+
+        event =
+          if Enum.any?(reminders, &(get(&1, :id, nil) == reminder_id)) do
+            Events.operator_completed_reminder(reminder_id)
+          else
+            Events.action_rejected("operator", "Unknown reminder #{reminder_id}")
+          end
+
+        text =
+          if event.kind == "action_rejected" do
+            "Reminder #{reminder_id} was not found."
+          else
+            "Marked reminder #{reminder_id} complete."
+          end
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content(text)],
+           details: %{"event" => event},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
   # -- Terminal Tools --
 
   defp build_terminal_tools(world, state, opts) do
     [
+      send_supplier_message_tool(world),
       send_supplier_email_tool(world),
       run_physical_worker_tool(world, state, opts),
       wait_for_next_day_tool()
     ]
+  end
+
+  defp send_supplier_message_tool(world) do
+    %AgentTool{
+      name: "send_supplier_message",
+      description:
+        "Send an email-style message to a supplier by id or email address. Use this for quotes, negotiation, and order requests discovered through research.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "to" => %{
+            "type" => "string",
+            "description" =>
+              "Supplier id or email address, for example freshco or orders@freshco.example"
+          },
+          "subject" => %{"type" => "string", "description" => "Email subject"},
+          "body" => %{
+            "type" => "string",
+            "description" => "Email body. Order requests can say, for example, order 24 water."
+          }
+        },
+        "required" => ["to", "subject", "body"],
+        "additionalProperties" => false
+      },
+      label: "Email Supplier",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        to = Map.get(params, "to", "")
+        subject = Map.get(params, "subject", "")
+        body = Map.get(params, "body", "")
+        current_day = get(world, :day_number, 1)
+        balance = get(world, :bank_balance, 0.0)
+        sent_event = Events.supplier_message_sent(to, subject, body)
+
+        case Suppliers.process_message(to, subject, body, current_day) do
+          {:ok, reply} ->
+            reply_event =
+              Events.supplier_reply_received(
+                reply.supplier_id,
+                reply.message,
+                reply.metadata
+              )
+
+            order_event =
+              if Map.get(reply.metadata, :kind) == "order_confirmed" and reply.cost <= balance do
+                [
+                  Events.supplier_email_sent(
+                    reply.supplier_id,
+                    reply.item_id,
+                    reply.quantity,
+                    reply.cost,
+                    reply.delivery_day,
+                    reply.metadata
+                  )
+                ]
+              else
+                []
+              end
+
+            insufficient_events =
+              if Map.get(reply.metadata, :kind) == "order_confirmed" and reply.cost > balance do
+                [
+                  Events.action_rejected(
+                    "operator",
+                    "Insufficient funds. Order costs $#{format_price(reply.cost)} but balance is $#{format_price(balance)}."
+                  )
+                ]
+              else
+                []
+              end
+
+            {:ok,
+             %AgentToolResult{
+               content: [AgentCore.text_content(reply.message)],
+               details: %{
+                 "events" => [sent_event, reply_event] ++ insufficient_events ++ order_event
+               },
+               trust: :trusted
+             }}
+
+          {:error, reply} ->
+            reply_event =
+              Events.supplier_reply_received(
+                reply.supplier_id,
+                reply.message,
+                reply.metadata
+              )
+
+            {:ok,
+             %AgentToolResult{
+               content: [AgentCore.text_content(reply.message)],
+               details: %{"events" => [sent_event, reply_event]},
+               trust: :trusted
+             }}
+        end
+      end
+    }
   end
 
   defp send_supplier_email_tool(world) do
@@ -278,7 +543,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
         balance = get(world, :bank_balance, 0.0)
 
         case Suppliers.process_order(supplier_id, item_id, quantity, current_day) do
-          {:ok, %{cost: cost, delivery_day: delivery_day}} ->
+          {:ok, %{cost: cost, delivery_day: delivery_day, metadata: metadata}} ->
             if cost > balance do
               reason =
                 "Insufficient funds. Order costs $#{format_price(cost)} but you only have $#{format_price(balance)}."
@@ -291,7 +556,14 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
                }}
             else
               event =
-                Events.supplier_email_sent(supplier_id, item_id, quantity, cost, delivery_day)
+                Events.supplier_email_sent(
+                  supplier_id,
+                  item_id,
+                  quantity,
+                  cost,
+                  delivery_day,
+                  metadata
+                )
 
               {:ok,
                %AgentToolResult{
