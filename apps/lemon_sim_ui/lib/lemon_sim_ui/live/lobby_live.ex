@@ -104,9 +104,18 @@ defmodule LemonSimUi.LobbyLive do
                   ]}>
                     {SimHelpers.domain_label(sim.domain_type)}
                   </span>
-                  <span class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-1.5">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.8)]"></span>
-                    LIVE
+                  <span class={[
+                    "text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm border flex items-center gap-1.5",
+                    status_badge_class(sim.status)
+                  ]}>
+                    <span class={[
+                      "w-1.5 h-1.5 rounded-full",
+                      if(sim.status == "in_progress",
+                        do: "bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.8)]",
+                        else: "bg-emerald-400"
+                      )
+                    ]}></span>
+                    {status_badge_label(sim.status)}
                   </span>
                 </div>
 
@@ -145,10 +154,12 @@ defmodule LemonSimUi.LobbyLive do
     |> Enum.map(fn state ->
       summary = SimHelpers.sim_summary(state)
       players = LemonCore.MapHelpers.get_key(state.world, :players)
+      arena_agents = LemonCore.MapHelpers.get_key(state.world, :arena_agents)
 
       player_count =
-        case players do
-          m when is_map(m) -> map_size(m)
+        case {players, arena_agents} do
+          {_, agents} when is_list(agents) -> length(agents)
+          {m, _} when is_map(m) -> map_size(m)
           _ -> nil
         end
 
@@ -180,7 +191,8 @@ defmodule LemonSimUi.LobbyLive do
   defp load_artifact_state(sim_id, artifact_dir) when is_binary(artifact_dir) do
     with {:ok, body} <- File.read(Path.join(artifact_dir, "final_world.json")),
          {:ok, world} when is_map(world) <- Jason.decode(body),
-         "in_progress" <- LemonCore.MapHelpers.get_key(world, :status) do
+         status when status in ["in_progress", "complete"] <-
+           LemonCore.MapHelpers.get_key(world, :status) do
       State.new(
         sim_id: sim_id,
         world: world,
@@ -195,7 +207,12 @@ defmodule LemonSimUi.LobbyLive do
   defp load_artifact_state(_sim_id, _artifact_dir), do: nil
 
   defp recent_artifact_events(artifact_dir) do
-    case File.read(Path.join(artifact_dir, "events.jsonl")) do
+    event_path =
+      ["events.jsonl", "arena_events.jsonl"]
+      |> Enum.map(&Path.join(artifact_dir, &1))
+      |> Enum.find(&File.exists?/1)
+
+    case event_path && File.read(event_path) do
       {:ok, body} ->
         body
         |> String.split("\n", trim: true)
@@ -211,4 +228,13 @@ defmodule LemonSimUi.LobbyLive do
         []
     end
   end
+
+  defp status_badge_label("complete"), do: "REPLAY"
+  defp status_badge_label(_status), do: "LIVE"
+
+  defp status_badge_class("complete"),
+    do: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+
+  defp status_badge_class(_status),
+    do: "bg-red-500/10 text-red-400 border-red-500/30"
 end

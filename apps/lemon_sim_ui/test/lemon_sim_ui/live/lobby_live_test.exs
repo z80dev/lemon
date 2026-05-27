@@ -33,6 +33,40 @@ defmodule LemonSimUi.LobbyLiveTest do
     refute html =~ "No Games Currently Live"
   end
 
+  test "lists completed VendingBench arena artifacts as replays", %{conn: conn} do
+    sim_id = "test_lobby_vb_arena_artifact_#{System.unique_integer([:positive])}"
+    artifact_dir = Path.join(System.tmp_dir!(), sim_id)
+    original_registry = File.read(@artifact_registry)
+
+    on_exit(fn ->
+      File.rm_rf!(artifact_dir)
+      restore_registry(original_registry)
+    end)
+
+    File.rm_rf!(artifact_dir)
+    File.mkdir_p!(artifact_dir)
+
+    {:ok, arena} =
+      LemonSim.Examples.VendingBench.Arena.run_offline_strategy("baseline",
+        sim_id: sim_id,
+        max_days: 3,
+        artifact_dir: artifact_dir,
+        arena_agents: 2
+      )
+
+    world = Jason.encode!(arena.world, pretty: true)
+
+    File.write!(Path.join(artifact_dir, "final_world.json"), world)
+    write_registry_entry(sim_id, artifact_dir)
+
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ sim_id
+    assert html =~ "Vending Bench"
+    assert html =~ "REPLAY"
+    refute html =~ "No Games Currently Live"
+  end
+
   defp write_registry_entry(sim_id, artifact_dir) do
     registry =
       case File.read(@artifact_registry) do
