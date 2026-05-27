@@ -24,6 +24,7 @@
 | [demo.md](demo.md) | Deterministic local demo paths for runtime health, Web ops, TUI, support bundles, and docs quality |
 | [support.md](support.md) | Public support boundaries, issue data requirements, support-bundle commands, and security-reporting path |
 | [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
 | [user-guide/adaptive.md](user-guide/adaptive.md) | Adaptive routing, routing feedback, skill synthesis pipeline |
@@ -76,6 +77,7 @@
 - [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
 - [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](plans/lemon-sim-platform-mission-2026-05-12.md) - LemonSim mission for watchable Werewolf and Vending Bench 2.0
 - [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](plans/lemon-hermes-agent-harness-parity-scorecard.md) - Hermes-class agent harness parity scorecard
+- [`docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md`](plans/lemon-hermes-parity-expansion-goal-2026-05-24.md) - Active expansion goal for browser, external API/editor, migration v2, terminal, plugin/provider, LSP, and observability parity
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/skills_v2.md`](skills_v2.md) - Skill manifest v2 and newer skill-system direction
 - [`docs/tools/web.md`](tools/web.md)

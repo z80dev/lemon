@@ -68,6 +68,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
 | `LemonCore.ProviderPoolRotator` | Supervised in-memory round-robin state for provider credential pools |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
+| `LemonCore.HermesMigration` | Preview/apply migration helper for Hermes memories, skills, compatible config, allowlisted secrets, and session recall |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |

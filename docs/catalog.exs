@@ -288,6 +288,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/user-guide/migrate-from-hermes.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-24],
+    max_age_days: 60
+  },
+  %{
     path: "docs/user-guide/skills.md",
     owner: "@z80",
     last_reviewed: ~D[2026-05-16],
@@ -306,6 +312,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-05-24],
+    max_age_days: 30
+  },
+  %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
     last_reviewed: ~D[2026-05-16],
@@ -320,7 +332,7 @@
   %{
     path: "docs/plans/2026-03-26-async-followup-delivery-and-provenance-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-26],
+    last_reviewed: ~D[2026-05-27],
     max_age_days: 60
   },
   %{

@@ -2,7 +2,7 @@
 
 Status: shipped and working (3 open items remain)
 
-Last reviewed: 2026-04-10 (Codex codebase review)
+Last reviewed: 2026-05-27 (Codex catalog freshness review)
 
 ## Progress
 

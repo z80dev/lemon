@@ -32,6 +32,7 @@ defmodule LemonCore.MixProject do
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"},
       {:exqlite, "~> 0.34.0"},
+      {:yaml_elixir, "~> 2.9"},
       {:file_system, "~> 1.0", optional: true}
     ]
   end
