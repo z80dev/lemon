@@ -13,7 +13,20 @@ mission plan and acceptance criteria.
 
 ## Scope (Phase 0)
 
-Phase 0 establishes the small reusable core:
+LemonSim is intentionally Lemon-native. It may depend on `lemon_core`,
+`agent_core`, `ai`, and `lemon_ai_runtime`, but new work should keep these
+internal boundaries clear:
+
+- `LemonSim.Kernel` owns state, events, runner flow, updater/action/projector
+  behaviours, decision adaptation, persistence, and pubsub helpers.
+- `LemonSim.LLM` owns tool-loop deciders, tool policies, model/provider setup,
+  provider throttling, shared live-run helpers, and transcript capture.
+- `LemonSim.Bench` owns artifact writing, run manifests, scorecards, replay
+  verification, suite runners, and leaderboard export.
+- `LemonSim.Examples.*` owns domain rules, worlds, commands, facts, projections,
+  scorecards, and baselines for each simulation.
+
+Phase 0 establishes the small core:
 
 - normalized state structs (`State`, `Event`, `PlanStep`, `DecisionFrame`)
 - pluggable behaviours for projector/updater/action space/decider/decision adapter
@@ -162,34 +175,39 @@ updater.
 
 | Module | Purpose |
 |---|---|
-| `LemonSim.State` | Persistent world state + rolling event window + intent + plan history |
-| `LemonSim.Event` | Canonical simulation event envelope |
-| `LemonSim.PlanStep` | Compact plan-history record |
-| `LemonSim.DecisionFrame` | Per-decision snapshot built from stored state |
-| `LemonSim.DecisionSignal` | `:skip` / `:decide` decision gating signal |
-| `LemonSim.EventCoalescer` | Behaviour for coalescing/filtering incoming events |
-| `LemonSim.Updater` | Behaviour for applying events and returning decision signals |
-| `LemonSim.ActionSpace` | Behaviour for deciding which tools are exposed on the current turn |
-| `LemonSim.Projector` | Behaviour for state -> `Ai.Types.Context` projection |
-| `LemonSim.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
-| `LemonSim.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |
-| `LemonSim.Decider` | Behaviour for one constrained model decision |
-| `LemonSim.Deciders.ToolLoopPolicy` | Behaviour for tool-batch validation and terminal decision selection |
-| `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default policy: support-tool chaining + one terminal decision |
-| `LemonSim.DecisionAdapter` | Behaviour for adapting decider output into simulation events when a decision does not already carry direct events |
-| `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results containing `"event"` / `"events"` in `result_details` |
-| `LemonSim.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving `"event"` / `"events"` payloads from every executed tool call in a tool-loop decision |
-| `LemonSim.Artifacts.AtomicFile` | Atomic artifact writes with tmp-file, sync, and rename |
-| `LemonSim.Artifacts.Verifier` | Manifest and file-hash verifier for run artifact bundles |
-| `LemonSim.GameHelpers.Config` | Shared model/provider credential resolution |
-| `LemonSim.GameHelpers.ProviderThrottle` | Provider request throttling with explicit process ownership |
-| `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
-| `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |
-| `LemonSim.Runner` | Ingest-until-decision + decide-once + composed `step/3` + `run_until_terminal/3` |
-| `LemonSim.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider driven by a pluggable tool policy |
-| `LemonSim.Memory.Tools` | Optional scoped file-memory tool bundle for long-term notes |
+| `LemonSim.Kernel` | Boundary namespace for durable simulation contracts and deterministic state flow |
+| `LemonSim.Kernel.State` | Persistent world state + rolling event window + intent + plan history |
+| `LemonSim.Kernel.Event` | Canonical simulation event envelope |
+| `LemonSim.Kernel.PlanStep` | Compact plan-history record |
+| `LemonSim.Kernel.DecisionFrame` | Per-decision snapshot built from stored state |
+| `LemonSim.Kernel.DecisionSignal` | `:skip` / `:decide` decision gating signal |
+| `LemonSim.Kernel.EventCoalescer` | Behaviour for coalescing/filtering incoming events |
+| `LemonSim.Kernel.Updater` | Behaviour for applying events and returning decision signals |
+| `LemonSim.Kernel.ActionSpace` | Behaviour for deciding which tools are exposed on the current turn |
+| `LemonSim.Kernel.Projector` | Behaviour for state -> `Ai.Types.Context` projection |
+| `LemonSim.Kernel.Decider` | Behaviour for one constrained decision |
+| `LemonSim.Kernel.DecisionAdapter` | Behaviour for adapting decider output into simulation events |
+| `LemonSim.Kernel.DecisionAdapters.ToolResultEvents` | Default adapter for tool results containing `"event"` / `"events"` in `result_details` |
+| `LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving `"event"` / `"events"` payloads from every executed tool call |
+| `LemonSim.Kernel.Store` | `LemonCore.Store` wrapper for state persistence |
+| `LemonSim.Kernel.Bus` | `LemonCore.Bus` wrapper for sim topics |
+| `LemonSim.Kernel.Runner` | Ingest-until-decision + decide-once + composed `step/3` + `run_until_terminal/3` |
+| `LemonSim.LLM` | Boundary namespace for model/tool-loop execution and provider integration |
+| `LemonSim.LLM.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
+| `LemonSim.LLM.Projectors.SectionedProjector` | Reusable scaffold projector with pluggable section builders |
+| `LemonSim.LLM.Deciders.ToolLoopPolicy` | Behaviour for tool-batch validation and terminal decision selection |
+| `LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal` | Default policy: support-tool chaining + one terminal decision |
+| `LemonSim.LLM.Deciders.ToolLoopDecider` | Bounded LLM/tool loop decider driven by a pluggable tool policy |
+| `LemonSim.LLM.GameHelpers.Config` | Shared model/provider credential resolution |
+| `LemonSim.LLM.GameHelpers.ProviderThrottle` | Provider request throttling with explicit process ownership |
+| `LemonSim.LLM.GameHelpers.Runner` | Shared model-backed example runner |
+| `LemonSim.LLM.Memory.Tools` | Optional scoped file-memory tool bundle for long-term notes |
+| `LemonSim.Bench` | Boundary namespace for benchmark artifacts, scorecards, manifests, and replay checks |
+| `LemonSim.Bench.Artifacts.AtomicFile` | Atomic artifact writes with tmp-file, sync, and rename |
+| `LemonSim.Bench.Artifacts.Verifier` | Manifest and file-hash verifier for run artifact bundles |
+| `LemonSim.Examples.Helpers` | Shared pure helpers for example implementations |
 
-`LemonSim.Deciders.ToolLoopDecider` expects the model to terminate turns with a
+`LemonSim.LLM.Deciders.ToolLoopDecider` expects the model to terminate turns with a
 tool call. If the assistant responds without any tool call, it returns
 `{:error, {:tool_call_required, details}}` instead of producing a text-only
 decision that `Runner.step/3` cannot ingest. VendingBench live runs convert
@@ -224,13 +242,13 @@ If an invalid coalescer is configured, `Runner.ingest_events/4` returns
 `ToolLoopDecider` rejects duplicate normalized tool names before model calls so
 benchmark runs cannot silently replace one tool implementation with another.
 
-`LemonSim.Deciders.ToolPolicies.SingleTerminal` also copies any
+`LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal` also copies any
 `result_details.event(s)` from terminal tool calls onto the returned decision as
 top-level `"events"` so the default tool-loop path can bypass extra adapter
 plumbing while still preserving `result_details`.
 
 VendingBench uses `SingleTerminal` plus
-`LemonSim.DecisionAdapters.ExecutedCallEvents` so support-tool and terminal-tool
+`LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents` so support-tool and terminal-tool
 events are preserved through the same generic path. Its public module is a
 facade; world setup, projection, artifact writing, offline baseline execution,
 arena behavior, demand, suppliers, physical worker behavior, performance,

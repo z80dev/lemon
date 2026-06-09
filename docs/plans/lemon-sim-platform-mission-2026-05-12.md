@@ -52,6 +52,31 @@ Existing useful foundation:
   demand model, suppliers, updater/action-space modules, physical-worker
   subagent flow, performance summary code, and a runnable Mix task.
 
+## Internal Boundaries
+
+LemonSim is explicitly Lemon-native, so umbrella app dependencies on
+`lemon_core`, `agent_core`, `ai`, and `lemon_ai_runtime` are acceptable. The
+important architecture boundary is internal:
+
+- `LemonSim.Kernel` owns durable simulation contracts and deterministic state
+  flow: state, event envelopes, command/fact envelopes, updater/action/projector
+  behaviours, decision adaptation, runner/replay mechanics, persistence, and
+  pubsub helpers.
+- `LemonSim.LLM` owns model execution above the runner: tool-loop deciders,
+  tool policies, Lemon provider/auth integration, provider throttling, shared
+  live-run helpers, and transcript capture.
+- `LemonSim.Bench` owns comparable benchmark outputs: atomic artifact writing,
+  run manifests, scorecards, artifact verification, golden replay checks,
+  suite runners, and leaderboard exports.
+- `LemonSim.Examples.*` owns domain-specific worlds, commands, facts,
+  projections, action spaces, updaters, suppliers, physical workers, baselines,
+  arenas, and domain scorecards.
+
+New reusable benchmark mechanics should move toward `LemonSim.Bench`; new
+reusable model/tool-loop mechanics should move toward `LemonSim.LLM`; new
+domain mechanics should stay under the example that needs them until a second
+simulation proves the abstraction.
+
 ## Werewolf Mission
 
 Werewolf should become the canonical watchable LemonSim game.
