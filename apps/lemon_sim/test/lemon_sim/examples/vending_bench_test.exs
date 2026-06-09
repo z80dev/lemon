@@ -2,6 +2,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
   use ExUnit.Case, async: true
 
   alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
+  alias LemonSim.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.{DecisionFrame, Runner}
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.ActionSpace
@@ -30,6 +31,8 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert prompt =~ "over 365 simulated days"
     assert prompt =~ "by day 365"
     assert prompt =~ "After at most 2 support tool calls"
+    assert prompt =~ "10 consecutive unpaid fees"
+    refute prompt =~ "5 consecutive unpaid fees"
     refute prompt =~ "day 30"
   end
 
@@ -92,7 +95,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
       complete_fn: complete_fn,
       stream_options: %{},
       persist?: false,
-      tool_policy: VendingBench.ToolPolicy,
+      tool_policy: SingleTerminal,
       support_tool_matcher: fn tool ->
         String.starts_with?(tool.name, "memory_") or
           tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory review_recent_sales)
@@ -138,7 +141,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                complete_fn: complete_fn,
                stream_options: %{},
                persist?: false,
-               tool_policy: VendingBench.ToolPolicy
+               tool_policy: SingleTerminal
              )
 
     assert Enum.map(result.events, & &1.kind) == ["action_rejected"]
@@ -185,7 +188,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                complete_fn: complete_fn,
                stream_options: %{},
                persist?: false,
-               tool_policy: VendingBench.ToolPolicy,
+               tool_policy: SingleTerminal,
                support_tool_matcher: &support_tool?/1
              )
 
@@ -238,7 +241,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                complete_fn: complete_fn,
                stream_options: %{},
                persist?: false,
-               tool_policy: VendingBench.ToolPolicy
+               tool_policy: SingleTerminal
              )
 
     assert Enum.map(result.events, & &1.kind) == [
@@ -792,7 +795,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                complete_fn: complete_fn,
                stream_options: %{},
                persist?: false,
-               tool_policy: VendingBench.ToolPolicy,
+               tool_policy: SingleTerminal,
                physical_worker_runner: runner
              )
 
@@ -952,7 +955,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                complete_fn: complete_fn,
                stream_options: %{},
                persist?: false,
-               tool_policy: VendingBench.ToolPolicy,
+               tool_policy: SingleTerminal,
                physical_worker_runner: runner
              )
 
@@ -1655,7 +1658,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
           complete_fn: complete_fn,
           stream_options: %{},
           persist?: false,
-          tool_policy: VendingBench.ToolPolicy
+          tool_policy: SingleTerminal
         ],
         opts
       )

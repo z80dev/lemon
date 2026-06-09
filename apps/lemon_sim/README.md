@@ -172,6 +172,7 @@ updater.
 | `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default policy: support-tool chaining + one terminal decision |
 | `LemonSim.DecisionAdapter` | Behaviour for adapting decider output into simulation events when a decision does not already carry direct events |
 | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results containing `"event"` / `"events"` in `result_details` |
+| `LemonSim.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving `"event"` / `"events"` payloads from every executed tool call in a tool-loop decision |
 | `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
 | `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |
 | `LemonSim.Runner` | Ingest-until-decision + decide-once + composed `step/3` + `run_until_terminal/3` |
@@ -204,6 +205,8 @@ decision adapter:
 - if a decider returns top-level `"event"` / `"events"`, the runner ingests
   them immediately
 - otherwise, the configured `DecisionAdapter` is used
+- exception: if a decision includes `"executed_calls"` and a non-default adapter
+  is configured, the adapter runs first so support-tool events are not dropped
 
 If an invalid coalescer is configured, `Runner.ingest_events/4` returns
 `{:error, {:invalid_coalescer, module}}` instead of raising.
@@ -212,6 +215,13 @@ If an invalid coalescer is configured, `Runner.ingest_events/4` returns
 `result_details.event(s)` from terminal tool calls onto the returned decision as
 top-level `"events"` so the default tool-loop path can bypass extra adapter
 plumbing while still preserving `result_details`.
+
+VendingBench uses `SingleTerminal` plus
+`LemonSim.DecisionAdapters.ExecutedCallEvents` so support-tool and terminal-tool
+events are preserved through the same generic path. Its public module is a
+facade; world setup, projection, artifact writing, offline baseline execution,
+arena behavior, demand, suppliers, physical worker behavior, performance,
+replay, and updater logic live in focused `vending_bench/*` modules.
 
 ## Dependency Rationale
 

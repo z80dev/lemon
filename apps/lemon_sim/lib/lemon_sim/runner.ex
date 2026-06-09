@@ -154,29 +154,41 @@ defmodule LemonSim.Runner do
   end
 
   defp adapt_events(decision_adapter, decision, state, opts) do
+    if executed_calls?(decision) and decision_adapter != ToolResultEvents do
+      adapter_events(decision_adapter, decision, state, opts)
+    else
+      direct_or_adapter_events(decision_adapter, decision, state, opts)
+    end
+  end
+
+  defp direct_or_adapter_events(decision_adapter, decision, state, opts) do
     case direct_events(decision) do
       {:ok, events} ->
         {:ok, events}
 
       :no_events ->
-        if Code.ensure_loaded?(decision_adapter) and
-             function_exported?(decision_adapter, :to_events, 3) do
-          case decision_adapter.to_events(decision, state, opts) do
-            {:ok, events} when is_list(events) ->
-              {:ok, events}
+        adapter_events(decision_adapter, decision, state, opts)
+    end
+  end
 
-            {:ok, events} ->
-              {:error, {:invalid_events, events}}
+  defp adapter_events(decision_adapter, decision, state, opts) do
+    if Code.ensure_loaded?(decision_adapter) and
+         function_exported?(decision_adapter, :to_events, 3) do
+      case decision_adapter.to_events(decision, state, opts) do
+        {:ok, events} when is_list(events) ->
+          {:ok, events}
 
-            {:error, _reason} = error ->
-              error
+        {:ok, events} ->
+          {:error, {:invalid_events, events}}
 
-            other ->
-              {:error, {:invalid_decision_adapter_result, other}}
-          end
-        else
-          {:error, {:invalid_decision_adapter, decision_adapter}}
-        end
+        {:error, _reason} = error ->
+          error
+
+        other ->
+          {:error, {:invalid_decision_adapter_result, other}}
+      end
+    else
+      {:error, {:invalid_decision_adapter, decision_adapter}}
     end
   end
 
@@ -194,6 +206,11 @@ defmodule LemonSim.Runner do
   end
 
   defp direct_events(_decision), do: :no_events
+
+  defp executed_calls?(%{} = decision),
+    do: is_list(fetch(decision, :executed_calls, "executed_calls", nil))
+
+  defp executed_calls?(_decision), do: false
 
   defp fetch(map, atom_key, string_key, default) do
     Map.get(map, atom_key, Map.get(map, string_key, default))

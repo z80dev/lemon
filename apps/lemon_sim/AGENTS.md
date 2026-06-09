@@ -88,6 +88,7 @@ mission targets change.
 | `lib/lemon_sim/deciders/tool_policies/single_terminal.ex` | `LemonSim.Deciders.ToolPolicies.SingleTerminal` | Default support-tool + one-terminal-action policy |
 | `lib/lemon_sim/decision_adapter.ex` | `LemonSim.DecisionAdapter` | Decision -> event adaptation behaviour for decisions without direct top-level events |
 | `lib/lemon_sim/decision_adapters/tool_result_events.ex` | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results that return event payloads in `result_details` |
+| `lib/lemon_sim/decision_adapters/executed_call_events.ex` | `LemonSim.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving event payloads from every executed tool call in a tool-loop decision |
 | `lib/lemon_sim/deciders/tool_loop_decider.ex` | `LemonSim.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/runner.ex` | `LemonSim.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
 | `lib/lemon_sim/store.ex` | `LemonSim.Store` | `LemonCore.Store` persistence wrapper |
@@ -110,6 +111,9 @@ mission targets change.
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
 - Keep memory policy out of the core harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.Memory.Tools`).
 - Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
+- If a decision includes `"executed_calls"` and a non-default adapter is configured, `Runner.step/3` adapts through that adapter before direct terminal events so support-tool events are preserved.
+- VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.
+- Keep `LemonSim.Examples.VendingBench` as a facade. World bootstrap, projection, artifacts, offline baseline running, arena behavior, demand, suppliers, physical-worker behavior, performance, replay, and updater logic belong in focused `vending_bench/*` modules.
 - `ToolLoopDecider` is tool-first: assistant replies without tool calls are treated as errors, not text decisions.
 - Use `driver_max_turns` for outer sim loops and `decision_max_turns` for inner model/tool retries; `max_turns` remains a backward-compatible fallback.
 - `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.

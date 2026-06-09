@@ -1,7 +1,7 @@
 defmodule LemonSimTest do
   use ExUnit.Case
 
-  alias LemonSim.DecisionAdapters.ToolResultEvents
+  alias LemonSim.DecisionAdapters.{ExecutedCallEvents, ToolResultEvents}
   alias LemonSim.{DecisionFrame, DecisionSignal, Event, PlanStep, Runner, State}
 
   test "state builds from string-key maps and appends bounded history" do
@@ -185,6 +185,27 @@ defmodule LemonSimTest do
     assert [%Event{kind: "enemy_visible"}] = result.state.recent_events
   end
 
+  test "runner step lets executed-call adapters preserve support events before direct terminal events" do
+    state = State.new(sim_id: "sim-step-executed-calls", world: %{"hp" => 100})
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.ExecutedCallsDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: ExecutedCallEvents
+               },
+               []
+             )
+
+    assert Enum.map(result.events, & &1.kind) == ["support_checked", "enemy_visible"]
+    assert {:decide, "enemy spotted"} = result.signal
+    assert Enum.map(result.state.recent_events, & &1.kind) == ["support_checked", "enemy_visible"]
+  end
+
   test "runner runs until terminal state" do
     state = State.new(sim_id: "sim-run", world: %{"turns" => 0})
 
@@ -236,6 +257,36 @@ defmodule LemonSimTest do
                state,
                []
              )
+  end
+
+  test "executed-call event adapter preserves events from every executed tool call" do
+    state = State.new(sim_id: "sim-executed-call-adapter", world: %{})
+
+    decision = %{
+      "type" => "tool_call",
+      "executed_calls" => [
+        %{result_details: %{event: %{kind: "support_checked"}}},
+        %{"result_details" => %{"events" => [%{"kind" => "terminal_started"}]}},
+        %{result_details: %{events: [%{kind: "terminal_finished"}]}}
+      ]
+    }
+
+    assert {:ok,
+            [
+              %Event{kind: "support_checked"},
+              %Event{kind: "terminal_started"},
+              %Event{kind: "terminal_finished"}
+            ]} = ExecutedCallEvents.to_events(decision, state, [])
+  end
+
+  test "executed-call event adapter can require emitted events" do
+    state = State.new(sim_id: "sim-executed-call-adapter-required", world: %{})
+    decision = %{"type" => "tool_call", "executed_calls" => [%{result_details: %{}}]}
+
+    assert {:ok, []} = ExecutedCallEvents.to_events(decision, state, [])
+
+    assert {:error, {:missing_events_in_executed_calls, ^decision}} =
+             ExecutedCallEvents.to_events(decision, state, require_executed_call_events?: true)
   end
 
   defmodule UpdaterStub do
@@ -346,6 +397,23 @@ defmodule LemonSimTest do
     @impl true
     def decide(_context, _tools, _opts) do
       {:ok, %{"type" => "domain_decision", "events" => [%{"kind" => "enemy_visible"}]}}
+    end
+  end
+
+  defmodule ExecutedCallsDeciderStub do
+    @behaviour LemonSim.Decider
+
+    @impl true
+    def decide(_context, _tools, _opts) do
+      {:ok,
+       %{
+         "type" => "tool_call",
+         "events" => [%{"kind" => "enemy_visible"}],
+         "executed_calls" => [
+           %{"result_details" => %{"event" => %{"kind" => "support_checked"}}},
+           %{"result_details" => %{"event" => %{"kind" => "enemy_visible"}}}
+         ]
+       }}
     end
   end
 
