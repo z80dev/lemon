@@ -372,7 +372,7 @@ All onboarding flows:
 - Support `--set-default`, `--model`, and `--config-path`
 
 Provider readiness is visible through the read-only control-plane
-`providers.status` method and the Web `/ops` provider panel. It uses the same
+`providers.status` method. It uses the same
 `LemonAiRuntime` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -381,8 +381,8 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
 
-Memory-provider readiness is visible through read-only `memory.status`, Web
-`/ops`, and support-bundle `memory_diagnostics.json`. These surfaces expose
+Memory-provider readiness is visible through read-only `memory.status` and
+support-bundle `memory_diagnostics.json`. These surfaces expose
 provider ids, enabled state, source labels, scopes, timeout shape, and module
 load state without memory document contents, raw provider config, secret values,
 prompts, tool output, or provider error payloads.

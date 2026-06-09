@@ -328,7 +328,7 @@ Memory provider `config` supports:
 
 `LemonCore.MemoryProviders` always keeps local SQLite as the built-in provider,
 isolates provider failures, deduplicates search results by document id, and
-reports only redacted provider shape through `memory.status`, Web `/ops`, and
+reports only redacted provider shape through `memory.status` and
 support bundles.
 
 ## Extension Discovery
@@ -387,7 +387,7 @@ Supported manifest fields:
 }
 ```
 
-`extension_diagnostics.json` and Web `/ops` expose only aggregate manifest
+`extension_diagnostics.json` exposes only aggregate manifest
 shape: valid/invalid counts, capability counts, provider-type counts, host-type
 counts, distribution source counts, audit-status counts, and a redacted
 host-runtime summary. The host-runtime summary distinguishes BEAM extension
@@ -444,7 +444,7 @@ sidecar exit. It verifies `[:coding_agent, :wasm, :tool, :start]`,
 tool-call ids. The proof artifact is
 `.lemon/proofs/wasm-tool-telemetry-latest.json` and records only aggregate
 counts, host-boundary flags, and redaction booleans.
-`extensions.status` and Web `/ops` expose the same proof status, check status,
+`extensions.status` exposes the same proof status, check status,
 host-boundary flags, proof hash, and redaction summary.
 
 This is wrapper telemetry proof for the WASM execution boundary. It is not
@@ -695,14 +695,12 @@ tool-conflict resolution, extension-provided provider names, extension-host
 execution telemetry proof shape, WASM wrapper telemetry proof shape, and WASM
 status shape when available. It redacts raw source paths, load-error messages,
 config schemas, provider modules, and path-like WASM metadata, replacing
-sensitive path fields with hashes.
-
-Web `/ops` also shows a code-free extension/plugin directory panel backed by
-`LemonCore.Doctor.ExtensionDiagnostics`. That panel reports global, project,
-and configured extension directory existence, extension-file counts, manifest
-counts and aggregate manifest shape, nested library-file counts, and file/path
-hashes without loading plugin code or exposing raw source paths, file contents,
-manifest contents, distribution URLs, or load-error messages. When
+sensitive path fields with hashes. `LemonCore.Doctor.ExtensionDiagnostics`
+reports global, project, and configured extension directory existence,
+extension-file counts, manifest counts and aggregate manifest shape, nested
+library-file counts, and file/path hashes without loading plugin code or
+exposing raw source paths, file contents, manifest contents, distribution URLs,
+or load-error messages. When
 `.lemon/proofs/extension-host-smoke-latest.json` exists, the same diagnostics
 surface includes a redacted `execution_telemetry` summary with proof status,
 proof hash, completed/failed counts, telemetry-check status, config/env

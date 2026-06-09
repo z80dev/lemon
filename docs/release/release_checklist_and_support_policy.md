@@ -137,7 +137,7 @@ Before cutting a stable release:
       Keep `--result-path` for operator handoff data such as nonces and message
       ids; use `--proof-path` for the redacted artifact consumed by
       `proofs.status`, `./bin/lemon proofs`, support bundles, doctor gates,
-      and Web `/ops`.
+      and.
       The runner stops on the first failed manual check by default; do not use
       `--continue-on-failure` for release evidence.
 - [ ] Before promoting Discord free-response support, run the unmentioned

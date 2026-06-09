@@ -82,7 +82,7 @@ MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
 The proof writes `.lemon/proofs/wasm-lifecycle-latest.json` and verifies
 redacted discover/invoke start-stop telemetry, running sidecar status, explicit
 stop termination, and omission of raw cwd, session id, tool name, and params
-from lifecycle telemetry. `extensions.status`, Web `/ops`, and
+from lifecycle telemetry. `extensions.status` and
 `mix lemon.doctor --verbose` surface it as `extensions.wasm_lifecycle`.
 
 ## Security Model (v1)

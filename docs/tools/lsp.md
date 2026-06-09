@@ -174,7 +174,7 @@ When the ElixirLS command is an absolute local launcher, set
 
 The project-fixture proof lane writes
 `.lemon/proofs/lsp-project-fixtures-latest.json`, which is included by
-support bundles, read-only `proofs.status`, and Web `/ops` through the
+support bundles, read-only `proofs.status`, and through the
 first-party `.lemon/proofs/*-latest.json` inventory.
 
 The real-repository fixture proof lane writes

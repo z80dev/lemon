@@ -25,7 +25,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. The harness includes memory scope/topic contracts, relevant-skill prompt disclosure, scripted skill-curator behavior, async delegation joins, and child artifact verification contracts. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
 - `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`, or legacy `ANTHROPIC_API_KEY` is set. Secret variables hold the name of a Lemon secret and resolve with env fallback, so local release-candidate runs can use the normal encrypted secret store without printing credentials. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, delegates parallel child work before answering, handles untrusted external content, preserves leaf-worker tool restrictions, verifies child side effects before finalizing, and completes a tiny Elixir coding repair by reading source, patching code, running `elixir test/lemon_release_report_test.exs`, and answering only after the test passes.
 - Script notification changes should keep `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/script_send_test.exs --seed 1` green. That focused lane covers `mix lemon.send` parsing, `./bin/lemon send` target formats, default Telegram/Discord target env vars, config-backed default targets, env-over-config precedence, account-scoped delivery and known-target resolution, config-backed default account ids, standalone thread/topic target overrides, reply-to payload routing, Telegram known-target discovery from `LemonChannels.Telegram.KnownTargetStore`, Discord known-target discovery from `LemonChannels.Discord.KnownTargetStore`, list-mode alias metadata, unique Telegram known-name resolution, unique Discord known-name resolution, positional/file/stdin body resolution, `--file -`, repeated `--attach` payload construction up to 10 files, attachment caption handling, attachment filename/count/byte metadata, attachment input errors, dry-run validation without delivery, subject formatting, help text, filtered JSON/list mode, bounded `message_id` extraction, batch delivery `extra_message_ids` extraction, and injected Telegram/Discord direct-delivery payloads without real platform credentials. Attachment changes should also keep the adapter file-delivery lanes green with `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/outbound_test.exs apps/lemon_channels/test/lemon_channels/adapters/discord/outbound_test.exs --seed 1`. Discord transport changes that affect target indexing should also run `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs apps/lemon_channels/test/lemon_channels/discord/known_target_store_test.exs --seed 1`. The source wrapper should also be smoke-checked for Unix exit codes: success/list/help/dry-run returns `0`, usage/config/input failures return `2`, attachment usage/input failures return `2`, and platform delivery failures return `1`.
-- Cron lifecycle changes should keep `apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_store_test.exs`, `apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs`, `apps/lemon_core/test/lemon_core/doctor/checks_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/cron_methods_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/event_bridge_mapping_test.exs`, `apps/lemon_web/test/lemon_web_test.exs`, and `apps/lemon_gateway/test/tools/cron_test.exs` green. That focused lane covers immutable job fields, schedule shorthand normalization, operator-owned no-agent command cron, pause/resume, active-run abort, terminal `aborted` status persistence, durable lifecycle audit events, redacted support-bundle audit diagnostics, `cron.audit` schema/method/event exposure, Web `/ops` audit visibility, the model-facing cron tool lifecycle actions, and `cron.preview` doctor readiness over the redacted diagnostics, runtime-restart, and channel-origin proof artifacts. TUI cron abort changes should also keep `cd clients/lemon-tui && npm run typecheck` plus focused `useCommands` and `agent-connection` Vitest coverage green for `/cron abort <run-id>` and `cron.abort` WebSocket routing. Channel-origin cron promotion should also run `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs`, which proves Telegram- and Discord-shaped channel-peer cron completions through `CronManager`, forwarded run history, `LemonRouter.ChannelsDelivery`, and the LemonChannels outbox using proof-only plugins.
+- Cron lifecycle changes should keep `apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_store_test.exs`, `apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs`, `apps/lemon_core/test/lemon_core/doctor/checks_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/cron_methods_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/event_bridge_mapping_test.exs`, `apps/lemon_web/test/lemon_web_test.exs`, and `apps/lemon_gateway/test/tools/cron_test.exs` green. That focused lane covers immutable job fields, schedule shorthand normalization, operator-owned no-agent command cron, pause/resume, active-run abort, terminal `aborted` status persistence, durable lifecycle audit events, redacted support-bundle audit diagnostics, `cron.audit` schema/method/event exposure audit visibility, the model-facing cron tool lifecycle actions, and `cron.preview` doctor readiness over the redacted diagnostics, runtime-restart, and channel-origin proof artifacts. TUI cron abort changes should also keep `cd clients/lemon-tui && npm run typecheck` plus focused `useCommands` and `agent-connection` Vitest coverage green for `/cron abort <run-id>` and `cron.abort` WebSocket routing. Channel-origin cron promotion should also run `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs`, which proves Telegram- and Discord-shaped channel-peer cron completions through `CronManager`, forwarded run history, `LemonRouter.ChannelsDelivery`, and the LemonChannels outbox using proof-only plugins.
 - `smoke`: documents the product-smoke lane and points at `.github/workflows/product-smoke.yml`. It exits successfully locally because the current product smoke builds and boots a release with CI assumptions. The workflow builds a release, boots it, checks control-plane HTTP health, handshakes with the control-plane WebSocket protocol, calls `health`, submits a deterministic `echo` agent run, waits for it through `agent.wait`, checks the web health endpoint for the full runtime profile, verifies release support-bundle generation, lints built-in skills, and runs focused adaptive gate checks.
 - `all`: useful local aggregate for BEAM-centric pre-review confidence: `fast`, `quality`, `eval-fast`, then `smoke`. Run `clients` separately when client code or shared contracts changed.
 - `path`: pass-through to `mix test` for specific paths or ExUnit args, for example `scripts/test path apps/coding_agent/test --only some_tag`.
@@ -92,7 +92,7 @@ Memory-provider proof covers the BEAM-native provider boundary behind
 `search_memory` and the Hermes-compatible `session_search` wrapper: local SQLite remains the built-in provider, registered BEAM
 providers receive safety-screened ingest fan-out, scoped searches fan out without
 broadening missing scope keys, provider failures are isolated, `memory.status`
-exposes read-only provider shape, Web `/ops` renders the same redacted registry
+exposes read-only provider shape renders the same redacted registry
 state, and `memory_diagnostics.json` redacts memory contents and raw provider
 config.
 
@@ -189,7 +189,7 @@ current completed deterministic check set. The proof covers the 16-command
 local slash inventory, checkpoint/rollback/kanban/media payload decoding, and safe local interaction
 responses for session/model/thinking/resume/cancel/media/trigger/cwd/topic/file
 paths. The proof artifact also records safe coverage counts consumed by
-`proofs.status`, support bundles, and Web `/ops`. It is not real Discord
+`proofs.status`, support bundles, and. It is not real Discord
 client-click evidence.
 
 The live Discord runtime also has a passive client-click proof recorder. When a
@@ -232,7 +232,7 @@ observed.
 
 For live Discord matrix runs, keep `--result-path` for operator handoff data
 such as nonces and Discord message ids, and add `--proof-path` when the result
-should feed `proofs.status`, support bundles, doctor gates, or Web `/ops`.
+should feed `proofs.status`, support bundles, doctor gates, or.
 The proof path writes a sanitized artifact with hashed channel/user/message
 identifiers, check counts, reason kinds, cleanup assertions, and safe coverage
 booleans for which live-matrix families were exercised, but no raw Discord ids,
@@ -398,7 +398,7 @@ MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
 This writes `.lemon/proofs/wasm-tool-telemetry-latest.json` and verifies
 successful WASM tool execution, returned sidecar errors, and sidecar exits emit
 redacted start/stop/exception telemetry with hashed WASM paths and tool-call
-ids. `extensions.status` and Web `/ops` surface the redacted proof status,
+ids. `extensions.status` and surface the redacted proof status,
 check status, host-boundary flags, proof hash, and redaction summary. It proves
 the wrapper telemetry contract only; public registry workflow and broad sandbox
 parity remain separate plugin-ecosystem work.
@@ -452,7 +452,7 @@ proof exists and skip before the matching proof has been generated. The generic
 the redacted raw-cwd/session/tool/param/path/manifest/distribution flags even
 when the artifact has no generic `cleanup` map. The JSON-RPC `proofs.status`
 method preserves the same `redaction` map on formatted recent proofs for
-external clients with lowerCamelCase keys, and Web `/ops` renders the generic
+external clients with lowerCamelCase keys, and renders the generic
 proof-row redaction summary in its proof artifact panel.
 
 Telegram and Discord renderer checks cover finalized-run text presentation,
@@ -467,7 +467,7 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/renderer_test
 This lane passed locally on 2026-05-16 with `19 tests, 0 failures`.
 
 Media job observability checks cover redacted generated-media metadata,
-`media.status`, support-bundle `media_diagnostics.json`, Web `/ops` snapshot
+`media.status`, support-bundle `media_diagnostics.json` snapshot
 visibility, router finalization recording for generated `auto_send_files`, and
 Hermes-compatible final-answer `MEDIA:<path>` directives that resolve through
 the same safe attachment path:
@@ -676,7 +676,7 @@ LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
 LSP diagnostics preview checks cover the model-facing `lsp_diagnostics` tool,
 baseline/delta suppression for pre-existing issues, graceful skipped results,
 opt-in post-edit diagnostics on `write`, `edit`, and `patch`, plus redacted
-control-plane, Web `/ops`, support-bundle status visibility, and the supervised
+control-plane support-bundle status visibility, and the supervised
 language-server registry/session/initialize/JSON-RPC/diagnostic-notification
 manager, stderr containment, launcher-child cleanup, request-timeout session
 termination, and document open/change/close notification redaction:
@@ -758,7 +758,7 @@ The full registered-server real-repository fixture proof passed locally on
 Rust, TypeScript, and Elixir fixtures, initial/reintroduced diagnostics for all
 servers, final clean diagnostics, closed documents, and cleanup flags false for
 raw paths, file contents, diagnostics output, raw session ids, and server I/O.
-`proofs.status`, support bundles, Web `/ops`, and
+`proofs.status`, support bundles and
 `mix lemon.doctor --verbose` consume both
 `.lemon/proofs/lsp-project-fixtures-latest.json` and
 `.lemon/proofs/lsp-real-repo-fixtures-latest.json`; the final readiness audit
@@ -1223,7 +1223,7 @@ blocking, public-route guard rejection, model-visible screenshot, local
 browser-to-media vision, browser analyze, cookie set/get redaction, clear-state
 reset, attach-only CDP endpoint mode, and 40 redacted browser progress updates
 across 20 started and 20 completed phases in the proof JSON. `proofs.status`,
-support bundles, Web `/ops`, and `mix lemon.doctor --verbose` consume the same
+support bundles and `mix lemon.doctor --verbose` consume the same
 `.lemon/proofs/browser-smoke-latest.json` artifact through `browser.preview`;
 the final readiness audit validates it by default or
 `LEMON_BROWSER_PROOF_JSON` when release evidence lives elsewhere.

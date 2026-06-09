@@ -4,14 +4,12 @@ Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashbo
 
 ## Quick Orientation
 
-This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. Most pages are LiveViews, with a small controller for support bundle downloads. The frontend uses Tailwind from CDN and vendored Phoenix/LiveView JS from umbrella dependencies (no Node.js, no esbuild). The HTTP server is Bandit.
+This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. The frontend uses Tailwind from CDN and vendored Phoenix/LiveView JS from umbrella dependencies (no Node.js, no esbuild). The HTTP server is Bandit.
 
 Key entry points:
 - **Router**: `lib/lemon_web/router.ex` -- all routes defined here
 - **Endpoint**: `lib/lemon_web/endpoint.ex` -- HTTP pipeline and socket config
 - **Main LiveView**: `lib/lemon_web/live/session_live.ex` -- the dashboard chat UI
-- **Ops LiveViews**: `lib/lemon_web/live/ops_dashboard_live.ex`, `lib/lemon_web/live/ops_run_live.ex` -- operations dashboard and run inspection
-- **Support bundle controller**: `lib/lemon_web/controllers/support_bundle_controller.ex` -- redacted support bundle download
 - **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional token gate
 
 ## Purpose and Responsibilities
@@ -39,7 +37,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show), `/ops`, `/ops/runs/:run_id`, `/ops/support-bundle`
+- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show)
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -53,75 +51,6 @@ Key entry points:
 live "/", SessionLive, :index        # Generates a new isolated session key per tab
 live "/sessions/:session_key", SessionLive, :show  # Uses the provided session key
 ```
-
-### OpsDashboardLive and OpsRunLive
-
-`LemonWeb.OpsDashboardLive` exposes `/ops` for runtime health, build/release
-metadata, shared launch-readiness gate status, default provider/model/thinking/engine editing, provider
-secret-reference editing, redacted runtime provider readiness, media job and
-grouped image/TTS/STT/vision/video provider-proof readiness, redacted
-usage/cost/quota aggregate visibility backed by `LemonCore.UsageDiagnostics`,
-redacted memory-provider registry status, recent runs,
-approvals, MCP OAuth `Open OAuth` approval actions, structured MCP sampling approval summaries, cron create/edit/delete/run/pause/resume controls with active-run abort, retry policy fields, active-run scheduler-lock counts, suppressed-slot counts, stale-run recovery counts, retry scheduling counts, recent run/retry visibility, and recent lifecycle audit entries,
-redacted extension/plugin directory and manifest diagnostics, skill provenance/status/install/update controls, channel transport
-enable/disable config controls, shared Telegram/Discord launch-gate readiness
-from `LemonCore.Doctor.ChannelReadiness`, gateway default editing, Telegram
-token-secret/allowlist editing, channel binding create/edit/delete controls,
-adapter runtime status/disconnect/reconnect controls, redacted checkpoint
-status with copy-ready TUI/control-plane rollback commands plus direct
-checkpoint diff/restore controls, redacted durable kanban board/task status, and
-redacted LSP checker/server/session status with recent LSP proof artifacts and
-proof-check summaries, and support bundle entry points.
-
-`LemonWeb.OpsRunLive` exposes `/ops/runs/:run_id` for timeline, tool events,
-failures, child-run graph, run-scoped approvals with MCP OAuth and sampling
-metadata plus approve/deny controls, resolved/timed-out approval history,
-skill/memory learning events, Telegram/Discord channel events, cron lifecycle
-events, subagent/delegation events, and support bundle entry points.
-
-Provider-backed media proof rows in `/ops` should be grouped by launch lane,
-not a single provider id, so alternate providers such as `vertex_imagen`,
-`google_tts`, and `deepgram_transcribe` can satisfy the same image/TTS/STT
-proof lanes as their OpenAI-backed defaults. Keep copy-ready live-proof
-commands, secret-backed `--api-key-secret SECRET_NAME` variants, per-provider
-`--provider` rerun commands where a smoke script supports them, and default
-`.lemon/proofs/media-*-smoke-latest.json` paths visible. Local `--local` media
-smoke artifacts do not satisfy the provider-backed launch gate. Provider rows
-must display bounded next-action hints from safe `reason_kind` values for
-permission, quota/billing, payment, request-shape, and provider HTTP failures,
-but must never include raw provider response text.
-
-Channel failure drilldown must stay aligned with `LemonCore.Doctor` and
-`ProofDiagnostics`: if a live Discord proof emits
-`discord_message_content_intent_or_delivery`, `/ops` should surface that
-Message Content Intent or delivery drift explicitly instead of collapsing it
-into a generic no-reply failure. Slash client-click rows should use the latest
-`discord_slash_client_click_proof_artifact` reason kind, including missing,
-invalid, non-promotable, and stale artifact states, so operators get the same
-redacted wait-mode `--proof-path` next step as doctor and support bundles.
-The aggregate launch-gate card should come from
-`LemonCore.Doctor.ChannelReadiness` so Web `/ops`, `channels.status`, and
-support-bundle `channel_readiness.json` stay aligned on promoted-platform
-counts, safe reason kinds, cleanup flags, and Discord client-click wait-mode
-state.
-Discord DM rows should keep `discord_dm_setup_refused` bounded as an external
-reachability blocker and surface the concrete `--wait-dm-inbound` handoff
-instead of implying bot-to-bot DMs are stable.
-
-The top-level Launch Readiness panel should come from
-`LemonCore.Doctor.ReadinessSummary`, matching `mix lemon.readiness`,
-`readiness.status`, and support-bundle `readiness_summary.json`. Keep the panel
-compact: doctor status/counts, Telegram/Discord launch-gate counts,
-provider-media state, shared `LemonCore.Doctor.ProofLaunchGates` summaries,
-proof totals, unresolved gate labels, and cleanup flags only. It must not
-include raw ids, prompts, provider responses, proof paths, proof details, bot
-tokens, secret names, or secret values.
-
-The Discord access form owns only Lemon's local config declaration. Toggling
-Message Content Intent writes `gateway.discord.message_content_intent_enabled`;
-operators still must enable the privileged intent in the Discord Developer
-Portal and restart/rerun the live proof before free-response support is
-promotable.
 
 **Query params supported on `/`:**
 - `?agent_id=<id>` - Sets the agent for the isolated session (default: `"default"`)
@@ -456,10 +385,6 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonRouter.abort/1` -- Aborts the active run for a session key.
 - `LemonRouter.abort_run/1` -- Aborts a specific run by ID.
 
-### lemon_ai_runtime
-
-- `LemonAiRuntime.ProviderStatus.snapshot/1` -- Returns redacted provider credential readiness and route-preview metadata for `/ops` without raw API keys, secret names, base URLs, or env var names.
-
 ## Configuration Reference
 
 | Config Key | Env Var | Default | Purpose |
@@ -481,14 +406,10 @@ apps/lemon_web/
 |-- lib/lemon_web/router.ex             # Routes + :browser pipeline
 |-- lib/lemon_web/telemetry.ex          # Telemetry supervisor
 |-- lib/lemon_web/gettext.ex            # i18n backend
-|-- lib/lemon_web/controllers/
-|   |-- support_bundle_controller.ex    # Redacted support bundle download
 |-- lib/lemon_web/plugs/
 |   |-- require_access_token.ex         # Auth plug (optional token gate)
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
-|   |-- ops_dashboard_live.ex           # Operations dashboard
-|   |-- ops_run_live.ex                 # Run timeline/detail page
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
 |       |-- message_component.ex        # Chat message bubbles

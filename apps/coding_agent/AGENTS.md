@@ -142,8 +142,8 @@ filesystem checkpoint before backend launch.
 file diagnostics with graceful fallback when a checker is unavailable, and
 `write`, `edit`, and `patch` can opt into post-edit baseline/delta diagnostics.
 Operator status is exposed without paths, file contents, workspace roots, or
-diagnostic output through `lsp.diagnostics.status`, Web `/ops`, and support
-bundle `lsp_diagnostics.json`. `LemonCore.LspServerManager` owns redacted
+diagnostic output through `lsp.diagnostics.status` and support bundle
+`lsp_diagnostics.json`. `LemonCore.LspServerManager` owns redacted
 language-server registry, stdio session lifecycle status, initialize
 orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.

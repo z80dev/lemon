@@ -574,8 +574,8 @@ if grep -q 'verify_browser_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/nul
    grep -q 'browser.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q 'scripts/live_browser_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q '"liveProof"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/browser_status.ex" 2>/dev/null &&
-   grep -q 'JSON-RPC `browser.status` exposes the same live' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'browser proof state, latest browser proof checks' "$ROOT/docs/support.md" 2>/dev/null; then
+   grep -q 'browser operator diagnostics through JSON-RPC `browser.status`' "$ROOT/docs/support.md" 2>/dev/null &&
+   grep -q 'live browser proof' "$ROOT/docs/support.md" 2>/dev/null; then
   pass "J27: final readiness audit requires browser proof"
 else
   fail "J27: final readiness audit does not require documented browser proof"
@@ -717,12 +717,9 @@ if grep -q 'verify_cron_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null 
    grep -q 'LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q 'LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
    grep -q 'cron.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'active_run_count' "$ROOT/apps/lemon_web/lib/lemon_web/ops_dashboard.ex" 2>/dev/null &&
-   grep -q 'suppressed_run_count' "$ROOT/apps/lemon_web/lib/lemon_web/ops_dashboard.ex" 2>/dev/null &&
-   grep -q 'stale_recovery_count' "$ROOT/apps/lemon_web/lib/lemon_web/ops_dashboard.ex" 2>/dev/null &&
    grep -q 'suppressedSlotCount' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex" 2>/dev/null &&
    grep -q 'retryScheduledCount' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex" 2>/dev/null &&
-   grep -q 'control-plane `cron.status` also surface cron scheduler health' "$ROOT/docs/support.md" 2>/dev/null; then
+   grep -q 'control-plane `cron.status` surfaces cron scheduler health' "$ROOT/docs/support.md" 2>/dev/null; then
   pass "J27: final readiness audit requires cron proof"
 else
   fail "J27: final readiness audit does not require documented cron proof"

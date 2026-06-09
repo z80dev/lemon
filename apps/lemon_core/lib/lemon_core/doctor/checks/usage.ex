@@ -29,7 +29,7 @@ defmodule LemonCore.Doctor.Checks.Usage do
     Check.warn(
       "usage.status",
       "Usage is over a configured quota: #{usage_summary(diagnostics)}.",
-      "Review `usage.status`, `usage.cost`, or Web `/ops`, then adjust limits or reduce run volume."
+      "Review `usage.status` or `usage.cost`, then adjust limits or reduce run volume."
     )
   end
 

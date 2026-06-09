@@ -101,15 +101,15 @@ capability only when Lemon can answer server sampling requests:
 When sampling is configured through `LemonSkills.McpSource`, use
 `reviewer: :ops_approval` to route reviewed sampling through
 `LemonCore.ExecApprovals`. The source bridge creates redacted
-`mcp_<server>_sampling` approvals for Web `/ops` and other approval surfaces
-before any delegate sees raw sampling params. Web `/ops` renders the safe
-request hash, model, token, message, role, and content-kind metadata.
+`mcp_<server>_sampling` approvals for approval surfaces before any delegate sees
+raw sampling params. Approval summaries include the safe request hash, model,
+token, message, role, and content-kind metadata.
 
 Configured Streamable HTTP sources with local PKCE redirect URIs also route
 authorization requests through `LemonCore.ExecApprovals` as `mcp_<server>_oauth`
-approvals before token exchange. Web `/ops` renders those approvals with an
-`Open OAuth` link plus resource, redirect, and scope context; denial or timeout
-stops the authorization attempt.
+approvals before token exchange. Approval surfaces receive an OAuth link plus
+resource, redirect, and scope context; denial or timeout stops the authorization
+attempt.
 
 Streamable HTTP servers protected by OAuth client credentials can be started
 with an `:oauth` option:

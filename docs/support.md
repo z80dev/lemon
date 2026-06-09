@@ -14,14 +14,14 @@ Initial stable 1.0 support targets:
 - Linux `x86_64` release tarballs published by the Lemon release workflow
 - provider setup through documented configuration and secrets commands
 - runtime startup through `./bin/lemon`, `./bin/lemon-dev`, and release scripts
-- Web health and operations pages
+- Web health and session pages
 - first-party text web tools such as web search/fetch when used from supported
   agent runs
 - doctor diagnostics and redacted support bundles
-- preview checkpoint diagnostics through `checkpoint.status`, Web `/ops`,
+- preview checkpoint diagnostics through `checkpoint.status`,
   Telegram/Discord `/checkpoint` status/events/diff/restore controls with
   redacted lifecycle event counts/history and pushed active-run event notices,
-  checkpoint lifecycle events, redacted support-bundle metadata, Web `/ops` rollback
+  checkpoint lifecycle events, redacted support-bundle metadata, rollback
   command guidance and direct diff/restore controls, and
   operator-only `checkpoint.diff` / `checkpoint.restore` control-plane methods
   plus TUI `/checkpoint diff` and `/checkpoint restore`; shared checkpoint
@@ -33,10 +33,10 @@ Initial stable 1.0 support targets:
   confirmation token or slash-command boolean.
 - preview LSP diagnostics through the model-facing `lsp_diagnostics` tool,
   opt-in `write`/`edit`/`patch` baseline/delta checks, redacted
-  `lsp.diagnostics.status`, Web `/ops` checker visibility, and
+  `lsp.diagnostics.status` checker visibility, and
   `lsp_diagnostics.json` in support bundles. JSON-RPC
   `lsp.diagnostics.status` also includes recent redacted LSP proof artifacts
-  and latest LSP proof checks, matching the Web `/ops` promotion view without
+  and latest LSP proof checks, matching the promotion view without
   raw proof paths, filenames, file contents, diagnostics output, or server I/O.
   `LemonCore.LspServerManager` is a
   supervised BEAM status, stdio session, initialize, JSON-RPC framing, and
@@ -55,7 +55,7 @@ Initial stable 1.0 support targets:
   artifacts are current.
   See [`docs/tools/lsp.md`](tools/lsp.md) for checker and language-server
   install commands.
-- preview generated-media job observability through `media.status`, Web `/ops`,
+- preview generated-media job observability through `media.status`,
   Telegram/Discord `/media status`, and `media_diagnostics.json` in support
   bundles. The preview reports job type/status counts, artifact counts/bytes,
   cleanup policy, prompt hashes, and artifact path hashes only; support surfaces
@@ -77,21 +77,17 @@ Initial stable 1.0 support targets:
   The same bundle includes `channel_readiness.json` with shared Telegram and
   Discord launch-gate status, gate counts, safe reason kinds, and bounded next
   actions without raw ids, tokens, proof paths, proof details, or message
-bodies. `readiness_summary.json` adds the compact launch-readiness rollup
-used by `mix lemon.readiness`: doctor counts, channel gate counts,
-provider-media state, proof totals, unresolved gates, and cleanup flags
-without raw ids, prompts, provider responses, proof paths, proof details, or
-secret values. Web `/ops` renders the same compact readiness summary so support
-operators can inspect launch status, unresolved gate labels, and cleanup flags
-without leaving the browser.
-- browser operator diagnostics in Web `/ops`. The browser panel shows local
-  driver session timestamps, pending/buffered request counters, a hashed driver
-  process id, safe capability labels, operator guidance, artifact counts, and
-  cleanup policy without embedding screenshot bytes, page contents, cookie
-  values, or raw driver logs. JSON-RPC `browser.status` exposes the same live
-  browser proof state, latest browser proof checks, and browser proof cleanup
-  booleans for non-Web operator clients without raw proof paths, filenames,
-  page data, screenshots, or provider responses.
+  bodies. `readiness_summary.json` adds the compact launch-readiness rollup
+  used by `mix lemon.readiness`: doctor counts, channel gate counts,
+  provider-media state, proof totals, unresolved gates, and cleanup flags
+  without raw ids, prompts, provider responses, proof paths, proof details, or
+  secret values.
+- browser operator diagnostics through JSON-RPC `browser.status`. The status
+  response exposes driver session timestamps, pending/buffered request counters,
+  safe capability labels, artifact counts, cleanup policy, live browser proof
+  state, latest browser proof checks, and browser proof cleanup booleans without
+  raw proof paths, filenames, page data, screenshots, cookie values, raw driver
+  logs, or provider responses.
 - browser tool progress status. Browser requests emit redacted `current_action`
   updates for Web/TUI/Telegram/Discord status surfaces with method, phase,
   timeout, safe counts, artifact flags, and hashed host metadata only; raw URLs,
@@ -102,7 +98,7 @@ without leaving the browser.
   ids, source labels, supported scopes, timeout shape, and module-load state
   without memory document contents, raw provider config, secret values, prompts,
   tool output, or provider error payloads. The same provider shape is visible to
-  operators through read-only `memory.status` and Web `/ops`. JSON-RPC
+  operators through read-only `memory.status`. JSON-RPC
   `memory.status` also summarizes provider health, enabled/disabled counts,
   loaded/missing module counts, searchable scopes, and per-scope provider
   counts without reading or returning memory contents.
@@ -150,7 +146,7 @@ without leaving the browser.
   summaries and cleanup flags without returning message bodies, credentials, or
   secret values.
 - proof-artifact diagnostics through `proof_diagnostics.json` in support
-  bundles, read-only `proofs.status`, and Web `/ops`. The bundle scans
+  bundles and read-only `proofs.status`. The bundle scans
   `.lemon/proofs/*proof*.json`, `.lemon/proofs/*-latest.json`, and
   `tmp/*proof*.json` for redacted proof status,
   pass/fail/skip counts, generated timestamps, provider/model labels when
@@ -161,18 +157,18 @@ without leaving the browser.
   latest redacted check status with proof-object labels when present, safe
   proof object/provider-path labels on recent proofs, safe coverage
   counts/booleans for Discord slash and live-matrix
-  artifacts, media-directive delivery/leak booleans on Web `/ops`, file/proof
+  artifacts, media-directive delivery/leak booleans, file/proof
   hashes, cleanup booleans, and explicit proof-level redaction booleans for
   proof artifacts that use a `redaction` map instead of a generic `cleanup`
   map;
   shared `LemonCore.Doctor.ProofLaunchGates` summary for Discord DM, Discord
   slash registration, Discord slash client-click, provider media, and terminal
-  backends; `proofs.status`, `readiness_summary.json`, `readiness.status`, and
-  Web `/ops` all consume that same redacted proof-gate view so operators can
+  backends; `proofs.status`, `readiness_summary.json`, and
+  `readiness.status` consume that same redacted proof-gate view so operators can
   show bounded launch blockers without raw proof rows;
   support surfaces omit raw file paths, filenames, proof details, prompts,
   provider responses, proof file contents, and generated artifacts.
-- channel failure drilldown in Web `/ops`. The panel joins redacted channel
+- channel failure diagnostics join redacted channel
   diagnostics with safe proof counts so operators can see whether Telegram
   voice transcription plus Discord DM, free-response, reconnect replay, and
   slash client-click promotion are blocked, seeded, proven, or still waiting for
@@ -182,8 +178,8 @@ without leaving the browser.
   Discord credential shape, Telegram local voice transcription proof status,
   plus Discord DM, free-response, reconnect, slash registration, deterministic
   slash, and real slash client-click proof gates from the same redacted
-  diagnostics/proof inventory used by support bundles and Web `/ops`.
-- media readiness checks in `mix lemon.doctor` and Web `/ops`. Doctor separates
+  diagnostics/proof inventory used by support bundles.
+- media readiness checks in `mix lemon.doctor`. Doctor separates
   Telegram/Discord generated-media delivery proof from provider-backed
   image/TTS/STT/vision/video proof. Provider-backed failures surface only safe
   `reason_kind` labels, such as `provider_http_error`, in doctor summaries and
@@ -220,7 +216,7 @@ without leaving the browser.
   `--wait-media-directive-delivery`; sanitized proof artifacts expose only
   coverage, marker/document or attachment status, directive-leak status, and
   hashed channel/topic identifiers. Doctor, support bundles, `proofs.status`,
-  and Web `/ops` surface the MEDIA directive coverage and leak-status booleans
+  surface the MEDIA directive coverage and leak-status booleans
   without exposing the local directive path or raw channel message body.
 - preview durable goal status, one-shot continuation, one supervised judge tick,
   max-continuation budgets, bounded operator-started goal loops, and opt-in
@@ -228,7 +224,7 @@ without leaving the browser.
   `goal.set`, `goal.status`, `goal.pause`, `goal.resume`, `goal.continue`,
   `goal.loop.once`, `goal.loop.start`, `goal.loop.status`, `goal.loop.stop`,
   `goal.clear`, TUI `/goal`, Telegram/Discord `/goal` status/set/continue/loop
-  controls, Web `/ops`, goal lifecycle events, and redacted support-bundle
+  controls, goal lifecycle events, and redacted support-bundle
   metadata. This is bounded supervised loop plumbing with a dev/prod
   router-backed judge default, deterministic proof through the real router run
   process, persisted-auto scheduler proof through the same path, and
@@ -236,7 +232,7 @@ without leaving the browser.
   remains preview before full persistent-goal parity.
 - preview durable kanban board/task state, JSON-RPC board/task/archive/dispatcher
   methods, model-facing `kanban` tool, supervised dispatcher leases, per-task
-  git worktree worker cwd for git-backed boards, redacted Web `/ops` board
+  git worktree worker cwd for git-backed boards, redacted control-plane board
   visibility, TUI `/kanban` board/task/archive/dispatcher controls, Telegram `/kanban`
   commands, Discord `/kanban` slash commands, and redacted support-bundle
   diagnostics.
@@ -248,20 +244,19 @@ Telegram and Discord are stable 1.0 remote chat channels for text-first agent
 runs. The TUI, Web UI, and control plane are stable first-party local
 interfaces. In control-plane mode, the TUI renders approval events as
 notifications; MCP OAuth approval requests include the authorization URL plus
-resource, scope, and redirect context so operators can complete login without
-opening Web `/ops`, and MCP sampling approval requests include redacted request
-hash, model, token, message, role, and content-kind metadata. Operators can
+resource, scope, and redirect context, and MCP sampling approval requests
+include redacted request hash, model, token, message, role, and content-kind
+metadata. Operators can
 resolve pending approvals from the terminal
-with `/approval approve|once|session|agent|global|deny <approval-id>`, using
-the same `exec.approval.resolve` path as Web `/ops`; `/approval` and
+with `/approval approve|once|session|agent|global|deny <approval-id>`; `/approval` and
 `/approval list` refresh the current pending approval snapshot through
 `exec.approvals.get`. Approval timeouts also arrive as
 `exec.approval.resolved` notifications with `decision: "timeout"` so terminal
 operators see when a pending request expired.
 
 JSON-RPC `channels.status` combines registered channel-adapter status with the
-same redacted Telegram/Discord diagnostics used by support bundles and Web
-`/ops`, including binding counts, file-transfer shape, Telegram voice settings,
+same redacted Telegram/Discord diagnostics used by support bundles, including
+binding counts, file-transfer shape, Telegram voice settings,
 Discord DM/free-response/replay/slash-command readiness, bot-message policy,
 and cleanup booleans without bot tokens, secret names, chat ids, channel ids,
 guild ids, or message bodies. It also exposes recent redacted Telegram/Discord
@@ -281,8 +276,8 @@ client-click slash interactions, and voice remain preview until separate live
 matrices promote them. Slash-command diagnostics list the expected Lemon
 commands and proof sources, and the deterministic slash proof covers 34 local
 inventory/decoder/response checks across the 16 in-repo command names. Safe
-coverage counts from that proof are exposed through support bundles,
-`proofs.status`, and Web `/ops`. Doctor now distinguishes all-command
+coverage counts from that proof are exposed through support bundles and
+`proofs.status`. Doctor now distinguishes all-command
 registration proof from narrower `/media` registration proof, but broad Discord
 slash parity still requires real client-click evidence. The Discord runtime now passively records redacted
 `lemon.discord_slash_client_click` proof artifacts when a real slash-command
@@ -294,7 +289,7 @@ runtime is deployed or hot reloaded and then running
 The wait mode posts a concrete operator instruction, polls the runtime proof
 artifact, and rejects stale artifacts generated before the watcher started. The validator
 emits stable reason kinds for missing, invalid, and non-promotable artifacts so
-doctor, support bundles, and Web `/ops` can tell operators whether they need to
+doctor and support bundles can tell operators whether they need to
 capture the first real click, replace a bad artifact, or rerun after a
 non-promotable click response.
 Inbound-replay diagnostics distinguish deterministic transport-restart dedupe
@@ -302,8 +297,8 @@ proof from live gateway reconnect proof. The latest live gateway reconnect
 proof passed after a deliberate runtime restart with no duplicate replay and a
 fresh post-restart response. Live Discord matrix runs can now write a second,
 sanitized proof artifact
-with `--proof-path` for `proofs.status`, support bundles, doctor gates, and Web
-`/ops`; keep `--result-path` for operator handoff data such as nonces and
+with `--proof-path` for `proofs.status`, support bundles, doctor gates,
+and readiness checks; keep `--result-path` for operator handoff data such as nonces and
 message ids. The sanitized proof preserves only coverage counts/booleans such
 as whether DM, free-response, restart-verify, generated-media, file-delivery,
 or slash-registration checks were present, including
@@ -345,22 +340,22 @@ blocks cron preview promotion unless all three artifacts are complete and
 redacted.
 
 Active cron runs can be aborted by cron run id through the control-plane
-`cron.abort` method, the model-facing `cron` tool `abort` action, Web `/ops`,
-or TUI `/cron abort <run-id>`. Abort routes to the underlying Lemon run
+`cron.abort` method, the model-facing `cron` tool `abort` action, or TUI
+`/cron abort <run-id>`. Abort routes to the underlying Lemon run
 cancellation when that run is still alive, persists the cron run as `aborted`,
 and does not retry the run.
 
-Web `/ops` and control-plane `cron.status` also surface cron scheduler health
-as aggregate counters for active run locks, retry runs, suppressed scheduled
-slots, stale-run recoveries, and scheduled retries, plus next/last run
-timestamps and status/trigger/audit count maps. Those counters come from the
-same durable run and audit stores used by support bundles, so operators can see
-when BEAM scheduling is intentionally holding a slot instead of launching a
-duplicate run.
+The control-plane `cron.status` surfaces cron scheduler health as aggregate
+counters for active run locks, retry runs, suppressed scheduled slots,
+stale-run recoveries, and scheduled retries, plus next/last run timestamps and
+status/trigger/audit count maps. Those counters come from the same durable run
+and audit stores used by support bundles, so operators can see when BEAM
+scheduling is intentionally holding a slot instead of launching a duplicate
+run.
 
 Cron lifecycle actions also write durable operator audit events to
 `:cron_audit_events`. The control-plane `cron.audit` read method returns raw
-operator IDs for authorized clients, Web `/ops` shows the most recent lifecycle
+operator IDs for authorized clients shows the most recent lifecycle
 audit entries, and the WebSocket event bridge emits `cron.audit` updates.
 Support bundles include only redacted audit counts, action counts, recent action
 shape, reason hashes, ID hashes, and changed-field names.
@@ -423,10 +418,11 @@ remediation includes copy-ready `MIX_ENV=test mix run --no-start scripts/live_me
 adds the target `--provider` flag when a failed/skipped multi-provider lane
 identifies the safe provider id, and includes bounded hints for
 permission-denied, billing/quota, payment-required, and request-shape failures,
-matching the Web `/ops` provider-media proof rows. Web
-`/ops` also exposes the secret-backed variant with `--api-key-secret SECRET_NAME` for
-release-candidate operators who keep provider keys in Lemon's encrypted secret
-store instead of exporting raw API keys. The provider-prefixed OpenAI-compatible routing handoff is proven only on the media vision path; image, TTS, STT, and video
+matching the provider-media proof rows. The same smoke scripts expose the
+secret-backed variant with `--api-key-secret SECRET_NAME` for release-candidate
+operators who keep provider keys in Lemon's encrypted secret store instead of
+exporting raw API keys. The provider-prefixed OpenAI-compatible routing handoff
+is proven only on the media vision path; image, TTS, STT, and video
 proof scripts report
 `provider_prefixed_model_not_supported_for_media_type` if called with a
 `provider:model` value, and compatible endpoint checks should use `--base-url`
@@ -486,7 +482,7 @@ tool. Scheduled agent runs are expected to run in isolated forked sessions, carr
 their prior-run memory context, and block recursive cron management through model
 tool policy. Operator-controlled pause/resume/run-now/abort are supported first
 through the first-party runtime surfaces. Operator-controlled audit history is
-available through `cron.audit`, Web `/ops`, and `cron.audit` WebSocket events.
+available through `cron.audit` and `cron.audit` WebSocket events.
 Treat advanced automation workflows, external scheduler integrations, and
 production SLA-style scheduling guarantees as post-1.0 work.
 
@@ -551,7 +547,7 @@ These are outside the initial stable support boundary:
   configured risky-shell snapshots, redacted lifecycle events, redacted
   diagnostic metadata, Telegram/Discord redacted checkpoint status/events with
   lifecycle event counts/history, pushed active-run event notices, and
-  diff/restore actions through `/checkpoint` plus the `/rollback` alias, Web `/ops` rollback command guidance/actions, and operator-only
+  diff/restore actions through `/checkpoint` plus the `/rollback` alias rollback command guidance/actions, and operator-only
   control-plane and TUI diff/restore methods. Chat checkpoint output does not
   expose raw file paths, file contents, raw session ids, or arbitrary file
   browsing.
@@ -591,12 +587,6 @@ For source-dev installs, generate a reviewed redacted bundle:
 mix lemon.doctor --bundle
 ```
 
-From the Web operations UI, use:
-
-```text
-http://127.0.0.1:4080/ops/support-bundle
-```
-
 For release-runtime installs, generate:
 
 ```bash
@@ -626,7 +616,7 @@ image/TTS/STT/vision/video launch lanes with completed count, safe provider
 labels, safe `reason_kind` labels, default proof paths, and copy-ready rerun
 commands. When a failed or skipped multi-provider lane identifies a safe target
 provider, the support bundle includes the same `--provider` rerun flag that
-doctor, Web `/ops`, and the final readiness audit use. It does not include
+doctor and the final readiness audit use. It does not include
 prompts, raw artifact paths, generated bytes, provider responses, channel
 message bodies, or API credentials.
 
@@ -642,9 +632,7 @@ fallback routing is disabled, absent, configured without any credential-ready
 fallback, or able to rescue a not-ready default provider through a
 credential-ready fallback. The check only reports provider labels and counts;
 it does not expose key material, secret names, endpoint URLs, prompts, or
-provider responses.
-
-Web `/ops` also shows the latest redacted provider fallback proof summary from
+provider responses. also shows the latest redacted provider fallback proof summary from
 local proof artifacts, including proof status, primary/fallback/final provider
 labels, proof object, proof hash, modified timestamp, next action, and explicit
 cleanup flags. It does not expose prompts, answers, raw API keys, secret names,
@@ -695,7 +683,7 @@ terminal backends from
 `LemonCore.Doctor.ProofLaunchGates`. JSON-RPC `readiness.status` exposes the
 same compact launch-readiness shape for operator clients, using lowerCamelCase
 cleanup keys, top-level summary proof-gate counts/statuses, and a top-level
-summary list of unresolved gate reason kinds. Web `/ops` consumes the shared
+summary list of unresolved gate reason kinds. consumes the shared
 `LemonCore.Doctor.ReadinessSummary` payload too, keeping browser support views,
 CLI output, JSON-RPC clients, and support bundles aligned on the same launch
 gate counts and redaction boundary.
@@ -706,7 +694,7 @@ release-runtime verifiers also inspect support-bundle `readiness_summary.json`
 for the shared proof-gate status/count shape and required launch-gate ids, so
 release artifacts cannot pass while omitting the operator-visible launch-gate
 summary. The provider-media unresolved gate also carries bounded
-`reason_kinds` from the shared proof-gate lanes, and Web `/ops` requests enough
+`reason_kinds` from the shared proof-gate lanes, and requests enough
 unresolved readiness rows to include that provider-media gate.
 
 `mix lemon.doctor` also includes channel and media readiness checks. Telegram and Discord
@@ -726,7 +714,7 @@ Discord IDs, interaction tokens, or message bodies.
 Media checks report generated
 Telegram/Discord delivery separately from provider-backed
 image/TTS/STT/vision/video proof; missing or skipped provider proofs remain
-warnings until live credential proofs pass. Doctor and Web `/ops` both show the
+warnings until live credential proofs pass. Doctor and both show the
 default redacted provider proof paths for reruns. Restart seed without verify is
 still a warning if only the seed artifact exists, but the latest restart verify
 proof has passed.
@@ -774,12 +762,12 @@ nested library-file counts, and file/path hashes. It does not load extension
 code and does not include raw source paths, file contents, manifest contents,
 distribution URLs, plugin names, provider names, or load-error messages.
 
-The same redacted directory shape is visible in Web `/ops` through the
+The same redacted directory shape is visible in through the
 Extensions panel. Use read-only `extensions.status` when you need the deeper
 loaded-extension, tool-conflict, provider-registration, or WASM status view.
 Generic proof diagnostics and JSON-RPC `proofs.status` also preserve
 extension/WASM proof-level `redaction` maps on recent proof summaries, so
-support bundles, Web `/ops`, and external clients can show that lifecycle,
+support bundles and external clients can show that lifecycle,
 telemetry, policy, host, and registry proof artifacts omit raw paths, cwd,
 session ids, params, manifest contents, distribution URLs, and tool payloads
 without treating those fields as generic cleanup policy.

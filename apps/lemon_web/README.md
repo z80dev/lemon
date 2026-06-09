@@ -54,13 +54,7 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 | Path | LiveView | Action | Description |
 |------|----------|--------|-------------|
 | `/` | `SessionLive` | `:index` | Dashboard home; generates an isolated session key per browser tab |
-| `/ops` | `OpsDashboardLive` | `:index` | Operations dashboard for health, launch-readiness gate status, browser worker status/artifacts, media job metadata, provider readiness, grouped media provider-proof readiness, usage/cost/quota aggregates, memory-provider registry status, extension/plugin directory diagnostics, checkpoint metadata plus diff/restore controls, redacted goal/kanban status, runs, approvals including MCP OAuth `Open OAuth` actions and structured MCP sampling summaries, cron schedules with recent run/retry visibility, active-run abort controls, and recent lifecycle audit entries, skills, channels, and support bundle access |
-| `/ops/runs/:run_id` | `OpsRunLive` | `:show` | Run detail page with timeline, tool events, failures, child-run graph, approval metadata and resolution actions including MCP OAuth and sampling context, and support bundle access |
 | `/sessions/:session_key` | `SessionLive` | `:show` | Dashboard bound to a specific session key |
-
-| Path | Controller | Action | Description |
-|------|------------|--------|-------------|
-| `/ops/support-bundle` | `SupportBundleController` | `:download` | Downloads a redacted Lemon support bundle zip |
 
 ### Query Parameters
 
@@ -97,40 +91,6 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 2. Files are persisted to the uploads directory with timestamped names
 3. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
 4. Response streams back through PubSub events
-
-### OpsDashboardLive (`/ops`)
-
-Operations dashboard for support and runtime inspection.
-
-**Features:**
-- Runtime, router, launch-readiness gate summary, browser worker, media job, grouped media provider-proof readiness, provider readiness, usage/cost/quota aggregates, memory-provider registry, provider routing preview, and secrets status summary
-- Version, release, git, Elixir, and OTP runtime metadata
-- Default provider/model/thinking/engine editing and provider secret-reference editing
-- Local browser driver lifecycle counters, redacted local/remote CDP driver mode, last error, artifact directory, and recent screenshot artifacts
-- Redacted media job counts, artifact counts, cleanup policy, recent generated-media job metadata, and grouped image/TTS/STT/vision/video proof status with copy-ready live-proof commands, per-provider rerun commands, default proof artifact paths, and bounded permission/quota/payment/request-shape next actions from safe reason kinds
-- Redacted usage aggregate panel backed by `LemonCore.UsageDiagnostics` for current requests, tokens, cost, provider rows, today totals, and configured run/token/cost limits without prompt text, responses, message bodies, credentials, or secret values
-- Redacted memory-provider count, enabled provider count, source/scope/timeout shape, and cleanup flags matching `memory.status` and `memory_diagnostics.json`
-- Redacted LSP checker/server/session status plus recent LSP proof artifacts and proof-check summaries
-- Active sessions, recent runs, and observed introspection activity
-- Pending execution approvals with resolution actions, including MCP OAuth authorization links for local PKCE flows and structured MCP sampling summaries with request hash, model, token, message, role, and content-kind metadata
-- Cron schedule list with create/edit/delete, run-now, Pause/Resume, active-run Abort, retry policy controls, recent run/retry outcome visibility, and recent lifecycle audit entries
-- Extension/plugin directory, manifest, registry audit, and WASM lifecycle diagnostics with redacted path/file hashes, aggregate capability/provider/host/distribution/audit shape, install/update proof status, sidecar lifecycle proof status, and no plugin-code loading
-- Redacted durable kanban board/task status with counts, leases, columns, worker profile, and workspace hashes
-- Skill health, provenance, required binaries, missing requirements, install/update controls, enable/disable controls, channel transport enable/disable config controls, shared Telegram/Discord launch-gate readiness, gateway default editing, Telegram token-secret and allowlist editing, Discord token-secret, allowlist, deny-unbound, and Message Content Intent declaration editing, channel binding create/edit/delete controls, live adapter status, and disconnect/reconnect controls
-- Channel failure drilldown that reports Discord DM setup refusals, Discord Message Content Intent/free-response proof drift, and Discord slash client-click missing/invalid/non-promotable/stale proof state from the same sanitized reason kinds used by doctor and support bundles, with concrete live-matrix handoff commands surfaced for operators; the aggregate launch-gate card is backed by `LemonCore.Doctor.ChannelReadiness`, matching `channels.status` and support-bundle `channel_readiness.json`
-- Launch Readiness panel backed by `LemonCore.Doctor.ReadinessSummary`, matching `mix lemon.readiness`, `readiness.status`, and support-bundle `readiness_summary.json` for doctor, Telegram/Discord gate, shared proof-gate, provider-media, proof, unresolved-gate, and cleanup summaries without raw ids, prompts, provider responses, proof paths/details, bot tokens, or secret values
-- Support bundle download plus source-dev and release-runtime troubleshooting commands
-
-### OpsRunLive (`/ops/runs/:run_id`)
-
-Run-level support page for inspecting one execution.
-
-**Features:**
-- Run status, event counts, failures, pending approval summary with MCP OAuth and sampling metadata plus approve/deny actions, resolved/timed-out approval history, skill/memory learning events, Telegram/Discord channel events, cron lifecycle events, and subagent/delegation events
-- Timeline of introspection events
-- Tool event and failure lists
-- Nested child-run graph from recorded `parent_run_id` relationships
-- Support bundle download plus source-dev and release-runtime troubleshooting commands
 
 ## Components
 
@@ -293,8 +253,6 @@ apps/lemon_web/
 |       |   |-- require_access_token.ex            # Optional token authentication plug
 |       |-- live/
 |       |   |-- session_live.ex                    # Main dashboard LiveView
-|       |   |-- games_lobby_live.ex                # Games lobby listing
-|       |   |-- game_match_live.ex                 # Game match spectator
 |       |   |-- components/
 |       |       |-- file_upload_component.ex        # File upload UI
 |       |       |-- message_component.ex            # Chat message bubbles

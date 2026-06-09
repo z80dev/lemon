@@ -206,7 +206,7 @@ and [`docs/user-guide/skills.md`](skills.md#skill-drafts-synthesized-skills).
 Support bundles include `memory_diagnostics.json`. It reports provider count,
 enabled provider count, provider ids, sources, scopes, timeout shape, and module
 load state. The same provider shape is available through read-only
-`memory.status` and Web `/ops`. These surfaces do not include memory document
+`memory.status` and. These surfaces do not include memory document
 contents, raw provider config, secret values, prompts, tool output, or provider
 error payloads.
 

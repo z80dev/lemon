@@ -108,10 +108,10 @@ kinds, proof paths, and target-provider rerun commands. It must not include raw
 prompts, provider responses, artifact bytes, API keys, or secret names.
 
 `usage_diagnostics.json` in support bundles mirrors the shared usage summary
-used by control-plane usage methods and Web `/ops`: current cost, request and
-token totals, provider rows, today totals, configured quota limits, and cleanup
-flags. It must not include raw prompts, responses, channel message bodies,
-credentials, or secret values.
+used by control-plane usage methods: current cost, request and token totals,
+provider rows, today totals, configured quota limits, and cleanup flags. It
+must not include raw prompts, responses, channel message bodies, credentials,
+or secret values.
 
 `channel_readiness.json` in support bundles mirrors the shared Telegram/Discord
 launch-gate summary used by `channels.status`: promoted platform list, gate

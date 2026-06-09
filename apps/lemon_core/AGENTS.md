@@ -49,7 +49,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
 | `LemonCore.IdempotencyStore` | Typed wrapper for persisted idempotency entries |
-| `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters used by control-plane and Web `/ops` surfaces |
+| `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters used by control-plane surfaces |
 | `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
@@ -431,13 +431,13 @@ bot tokens, or secret names. Free-response checks distinguish missing local
 Message Content Intent declaration from proof artifacts that still report
 Message Content Intent or unmentioned-message delivery drift after declaration.
 Slash client-click checks should preserve stable reason kinds for missing,
-invalid, non-promotable, and stale proof artifacts so doctor, support bundles,
-and Web `/ops` can point operators at the exact wait-mode proof step.
+invalid, non-promotable, and stale proof artifacts so doctor and support bundles
+can point operators at the exact wait-mode proof step.
 Shared proof launch-gate summaries should live in
 `LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
-support bundles, `proofs.status`, `readiness.status`, and Web `/ops` stay
-aligned on Discord DM, slash registration, slash client-click, provider media,
-and terminal backend gate state without raw proof details.
+support bundles, `proofs.status`, and `readiness.status` stay aligned on
+Discord DM, slash registration, slash client-click, provider media, and
+terminal backend gate state without raw proof details.
 
 ## How to Add Quality Checks
 

@@ -286,9 +286,9 @@ response routing stay tied together.
 When a stdio server is configured through `LemonSkills.McpSource`, the source
 layer may use `reviewer: :ops_approval` to bridge reviewed sampling into
 `LemonCore.ExecApprovals`. That production-facing bridge stores only redacted
-`mcp_<server>_sampling` summaries for Web `/ops` and approval surfaces before
-the low-level MCP delegate sees raw params. Web `/ops` renders the safe request
-hash, model, token, message, role, and content-kind metadata.
+`mcp_<server>_sampling` summaries for approval surfaces before the low-level
+MCP delegate sees raw params. Approval summaries include the safe request hash,
+model, token, message, role, and content-kind metadata.
 
 Streamable HTTP client:
 

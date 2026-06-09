@@ -195,8 +195,8 @@ status surfaces do not need to parse terminal text.
 baseline/delta reporting so newly introduced issues are surfaced without
 failing edits when local checkers are missing. Operator surfaces can inspect
 redacted checker and supervised language-server session capability metadata
-through `lsp.diagnostics.status`, Web `/ops`, and `lsp_diagnostics.json` in
-support bundles. The BEAM manager can also start/stop sessions, run the
+through `lsp.diagnostics.status` and `lsp_diagnostics.json` in support
+bundles. The BEAM manager can also start/stop sessions, run the
 initialize handshake, send framed JSON-RPC requests, synchronize open/change/
 close document notifications, and capture redacted diagnostic notifications
 through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,

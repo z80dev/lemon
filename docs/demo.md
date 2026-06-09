@@ -71,7 +71,7 @@ The operations page should show:
 For a specific run, use:
 
 ```text
-http://127.0.0.1:4080/ops/runs/<run_id>
+Use the TUI, control-plane run APIs, or logs to inspect run details.
 ```
 
 The run page should show timeline events, tool events, failures, the nested run

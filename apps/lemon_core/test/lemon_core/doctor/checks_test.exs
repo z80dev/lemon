@@ -135,7 +135,7 @@ defmodule LemonCore.Doctor.ChecksTest do
 
       assert usage.status == :warn
       assert usage.message =~ "over a configured quota"
-      assert usage.remediation =~ "Web `/ops`"
+      assert usage.remediation =~ "`usage.status`"
     end
   end
 

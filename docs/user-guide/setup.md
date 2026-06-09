@@ -270,10 +270,6 @@ then open the web port shown in the logs:
 Default local routes:
 
 - `/` - session console
-- `/ops` - operations dashboard for runtime health, active sessions, recent
-  runs, pending approvals, and support-bundle commands
-- `/ops/runs/<run_id>` - run detail with timeline events, tool events,
-  failures, child runs, and support-bundle commands
 - `/healthz` - web health check
 
 ---

@@ -128,7 +128,7 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - Scheduled failures/timeouts can retry as separate `:retry` runs when `max_retries` is set. Manual and wake runs stay single-shot by default.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
-- Web `/ops` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
+- `cron.status` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
 
 ## Top-Level Facade
 

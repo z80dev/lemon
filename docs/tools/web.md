@@ -101,9 +101,9 @@ events by default; pass `clearCookies`, `clearStorage`, or `clearEvents` as
 `false` to leave a specific state surface intact.
 
 Control-plane operators can inspect the same BEAM-owned browser surface with
-`browser.status`, and the Web `/ops` dashboard renders local driver status,
-request counters, the last worker error, the artifact directory, and recent
-artifact cleanup metadata. The status surfaces include a redacted driver config
+`browser.status`, including local driver status, request counters, the last
+worker error, the artifact directory, and recent artifact cleanup metadata. The
+status surfaces include a redacted driver config
 summary showing local-CDP vs remote-CDP mode, attach-only state, launch behavior,
 local CDP port, and an endpoint hash when a managed endpoint is configured.
 `browser.status` also reports paired browser nodes.
