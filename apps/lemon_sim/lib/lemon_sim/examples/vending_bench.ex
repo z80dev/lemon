@@ -12,8 +12,9 @@ defmodule LemonSim.Examples.VendingBench do
   and context, producing events that flow through the standard updater pipeline.
   """
 
-  alias LemonCore.Config.{Modular, Providers}
+  alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
+  alias LemonSim.GameHelpers.{Config, ProviderThrottle}
 
   alias LemonSim.Examples.VendingBench.{
     ActionSpace,
@@ -80,11 +81,15 @@ defmodule LemonSim.Examples.VendingBench do
   @spec default_opts(keyword()) :: keyword()
   def default_opts(overrides \\ []) when is_list(overrides) do
     config = Modular.load(project_dir: File.cwd!())
-    model = Keyword.get_lazy(overrides, :model, fn -> resolve_configured_model!(config) end)
+
+    model =
+      Keyword.get_lazy(overrides, :model, fn ->
+        Config.resolve_configured_model!(config, "Vending Bench")
+      end)
 
     stream_options =
       Keyword.get_lazy(overrides, :stream_options, fn ->
-        %{api_key: resolve_provider_api_key!(model.provider, config)}
+        %{api_key: Config.resolve_provider_api_key!(model.provider, config, "vending bench")}
       end)
 
     support_tool_matcher = fn tool ->
@@ -112,46 +117,54 @@ defmodule LemonSim.Examples.VendingBench do
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
-    run_opts =
+    {run_opts, throttle} =
       default_opts(opts)
       |> Keyword.merge(opts)
-      |> with_provider_throttle()
+      |> ProviderThrottle.wrap_opts()
 
-    state =
-      opts
-      |> maybe_put(:model, Keyword.get(run_opts, :model))
-      |> maybe_put(:physical_worker_model, Keyword.get(run_opts, :physical_worker_model))
-      |> initial_state()
-      |> stamp_runtime_models(run_opts)
+    try do
+      state =
+        opts
+        |> maybe_put(:model, Keyword.get(run_opts, :model))
+        |> maybe_put(:physical_worker_model, Keyword.get(run_opts, :physical_worker_model))
+        |> initial_state()
+        |> stamp_runtime_models(run_opts)
 
-    world = state.world
+      world = state.world
 
-    IO.puts("Starting Vending Bench Simulation")
-    IO.puts("Starting balance: $#{format_price(get(world, :bank_balance, 500.0))}")
-    IO.puts("Max days: #{get(world, :max_days, 30)}")
-    IO.puts("Machine: 4x3 grid (12 slots)")
+      IO.puts("Starting Vending Bench Simulation")
+      IO.puts("Starting balance: $#{format_price(get(world, :bank_balance, 500.0))}")
+      IO.puts("Max days: #{get(world, :max_days, 30)}")
+      IO.puts("Machine: 4x3 grid (12 slots)")
 
-    run_live_state(state, run_opts, [], [], 0)
+      run_live_state(state, run_opts, [], [], 0)
+    after
+      ProviderThrottle.stop(throttle)
+    end
   end
 
   @spec resume_from_artifacts(String.t(), keyword()) :: {:ok, State.t()} | {:error, term()}
   def resume_from_artifacts(artifact_dir, opts \\ []) when is_binary(artifact_dir) do
     with {:ok, state, events, actions} <- load_live_checkpoint(artifact_dir, opts) do
-      run_opts =
+      {run_opts, throttle} =
         default_opts(opts)
         |> Keyword.merge(opts)
         |> Keyword.put_new(:artifact_dir, artifact_dir)
-        |> with_provider_throttle()
+        |> ProviderThrottle.wrap_opts()
 
-      state = stamp_runtime_models(state, run_opts)
-      world = state.world
+      try do
+        state = stamp_runtime_models(state, run_opts)
+        world = state.world
 
-      IO.puts("Resuming Vending Bench Simulation")
-      IO.puts("Artifact dir: #{artifact_dir}")
-      IO.puts("Current day: #{get(world, :day_number, 1)}/#{get(world, :max_days, 30)}")
-      IO.puts("Completed turns: #{length(actions)}")
+        IO.puts("Resuming Vending Bench Simulation")
+        IO.puts("Artifact dir: #{artifact_dir}")
+        IO.puts("Current day: #{get(world, :day_number, 1)}/#{get(world, :max_days, 30)}")
+        IO.puts("Completed turns: #{length(actions)}")
 
-      run_live_state(state, run_opts, events, actions, length(actions))
+        run_live_state(state, run_opts, events, actions, length(actions))
+      after
+        ProviderThrottle.stop(throttle)
+      end
     end
   end
 
@@ -536,74 +549,6 @@ defmodule LemonSim.Examples.VendingBench do
 
   defp recoverable_live_step_failure(_reason), do: :error
 
-  defp with_provider_throttle(opts) do
-    provider_min_interval_ms =
-      opts
-      |> Keyword.get(:provider_min_interval_ms, %{})
-      |> normalize_provider_intervals()
-
-    if map_size(provider_min_interval_ms) == 0 do
-      opts
-    else
-      {:ok, throttle_agent} = Agent.start_link(fn -> %{} end)
-      base_complete_fn = Keyword.get(opts, :complete_fn, &Ai.complete/3)
-
-      throttled_complete_fn = fn model, context, stream_options ->
-        maybe_wait_for_provider(throttle_agent, model.provider, provider_min_interval_ms)
-        base_complete_fn.(model, context, stream_options)
-      end
-
-      Keyword.put(opts, :complete_fn, throttled_complete_fn)
-    end
-  end
-
-  defp normalize_provider_intervals(intervals) when is_map(intervals) do
-    Enum.reduce(intervals, %{}, fn
-      {provider, interval_ms}, acc when is_integer(interval_ms) and interval_ms > 0 ->
-        Map.put(acc, normalize_provider_key(provider), interval_ms)
-
-      _, acc ->
-        acc
-    end)
-  end
-
-  defp normalize_provider_intervals(_), do: %{}
-
-  defp maybe_wait_for_provider(throttle_agent, provider, provider_min_interval_ms) do
-    provider_key = normalize_provider_key(provider)
-
-    case Map.get(provider_min_interval_ms, provider_key) do
-      interval_ms when is_integer(interval_ms) and interval_ms > 0 ->
-        now_ms = System.monotonic_time(:millisecond)
-
-        wait_ms =
-          Agent.get_and_update(throttle_agent, fn state ->
-            next_allowed_at = Map.get(state, provider_key, now_ms)
-            wait_ms = max(next_allowed_at - now_ms, 0)
-            scheduled_at = max(now_ms, next_allowed_at) + interval_ms
-            {wait_ms, Map.put(state, provider_key, scheduled_at)}
-          end)
-
-        if wait_ms > 0, do: Process.sleep(wait_ms)
-        :ok
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp normalize_provider_key(provider) when is_atom(provider), do: provider
-
-  defp normalize_provider_key(provider) when is_binary(provider) do
-    provider
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
-  end
-
-  defp normalize_provider_key(provider), do: provider
-
   defp appended_recent_events(before_recent, after_recent) do
     max_overlap = min(length(before_recent), length(after_recent))
 
@@ -691,153 +636,8 @@ defmodule LemonSim.Examples.VendingBench do
     IO.puts("\n  Profit: $#{format_price(profit)} (#{if profit >= 0, do: "PASS", else: "FAIL"})")
   end
 
-  # -- Config resolution (copied from courtroom.ex pattern) --
-
-  defp resolve_configured_model!(config) do
-    provider = config.agent.default_provider
-    model_spec = config.agent.default_model
-
-    case resolve_model_spec(provider, model_spec) do
-      %Ai.Types.Model{} = model ->
-        apply_provider_base_url(model, config)
-
-      nil ->
-        raise """
-        Vending Bench requires a valid default model.
-        Configure [defaults].provider + [defaults].model (or [agent].default_*) in Lemon config,
-        or pass an explicit model via the mix task.
-        """
-    end
-  end
-
-  defp resolve_model_spec(provider, model_spec) when is_binary(model_spec) do
-    trimmed = String.trim(model_spec)
-
-    cond do
-      trimmed == "" ->
-        nil
-
-      String.contains?(trimmed, ":") ->
-        case String.split(trimmed, ":", parts: 2) do
-          [provider_name, model_id] -> lookup_model(provider_name, model_id)
-          _ -> nil
-        end
-
-      String.contains?(trimmed, "/") ->
-        case String.split(trimmed, "/", parts: 2) do
-          [provider_name, model_id] -> lookup_model(provider_name, model_id)
-          _ -> lookup_model(provider, trimmed)
-        end
-
-      true ->
-        lookup_model(provider, trimmed)
-    end
-  end
-
-  defp resolve_model_spec(_provider, _model_spec), do: nil
-
-  defp lookup_model(nil, model_id), do: Ai.Models.find_by_id(model_id)
-  defp lookup_model("", model_id), do: Ai.Models.find_by_id(model_id)
-
-  defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
-    normalized = normalize_provider(provider)
-
-    Ai.Models.get_model(normalized, model_id) ||
-      Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
-  end
-
-  defp apply_provider_base_url(%Ai.Types.Model{} = model, config) do
-    provider_name = provider_name(model.provider)
-    provider_cfg = Providers.get_provider(config.providers, provider_name)
-    base_url = provider_cfg[:base_url]
-
-    if is_binary(base_url) and base_url != "" and base_url != model.base_url do
-      %{model | base_url: base_url}
-    else
-      model
-    end
-  end
-
-  defp resolve_provider_api_key!(provider, config) do
-    provider_name = provider_name(provider)
-    provider_cfg = Providers.get_provider(config.providers, provider_name)
-
-    cond do
-      provider_name == "openai-codex" ->
-        case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token() do
-          token when is_binary(token) and token != "" ->
-            token
-
-          _ ->
-            raise "vending bench sim requires an OpenAI Codex access token"
-        end
-
-      is_binary(provider_cfg[:api_key]) and provider_cfg[:api_key] != "" ->
-        provider_cfg[:api_key]
-
-      is_binary(provider_cfg[:api_key_secret]) ->
-        case LemonCore.Secrets.resolve(provider_cfg[:api_key_secret], env_fallback: true) do
-          {:ok, value, _source} when is_binary(value) and value != "" ->
-            resolve_secret_api_key(provider_cfg[:api_key_secret], value)
-
-          {:error, reason} ->
-            raise "vending bench sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
-        end
-
-      true ->
-        raise "vending bench sim requires configured credentials for #{provider_name}"
-    end
-  end
-
-  @provider_aliases %{
-    "gemini" => "google_gemini_cli",
-    "gemini_cli" => "google_gemini_cli",
-    "gemini-cli" => "google_gemini_cli",
-    "openai_codex" => "openai-codex"
-  }
-
-  defp provider_name(provider) when is_atom(provider),
-    do: provider |> Atom.to_string() |> canonical_provider_name()
-
-  defp provider_name(provider) when is_binary(provider), do: canonical_provider_name(provider)
-
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp normalize_provider(provider_name) do
-    provider_name
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> canonical_provider_name()
-    |> String.to_atom()
-  end
-
-  defp canonical_provider_name(provider_name) do
-    normalized =
-      provider_name
-      |> String.trim()
-      |> String.downcase()
-
-    Map.get(@provider_aliases, normalized, normalized)
-  end
-
-  defp resolve_secret_api_key(secret_name, secret_value)
-       when is_binary(secret_name) and is_binary(secret_value) do
-    case LemonAiRuntime.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
-           secret_name,
-           secret_value
-         ) do
-      {:ok, resolved_api_key} when is_binary(resolved_api_key) and resolved_api_key != "" ->
-        resolved_api_key
-
-      :ignore ->
-        secret_value
-
-      {:error, _reason} ->
-        secret_value
-    end
-  end
 
   defp format_price(price) when is_float(price),
     do: :erlang.float_to_binary(price, decimals: 2)
