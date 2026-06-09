@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
 
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.{Artifacts, Events, Suppliers, Updater}
-  alias LemonSim.{Event, Runner, State}
+  alias LemonSim.Kernel.{Event, Runner, State}
 
   @spec run_strategy(String.t() | atom(), keyword()) ::
           {:ok, %{state: State.t(), artifacts: map(), steps: non_neg_integer()}}

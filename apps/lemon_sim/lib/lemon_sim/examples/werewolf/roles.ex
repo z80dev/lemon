@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   Role definitions and assignment logic for Werewolf.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @roles_by_count %{
     5 => [:werewolf, :seer, :doctor, :villager, :villager],

@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.SpaceStation.Roles do
   Role definitions and assignment logic for Space Station Crisis.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @roles_by_count %{
     5 => [:engineer, :captain, :saboteur, :crew, :crew],

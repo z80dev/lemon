@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.Survivor.Tribes do
   character names, personality traits, and backstory connections.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @tribe_names ["Tala", "Manu"]
   @merge_tribe_name "Solana"

@@ -1,10 +1,7 @@
 defmodule LemonSim.DecisionSignal do
-  @moduledoc """
-  Decision gating signal returned by updater/coalescing stages.
-  """
+  @moduledoc false
 
-  @type t :: :skip | :decide | {:decide, String.t()}
+  @type t :: LemonSim.Kernel.DecisionSignal.t()
 
-  @spec decide?(t()) :: boolean()
-  def decide?(signal), do: match?(:decide, signal) or match?({:decide, _}, signal)
+  defdelegate decide?(signal), to: LemonSim.Kernel.DecisionSignal
 end

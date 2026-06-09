@@ -12,13 +12,13 @@ defmodule LemonSimUi.SimDashboardLiveTest do
 
   test "shows sim list when sims exist", %{conn: conn} do
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_ttt_1",
         world: LemonSim.Examples.TicTacToe.initial_world()
       )
 
-    LemonSim.Store.put_state(state)
-    on_exit(fn -> LemonSim.Store.delete_state("test_ttt_1") end)
+    LemonSim.Kernel.Store.put_state(state)
+    on_exit(fn -> LemonSim.Kernel.Store.delete_state("test_ttt_1") end)
 
     {:ok, _view, html} = live(conn, "/admin")
     assert html =~ "test_ttt_1"
@@ -27,13 +27,13 @@ defmodule LemonSimUi.SimDashboardLiveTest do
 
   test "navigates to sim detail", %{conn: conn} do
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_ttt_2",
         world: LemonSim.Examples.TicTacToe.initial_world()
       )
 
-    LemonSim.Store.put_state(state)
-    on_exit(fn -> LemonSim.Store.delete_state("test_ttt_2") end)
+    LemonSim.Kernel.Store.put_state(state)
+    on_exit(fn -> LemonSim.Kernel.Store.delete_state("test_ttt_2") end)
 
     {:ok, view, _html} = live(conn, "/admin")
     html = render_patch(view, "/admin/sims/test_ttt_2")

@@ -21,11 +21,11 @@ defmodule LemonSim.Examples.Survivor do
   - **Jury:** Post-merge eliminations join the jury; jury votes for the winner.
   """
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.EventHelpers
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.EventHelpers
 
-  alias LemonSim.GameHelpers.Runner, as: GameRunner
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Survivor.{
     ActionSpace,
@@ -34,8 +34,8 @@ defmodule LemonSim.Examples.Survivor do
     Updater
   }
 
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.State
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.State
 
   @default_max_turns 400
   @default_player_count 8

@@ -12,7 +12,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.StreamOptions
   alias LemonSim.Examples.VendingBench.Events
-  alias LemonSim.Memory.Tools, as: MemoryTools
+  alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
   @worker_max_turns 5
   @default_timeout_ms 30_000

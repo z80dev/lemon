@@ -1,13 +1,13 @@
 defmodule LemonSim.Examples.SpaceStation.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.SpaceStation.{Events, Roles}
-  alias LemonSim.GameHelpers.Tools, as: GameTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
 
   @system_ids ~w(o2 power hull comms nav medbay shields)
 

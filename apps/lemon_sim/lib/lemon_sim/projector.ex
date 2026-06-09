@@ -1,10 +1,8 @@
 defmodule LemonSim.Projector do
-  @moduledoc """
-  Behaviour for projecting a decision frame into model-ready context.
-  """
+  @moduledoc false
 
   @callback project(
-              frame :: LemonSim.DecisionFrame.t(),
+              frame :: LemonSim.Kernel.DecisionFrame.t(),
               tools :: [AgentCore.Types.AgentTool.t()],
               opts :: keyword()
             ) ::

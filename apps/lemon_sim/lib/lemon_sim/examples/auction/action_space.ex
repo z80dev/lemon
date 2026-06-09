@@ -1,11 +1,11 @@
 defmodule LemonSim.Examples.Auction.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
-  alias LemonSim.GameHelpers.Tools, as: GameTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
   alias LemonSim.Examples.Auction.Events
 
   @impl true

@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.StockMarket.Performance do
   and directional trading quality under social pressure.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias LemonSim.Examples.StockMarket.Market
 

@@ -9,10 +9,10 @@ defmodule LemonSim.Examples.VendingBench.Arena do
   spend.
   """
 
-  alias LemonSim.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.AtomicFile
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.ArtifactRegistry
-  alias LemonSim.{Runner, State}
+  alias LemonSim.Kernel.{Runner, State}
 
   @default_agents [
     %{id: "alex", name: "Alex Market"},

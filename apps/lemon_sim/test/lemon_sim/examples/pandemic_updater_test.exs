@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.PandemicUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Pandemic.{DiseaseModel, Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   # ---------------------------------------------------------------------------
   # Helpers

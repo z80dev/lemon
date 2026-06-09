@@ -8,11 +8,11 @@ defmodule LemonSim.Examples.StockMarket do
   part of the benchmark rather than pure flavor text.
   """
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.EventHelpers
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.EventHelpers
 
-  alias LemonSim.GameHelpers.Runner, as: GameRunner
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.StockMarket.{
     ActionSpace,
@@ -22,8 +22,8 @@ defmodule LemonSim.Examples.StockMarket do
     Updater
   }
 
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.State
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.State
 
   @default_max_turns 500
   @default_player_count 4

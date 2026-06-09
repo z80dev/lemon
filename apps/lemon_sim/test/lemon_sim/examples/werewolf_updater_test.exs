@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Werewolf.{Events, Roles, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "day discussion advances to a second round before voting when enough players are alive" do
     players = sample_players()

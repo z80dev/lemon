@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.PokerTest do
   import ExUnit.CaptureIO
 
   alias Ai.Types.{AssistantMessage, Model, ToolCall}
-  alias LemonSim.{DecisionFrame, Runner, State}
+  alias LemonSim.Kernel.{DecisionFrame, Runner, State}
   alias LemonSim.Examples.Poker
   alias LemonSim.Examples.Poker.{Events, Performance, ToolPolicy, Updater}
   alias LemonSim.Examples.Poker.Engine.{Card, Deck, Table}

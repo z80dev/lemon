@@ -7,6 +7,6 @@ defmodule LemonSim.Examples.TicTacToe.Outcome do
           status: String.t(),
           winner: String.t() | nil,
           next_player: String.t() | nil,
-          events: [LemonSim.Event.t()]
+          events: [LemonSim.Kernel.Event.t()]
         }
 end

@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Werewolf.ActionSpace
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "runoff voting forces a choice between the finalists" do
     state =

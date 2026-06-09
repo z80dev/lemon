@@ -1,10 +1,10 @@
-defmodule LemonSim.Projectors.SectionedProjectorTest do
+defmodule LemonSim.LLM.Projectors.SectionedProjectorTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.Types.AgentTool
   alias Ai.Types.UserMessage
-  alias LemonSim.{DecisionFrame, Event, PlanStep}
-  alias LemonSim.Projectors.SectionedProjector
+  alias LemonSim.Kernel.{DecisionFrame, Event, PlanStep}
+  alias LemonSim.LLM.Projectors.SectionedProjector
 
   test "builds a sectioned context with default scaffold" do
     frame = %DecisionFrame{

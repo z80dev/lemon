@@ -1,8 +1,8 @@
 defmodule LemonSimTest do
   use ExUnit.Case
 
-  alias LemonSim.DecisionAdapters.{ExecutedCallEvents, ToolResultEvents}
-  alias LemonSim.{DecisionFrame, DecisionSignal, Event, PlanStep, Runner, State}
+  alias LemonSim.Kernel.DecisionAdapters.{ExecutedCallEvents, ToolResultEvents}
+  alias LemonSim.Kernel.{DecisionFrame, DecisionSignal, Event, PlanStep, Runner, State}
 
   test "state builds from string-key maps and appends bounded history" do
     state =
@@ -298,7 +298,7 @@ defmodule LemonSimTest do
   end
 
   defmodule UpdaterStub do
-    @behaviour LemonSim.Updater
+    @behaviour LemonSim.Kernel.Updater
 
     @impl true
     def apply_event(state, event, _opts) do
@@ -313,7 +313,7 @@ defmodule LemonSimTest do
   end
 
   defmodule ActionSpaceStub do
-    @behaviour LemonSim.ActionSpace
+    @behaviour LemonSim.Kernel.ActionSpace
 
     @impl true
     def tools(_state, _opts) do
@@ -333,7 +333,7 @@ defmodule LemonSimTest do
   end
 
   defmodule ProjectorStub do
-    @behaviour LemonSim.Projector
+    @behaviour LemonSim.Kernel.Projector
 
     @impl true
     def project(%DecisionFrame{} = frame, _tools, _opts) do
@@ -346,7 +346,7 @@ defmodule LemonSimTest do
   end
 
   defmodule DeciderStub do
-    @behaviour LemonSim.Decider
+    @behaviour LemonSim.Kernel.Decider
 
     @impl true
     def decide(_context, tools, _opts) do
@@ -356,7 +356,7 @@ defmodule LemonSimTest do
   end
 
   defmodule StepDeciderStub do
-    @behaviour LemonSim.Decider
+    @behaviour LemonSim.Kernel.Decider
 
     @impl true
     def decide(_context, _tools, _opts) do
@@ -369,7 +369,7 @@ defmodule LemonSimTest do
   end
 
   defmodule DecisionAdapterStub do
-    @behaviour LemonSim.DecisionAdapter
+    @behaviour LemonSim.Kernel.DecisionAdapter
 
     @impl true
     def to_events(%{"result_details" => %{"event" => event}}, _state, _opts), do: {:ok, [event]}
@@ -377,21 +377,21 @@ defmodule LemonSimTest do
   end
 
   defmodule DecisionAdapterErrorStub do
-    @behaviour LemonSim.DecisionAdapter
+    @behaviour LemonSim.Kernel.DecisionAdapter
 
     @impl true
     def to_events(_decision, _state, _opts), do: {:error, :forced_error}
   end
 
   defmodule DecisionAdapterEmptyStub do
-    @behaviour LemonSim.DecisionAdapter
+    @behaviour LemonSim.Kernel.DecisionAdapter
 
     @impl true
     def to_events(_decision, _state, _opts), do: {:ok, []}
   end
 
   defmodule CounterDeciderStub do
-    @behaviour LemonSim.Decider
+    @behaviour LemonSim.Kernel.Decider
 
     @impl true
     def decide(_context, _tools, _opts) do
@@ -400,7 +400,7 @@ defmodule LemonSimTest do
   end
 
   defmodule DirectEventDeciderStub do
-    @behaviour LemonSim.Decider
+    @behaviour LemonSim.Kernel.Decider
 
     @impl true
     def decide(_context, _tools, _opts) do
@@ -409,7 +409,7 @@ defmodule LemonSimTest do
   end
 
   defmodule ExecutedCallsDeciderStub do
-    @behaviour LemonSim.Decider
+    @behaviour LemonSim.Kernel.Decider
 
     @impl true
     def decide(_context, _tools, _opts) do
@@ -426,7 +426,7 @@ defmodule LemonSimTest do
   end
 
   defmodule CounterUpdaterStub do
-    @behaviour LemonSim.Updater
+    @behaviour LemonSim.Kernel.Updater
 
     @impl true
     def apply_event(state, event, _opts) do

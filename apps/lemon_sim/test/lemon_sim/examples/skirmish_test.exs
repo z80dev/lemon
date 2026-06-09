@@ -96,7 +96,7 @@ defmodule LemonSim.Examples.SkirmishTest do
     }
 
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_skirmish",
         world: small_world,
         intent: %{goal: "Win the skirmish"},
@@ -106,7 +106,7 @@ defmodule LemonSim.Examples.SkirmishTest do
     output =
       capture_io(fn ->
         assert {:ok, final_state} =
-                 LemonSim.Runner.run_until_terminal(
+                 LemonSim.Kernel.Runner.run_until_terminal(
                    state,
                    Skirmish.modules(),
                    model: fake_model(),

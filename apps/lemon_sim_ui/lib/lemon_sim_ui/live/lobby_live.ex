@@ -10,7 +10,7 @@ defmodule LemonSimUi.LobbyLive do
   use LemonSimUi, :live_view
 
   alias LemonSimUi.{SimHelpers, SimManager}
-  alias LemonSim.{Event, State, Store}
+  alias LemonSim.Kernel.{Event, State, Store}
 
   @vending_bench_artifact_registry Path.join(
                                      System.tmp_dir!(),

@@ -1,10 +1,10 @@
-defmodule LemonSim.Deciders.ToolLoopDeciderTest do
+defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.{AssistantMessage, Context, Model, TextContent, ToolCall}
-  alias LemonSim.Deciders.ToolLoopDecider
-  alias LemonSim.Memory.Tools, as: MemoryTools
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
   test "loops through memory tools and returns first non-memory tool decision" do
     tmp_dir = System.tmp_dir!()

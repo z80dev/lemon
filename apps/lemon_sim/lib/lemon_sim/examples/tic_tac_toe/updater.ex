@@ -1,10 +1,10 @@
 defmodule LemonSim.Examples.TicTacToe.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
   alias LemonCore.MapHelpers
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
   alias LemonSim.Examples.TicTacToe.{Events, Outcome}
 
   @impl true

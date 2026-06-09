@@ -8,7 +8,7 @@ defmodule LemonSim.Examples.Werewolf.Performance do
   single opaque score.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

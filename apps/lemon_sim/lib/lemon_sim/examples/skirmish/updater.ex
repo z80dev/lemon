@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Skirmish.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias LemonCore.MapHelpers
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   alias LemonSim.Examples.Skirmish.{
     Events,

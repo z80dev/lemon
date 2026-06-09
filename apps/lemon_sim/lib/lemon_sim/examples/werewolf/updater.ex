@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Werewolf.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.UpdaterHelpers, except: [maybe_store_thought: 2]
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.UpdaterHelpers, except: [maybe_store_thought: 2]
 
-  alias LemonSim.{Event, State}
+  alias LemonSim.Kernel.{Event, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles}
 
   @wander_sighting_chance 0.15

@@ -32,9 +32,9 @@ defmodule LemonSim.Examples.SupplyChain do
     Updater
   }
 
-  alias LemonSim.Deciders.ToolLoopDecider
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.{Runner, State, Store}
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.{Runner, State, Store}
 
   @default_max_turns 300
   @default_max_rounds 20

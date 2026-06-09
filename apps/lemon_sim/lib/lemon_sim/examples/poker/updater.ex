@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Poker.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
   require Logger
 
@@ -9,7 +9,7 @@ defmodule LemonSim.Examples.Poker.Updater do
   alias LemonSim.Examples.Poker
   alias LemonSim.Examples.Poker.Engine.Table
   alias LemonSim.Examples.Poker.Events
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   @max_consecutive_rejections 3
 

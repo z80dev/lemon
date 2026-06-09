@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Survivor.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias LemonSim.GameHelpers.Tools, as: GameTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
   alias LemonSim.Examples.Survivor.{Events, Tribes}
 
   @impl true

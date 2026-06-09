@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.SupplyChain.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   @initial_tiers %{
     "retailer" => %{

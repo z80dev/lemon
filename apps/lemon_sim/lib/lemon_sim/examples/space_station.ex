@@ -23,10 +23,10 @@ defmodule LemonSim.Examples.SpaceStation do
   - Crew wins if they survive 8 rounds.
   """
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.EventHelpers
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.EventHelpers
 
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.SpaceStation.{
     ActionSpace,
@@ -37,9 +37,9 @@ defmodule LemonSim.Examples.SpaceStation do
     Updater
   }
 
-  alias LemonSim.GameHelpers.Runner, as: GameRunner
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.State
+  alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.State
 
   @default_max_turns 300
   @default_player_count 6

@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.IntelNetworkUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.IntelNetwork.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world(overrides) do
     Map.merge(

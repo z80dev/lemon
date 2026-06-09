@@ -3,7 +3,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "shows not found for nonexistent sim", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/watch/nonexistent_sim_id")
@@ -14,30 +14,30 @@ defmodule LemonSimUi.SpectatorLiveTest do
   test "shows not supported for non-werewolf sim", %{conn: conn} do
     # Create a tic-tac-toe sim (not werewolf)
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_spectator_ttt",
         world: LemonSim.Examples.TicTacToe.initial_world()
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     {:ok, _view, html} = live(conn, "/watch/test_spectator_ttt")
     assert html =~ "Spectator Mode Unavailable"
     assert html =~ "Tic Tac Toe"
 
-    LemonSim.Store.delete_state("test_spectator_ttt")
+    LemonSim.Kernel.Store.delete_state("test_spectator_ttt")
   end
 
   test "renders spectator view for werewolf sim", %{conn: conn} do
     world = LemonSim.Examples.Werewolf.initial_world(player_count: 5)
 
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_spectator_ww",
         world: world
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     {:ok, _view, html} = live(conn, "/watch/test_spectator_ww")
     assert html =~ "test_spectator_ww"
@@ -49,7 +49,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
     refute html =~ "AGENT STRATEGY"
     refute html =~ "DATA BANKS"
 
-    LemonSim.Store.delete_state("test_spectator_ww")
+    LemonSim.Kernel.Store.delete_state("test_spectator_ww")
   end
 
   test "renders spectator view for vending bench sim", %{conn: conn} do
@@ -59,7 +59,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
         max_days: 365
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     {:ok, _view, html} = live(conn, "/watch/test_spectator_vb")
     assert html =~ "test_spectator_vb"
@@ -71,7 +71,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
     refute html =~ "AGENT STRATEGY"
     refute html =~ "DATA BANKS"
 
-    LemonSim.Store.delete_state("test_spectator_vb")
+    LemonSim.Kernel.Store.delete_state("test_spectator_vb")
   end
 
   test "renders vending bench spectator view from checkpoint artifacts", %{conn: conn} do
@@ -84,7 +84,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
       )
 
     File.rm_rf!(artifact_dir)
-    LemonSim.Store.delete_state(sim_id)
+    LemonSim.Kernel.Store.delete_state(sim_id)
 
     assert {:ok, _result} =
              LemonSim.Examples.VendingBench.run_offline_strategy("baseline",
@@ -95,7 +95,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
                artifact_dir: artifact_dir
              )
 
-    LemonSim.Store.delete_state(sim_id)
+    LemonSim.Kernel.Store.delete_state(sim_id)
 
     {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
     assert html =~ sim_id
@@ -125,12 +125,12 @@ defmodule LemonSimUi.SpectatorLiveTest do
       })
 
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_spectator_ww_lore",
         world: world
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     {:ok, view, _html} = live(conn, "/watch/test_spectator_ww_lore")
     html = render(view)
@@ -138,42 +138,42 @@ defmodule LemonSimUi.SpectatorLiveTest do
     assert html =~ "herbalist"
     assert html =~ "VILLAGERS"
 
-    LemonSim.Store.delete_state("test_spectator_ww_lore")
+    LemonSim.Kernel.Store.delete_state("test_spectator_ww_lore")
   end
 
   test "shows LIVE badge for running sims", %{conn: conn} do
     world = LemonSim.Examples.Werewolf.initial_world(player_count: 5)
 
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: "test_spectator_live_badge",
         world: world
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     {:ok, _view, html} = live(conn, "/watch/test_spectator_live_badge")
     # Since the sim is not running via SimManager, should show STOPPED
     assert html =~ "STOPPED"
 
-    LemonSim.Store.delete_state("test_spectator_live_badge")
+    LemonSim.Kernel.Store.delete_state("test_spectator_live_badge")
   end
 
   test "updates running badge when lobby changes", %{conn: conn} do
     sim_id = "test_spectator_lobby_updates"
 
     state =
-      LemonSim.State.new(
+      LemonSim.Kernel.State.new(
         sim_id: sim_id,
         world: LemonSim.Examples.Werewolf.initial_world(player_count: 5)
       )
 
-    LemonSim.Store.put_state(state)
+    LemonSim.Kernel.Store.put_state(state)
 
     original_manager_state = :sys.get_state(LemonSimUi.SimManager)
 
     on_exit(fn ->
-      LemonSim.Store.delete_state(sim_id)
+      LemonSim.Kernel.Store.delete_state(sim_id)
       :sys.replace_state(LemonSimUi.SimManager, fn _ -> original_manager_state end)
     end)
 
@@ -232,24 +232,24 @@ defmodule LemonSimUi.SpectatorLiveTest do
         }
       )
 
-    LemonSim.Store.put_state(state0)
+    LemonSim.Kernel.Store.put_state(state0)
 
     on_exit(fn ->
-      LemonSim.Store.delete_state(sim_id)
+      LemonSim.Kernel.Store.delete_state(sim_id)
     end)
 
     {:ok, view, _html} = live(conn, "/watch/#{sim_id}")
 
     # Put the store ahead of the UI, then send exact snapshots over pubsub.
-    LemonSim.Store.put_state(state2)
+    LemonSim.Kernel.Store.put_state(state2)
 
     LemonCore.Bus.broadcast(
-      LemonSim.Bus.sim_topic(sim_id),
+      LemonSim.Kernel.Bus.sim_topic(sim_id),
       LemonCore.Event.new(:sim_world_updated, %{state: state1}, %{sim_id: sim_id})
     )
 
     LemonCore.Bus.broadcast(
-      LemonSim.Bus.sim_topic(sim_id),
+      LemonSim.Kernel.Bus.sim_topic(sim_id),
       LemonCore.Event.new(:sim_world_updated, %{state: state2}, %{sim_id: sim_id})
     )
 

@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Werewolf.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias LemonSim.Event
+  alias LemonSim.Kernel.Event
   alias LemonSim.Examples.Werewolf.{Events, Roles}
 
   @impl true
@@ -160,7 +160,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       |> Enum.map(fn {id, _p} -> id end)
 
     [
-      LemonSim.GameHelpers.Tools.statement_tool(actor_id,
+      LemonSim.Examples.Helpers.Tools.statement_tool(actor_id,
         description:
           "Make a public statement during the day discussion. All players will see what you say. " <>
             "Advance the game by naming a concrete suspect or town lean, asking a targeted question, " <>
@@ -188,7 +188,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       |> Enum.map(fn {id, _p} -> id end)
 
     [
-      LemonSim.GameHelpers.Tools.statement_tool(actor_id,
+      LemonSim.Examples.Helpers.Tools.statement_tool(actor_id,
         description:
           "Make a public statement during the runoff discussion. The top vote-getters are defending themselves. " <>
             "All players will see what you say. Push toward a final choice by backing one finalist, " <>
@@ -207,7 +207,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       |> Enum.map(fn {id, _p} -> id end)
 
     [
-      LemonSim.GameHelpers.Tools.vote_tool(actor_id, living_others,
+      LemonSim.Examples.Helpers.Tools.vote_tool(actor_id, living_others,
         description:
           "Vote to eliminate the player who is currently your best suspect. " <>
             "Voting is mandatory once discussion ends. Valid targets: #{Enum.join(living_others, ", ")}.",
@@ -228,7 +228,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     targets = (runoff_candidates || []) |> Enum.reject(&(&1 == actor_id))
 
     [
-      LemonSim.GameHelpers.Tools.vote_tool(actor_id, targets,
+      LemonSim.Examples.Helpers.Tools.vote_tool(actor_id, targets,
         description:
           "RUNOFF VOTE: Choose between the final candidates. This is the forced final choice, so pick one. " <>
             "Valid targets: #{Enum.join(targets, ", ")}.",

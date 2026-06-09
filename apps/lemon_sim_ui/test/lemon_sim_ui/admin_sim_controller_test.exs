@@ -1,7 +1,7 @@
 defmodule LemonSimUi.AdminSimControllerTest do
   use LemonSimUi.ConnCase
 
-  alias LemonSim.{Store, State}
+  alias LemonSim.Kernel.{Store, State}
 
   setup do
     original = Application.get_env(:lemon_sim_ui, :access_token)

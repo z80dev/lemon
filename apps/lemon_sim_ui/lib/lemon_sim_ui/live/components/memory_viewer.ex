@@ -4,7 +4,7 @@ defmodule LemonSimUi.Live.Components.MemoryViewer do
   attr :sim_id, :string, required: true
 
   def render(assigns) do
-    root = LemonSim.Memory.Tools.memory_root(memory_namespace: assigns.sim_id)
+    root = LemonSim.LLM.Memory.Tools.memory_root(memory_namespace: assigns.sim_id)
     files = list_memory_files(root)
 
     assigns = assign(assigns, :files, files)

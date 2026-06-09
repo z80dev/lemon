@@ -1,9 +1,9 @@
 defmodule LemonSim.Examples.Poker.DecisionAdapter do
   @moduledoc false
 
-  @behaviour LemonSim.DecisionAdapter
+  @behaviour LemonSim.Kernel.DecisionAdapter
 
-  alias LemonSim.{Event, State}
+  alias LemonSim.Kernel.{Event, State}
 
   @impl true
   def to_events(%{} = decision, %State{}, _opts) do

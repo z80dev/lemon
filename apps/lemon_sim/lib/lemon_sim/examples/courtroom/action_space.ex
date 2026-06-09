@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Courtroom.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Courtroom.Events
-  alias LemonSim.GameHelpers.Tools, as: GameTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
 
   @impl true
   def tools(state, _opts) do

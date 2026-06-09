@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.Skirmish.UpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Skirmish.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   # Build a minimal test world with 2 units close together
   defp test_state do

@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Auction.Events do
   @moduledoc false
 
-  alias LemonSim.Event
+  alias LemonSim.Kernel.Event
 
   @spec normalize(Event.t() | map() | keyword()) :: Event.t()
   def normalize(raw_event), do: Event.new(raw_event)

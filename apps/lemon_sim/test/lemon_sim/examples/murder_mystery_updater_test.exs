@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.MurderMysteryUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.MurderMystery.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world do
     %{

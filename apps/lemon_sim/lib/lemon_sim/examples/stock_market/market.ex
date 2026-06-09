@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.StockMarket.Market do
   Market mechanics, player management, and price generation for Stock Market Arena.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @stocks %{
     "NOVA" => %{

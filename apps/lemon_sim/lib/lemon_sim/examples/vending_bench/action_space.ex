@@ -1,13 +1,13 @@
 defmodule LemonSim.Examples.VendingBench.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.VendingBench.{Events, PhysicalWorker, Suppliers}
-  alias LemonSim.GameHelpers.Tools, as: GameTools
-  alias LemonSim.Memory.Tools, as: MemoryTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
+  alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
   @worker_visit_minutes 75
   @worker_latest_departure_minutes 17 * 60 - @worker_visit_minutes

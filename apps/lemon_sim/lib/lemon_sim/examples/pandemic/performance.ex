@@ -7,7 +7,7 @@ defmodule LemonSim.Examples.Pandemic.Performance do
   regional death rates relative to population.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias LemonSim.Examples.Pandemic.DiseaseModel
 

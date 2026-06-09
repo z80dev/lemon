@@ -1,7 +1,7 @@
-defmodule LemonSim.GameHelpers.ConfigTest do
+defmodule LemonSim.LLM.GameHelpers.ConfigTest do
   use ExUnit.Case, async: false
 
-  alias LemonSim.GameHelpers.Config
+  alias LemonSim.LLM.GameHelpers.Config
   alias LemonCore.Secrets
 
   setup do

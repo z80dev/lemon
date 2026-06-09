@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.CourtroomUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Courtroom.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   # ---------------------------------------------------------------------------
   # Shared helpers

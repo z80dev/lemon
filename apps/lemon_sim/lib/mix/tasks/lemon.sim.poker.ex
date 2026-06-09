@@ -2,8 +2,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
   use Mix.Task
 
   alias LemonCore.Config.Modular
-  alias LemonSim.GameHelpers
-  alias LemonSim.GameHelpers.Config, as: GameConfig
+  alias LemonSim.Examples.Helpers, as: GameHelpers
+  alias LemonSim.LLM.GameHelpers.Config, as: GameConfig
 
   @shortdoc "Run the LemonSim poker self-play example"
 

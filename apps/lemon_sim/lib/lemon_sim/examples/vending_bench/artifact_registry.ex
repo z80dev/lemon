@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.VendingBench.ArtifactRegistry do
   @moduledoc false
 
-  alias LemonSim.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.AtomicFile
 
   @path Path.join(System.tmp_dir!(), "lemon_vending_bench_artifact_registry.json")
   @lock {__MODULE__, :registry}

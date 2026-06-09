@@ -13,7 +13,7 @@ defmodule LemonSim.Examples.Auction do
 
   alias LemonCore.Config.{Modular, Providers}
   alias LemonCore.MapHelpers
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Auction.{
     ActionSpace,
@@ -22,8 +22,8 @@ defmodule LemonSim.Examples.Auction do
     Updater
   }
 
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.{Runner, State, Store}
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.{Runner, State, Store}
 
   @default_max_turns 120
   @default_player_count 4

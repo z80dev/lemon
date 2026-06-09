@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
   fill rate maximization, and communication quality.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias LemonSim.Examples.SupplyChain.DemandModel
 

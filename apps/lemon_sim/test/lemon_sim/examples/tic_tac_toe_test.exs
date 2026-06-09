@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.TicTacToeTest do
   alias Ai.Types.{AssistantMessage, Model, ToolCall}
   alias LemonSim.Examples.TicTacToe
   alias LemonSim.Examples.TicTacToe.{ActionSpace, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "example runs to completion with scripted tool calls" do
     {:ok, moves} =

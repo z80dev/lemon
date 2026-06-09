@@ -14,7 +14,7 @@ defmodule LemonSim.Examples.VendingBench do
 
   alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
-  alias LemonSim.GameHelpers.{Config, ProviderThrottle}
+  alias LemonSim.LLM.GameHelpers.{Config, ProviderThrottle}
 
   alias LemonSim.Examples.VendingBench.{
     ActionSpace,
@@ -27,11 +27,11 @@ defmodule LemonSim.Examples.VendingBench do
     World
   }
 
-  alias LemonSim.DecisionAdapters.ExecutedCallEvents
-  alias LemonSim.Deciders.ToolLoopDecider
-  alias LemonSim.Deciders.ToolPolicies.SingleTerminal
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.{Event, Runner, State, Store}
+  alias LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.{Event, Runner, State, Store}
 
   @default_max_turns 300
   @default_max_days 30
@@ -279,7 +279,7 @@ defmodule LemonSim.Examples.VendingBench do
   def run_offline_strategy(strategy, opts \\ [])
   def run_offline_strategy(strategy, opts), do: OfflineRunner.run_strategy(strategy, opts)
 
-  @spec offline_baseline_events_for_day(map()) :: [LemonSim.Event.t()]
+  @spec offline_baseline_events_for_day(map()) :: [LemonSim.Kernel.Event.t()]
   def offline_baseline_events_for_day(world), do: OfflineRunner.events_for_day(world)
 
   # -- Callbacks --

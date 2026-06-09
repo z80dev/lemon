@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.SurvivorUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Survivor.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "pre-merge challenge resolution rewards the tribe with the favorable strategy matchup" do
     state =

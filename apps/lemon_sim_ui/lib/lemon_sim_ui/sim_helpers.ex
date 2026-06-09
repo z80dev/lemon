@@ -4,7 +4,7 @@ defmodule LemonSimUi.SimHelpers do
   """
 
   alias LemonCore.MapHelpers
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   @spec infer_domain_type(State.t()) ::
           :tic_tac_toe

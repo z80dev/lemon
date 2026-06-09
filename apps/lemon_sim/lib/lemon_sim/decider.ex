@@ -1,7 +1,5 @@
 defmodule LemonSim.Decider do
-  @moduledoc """
-  Behaviour for executing one model decision against a tool-constrained context.
-  """
+  @moduledoc false
 
   @callback decide(
               context :: Ai.Types.Context.t(),

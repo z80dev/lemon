@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.VendingBench.Events do
   Event factory functions for the Vending Bench simulation.
   """
 
-  alias LemonSim.Event
+  alias LemonSim.Kernel.Event
 
   # -- Normalize --
 

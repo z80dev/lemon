@@ -17,7 +17,7 @@ defmodule LemonSimUi.SimDashboardLive do
   use LemonSimUi, :live_view
 
   alias LemonSimUi.{SimHelpers, SimManager, WerewolfPlayback}
-  alias LemonSim.{Store, Bus}
+  alias LemonSim.Kernel.{Store, Bus}
   alias LemonSim.Examples.Skirmish
 
   alias LemonSimUi.Live.Components.{
@@ -1098,11 +1098,11 @@ defmodule LemonSimUi.SimDashboardLive do
 
   defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do
     case Map.get(payload, :state, Map.get(payload, "state")) do
-      %LemonSim.State{} = state ->
+      %LemonSim.Kernel.State{} = state ->
         state
 
       %{} = state_map ->
-        LemonSim.State.new(state_map)
+        LemonSim.Kernel.State.new(state_map)
 
       _ ->
         nil

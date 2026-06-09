@@ -1,13 +1,13 @@
 defmodule LemonSim.Examples.Pandemic.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.UpdaterHelpers, only: [maybe_store_thought: 2]
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.UpdaterHelpers, only: [maybe_store_thought: 2]
 
   alias LemonCore.MapHelpers
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
   alias LemonSim.Examples.Pandemic.{DiseaseModel, Events}
 
   @comm_quota 3

@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.SupplyChain.ActionSpace do
   @moduledoc false
 
-  @behaviour LemonSim.ActionSpace
+  @behaviour LemonSim.Kernel.ActionSpace
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.SupplyChain.Events
-  alias LemonSim.GameHelpers.Tools, as: GameTools
+  alias LemonSim.Examples.Helpers.Tools, as: GameTools
 
   @tier_order ["retailer", "distributor", "factory", "raw_materials"]
 

@@ -1,9 +1,9 @@
-defmodule LemonSim.Deciders.ToolLoopPolicyTest do
+defmodule LemonSim.LLM.Deciders.ToolLoopPolicyTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.ToolCall
-  alias LemonSim.Deciders.ToolPolicies.SingleTerminal
+  alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
 
   test "accepts support tools followed by one terminal decision tool" do
     resolved_calls = [

@@ -10,7 +10,7 @@ defmodule LemonSimUi.SpectatorLive do
   use LemonSimUi, :live_view
 
   alias LemonSimUi.{SimHelpers, WerewolfPlayback}
-  alias LemonSim.{Bus, Event, State, Store}
+  alias LemonSim.Kernel.{Bus, Event, State, Store}
 
   alias LemonSimUi.Live.Components.{
     WerewolfBoard,
@@ -507,7 +507,7 @@ defmodule LemonSimUi.SpectatorLive do
       if sim_id != exclude_sim_id do
         case Store.get_state(sim_id) do
           %{world: world} ->
-            domain = SimHelpers.infer_domain_type(%LemonSim.State{world: world, sim_id: sim_id})
+            domain = SimHelpers.infer_domain_type(%LemonSim.Kernel.State{world: world, sim_id: sim_id})
             if domain == :werewolf, do: sim_id
 
           _ ->
@@ -607,11 +607,11 @@ defmodule LemonSimUi.SpectatorLive do
 
   defp payload_state(%LemonCore.Event{payload: payload}) when is_map(payload) do
     case Map.get(payload, :state, Map.get(payload, "state")) do
-      %LemonSim.State{} = state ->
+      %LemonSim.Kernel.State{} = state ->
         state
 
       %{} = state_map ->
-        LemonSim.State.new(state_map)
+        LemonSim.Kernel.State.new(state_map)
 
       _ ->
         nil

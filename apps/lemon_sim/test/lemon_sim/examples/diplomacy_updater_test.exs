@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.DiplomacyUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Diplomacy.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "send_message records public negotiation history without leaking inbox contents" do
     state =

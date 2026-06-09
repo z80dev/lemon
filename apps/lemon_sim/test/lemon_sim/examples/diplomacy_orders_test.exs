@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.DiplomacyOrdersTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Diplomacy.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world do
     %{

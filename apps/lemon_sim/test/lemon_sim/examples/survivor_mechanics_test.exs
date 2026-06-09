@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.SurvivorMechanicsTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Survivor.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world do
     %{

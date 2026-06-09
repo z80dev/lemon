@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.SpaceStationUpdaterTest do
 
   alias LemonSim.Examples.SpaceStation
   alias LemonSim.Examples.SpaceStation.{Events, Roles, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "discussion uses a second pass before voting when enough players are alive" do
     state = SpaceStation.initial_state(player_count: 5)

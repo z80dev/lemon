@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.StockMarket.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.UpdaterHelpers
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.UpdaterHelpers
 
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
   alias LemonSim.Examples.StockMarket.{Events, Market}
 
   @discussion_round_limit 2

@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.DungeonCrawlUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.DungeonCrawl.{Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world do
     %{

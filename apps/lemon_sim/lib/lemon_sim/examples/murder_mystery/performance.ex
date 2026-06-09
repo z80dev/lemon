@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.MurderMystery.Performance do
   across all players.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

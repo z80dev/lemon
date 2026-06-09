@@ -1,7 +1,7 @@
-defmodule LemonSim.Memory.ToolsTest do
+defmodule LemonSim.LLM.Memory.ToolsTest do
   use ExUnit.Case, async: true
 
-  alias LemonSim.Memory.Tools
+  alias LemonSim.LLM.Memory.Tools
 
   test "memory tools can write, read, patch, list, and delete files" do
     tmp_dir = System.tmp_dir!()

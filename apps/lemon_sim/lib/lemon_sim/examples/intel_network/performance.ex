@@ -9,7 +9,7 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
   - Trust calibration (how well trust scores match ground truth)
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

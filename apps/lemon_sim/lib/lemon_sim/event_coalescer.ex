@@ -1,8 +1,6 @@
 defmodule LemonSim.EventCoalescer do
-  @moduledoc """
-  Behaviour for event stream coalescing/filtering before state updates.
-  """
+  @moduledoc false
 
-  @callback coalesce(events :: [LemonSim.Event.t() | map()], opts :: keyword()) ::
-              [LemonSim.Event.t() | map()]
+  @callback coalesce(events :: [LemonSim.Kernel.Event.t() | map()], opts :: keyword()) ::
+              [LemonSim.Kernel.Event.t() | map()]
 end

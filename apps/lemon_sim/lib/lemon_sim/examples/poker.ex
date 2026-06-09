@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Poker do
   alias AgentCore.Types.AgentTool
   alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Poker.{
     ActionSpace,
@@ -18,13 +18,11 @@ defmodule LemonSim.Examples.Poker do
   }
 
   alias LemonSim.Examples.Poker.Engine.{Card, Table}
-  alias LemonSim.GameHelpers
-  alias LemonSim.GameHelpers.Config, as: GameConfig
-  alias LemonSim.Projectors.{SectionedProjector, Toolkit}
-  alias LemonSim.{Event, Runner, State, Store}
-  alias LemonSim.GameHelpers.Runner, as: GameRunner
-
-  import LemonSim.GameHelpers, only: []
+  alias LemonSim.Examples.Helpers, as: GameHelpers
+  alias LemonSim.LLM.GameHelpers.Config, as: GameConfig
+  alias LemonSim.LLM.Projectors.{SectionedProjector, Toolkit}
+  alias LemonSim.Kernel.{Event, Runner, State, Store}
+  alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
 
   @default_max_turns 200
   @default_player_count 4

@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.VendingBench.Replay do
   Loads VendingBench artifact directories and builds a compact replay browser.
   """
 
-  alias LemonSim.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.AtomicFile
 
   @required_files ~w(final_world.json events.jsonl actions.jsonl scorecard.json)
 

@@ -1,12 +1,12 @@
 defmodule LemonSim.Examples.Survivor.Updater do
   @moduledoc false
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
-  import LemonSim.GameHelpers
-  import LemonSim.GameHelpers.UpdaterHelpers
+  import LemonSim.Examples.Helpers
+  import LemonSim.Examples.Helpers.UpdaterHelpers
 
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
   alias LemonSim.Examples.Survivor.{Events, Tribes}
 
   @impl true

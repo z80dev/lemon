@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
   diversification, and bluff/question activity.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   alias LemonSim.Examples.StartupIncubator.Market
 

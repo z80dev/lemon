@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Survivor.Performance do
   alliance maintenance, and endgame conversion rather than pure luck.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

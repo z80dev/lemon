@@ -6,12 +6,12 @@ defmodule LemonSim.Examples.VendingBench.Updater do
   sales resolution, delivery handling, and terminal conditions.
   """
 
-  @behaviour LemonSim.Updater
+  @behaviour LemonSim.Kernel.Updater
 
   alias LemonSim.Examples.VendingBench.Commands.PlaceSupplierOrder
   alias LemonSim.Examples.VendingBench.Facts.SupplierOrderPlaced
   alias LemonSim.Examples.VendingBench.{DemandModel, Events, Performance, Suppliers}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   @bankruptcy_threshold 10
   @start_of_day_minutes 9 * 60

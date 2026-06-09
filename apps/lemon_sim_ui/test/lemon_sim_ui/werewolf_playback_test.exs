@@ -1,7 +1,7 @@
 defmodule LemonSimUi.WerewolfPlaybackTest do
   use ExUnit.Case, async: true
 
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
   alias LemonSimUi.WerewolfPlayback
 
   test "wolf chat gets a readable dwell before the next phase" do

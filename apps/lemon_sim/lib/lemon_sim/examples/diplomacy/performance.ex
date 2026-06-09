@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Diplomacy.Performance do
   support coordination, and territory conversion.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

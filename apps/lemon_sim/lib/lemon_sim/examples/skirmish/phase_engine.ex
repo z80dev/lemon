@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.Skirmish.PhaseEngine do
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Skirmish.{Events, Outcome}
 
-  @spec advance_turn(map()) :: {map(), [LemonSim.Event.t()]}
+  @spec advance_turn(map()) :: {map(), [LemonSim.Kernel.Event.t()]}
   def advance_turn(world) when is_map(world) do
     units = get(world, :units, %{})
     turn_order = get(world, :turn_order, [])

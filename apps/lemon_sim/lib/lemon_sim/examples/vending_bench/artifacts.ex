@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.VendingBench.Artifacts do
   @moduledoc false
 
-  alias LemonSim.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.AtomicFile
   alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Performance, Replay}
 
   @default_artifact_root "apps/lemon_sim/priv/game_logs/vending_bench"

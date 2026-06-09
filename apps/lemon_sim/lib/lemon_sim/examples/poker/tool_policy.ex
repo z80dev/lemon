@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Poker.ToolPolicy do
   @moduledoc false
 
-  @behaviour LemonSim.Deciders.ToolLoopPolicy
+  @behaviour LemonSim.LLM.Deciders.ToolLoopPolicy
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.ToolCall

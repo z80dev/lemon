@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpaceTest do
 
   alias LemonSim.Examples.Skirmish
   alias LemonSim.Examples.Skirmish.ActionSpace
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   test "initial action space exposes the core tactical tools" do
     assert {:ok, tools} = ActionSpace.tools(Skirmish.initial_state(), [])

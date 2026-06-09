@@ -1,7 +1,7 @@
-defmodule LemonSim.Projectors.ToolkitTest do
+defmodule LemonSim.LLM.Projectors.ToolkitTest do
   use ExUnit.Case, async: true
 
-  alias LemonSim.Projectors.Toolkit
+  alias LemonSim.LLM.Projectors.Toolkit
 
   test "stable_json sorts object keys deterministically" do
     json =

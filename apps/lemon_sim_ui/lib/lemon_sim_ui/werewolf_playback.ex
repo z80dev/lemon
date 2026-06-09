@@ -2,7 +2,7 @@ defmodule LemonSimUi.WerewolfPlayback do
   @moduledoc false
 
   alias LemonCore.MapHelpers
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   @default_hold_ms 900
   @phase_hold_ms 1_700

@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Poker.Events do
   @moduledoc false
 
-  alias LemonSim.Event
+  alias LemonSim.Kernel.Event
   alias LemonSim.Examples.Poker.Engine.Table
 
   @spec normalize(Event.t() | map() | keyword()) :: Event.t()

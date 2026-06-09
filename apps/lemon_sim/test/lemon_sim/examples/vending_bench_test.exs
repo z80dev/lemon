@@ -2,8 +2,8 @@ defmodule LemonSim.Examples.VendingBenchTest do
   use ExUnit.Case, async: true
 
   alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
-  alias LemonSim.Deciders.ToolPolicies.SingleTerminal
-  alias LemonSim.{DecisionFrame, Runner}
+  alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
+  alias LemonSim.Kernel.{DecisionFrame, Runner}
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.ActionSpace
   alias LemonSim.Examples.VendingBench.PhysicalWorker
@@ -20,7 +20,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
     frame = DecisionFrame.from_state(state)
 
     assert {:ok, context} =
-             LemonSim.Projectors.SectionedProjector.project(
+             LemonSim.LLM.Projectors.SectionedProjector.project(
                frame,
                [],
                VendingBench.projector_opts()
@@ -1056,7 +1056,9 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert manifest["integrity"]["events_sha256"] == hashes["files"]["events.jsonl"]
     assert is_binary(hashes["prompt_sha256"])
     assert is_binary(hashes["tool_schema_sha256"])
-    assert {:ok, %{scorecard: ^scorecard}} = LemonSim.Artifacts.Verifier.verify_run(artifact_dir)
+
+    assert {:ok, %{scorecard: ^scorecard}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
 
     supplier_messages = artifacts.supplier_messages |> File.read!() |> Jason.decode!()
     worker_history = artifacts.worker_history |> File.read!() |> Jason.decode!()
@@ -1258,7 +1260,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
   test "live-style run persists each checkpoint for spectator views" do
     sim_id = "vb_live_persist_checkpoint_#{System.unique_integer([:positive])}"
-    _ = LemonSim.Store.delete_state(sim_id)
+    _ = LemonSim.Kernel.Store.delete_state(sim_id)
 
     complete_fn = fn _model, _context, _stream_opts ->
       {:ok,
@@ -1291,11 +1293,11 @@ defmodule LemonSim.Examples.VendingBenchTest do
                driver_max_turns: 1
              )
 
-    assert %LemonSim.State{} = persisted = LemonSim.Store.get_state(sim_id)
+    assert %LemonSim.Kernel.State{} = persisted = LemonSim.Kernel.Store.get_state(sim_id)
     assert persisted.world.day_number == 2
     assert persisted.world.status == "in_progress"
 
-    _ = LemonSim.Store.delete_state(sim_id)
+    _ = LemonSim.Kernel.Store.delete_state(sim_id)
   end
 
   test "live-style run records empty model responses as rejected actions" do

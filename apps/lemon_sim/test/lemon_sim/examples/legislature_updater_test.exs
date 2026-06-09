@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.LegislatureUpdaterTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Legislature.{Bills, Events, Updater}
-  alias LemonSim.State
+  alias LemonSim.Kernel.State
 
   defp base_world(overrides) do
     player_ids = ["player_1", "player_2", "player_3", "player_4", "player_5"]

@@ -2,7 +2,7 @@ defmodule LemonSimUi.SimManager do
   @moduledoc """
   GenServer managing running simulation processes.
 
-  Bridges the UI with LemonSim.Runner by spawning linked runner
+  Bridges the UI with LemonSim.Kernel.Runner by spawning linked runner
   processes and providing start/stop/list operations.
   """
 
@@ -11,7 +11,7 @@ defmodule LemonSimUi.SimManager do
   require Logger
 
   alias LemonCore.MapHelpers
-  alias LemonSim.{Runner, State, Store}
+  alias LemonSim.Kernel.{Runner, State, Store}
 
   alias LemonSim.Examples.{
     TicTacToe,
@@ -25,7 +25,7 @@ defmodule LemonSimUi.SimManager do
     VendingBench
   }
 
-  alias LemonSim.GameHelpers.Config, as: SimConfig
+  alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
   alias LemonSimUi.ProjectRoot
 
   @lobby_topic "sim:lobby"
@@ -64,7 +64,7 @@ defmodule LemonSimUi.SimManager do
     GenServer.call(__MODULE__, {:register_human, sim_id, team})
   end
 
-  @spec submit_human_move(String.t(), LemonSim.Event.t()) :: :ok | {:error, term()}
+  @spec submit_human_move(String.t(), LemonSim.Kernel.Event.t()) :: :ok | {:error, term()}
   def submit_human_move(sim_id, event) do
     GenServer.call(__MODULE__, {:human_move, sim_id, event}, 30_000)
   end
@@ -924,12 +924,12 @@ defmodule LemonSimUi.SimManager do
   defp on_after_step(_turn, _result), do: :ok
 
   defp broadcast_update(%State{} = state) do
-    LemonSim.Bus.broadcast_world_update(state.sim_id, %{state: state})
+    LemonSim.Kernel.Bus.broadcast_world_update(state.sim_id, %{state: state})
     broadcast_lobby()
   end
 
   defp broadcast_update(sim_id) when is_binary(sim_id) do
-    LemonSim.Bus.broadcast_world_update(sim_id, %{})
+    LemonSim.Kernel.Bus.broadcast_world_update(sim_id, %{})
     broadcast_lobby()
   end
 

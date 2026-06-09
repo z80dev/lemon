@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
   Objective performance metrics for Space Station Crisis.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do

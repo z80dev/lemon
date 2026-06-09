@@ -9,7 +9,7 @@ defmodule LemonSim.Examples.Skirmish do
 
   alias LemonCore.Config.{Modular, Providers}
   alias LemonCore.MapHelpers
-  alias LemonSim.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Skirmish.{
     ActionSpace,
@@ -20,8 +20,8 @@ defmodule LemonSim.Examples.Skirmish do
     Visibility
   }
 
-  alias LemonSim.Projectors.SectionedProjector
-  alias LemonSim.{Runner, State, Store}
+  alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.Kernel.{Runner, State, Store}
 
   @default_max_turns 60
   @default_map_width 8

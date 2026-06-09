@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Legislature.Performance do
   amendment success rate, and political capital efficiency.
   """
 
-  import LemonSim.GameHelpers
+  import LemonSim.Examples.Helpers
 
   @spec summarize(map()) :: map()
   def summarize(world) do
