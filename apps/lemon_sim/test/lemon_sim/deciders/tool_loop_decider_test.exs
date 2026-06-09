@@ -108,6 +108,16 @@ defmodule LemonSim.Deciders.ToolLoopDeciderTest do
              ToolLoopDecider.decide(Context.new(), [])
   end
 
+  test "rejects duplicate normalized tool names" do
+    assert {:error, {:duplicate_tool_names, ["attack"]}} =
+             ToolLoopDecider.decide(
+               Context.new(system_prompt: "Pick one action"),
+               [action_tool("Attack"), action_tool(" attack ")],
+               model: fake_model(),
+               complete_fn: fn _model, _ctx, _stream_opts -> flunk("unused") end
+             )
+  end
+
   test "rejects batches with multiple decision tools before execution" do
     complete_fn = fn _model, _ctx, _stream_opts ->
       {:ok,

@@ -8,6 +8,8 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
 
   @behaviour LemonSim.Decider
 
+  require Logger
+
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage}
   alias LemonSim.Deciders.ToolPolicies.SingleTerminal
@@ -66,12 +68,16 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
           case tool_calls do
             [] ->
               if empty_response?(assistant) and empty_retries < max_empty_retries do
-                IO.puts(
-                  "[ToolLoopDecider] Empty API response (retry #{empty_retries + 1}/#{max_empty_retries})"
+                retry = empty_retries + 1
+
+                Logger.debug(
+                  "ToolLoopDecider empty API response retry=#{retry} max_retries=#{max_empty_retries}"
                 )
 
-                Process.sleep(500 * (empty_retries + 1))
-                run_loop(state, model, opts, turn, empty_retries + 1)
+                case backoff_empty_response(opts, retry) do
+                  :ok -> run_loop(state, model, opts, turn, retry)
+                  {:error, _reason} = error -> error
+                end
               else
                 {:error, tool_call_required_error(assistant, state.executed_calls)}
               end
@@ -176,19 +182,33 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
   end
 
   defp normalize_tools(tools) do
+    with :ok <- ensure_all_tools(tools),
+         :ok <- ensure_unique_tool_names(tools) do
+      {:ok, tools}
+    end
+  end
+
+  defp ensure_all_tools(tools) do
     if Enum.all?(tools, &match?(%AgentTool{}, &1)) do
-      {:ok, dedupe_tools(tools)}
+      :ok
     else
       {:error, :invalid_tools}
     end
   end
 
-  defp dedupe_tools(tools) do
-    tools
-    |> Enum.reduce(%{}, fn %AgentTool{} = tool, acc ->
-      Map.put(acc, normalize_name(tool.name), tool)
-    end)
-    |> Map.values()
+  defp ensure_unique_tool_names(tools) do
+    names = Enum.map(tools, &normalize_name(&1.name))
+
+    dupes =
+      names
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(fn {name, _count} -> name end)
+
+    case dupes do
+      [] -> :ok
+      _ -> {:error, {:duplicate_tool_names, dupes}}
+    end
   end
 
   defp with_llm_tools(%Context{} = context, tools) do
@@ -251,6 +271,19 @@ defmodule LemonSim.Deciders.ToolLoopDecider do
     normalized = normalize_name(name)
     Enum.find(tools, fn %AgentTool{} = tool -> normalize_name(tool.name) == normalized end)
   end
+
+  defp backoff_empty_response(opts, retry) do
+    backoff = Keyword.get(opts, :empty_response_backoff, &default_empty_response_backoff/1)
+
+    if is_function(backoff, 1) do
+      backoff.(retry)
+      :ok
+    else
+      {:error, {:invalid_empty_response_backoff, backoff}}
+    end
+  end
+
+  defp default_empty_response_backoff(retry), do: Process.sleep(500 * retry)
 
   defp normalize_name(name) when is_binary(name), do: name |> String.trim() |> String.downcase()
   defp normalize_name(name), do: name |> to_string() |> normalize_name()

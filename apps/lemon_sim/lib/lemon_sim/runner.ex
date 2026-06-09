@@ -150,6 +150,9 @@ defmodule LemonSim.Runner do
         else
           {:error, {:invalid_coalescer, coalescer}}
         end
+
+      coalescer ->
+        {:error, {:invalid_coalescer, coalescer}}
     end
   end
 

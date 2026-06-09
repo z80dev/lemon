@@ -88,6 +88,14 @@ defmodule LemonSimTest do
                __MODULE__.UpdaterStub,
                coalescer: __MODULE__.MissingCoalescerStub
              )
+
+    assert {:error, {:invalid_coalescer, "not-a-module"}} =
+             Runner.ingest_events(
+               state,
+               [%{kind: "tick"}],
+               __MODULE__.UpdaterStub,
+               coalescer: "not-a-module"
+             )
   end
 
   test "runner decides once using action space/projector/decider modules" do
