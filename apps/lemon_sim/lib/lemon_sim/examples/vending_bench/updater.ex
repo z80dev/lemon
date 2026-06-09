@@ -8,8 +8,10 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
   @behaviour LemonSim.Updater
 
+  alias LemonSim.Examples.VendingBench.Commands.PlaceSupplierOrder
+  alias LemonSim.Examples.VendingBench.Facts.SupplierOrderPlaced
+  alias LemonSim.Examples.VendingBench.{DemandModel, Events, Performance, Suppliers}
   alias LemonSim.State
-  alias LemonSim.Examples.VendingBench.{DemandModel, Events, Performance}
 
   @bankruptcy_threshold 10
   @start_of_day_minutes 9 * 60
@@ -34,6 +36,8 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "operator_completed_reminder" -> apply_reminder_completed(state, event)
       # -- Terminal: supplier email --
       "supplier_message_sent" -> apply_supplier_message_sent(state, event)
+      "place_supplier_order" -> apply_place_supplier_order(state, event)
+      "supplier_order_placed" -> apply_supplier_order_placed(state, event)
       "supplier_email_sent" -> apply_supplier_email(state, event)
       # -- Terminal: physical worker --
       "physical_worker_run_requested" -> apply_worker_requested(state, event)
@@ -62,7 +66,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "game_over" -> apply_skip(state, event)
       "action_rejected" -> apply_action_rejected(state, event)
       # -- Unknown --
-      _ -> apply_skip(state, event)
+      _ -> {:error, {:unknown_vending_bench_event, event.kind}}
     end
   end
 
@@ -224,7 +228,68 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     {:ok, state, :skip}
   end
 
+  defp apply_place_supplier_order(state, event) do
+    command = PlaceSupplierOrder.new(event.payload)
+    base_state = State.append_event(state, event)
+
+    case quote_supplier_order(state, command) do
+      {:ok, fact_event} ->
+        apply_supplier_order_placed(base_state, fact_event)
+
+      {:error, reason} ->
+        apply_action_rejected(base_state, Events.action_rejected(command.actor, reason))
+    end
+  end
+
   defp apply_supplier_email(state, event) do
+    payload =
+      event.payload
+      |> Map.put_new("actor", "operator")
+      |> Map.put(
+        "item_id",
+        get(event.payload, :ordered_item_id, get(event.payload, :item_id, ""))
+      )
+
+    command = PlaceSupplierOrder.new(payload)
+
+    case quote_supplier_order(state, command) do
+      {:ok, fact_event} ->
+        apply_supplier_order_placed(state, fact_event)
+
+      {:error, reason} ->
+        apply_action_rejected(state, Events.action_rejected(command.actor, reason))
+    end
+  end
+
+  defp quote_supplier_order(state, %PlaceSupplierOrder{} = command) do
+    world = state.world
+    current_day = get(world, :day_number, 1)
+    balance = get(world, :bank_balance, 0.0)
+
+    case Suppliers.process_order(
+           command.supplier_id,
+           command.item_id,
+           command.quantity,
+           current_day,
+           negotiated?: command.negotiated?
+         ) do
+      {:ok, %{cost: cost} = quote} ->
+        if cost > balance do
+          {:error,
+           "Insufficient funds. Order costs $#{format_price(cost)} but balance is $#{format_price(balance)}."}
+        else
+          {:ok,
+           command
+           |> SupplierOrderPlaced.from_quote(quote)
+           |> Events.supplier_order_placed()}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp apply_supplier_order_placed(state, event) do
     supplier_id = get(event.payload, :supplier_id, "")
     item_id = get(event.payload, :item_id, "")
     quantity = get(event.payload, :quantity, 0)

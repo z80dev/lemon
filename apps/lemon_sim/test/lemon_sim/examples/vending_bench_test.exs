@@ -104,7 +104,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert {:ok, result} = Runner.step(state, VendingBench.modules(), opts)
 
-    assert Enum.map(result.events, & &1.kind) == ["operator_read_inbox", "supplier_email_sent"]
+    assert Enum.map(result.events, & &1.kind) == ["operator_read_inbox", "place_supplier_order"]
     assert result.state.world.time_minutes == 570
     assert length(result.state.world.pending_deliveries) == 1
   end
@@ -196,7 +196,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
              "operator_researched_suppliers",
              "supplier_message_sent",
              "supplier_reply_received",
-             "supplier_email_sent"
+             "place_supplier_order"
            ]
 
     assert result.state.world.supplier_research_history != []
@@ -207,6 +207,28 @@ defmodule LemonSim.Examples.VendingBenchTest do
              result.state.world.pending_deliveries
 
     assert result.state.world.bank_balance == 490.4
+  end
+
+  test "supplier order facts are re-quoted by the updater instead of trusting payload economics" do
+    state = VendingBench.initial_state(sim_id: "vb_supplier_tamper")
+
+    forged_fact =
+      VendingBench.Events.supplier_email_sent(
+        "freshco",
+        "water",
+        24,
+        0.01,
+        99
+      )
+
+    assert {:ok, next_state, {:decide, message}} =
+             Runner.ingest_events(state, [forged_fact], VendingBench.modules().updater)
+
+    assert message =~ "Order placed"
+    assert next_state.world.bank_balance == 490.4
+    assert [%{cost: 9.6, delivery_day: delivery_day}] = next_state.world.pending_deliveries
+    refute delivery_day == 99
+    assert Enum.map(next_state.recent_events, & &1.kind) == ["supplier_order_placed"]
   end
 
   test "unknown supplier messages bounce into the inbox without failing the step" do
@@ -307,7 +329,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert Enum.map(result.events, & &1.kind) == [
              "supplier_message_sent",
              "supplier_reply_received",
-             "supplier_email_sent"
+             "place_supplier_order"
            ]
 
     assert [%{supplier_id: "campusliquidators", cost: 5.27, delivery_day: 3} = delivery] =
@@ -1003,6 +1025,14 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.exists?(artifacts.operator_transcript)
     assert File.exists?(artifacts.reminders)
     assert File.exists?(artifacts.scorecard)
+    assert File.exists?(artifacts.manifest)
+    assert File.exists?(artifacts.config)
+    assert File.exists?(artifacts.commands)
+    assert File.exists?(artifacts.facts)
+    assert File.exists?(artifacts.tool_calls)
+    assert File.exists?(artifacts.hashes)
+    assert File.exists?(artifacts.operator_system_prompt)
+    assert File.exists?(artifacts.operator_initial_prompt)
     assert File.exists?(artifacts.report)
     assert File.exists?(artifacts.replay_json)
     assert File.exists?(artifacts.replay_html)
@@ -1014,11 +1044,19 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.read!(artifacts.events) =~ "\"kind\":\"game_over\""
     assert File.read!(artifacts.replay_html) =~ "VendingBench Replay"
     scorecard = artifacts.scorecard |> File.read!() |> Jason.decode!()
+    manifest = artifacts.manifest |> File.read!() |> Jason.decode!()
+    hashes = artifacts.hashes |> File.read!() |> Jason.decode!()
 
     assert get_in(scorecard, ["score_modes", "v1_net_worth"]) > 0
     assert get_in(scorecard, ["score_modes", "money_balance"]) >= 0
     assert get_in(scorecard, ["score_modes", "lemon_operational_score"]) >= 0
     assert is_map(scorecard["failure_modes"])
+    assert manifest["schema_version"] == "lemon_sim.run.v1"
+    assert manifest["sim"]["id"] == "vending_bench"
+    assert manifest["integrity"]["events_sha256"] == hashes["files"]["events.jsonl"]
+    assert is_binary(hashes["prompt_sha256"])
+    assert is_binary(hashes["tool_schema_sha256"])
+    assert {:ok, %{scorecard: ^scorecard}} = LemonSim.Artifacts.Verifier.verify_run(artifact_dir)
 
     supplier_messages = artifacts.supplier_messages |> File.read!() |> Jason.decode!()
     worker_history = artifacts.worker_history |> File.read!() |> Jason.decode!()

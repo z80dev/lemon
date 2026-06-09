@@ -62,6 +62,28 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
+  def place_supplier_order(
+        actor,
+        supplier_id,
+        item_id,
+        quantity,
+        request_id \\ nil,
+        extra_payload \\ %{}
+      ) do
+    payload =
+      %{
+        "schema_version" => "vending_bench.command.place_supplier_order.v1",
+        "actor" => actor,
+        "supplier_id" => supplier_id,
+        "item_id" => item_id,
+        "quantity" => quantity
+      }
+      |> Map.merge(Map.new(extra_payload))
+      |> maybe_put("request_id", request_id)
+
+    Event.new("place_supplier_order", payload)
+  end
+
   def supplier_email_sent(
         supplier_id,
         item_id,
@@ -81,6 +103,26 @@ defmodule LemonSim.Examples.VendingBench.Events do
       |> Map.merge(Map.new(extra_payload))
 
     Event.new("supplier_email_sent", payload)
+  end
+
+  def supplier_order_placed(fact) do
+    metadata = Map.get(fact, :metadata, %{})
+
+    Event.new("supplier_order_placed", %{
+      "schema_version" => "vending_bench.fact.supplier_order_placed.v1",
+      "supplier_id" => fact.supplier_id,
+      "item_id" => fact.item_id,
+      "ordered_item_id" => Map.get(metadata, :ordered_item_id, fact.item_id),
+      "quantity" => fact.quantity,
+      "unit_cost" => fact.unit_cost,
+      "cost" => fact.total_cost,
+      "delivery_day" => fact.delivery_day,
+      "delivered_item_id" => fact.item_id,
+      "delivery_delay_days" => Map.get(metadata, :delivery_delay_days, 0),
+      "substituted_item_id" => Map.get(metadata, :substituted_item_id),
+      "supplier_issue" => Map.get(metadata, :supplier_issue, false),
+      "metadata" => metadata
+    })
   end
 
   def physical_worker_run_requested(instructions) do
@@ -229,4 +271,7 @@ defmodule LemonSim.Examples.VendingBench.Events do
   def action_rejected(actor_id, reason) do
     Event.new("action_rejected", %{"actor_id" => actor_id, "reason" => reason})
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

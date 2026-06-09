@@ -85,20 +85,26 @@ without model credentials:
 mix lemon.sim.vending_bench --preset v2 --arena --offline-strategy baseline --arena-agents 5 --sim-id vb_arena
 ```
 
-The offline mode writes `final_world.json`, `events.jsonl`, `actions.jsonl`,
-`supplier_messages.json`, `worker_history.json`, `operator_transcript.json`,
-`reminders.json`, `scorecard.json`, `replay.json`, `replay.html`, and
-`report.md` artifacts under
+The offline mode writes a stable run bundle: `manifest.json`, `config.json`,
+`hashes.json`, `final_world.json`, `events.jsonl`, `commands.jsonl`,
+`facts.jsonl`, `actions.jsonl`, `tool_calls.jsonl`, `supplier_messages.json`,
+`worker_history.json`, `operator_transcript.json`, `reminders.json`,
+`scorecard.json`, `replay.json`, `replay.html`, prompt snapshots under
+`prompts/`, and `report.md` artifacts under
 `apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>` unless `--artifact-dir`
 is provided. Live model runs also write the same artifact bundle when
 `--artifact-dir` is supplied, and the bundle is checkpointed after each live
 operator turn so long runs still leave inspectable partial `final_world`,
-event, action, scorecard, replay, and report files if interrupted. Live runs
+event, command, fact, action, scorecard, replay, and report files if
+interrupted. Artifact writes use tmp-file, fsync, and rename; the VendingBench
+checkpoint registry is updated through a serialized atomic writer. Live runs
 also persist each checkpointed state when `persist?` is enabled, allowing the
 public watch UI to follow long CLI runs by sim id. Existing artifact
-directories can rebuild the replay browser with:
+directories can be verified, scored, or used to rebuild the replay browser with:
 
 ```bash
+mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
+mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 mix lemon.sim.vending_bench_replay apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 ```
 
@@ -173,6 +179,10 @@ updater.
 | `LemonSim.DecisionAdapter` | Behaviour for adapting decider output into simulation events when a decision does not already carry direct events |
 | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results containing `"event"` / `"events"` in `result_details` |
 | `LemonSim.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving `"event"` / `"events"` payloads from every executed tool call in a tool-loop decision |
+| `LemonSim.Artifacts.AtomicFile` | Atomic artifact writes with tmp-file, sync, and rename |
+| `LemonSim.Artifacts.Verifier` | Manifest and file-hash verifier for run artifact bundles |
+| `LemonSim.GameHelpers.Config` | Shared model/provider credential resolution |
+| `LemonSim.GameHelpers.ProviderThrottle` | Provider request throttling with explicit process ownership |
 | `LemonSim.Store` | `LemonCore.Store` wrapper for state persistence |
 | `LemonSim.Bus` | `LemonCore.Bus` wrapper for sim topics |
 | `LemonSim.Runner` | Ingest-until-decision + decide-once + composed `step/3` + `run_until_terminal/3` |
@@ -211,6 +221,9 @@ decision adapter:
 If an invalid coalescer is configured, `Runner.ingest_events/4` returns
 `{:error, {:invalid_coalescer, module}}` instead of raising.
 
+`ToolLoopDecider` rejects duplicate normalized tool names before model calls so
+benchmark runs cannot silently replace one tool implementation with another.
+
 `LemonSim.Deciders.ToolPolicies.SingleTerminal` also copies any
 `result_details.event(s)` from terminal tool calls onto the returned decision as
 top-level `"events"` so the default tool-loop path can bypass extra adapter
@@ -222,6 +235,10 @@ events are preserved through the same generic path. Its public module is a
 facade; world setup, projection, artifact writing, offline baseline execution,
 arena behavior, demand, suppliers, physical worker behavior, performance,
 replay, and updater logic live in focused `vending_bench/*` modules.
+Supplier ordering uses command/fact separation: model-facing tools emit
+`place_supplier_order`, and the updater validates quantity, supplier quote,
+delivery metadata, and affordability before appending the authoritative
+`supplier_order_placed` fact.
 
 ## Dependency Rationale
 

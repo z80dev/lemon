@@ -3,6 +3,8 @@ defmodule LemonSim.Examples.VendingBench.Replay do
   Loads VendingBench artifact directories and builds a compact replay browser.
   """
 
+  alias LemonSim.Artifacts.AtomicFile
+
   @required_files ~w(final_world.json events.jsonl actions.jsonl scorecard.json)
 
   @spec build(String.t()) :: {:ok, map()} | {:error, term()}
@@ -52,8 +54,8 @@ defmodule LemonSim.Examples.VendingBench.Replay do
         replay_html: Path.join(output_dir, "replay.html")
       }
 
-      File.write!(paths.replay_json, Jason.encode!(replay, pretty: true))
-      File.write!(paths.replay_html, render_html(replay))
+      AtomicFile.write!(paths.replay_json, Jason.encode!(replay, pretty: true))
+      AtomicFile.write!(paths.replay_html, render_html(replay))
 
       {:ok, Map.put(paths, :replay, replay)}
     end
@@ -191,6 +193,14 @@ defmodule LemonSim.Examples.VendingBench.Replay do
 
   defp event_summary("supplier_email_sent", payload) do
     "Ordered #{get(payload, "quantity", 0)}x #{get(payload, "item_id", "?")} from #{get(payload, "supplier_id", "?")} for $#{format_money(get(payload, "cost", 0))}; delivery day #{get(payload, "delivery_day", "?")}"
+  end
+
+  defp event_summary("place_supplier_order", payload) do
+    "Requested #{get(payload, "quantity", 0)}x #{get(payload, "item_id", "?")} from #{get(payload, "supplier_id", "?")}"
+  end
+
+  defp event_summary("supplier_order_placed", payload) do
+    "Placed #{get(payload, "quantity", 0)}x #{get(payload, "item_id", "?")} from #{get(payload, "supplier_id", "?")} for $#{format_money(get(payload, "cost", 0))}; delivery day #{get(payload, "delivery_day", "?")}"
   end
 
   defp event_summary("supplier_reply_received", payload) do

@@ -454,13 +454,13 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
             order_event =
               if Map.get(reply.metadata, :kind) == "order_confirmed" and reply.cost <= balance do
                 [
-                  Events.supplier_email_sent(
+                  Events.place_supplier_order(
+                    "operator",
                     reply.supplier_id,
                     reply.item_id,
                     reply.quantity,
-                    reply.cost,
-                    reply.delivery_day,
-                    reply.metadata
+                    "supplier_message:#{reply.supplier_id}:#{reply.item_id}:#{current_day}",
+                    %{"negotiated" => Map.get(reply.metadata, :discount_rate, 0.0) > 0.0}
                   )
                 ]
               else
@@ -543,7 +543,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
         balance = get(world, :bank_balance, 0.0)
 
         case Suppliers.process_order(supplier_id, item_id, quantity, current_day) do
-          {:ok, %{cost: cost, delivery_day: delivery_day, metadata: metadata}} ->
+          {:ok, %{cost: cost, delivery_day: delivery_day}} ->
             if cost > balance do
               reason =
                 "Insufficient funds. Order costs $#{format_price(cost)} but you only have $#{format_price(balance)}."
@@ -556,13 +556,12 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
                }}
             else
               event =
-                Events.supplier_email_sent(
+                Events.place_supplier_order(
+                  "operator",
                   supplier_id,
                   item_id,
                   quantity,
-                  cost,
-                  delivery_day,
-                  metadata
+                  "supplier_email:#{supplier_id}:#{item_id}:#{current_day}"
                 )
 
               {:ok,

@@ -89,6 +89,10 @@ mission targets change.
 | `lib/lemon_sim/decision_adapter.ex` | `LemonSim.DecisionAdapter` | Decision -> event adaptation behaviour for decisions without direct top-level events |
 | `lib/lemon_sim/decision_adapters/tool_result_events.ex` | `LemonSim.DecisionAdapters.ToolResultEvents` | Default adapter for tool results that return event payloads in `result_details` |
 | `lib/lemon_sim/decision_adapters/executed_call_events.ex` | `LemonSim.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving event payloads from every executed tool call in a tool-loop decision |
+| `lib/lemon_sim/artifacts/atomic_file.ex` | `LemonSim.Artifacts.AtomicFile` | Atomic artifact writes via tmp file, sync, and rename |
+| `lib/lemon_sim/artifacts/verifier.ex` | `LemonSim.Artifacts.Verifier` | Verifies run artifact manifests and file hashes |
+| `lib/lemon_sim/game_helpers/config.ex` | `LemonSim.GameHelpers.Config` | Shared model and provider credential resolution for sim runners |
+| `lib/lemon_sim/game_helpers/provider_throttle.ex` | `LemonSim.GameHelpers.ProviderThrottle` | Shared provider request throttling with explicit process stop |
 | `lib/lemon_sim/deciders/tool_loop_decider.ex` | `LemonSim.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/runner.ex` | `LemonSim.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
 | `lib/lemon_sim/store.ex` | `LemonSim.Store` | `LemonCore.Store` persistence wrapper |
@@ -115,8 +119,11 @@ mission targets change.
 - VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.
 - Keep `LemonSim.Examples.VendingBench` as a facade. World bootstrap, projection, artifacts, offline baseline running, arena behavior, demand, suppliers, physical-worker behavior, performance, replay, and updater logic belong in focused `vending_bench/*` modules.
 - `ToolLoopDecider` is tool-first: assistant replies without tool calls are treated as errors, not text decisions.
+- `ToolLoopDecider` must reject duplicate normalized tool names; silent tool replacement invalidates benchmark traces.
 - Use `driver_max_turns` for outer sim loops and `decision_max_turns` for inner model/tool retries; `max_turns` remains a backward-compatible fallback.
 - `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
+- VendingBench supplier orders are command/fact based: model-facing tools emit `place_supplier_order`, and the updater quotes suppliers and emits `supplier_order_placed`; do not trust model-origin payloads for cost, delivery day, substitutions, or affordability.
+- VendingBench artifact files must be written atomically with `LemonSim.Artifacts.AtomicFile`. The artifact registry is mutable only through `VendingBench.ArtifactRegistry`, which serializes updates and writes atomically.
 - `State.version` tracks all state mutations, not just appended events.
 - When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
 - After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.

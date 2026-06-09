@@ -9,8 +9,10 @@ defmodule LemonSim.Examples.VendingBench.Arena do
   spend.
   """
 
-  alias LemonSim.{Runner, State}
+  alias LemonSim.Artifacts.AtomicFile
   alias LemonSim.Examples.VendingBench
+  alias LemonSim.Examples.VendingBench.ArtifactRegistry
+  alias LemonSim.{Runner, State}
 
   @default_agents [
     %{id: "alex", name: "Alex Market"},
@@ -19,11 +21,6 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     %{id: "devon", name: "Devon Pantry"},
     %{id: "ellis", name: "Ellis Express"}
   ]
-
-  @artifact_registry_path Path.join(
-                            System.tmp_dir!(),
-                            "lemon_vending_bench_artifact_registry.json"
-                          )
 
   @spec run_offline_strategy(String.t() | atom(), keyword()) ::
           {:ok, %{world: map(), artifacts: map() | nil, events: list(), actions: list()}}
@@ -298,7 +295,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
       artifact_dir ->
         File.mkdir_p!(artifact_dir)
-        write_artifact_registry(world.sim_id, artifact_dir)
+        ArtifactRegistry.put(world.sim_id, artifact_dir)
 
         paths = %{
           final_world: Path.join(artifact_dir, "final_world.json"),
@@ -310,40 +307,19 @@ defmodule LemonSim.Examples.VendingBench.Arena do
         }
 
         encoded_world = Jason.encode!(jsonable(world), pretty: true)
-        File.write!(paths.final_world, encoded_world)
-        File.write!(paths.arena_world, encoded_world)
-        File.write!(paths.arena_events, jsonl(events))
-        File.write!(paths.arena_actions, jsonl(actions))
+        AtomicFile.write!(paths.final_world, encoded_world)
+        AtomicFile.write!(paths.arena_world, encoded_world)
+        AtomicFile.write!(paths.arena_events, jsonl(events))
+        AtomicFile.write!(paths.arena_actions, jsonl(actions))
 
-        File.write!(
+        AtomicFile.write!(
           paths.arena_scorecard,
           Jason.encode!(jsonable(scorecard(world)), pretty: true)
         )
 
-        File.write!(paths.arena_report, report(world, paths))
+        AtomicFile.write!(paths.arena_report, report(world, paths))
         paths
     end
-  end
-
-  defp write_artifact_registry(sim_id, artifact_dir) do
-    registry =
-      case File.read(@artifact_registry_path) do
-        {:ok, body} ->
-          case Jason.decode(body) do
-            {:ok, decoded} when is_map(decoded) -> decoded
-            _ -> %{}
-          end
-
-        _ ->
-          %{}
-      end
-
-    File.write!(
-      @artifact_registry_path,
-      registry
-      |> Map.put(sim_id, artifact_dir)
-      |> Jason.encode!(pretty: true)
-    )
   end
 
   defp scorecard(world) do
