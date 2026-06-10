@@ -174,26 +174,157 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
         .vb-main-grid {
           display: grid;
-          grid-template-columns: minmax(170px, 200px) minmax(0, 1fr) minmax(210px, 240px);
-          gap: 0;
-          min-height: 560px;
+          grid-template-columns: minmax(180px, 220px) minmax(320px, 1fr) minmax(220px, 260px);
+          gap: 14px;
+          min-height: 620px;
           min-width: 0;
+          padding: 16px;
         }
 
-        .vb-left-panel { border-right: 1px solid #1a3024; }
-        .vb-right-panel { border-left: 1px solid #1a3024; }
+        .vb-side-panel {
+          border: 1px solid #1f3a2b;
+          border-radius: 8px;
+          background: linear-gradient(180deg, #111c16 0%, #0b120f 100%);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 40px rgba(0,0,0,0.28);
+        }
+
+        .vb-machine-shell {
+          position: relative;
+          min-height: 590px;
+          border-radius: 18px;
+          border: 4px solid #280b10;
+          background:
+            radial-gradient(circle at 18% 12%, rgba(255,255,255,0.16), transparent 12%),
+            linear-gradient(135deg, #e64534 0%, #a51f2f 48%, #621424 100%);
+          box-shadow: inset 0 0 0 3px rgba(255,255,255,0.08), inset -18px 0 34px rgba(0,0,0,0.22), 0 28px 60px rgba(0,0,0,0.42);
+          padding: 18px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 112px;
+          gap: 14px;
+        }
+
+        .vb-machine-marquee {
+          grid-column: 1 / -1;
+          min-height: 54px;
+          border-radius: 10px;
+          border: 3px solid #3b1017;
+          background: linear-gradient(180deg, #ffe36d 0%, #f59e0b 100%);
+          color: #3b1017;
+          box-shadow: inset 0 2px 0 rgba(255,255,255,0.42), 0 6px 0 rgba(59,16,23,0.32);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 14px;
+        }
+
+        .vb-glass {
+          position: relative;
+          border-radius: 12px;
+          border: 4px solid #1b2b31;
+          background:
+            linear-gradient(110deg, rgba(255,255,255,0.18) 0 6%, transparent 6% 45%, rgba(255,255,255,0.08) 45% 52%, transparent 52%),
+            linear-gradient(180deg, #163139 0%, #071316 100%);
+          box-shadow: inset 0 0 28px rgba(103,232,249,0.16), inset 0 0 0 2px rgba(255,255,255,0.05);
+          padding: 12px;
+          overflow: hidden;
+        }
+
+        .vb-slot-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+          position: relative;
+          z-index: 1;
+        }
+
+        .vb-control-panel {
+          border-radius: 12px;
+          border: 3px solid #321017;
+          background: linear-gradient(180deg, #f5efe2 0%, #d8cbb7 100%);
+          color: #2d1710;
+          box-shadow: inset 0 2px 0 rgba(255,255,255,0.5), inset -8px 0 16px rgba(0,0,0,0.08);
+          padding: 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .vb-led {
+          border-radius: 6px;
+          border: 2px solid #142018;
+          background: #07110b;
+          color: #38f28f;
+          font-family: monospace;
+          font-size: 11px;
+          line-height: 1.35;
+          min-height: 58px;
+          padding: 8px;
+          text-shadow: 0 0 8px rgba(56,242,143,0.55);
+        }
+
+        .vb-keypad {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 6px;
+        }
+
+        .vb-key {
+          aspect-ratio: 1;
+          border-radius: 5px;
+          border: 1px solid rgba(0,0,0,0.28);
+          background: linear-gradient(180deg, #ffffff 0%, #c9c1b3 100%);
+          color: #45241b;
+          font-size: 11px;
+          font-family: monospace;
+          font-weight: 900;
+          display: grid;
+          place-items: center;
+          box-shadow: 0 2px 0 rgba(0,0,0,0.28);
+        }
+
+        .vb-coin-slot,
+        .vb-dispenser {
+          border-radius: 7px;
+          border: 2px solid #25130f;
+          background: linear-gradient(180deg, #3c3a36 0%, #12100e 100%);
+          box-shadow: inset 0 2px 8px rgba(0,0,0,0.55);
+        }
+
+        .vb-coin-slot { height: 26px; }
+
+        .vb-dispenser {
+          grid-column: 1 / -1;
+          min-height: 70px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fef3c7;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 2px;
+        }
 
         @media (max-width: 900px) {
           .vb-watch-grid,
           .vb-main-grid {
             grid-template-columns: minmax(0, 1fr);
+            padding: 12px;
           }
 
-          .vb-left-panel,
-          .vb-right-panel {
-            border-left: 0 !important;
-            border-right: 0 !important;
-            border-top: 1px solid #1a3024;
+          .vb-machine-shell {
+            grid-template-columns: minmax(0, 1fr);
+            min-height: auto;
+            padding: 12px;
+          }
+
+          .vb-control-panel {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .vb-keypad {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
           }
         }
       </style>
@@ -303,7 +434,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       <div class="vb-main-grid">
 
         <!-- Left: Storage + Financials + Worker -->
-        <div class="vb-left-panel" style="padding: 12px 0; display: flex; flex-direction: column; gap: 0; min-width: 0;">
+        <div class="vb-side-panel" style="padding: 12px 0; display: flex; flex-direction: column; gap: 0; min-width: 0;">
 
           <!-- Financials panel -->
           <div style="padding: 6px 12px 12px;">
@@ -371,47 +502,79 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
         </div>
 
-        <!-- Center: Machine Slot Grid -->
-        <div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0;">
-
-          <!-- Machine header -->
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div style="font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700;">MACHINE SLOTS</div>
-            <div style="font-size: 10px; color: #4a7c62;">4 rows x 3 cols</div>
+        <!-- Center: Retro machine -->
+        <div class="vb-machine-shell">
+          <div class="vb-machine-marquee">
+            <div style="min-width: 0;">
+              <div style="font-size: 10px; letter-spacing: 2px; font-weight: 900;">LEMON VENDBOT</div>
+              <div style="font-size: 20px; line-height: 1; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                <%= @headline %>
+              </div>
+            </div>
+            <div style="text-align: right; font-family: monospace; font-weight: 900; font-size: 18px;">
+              D<%= @day_number %>
+            </div>
           </div>
 
-          <!-- Slot grid: rows A-D, cols 1-3 -->
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
-            <%= for slot_key <- @slot_keys do %>
-              <% slot = get_slot(@slots, slot_key) %>
-              <% item_id = get_val(slot, :item_id, nil) %>
-              <% inventory = get_val(slot, :inventory, 0) %>
-              <% price = get_val(slot, :price, nil) %>
-              <% slot_type = get_val(slot, :slot_type, "standard") %>
-              <% item_name = if item_id, do: get_item_name(@catalog, item_id), else: nil %>
-              <% is_empty = inventory == 0 %>
-              <% is_vacant = item_id == nil %>
-              <.slot_card
-                slot_key={slot_key}
-                item_name={item_name}
-                item_id={item_id}
-                inventory={inventory}
-                price={price}
-                slot_type={slot_type}
-                is_empty={is_empty}
-                is_vacant={is_vacant}
-              />
-            <% end %>
+          <div class="vb-glass vb-scanline">
+            <div class="vb-slot-grid">
+              <%= for slot_key <- @slot_keys do %>
+                <% slot = get_slot(@slots, slot_key) %>
+                <% item_id = get_val(slot, :item_id, nil) %>
+                <% inventory = get_val(slot, :inventory, 0) %>
+                <% price = get_val(slot, :price, nil) %>
+                <% slot_type = get_val(slot, :slot_type, "standard") %>
+                <% item_name = if item_id, do: get_item_name(@catalog, item_id), else: nil %>
+                <% is_empty = inventory == 0 %>
+                <% is_vacant = item_id == nil %>
+                <.slot_card
+                  slot_key={slot_key}
+                  item_name={item_name}
+                  item_id={item_id}
+                  inventory={inventory}
+                  price={price}
+                  slot_type={slot_type}
+                  is_empty={is_empty}
+                  is_vacant={is_vacant}
+                />
+              <% end %>
+            </div>
           </div>
 
-          <!-- Recent Sales -->
-          <div style="flex: 1; background: #0f1a14; border-radius: 8px; border: 1px solid #1a3024; overflow: hidden;">
-            <div style="padding: 10px 14px; border-bottom: 1px solid #1a3024; font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700; background: rgba(15,26,20,0.8);">
+          <div class="vb-control-panel">
+            <div class="vb-led">
+              <div style="font-size: 9px; color: #fbbf24; text-shadow: none; margin-bottom: 4px;">SELECT</div>
+              <div><%= @top_product %></div>
+              <div style="margin-top: 5px; color: #8ef7bb;">$<%= format_money(@cash_in_machine) %> inside</div>
+            </div>
+            <div class="vb-keypad">
+              <%= for key <- ["A", "B", "C", "1", "2", "3"] do %>
+                <div class="vb-key"><%= key %></div>
+              <% end %>
+            </div>
+            <div>
+              <div style="font-size: 9px; font-weight: 900; letter-spacing: 1px; margin-bottom: 5px;">COIN</div>
+              <div class="vb-coin-slot"></div>
+            </div>
+            <div>
+              <div style="font-size: 9px; font-weight: 900; letter-spacing: 1px; margin-bottom: 5px;">STATUS</div>
+              <div style="border-radius: 6px; background: #2f1712; color: #fde68a; min-height: 42px; padding: 8px; font-size: 10px; font-family: monospace;">
+                <%= phase_label(@phase) %><br />RUN <%= @progress_percent %>%
+              </div>
+            </div>
+          </div>
+
+          <div class="vb-dispenser">
+            PRODUCT PICKUP
+          </div>
+
+          <div style="grid-column: 1 / -1; background: #0f1a14; border-radius: 8px; border: 1px solid #1a3024; overflow: hidden;">
+            <div style="padding: 10px 14px; border-bottom: 1px solid #1a3024; font-size: 10px; letter-spacing: 2px; color: #34d399; font-weight: 800; background: rgba(15,26,20,0.8);">
               RECENT SALES
             </div>
-            <div style="padding: 6px 4px; max-height: 180px; overflow-y: auto;">
+            <div style="padding: 6px 4px; max-height: 132px; overflow-y: auto;">
               <%= if @recent_sales_display == [] do %>
-                <div style="text-align: center; padding: 24px 20px; font-size: 12px; color: #2d5940; font-style: italic;">
+                <div style="text-align: center; padding: 18px 20px; font-size: 12px; color: #2d5940; font-style: italic;">
                   No sales recorded yet...
                 </div>
               <% else %>
@@ -436,7 +599,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
         </div>
 
         <!-- Right: Inbox + Pending Deliveries + Signals -->
-        <div class="vb-right-panel" style="padding: 12px 0; display: flex; flex-direction: column; gap: 0; min-width: 0;">
+        <div class="vb-side-panel" style="padding: 12px 0; display: flex; flex-direction: column; gap: 0; min-width: 0;">
 
           <!-- Inbox -->
           <div style="padding: 6px 12px 12px;">
@@ -602,12 +765,19 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
   defp slot_card(assigns) do
     ~H"""
     <div class={if !@is_vacant and !@is_empty, do: "vb-slot-active", else: ""}
-         style={"padding: 8px 10px; border-radius: 7px; border: 1px solid #{slot_border_color(@is_vacant, @is_empty)}; background: #{slot_bg_color(@is_vacant, @is_empty)}; min-height: 72px; display: flex; flex-direction: column; gap: 4px;"}>
+         style={"padding: 8px; border-radius: 8px; border: 1px solid #{slot_border_color(@is_vacant, @is_empty)}; background: #{slot_bg_color(@is_vacant, @is_empty)}; min-height: 128px; display: flex; flex-direction: column; gap: 5px; box-shadow: inset 0 0 18px rgba(0,0,0,0.32);"}>
       <!-- Slot ID + type -->
       <div style="display: flex; align-items: center; justify-content: space-between;">
         <span style={"font-size: 12px; font-weight: 800; color: #{slot_key_color(@is_vacant, @is_empty)}; font-family: monospace; letter-spacing: 1px;"}><%= @slot_key %></span>
         <%= if @slot_type && @slot_type != "standard" do %>
           <span style="font-size: 8px; color: #2d5940; font-family: monospace; letter-spacing: 1px;"><%= String.upcase(to_string(@slot_type)) %></span>
+        <% end %>
+      </div>
+      <div style="height: 76px; border-radius: 6px; background: rgba(255,255,255,0.05); display: grid; place-items: center; overflow: hidden;">
+        <%= if !@is_vacant do %>
+          <div style={"width: #{product_sprite_width(@item_id)}; height: 76px; opacity: #{if @is_empty, do: "0.38", else: "1"}; background-image: url('/assets/vending_bench/products.png'); background-repeat: no-repeat; background-size: 500% 200%; background-position: #{product_sprite_position(@item_id)}; transform: scale(#{product_sprite_scale(@item_id)}); filter: drop-shadow(0 7px 8px rgba(0,0,0,0.34));"}></div>
+        <% else %>
+          <div style="width: 42%; height: 10px; border-radius: 999px; background: rgba(45,89,64,0.45);"></div>
         <% end %>
       </div>
       <!-- Item name -->
@@ -890,6 +1060,29 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
   defp slot_bg_color(true, _), do: "rgba(15,26,20,0.5)"
   defp slot_bg_color(false, true), do: "rgba(248,113,113,0.05)"
   defp slot_bg_color(false, false), do: "rgba(16,185,129,0.06)"
+
+  defp product_sprite_position("sparkling_water"), do: "0% 0%"
+  defp product_sprite_position("energy_drink"), do: "25% 0%"
+  defp product_sprite_position("chips"), do: "50% 0%"
+  defp product_sprite_position("candy_bar"), do: "75% 0%"
+  defp product_sprite_position("cola"), do: "100% 0%"
+  defp product_sprite_position("water"), do: "0% 100%"
+  defp product_sprite_position("trail_mix"), do: "25% 100%"
+  defp product_sprite_position("granola_bar"), do: "50% 100%"
+  defp product_sprite_position("sandwich"), do: "75% 100%"
+  defp product_sprite_position("protein_box"), do: "100% 100%"
+  defp product_sprite_position(_), do: "50% 0%"
+
+  defp product_sprite_width(item_id)
+       when item_id in ["chips", "trail_mix", "sandwich", "protein_box"],
+       do: "64px"
+
+  defp product_sprite_width(item_id) when item_id in ["candy_bar", "granola_bar"], do: "48px"
+  defp product_sprite_width(_), do: "46px"
+
+  defp product_sprite_scale(item_id) when item_id in ["sparkling_water", "water"], do: "1.12"
+  defp product_sprite_scale(item_id) when item_id in ["energy_drink", "cola"], do: "1.06"
+  defp product_sprite_scale(_), do: "1"
 
   defp slot_key_color(true, _), do: "#2d5940"
   defp slot_key_color(false, true), do: "#f87171"

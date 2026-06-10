@@ -62,6 +62,7 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
   live_view: [signing_salt: "lemonsimuilv"]
 
 config :lemon_sim_ui, :access_token, nil
+config :lemon_sim_ui, :public_vending_launcher, false
 
 # Sample configuration:
 #

@@ -55,7 +55,7 @@ lib/
         auction_board.ex                   Lot/bidder display for :auction
         diplomacy_board.ex                 Territory/faction display for :diplomacy
         dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
-        vending_bench_board.ex             VendingBench broadcast view, Arena standings, operations, supplier/fault signals, and scorecard display
+        vending_bench_board.ex             Retro VendingBench machine view, generated product sprites, Arena standings, operations, supplier/fault signals, and scorecard display
 test/
   lemon_sim_ui/
     live/
@@ -71,7 +71,8 @@ test/
 | File | Module | Purpose |
 |---|---|---|
 | `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; `start_sim/2`, `stop_sim/1`, `resume_sim/1`, `list_running/0`, `submit_human_move/2`, auto-loop controls |
-| `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims and links to spectator pages |
+| `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose the fixed VendingBench launcher |
+| `lib/lemon_sim_ui/controllers/vending_bench_launch_controller.ex` | `LemonSimUi.VendingBenchLaunchController` | Public non-JS route for the fixed VendingBench launcher |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/admin` and `/admin/sims/:sim_id`; handles sim launch and admin/detail flows |
 | `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf and VendingBench, subscribes to sim/lobby updates, and refreshes CLI VendingBench runs from checkpoint artifacts |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
@@ -81,9 +82,10 @@ test/
 | `lib/lemon_sim_ui/sim_helpers.ex` | `LemonSimUi.SimHelpers` | `infer_domain_type/1`, `sim_summary/1`, `domain_label/1`, `domain_badge_color/1` |
 | `lib/lemon_sim_ui/live/components/event_log.ex` | `LemonSimUi.Live.Components.EventLog` | Stateless component; renders `recent_events` with color-coded event kinds |
 | `lib/lemon_sim_ui/live/components/plan_history.ex` | `LemonSimUi.Live.Components.PlanHistory` | Stateless component; renders `plan_history` as collapsible steps |
+| `lib/lemon_sim_ui/live/components/run_log.ex` | `LemonSimUi.Live.Components.RunLog` | Stateless component; renders current status, recent events, and model-visible VendingBench tool/decision traces |
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
 | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
-| `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | VendingBench broadcast view, Arena standings, machine, supplier, refund, fault, trade, and scorecard display |
+| `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier, refund, fault, trade, and scorecard display |
 
 ## Common Modification Patterns
 
@@ -142,8 +144,9 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 - `SimManager` is the single owner of all runner task PIDs. Do not start runner tasks outside of it.
 - Werewolf board context is not viewer-gated anymore. The dashboard and the public watcher should show the same non-admin story panels, including wolf chat history, private meetings, journals, and character bios.
 - Buffered Werewolf watch pacing belongs in `lemon_sim_ui`, not `lemon_sim`. Use exact broadcast snapshots plus UI-side dwell heuristics for readability, but keep simulation rules and state transitions in `lemon_sim`.
+- VendingBench live-log model traces are compact `plan_history` entries from `SimManager`. Keep them to visible tool calls/results and domain summaries; do not try to expose provider-hidden chain-of-thought.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.
-- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/`, `/watch/:sim_id`, and `/healthz` are intentionally public.
+- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/`, `/watch/:sim_id`, and `/healthz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to fixed presets unless the route is moved behind auth.
 - Treat auto-loop and deployment wiring as an ops slice. Runtime env flags such as `LEMON_SIM_AUTO_LOOP` and deployment manifests such as `fly.toml` should stay coherent with `SimManager` auto-loop behavior, but separate from the general public/admin UI route changes.
 - `MemoryViewer` reads files synchronously at render time (no caching). Keep it bounded to small memory namespaces; it already limits to 20 files and 4096 bytes per file.
 

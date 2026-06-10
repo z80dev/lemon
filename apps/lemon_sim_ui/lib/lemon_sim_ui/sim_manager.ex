@@ -614,23 +614,45 @@ defmodule LemonSimUi.SimManager do
 
   defp build_initial_state(:vending_bench, sim_id, opts) do
     max_days = Keyword.get(opts, :max_days, 30)
+    max_turns = Keyword.get(opts, :max_turns, Keyword.get(opts, :driver_max_turns, 300))
 
-    initial_state = VendingBench.initial_state(sim_id: sim_id, max_days: max_days)
+    config = load_project_config()
+
+    {model, stream_options} =
+      case Keyword.get(opts, :operator_model_spec, Keyword.get(opts, :model_spec)) do
+        nil -> resolve_default_model_for_ui()
+        spec -> resolve_model_stream_options!(spec, config, "vending bench")
+      end
+
+    {physical_worker_model, physical_worker_stream_options} =
+      case Keyword.get(
+             opts,
+             :physical_worker_model_spec,
+             Keyword.get(opts, :worker_model_spec)
+           ) do
+        nil -> {model, stream_options}
+        spec -> resolve_model_stream_options!(spec, config, "vending bench")
+      end
+
+    initial_state =
+      VendingBench.initial_state(
+        sim_id: sim_id,
+        max_days: max_days,
+        model: model,
+        physical_worker_model: physical_worker_model
+      )
+
     modules = VendingBench.modules()
-
-    {model, stream_options} = resolve_default_model_for_ui()
-
-    support_tool_matcher = fn tool ->
-      String.starts_with?(tool.name, "memory_") or
-        tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder send_supplier_message send_supplier_email)
-    end
 
     run_opts =
       VendingBench.default_opts(model: model, stream_options: stream_options)
+      |> Keyword.put(:physical_worker_model, physical_worker_model)
+      |> Keyword.put(:physical_worker_stream_options, physical_worker_stream_options)
+      |> Keyword.put(:driver_max_turns, max_turns)
       |> Keyword.put(:persist?, true)
       |> Keyword.put(:on_before_step, nil)
-      |> Keyword.put(:on_after_step, &on_after_step/2)
-      |> Keyword.put(:support_tool_matcher, support_tool_matcher)
+      |> Keyword.put(:on_after_step, nil)
+      |> Keyword.put(:support_tool_matcher, &VendingBench.support_tool?/1)
 
     {:ok, initial_state, modules, run_opts}
   rescue
@@ -752,10 +774,11 @@ defmodule LemonSimUi.SimManager do
       try do
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
-            Store.put_state(result.state)
-            broadcast_update(result.state)
+            next_state = append_decision_trace(result.state, state, turn + 1, result)
+            Store.put_state(next_state)
+            broadcast_update(next_state)
             Process.sleep(500)
-            do_ai_loop(result.state, modules, opts, terminal?, max_turns, turn + 1, 0)
+            do_ai_loop(next_state, modules, opts, terminal?, max_turns, turn + 1, 0)
 
           {:error, reason} ->
             ctx = sim_context(state, turn)
@@ -864,12 +887,13 @@ defmodule LemonSimUi.SimManager do
 
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
-            Store.put_state(result.state)
-            broadcast_update(result.state)
+            next_state = append_decision_trace(result.state, state, turn + 1, result)
+            Store.put_state(next_state)
+            broadcast_update(next_state)
             Process.sleep(500)
 
             do_interactive_loop(
-              result.state,
+              next_state,
               modules,
               opts,
               terminal?,
@@ -937,6 +961,144 @@ defmodule LemonSimUi.SimManager do
     event = LemonCore.Event.new(:sim_lobby_changed, %{})
     LemonCore.Bus.broadcast(@lobby_topic, event)
   end
+
+  defp append_decision_trace(%State{} = next_state, %State{} = before_state, turn, result) do
+    decision = Map.get(result, :decision, %{})
+    calls = decision |> fetch(:executed_calls, "executed_calls", []) |> List.wrap()
+    events = result |> Map.get(:events, []) |> List.wrap()
+    ctx = sim_context(before_state, turn)
+
+    tool_names =
+      calls |> Enum.map(&fetch(&1, :tool_name, "tool_name", nil)) |> Enum.reject(&is_nil/1)
+
+    event_names = events |> Enum.map(&fetch(&1, :kind, "kind", "event")) |> Enum.map(&to_string/1)
+
+    summary =
+      cond do
+        tool_names != [] ->
+          "#{ctx.actor} used #{Enum.join(tool_names, ", ")}"
+
+        event_names != [] ->
+          "#{ctx.actor} produced #{Enum.join(event_names, ", ")}"
+
+        true ->
+          "#{ctx.actor} completed a model step"
+      end
+
+    rationale =
+      visible_decision_rationale(decision) ||
+        visible_tool_trace(calls) ||
+        visible_event_trace(events)
+
+    State.append_plan_step(next_state, %{
+      summary: summary,
+      rationale: rationale,
+      meta: %{
+        kind: "model_trace",
+        turn: turn,
+        actor: ctx.actor,
+        day: ctx.day,
+        phase: ctx.phase,
+        tools: tool_names,
+        events: event_names
+      }
+    })
+  end
+
+  defp visible_decision_rationale(%{} = decision) do
+    [:rationale, :thought, :reasoning, :summary, :message]
+    |> Enum.find_value(fn key ->
+      decision
+      |> fetch(key, Atom.to_string(key), nil)
+      |> present_string()
+    end)
+  end
+
+  defp visible_decision_rationale(_), do: nil
+
+  defp visible_tool_trace([]), do: nil
+
+  defp visible_tool_trace(calls) do
+    calls
+    |> Enum.take(5)
+    |> Enum.map(fn call ->
+      tool = fetch(call, :tool_name, "tool_name", "tool")
+      args = call |> fetch(:arguments, "arguments", %{}) |> summarize_map()
+
+      result =
+        call |> fetch(:result_text, "result_text", nil) |> present_string() |> truncate(180)
+
+      cond do
+        result && args != "" -> "#{tool}(#{args}) -> #{result}"
+        result -> "#{tool} -> #{result}"
+        args != "" -> "#{tool}(#{args})"
+        true -> to_string(tool)
+      end
+    end)
+    |> Enum.join("\n")
+    |> truncate(900)
+  end
+
+  defp visible_event_trace([]), do: nil
+
+  defp visible_event_trace(events) do
+    events
+    |> Enum.take(5)
+    |> Enum.map(fn event ->
+      kind = fetch(event, :kind, "kind", "event")
+      payload = event |> fetch(:payload, "payload", %{}) |> summarize_map()
+      if payload == "", do: to_string(kind), else: "#{kind}: #{payload}"
+    end)
+    |> Enum.join("\n")
+    |> truncate(900)
+  end
+
+  defp summarize_map(value) when is_map(value) do
+    value
+    |> Enum.reject(fn {key, _value} -> secretish_key?(key) end)
+    |> Enum.take(4)
+    |> Enum.map(fn {key, value} -> "#{key}=#{summarize_value(value)}" end)
+    |> Enum.join(", ")
+  end
+
+  defp summarize_map(_), do: ""
+
+  defp summarize_value(value) when is_binary(value), do: truncate(value, 120)
+  defp summarize_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp summarize_value(value) when is_number(value), do: to_string(value)
+  defp summarize_value(value), do: inspect(value, limit: 4, printable_limit: 120)
+
+  defp secretish_key?(key) do
+    key
+    |> to_string()
+    |> String.downcase()
+    |> then(
+      &(String.contains?(&1, "key") or String.contains?(&1, "token") or
+          String.contains?(&1, "secret"))
+    )
+  end
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(nil), do: nil
+  defp present_string(value), do: value |> to_string() |> present_string()
+
+  defp truncate(nil, _max), do: nil
+
+  defp truncate(value, max) when is_binary(value) and byte_size(value) > max do
+    String.slice(value, 0, max) <> "..."
+  end
+
+  defp truncate(value, _max), do: value
+
+  defp fetch(map, atom_key, string_key, default) when is_map(map) do
+    Map.get(map, atom_key, Map.get(map, string_key, default))
+  end
+
+  defp fetch(_map, _atom_key, _string_key, default), do: default
 
   defp generate_id(:tic_tac_toe), do: "ttt_#{random_hex(4)}"
   defp generate_id(:skirmish), do: "skm_#{random_hex(4)}"
@@ -1075,6 +1237,13 @@ defmodule LemonSimUi.SimManager do
       nil ->
         raise "Could not resolve model #{provider}/#{model_id}"
     end
+  end
+
+  defp resolve_model_stream_options!(spec, config, game_name) do
+    {provider, model_id} = parse_model_spec(spec)
+    model = resolve_model!(provider, model_id, config)
+    api_key = SimConfig.resolve_provider_api_key!(provider, config, game_name)
+    {model, %{api_key: api_key}}
   end
 
   # Shared helper for games that support multi-model assignments (stock_market, survivor, space_station).

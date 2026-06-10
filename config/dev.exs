@@ -28,9 +28,15 @@ config :lemon_web, LemonWeb.Endpoint,
     "dev_secret_key_base_dev_secret_key_base_dev_secret_key_base_dev_secret_key_base",
   watchers: []
 
+sim_ui_bind_ip =
+  case :inet.parse_address(to_charlist(System.get_env("LEMON_SIM_UI_BIND_IP") || "127.0.0.1")) do
+    {:ok, address} -> address
+    {:error, _reason} -> raise "Invalid LEMON_SIM_UI_BIND_IP"
+  end
+
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [
-    ip: {127, 0, 0, 1},
+    ip: sim_ui_bind_ip,
     port: String.to_integer(System.get_env("LEMON_SIM_UI_PORT") || "4090")
   ],
   check_origin: false,

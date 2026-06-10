@@ -9,7 +9,7 @@ defmodule LemonSimUi.LobbyLive do
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.{SimHelpers, SimManager}
+  alias LemonSimUi.{SimHelpers, SimManager, VendingBenchLauncher}
   alias LemonSim.Kernel.{Event, State, Store}
 
   @vending_bench_artifact_registry Path.join(
@@ -33,7 +33,9 @@ defmodule LemonSimUi.LobbyLive do
     {:ok,
      assign(socket,
        sims: build_lobby_list(),
-       page_title: "LemonSim — Live Games"
+       page_title: "LemonSim — Live Games",
+       public_vending_launcher?: VendingBenchLauncher.enabled?(),
+       vending_model_presets: VendingBenchLauncher.presets()
      )}
   end
 
@@ -75,6 +77,45 @@ defmodule LemonSimUi.LobbyLive do
 
       <%!-- Content --%>
       <main class="max-w-5xl mx-auto px-6 py-10">
+        <%= if @public_vending_launcher? do %>
+          <section class="glass-panel rounded-xl border border-glass-border p-5 mb-8">
+            <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
+              <div>
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-[10px] font-bold uppercase px-2 py-1 rounded border bg-amber-500/10 text-amber-300 border-amber-500/30">
+                    Vending Bench
+                  </span>
+                  <span class="text-xs text-slate-500 font-mono">30 day run</span>
+                </div>
+                <h2 class="text-xl font-bold text-white">Start a New Run</h2>
+                <p class="text-sm text-slate-400 font-mono mt-1">
+                  Launches an operator and physical worker with the selected model.
+                </p>
+              </div>
+
+              <div class="w-full md:w-auto grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <%= for preset <- @vending_model_presets do %>
+                  <a
+                    href={~p"/vending_bench/start/#{preset.id}"}
+                    class="block rounded-lg border border-slate-700 bg-slate-950/50 p-3 hover:border-cyan-500/50 hover:bg-cyan-500/10 transition-colors"
+                  >
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <div class="text-sm font-bold text-white">{preset.label}</div>
+                        <div class="text-[11px] text-slate-500 font-mono">{preset.detail}</div>
+                      </div>
+                      <span class="w-3 h-3 rounded-full border border-cyan-400 bg-cyan-400"></span>
+                    </div>
+                    <div class="rounded bg-cyan-500 px-4 py-2 text-center text-sm font-bold text-slate-950 hover:bg-cyan-400">
+                      Start Run
+                    </div>
+                  </a>
+                <% end %>
+              </div>
+            </div>
+          </section>
+        <% end %>
+
         <%= if @sims == [] do %>
           <div class="text-center glass-panel p-16 rounded-2xl">
             <div class="w-20 h-20 bg-slate-900/80 rounded-full flex items-center justify-center mx-auto mb-6 border border-slate-700">

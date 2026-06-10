@@ -32,7 +32,7 @@ Public routes are served separately from admin routes. `LobbyLive` handles `/`, 
 
 On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
-Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/admin`, `/admin/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The public lobby (`/`), spectator route (`/watch/:sim_id`), and `/healthz` remain public.
+Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/admin`, `/admin/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The public lobby (`/`), spectator route (`/watch/:sim_id`), and `/healthz` remain public. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby also shows a fixed VendingBench launcher with only the GLM 5.1 Z.AI and GPT 5.5 Codex OAuth presets.
 
 ### Supported Simulation Domains
 
@@ -69,7 +69,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | Module | File | Purpose |
 |---|---|---|
 | `LemonSimUi.Application` | `lib/lemon_sim_ui/application.ex` | Starts `Telemetry`, `SimRunnerSupervisor`, `SimManager`, `Endpoint` |
-| `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims |
+| `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims and, when enabled, a fixed VendingBench launcher |
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
 | `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Admin dashboard LiveView for sim launch and detail flows |
 | `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf and VendingBench with no admin controls |
@@ -79,6 +79,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.SimHelpers` | `lib/lemon_sim_ui/sim_helpers.ex` | Domain type inference, status labels, badge colors, world summaries |
 | `LemonSimUi.Live.Components.EventLog` | `lib/lemon_sim_ui/live/components/event_log.ex` | Renders `recent_events` with per-kind color coding |
 | `LemonSimUi.Live.Components.PlanHistory` | `lib/lemon_sim_ui/live/components/plan_history.ex` | Renders `plan_history` steps with summary and rationale |
+| `LemonSimUi.Live.Components.RunLog` | `lib/lemon_sim_ui/live/components/run_log.ex` | Renders current run status, recent events, and model-visible tool/decision traces |
 | `LemonSimUi.Live.Components.MemoryViewer` | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | Reads scoped `LemonSim.Memory.Tools` files for the viewed sim |
 | `LemonSimUi.Live.Components.TicTacToeBoard` | `lib/lemon_sim_ui/live/components/tic_tac_toe_board.ex` | Renders 3x3 board; emits `human_move` click events |
 | `LemonSimUi.Live.Components.SkirmishBoard` | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | Grid board with terrain, unit rosters, kill feed, interactive tactical controls |
@@ -89,8 +90,8 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.AuctionBoard` | `lib/lemon_sim_ui/live/components/auction_board.ex` | Lot and bidder state display |
 | `LemonSimUi.Live.Components.DiplomacyBoard` | `lib/lemon_sim_ui/live/components/diplomacy_board.ex` | Territory map and faction negotiation display |
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
-| `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | VendingBench broadcast view with Arena standings, machine, supplier delivery, refund, machine fault, trade, and scorecard display |
-| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
+| `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier delivery, refund, machine fault, trade, and scorecard display |
+| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/vending_bench/start/:preset_id` to the public launcher, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |
 
@@ -119,7 +120,7 @@ mix phx.server
 iex -S mix phx.server
 ```
 
-The public lobby is available at `http://localhost:4000/` and the admin dashboard at `http://localhost:4000/admin` (port configured in `config/dev.exs`).
+The public lobby is available at `http://localhost:4090/` and the admin dashboard at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
 
 ### Starting a Simulation from the Dashboard
 
@@ -181,7 +182,9 @@ The create response includes the private admin URL and, for Werewolf and Vending
 | `LEMON_SIM_UI_SECRET_KEY_BASE` | Phoenix secret key base for `lemon_sim_ui` |
 | `LEMON_SIM_UI_HOST` | Public hostname for generated links |
 | `LEMON_SIM_UI_PORT` | HTTP bind port (defaults to `4090`) |
+| `LEMON_SIM_UI_BIND_IP` | Development bind address; use `0.0.0.0` for LAN/Tailscale access |
 | `LEMON_SIM_UI_ACCESS_TOKEN` | Protects admin dashboard + admin API |
+| `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | Enables the public lobby's fixed VendingBench launch form |
 | `LEMON_STORE_PATH` | Persistent SQLite path or directory for sim state |
 | `LEMON_SECRETS_MASTER_KEY` | Required on servers/containers that cannot read your local keychain but still need encrypted Lemon secrets |
 | `LEMON_SIM_AUTO_LOOP` | When `true`, boot configured auto-loop simulations on startup |
@@ -215,6 +218,17 @@ docker run --rm -p 4090:4090 \
 ```
 
 For internet exposure, put the container/release behind a TLS reverse proxy and publish only the `lemon_sim_ui` port.
+
+### Live Run Log
+
+The VendingBench public watcher renders a live run log below the board. It is driven by the same `State` updates as the board:
+
+- current status from world fields such as day, phase, actor, bank balance, and runner errors
+- recent domain events from `state.recent_events`
+- model-visible decision traces from `state.plan_history`
+- decision-pressure signals inferred from visible world state, including rejected actions, pending deliveries, open reminders, stockouts, complaints, and runner errors
+
+`SimManager` appends a compact trace after each successful model step. The trace includes tool names, selected arguments, tool results, and resulting event kinds. It does not expose provider-hidden chain-of-thought; only visible rationale or tool-call summaries returned through LemonSim are rendered.
 
 ### Starting a Simulation Programmatically
 

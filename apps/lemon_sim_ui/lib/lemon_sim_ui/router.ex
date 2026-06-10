@@ -39,6 +39,8 @@ defmodule LemonSimUi.Router do
 
     live("/", LobbyLive, :index)
     live("/watch/:sim_id", SpectatorLive, :show)
+    get("/vending_bench/start/:preset_id", VendingBenchLaunchController, :create)
+    post("/vending_bench/start", VendingBenchLaunchController, :create)
     get("/healthz", HealthController, :index)
   end
 

@@ -42,6 +42,10 @@ if is_binary(sim_ui_access_token) and sim_ui_access_token != "" do
   config :lemon_sim_ui, :access_token, sim_ui_access_token
 end
 
+if System.get_env("LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER") in ["1", "true", "TRUE"] do
+  config :lemon_sim_ui, :public_vending_launcher, true
+end
+
 uploads_dir = System.get_env("LEMON_WEB_UPLOADS_DIR")
 
 if is_binary(uploads_dir) and uploads_dir != "" do

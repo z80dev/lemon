@@ -15,7 +15,9 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
   alias LemonSimUi.Live.Components.VendingBenchBoard
   alias LemonSimUi.Live.Components.EventLog
   alias LemonSimUi.Live.Components.PlanHistory
+  alias LemonSimUi.Live.Components.RunLog
   alias LemonSimUi.Live.Components.MemoryViewer
+  alias LemonSim.Kernel.{Event, State}
 
   # ── TicTacToeBoard ─────────────────────────────────────────────────
 
@@ -150,6 +152,9 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Late Spring"
       assert html =~ "Hot"
       assert html =~ "VENDBENCH LIVE"
+      assert html =~ "LEMON VENDBOT"
+      assert html =~ "PRODUCT PICKUP"
+      assert html =~ "/assets/vending_bench/products.png"
       assert html =~ "RUN"
       assert html =~ "OP"
       assert html =~ "zai:glm-5-turbo"
@@ -849,6 +854,59 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
       assert html =~ "Attack the goblin"
       assert html =~ "Lowest HP target"
+    end
+  end
+
+  # ── RunLog ────────────────────────────────────────────────────────
+
+  describe "RunLog" do
+    test "renders current status, recent events, and model traces" do
+      state =
+        State.new(
+          sim_id: "vb_log_test",
+          world: %{
+            status: "in_progress",
+            phase: "operator_turn",
+            day_number: 4,
+            max_days: 30,
+            time_minutes: 615,
+            active_actor_id: "operator",
+            bank_balance: 512.5,
+            cash_in_machine: 18.25
+          },
+          recent_events: [
+            Event.new("supplier_order_placed", %{
+              "item_id" => "chips",
+              "quantity" => 12
+            })
+          ],
+          plan_history: [
+            %{
+              summary: "operator used place_supplier_order",
+              rationale: "place_supplier_order(item_id=chips, quantity=12) -> order queued",
+              meta: %{
+                actor: "operator",
+                tools: ["place_supplier_order"],
+                events: ["supplier_order_placed"]
+              }
+            }
+          ]
+        )
+
+      html = render_component(&RunLog.render/1, state: state, running: true)
+
+      assert html =~ "Current Status"
+      assert html =~ "4/30"
+      assert html =~ "Operator Turn"
+      assert html =~ "Running"
+      assert html =~ "$512.50"
+      assert html =~ "Decision Pressure"
+      assert html =~ "Model Decision Trace"
+      assert html =~ "operator used place_supplier_order"
+      assert html =~ "order queued"
+      assert html =~ "Live Event Feed"
+      assert html =~ "Supplier Order Placed"
+      assert html =~ "item_id=Chips"
     end
   end
 

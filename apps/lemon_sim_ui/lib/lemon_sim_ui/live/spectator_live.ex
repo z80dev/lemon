@@ -15,6 +15,7 @@ defmodule LemonSimUi.SpectatorLive do
   alias LemonSimUi.Live.Components.{
     WerewolfBoard,
     VendingBenchBoard,
+    RunLog,
     EventLog
   }
 
@@ -306,6 +307,7 @@ defmodule LemonSimUi.SpectatorLive do
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
         <VendingBenchBoard.render world={@state.world} interactive={false} />
+        <RunLog.render state={@state} running={@running} />
       </div>
     </div>
     """
@@ -507,7 +509,9 @@ defmodule LemonSimUi.SpectatorLive do
       if sim_id != exclude_sim_id do
         case Store.get_state(sim_id) do
           %{world: world} ->
-            domain = SimHelpers.infer_domain_type(%LemonSim.Kernel.State{world: world, sim_id: sim_id})
+            domain =
+              SimHelpers.infer_domain_type(%LemonSim.Kernel.State{world: world, sim_id: sim_id})
+
             if domain == :werewolf, do: sim_id
 
           _ ->
