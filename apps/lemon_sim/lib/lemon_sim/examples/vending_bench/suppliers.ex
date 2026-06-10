@@ -243,6 +243,26 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
                  message: quote_text(supplier_id),
                  metadata: %{kind: "quote", to: supplier.email, subject: subject}
                }}
+
+            {:ambiguous_order, matches} ->
+              items =
+                matches
+                |> Enum.map(fn {item_id, quantity} -> "#{quantity}x #{item_id}" end)
+                |> Enum.join(", ")
+
+              {:error,
+               %{
+                 supplier_id: supplier_id,
+                 message:
+                   "#{supplier.name} cannot process this order: multiple products detected (#{items}). Send one product per supplier email.",
+                 metadata: %{
+                   kind: "order_rejected",
+                   to: supplier.email,
+                   subject: subject,
+                   reason: "multiple_products_in_single_email",
+                   detected_items: matches
+                 }
+               }}
           end
         end
     end
@@ -337,26 +357,61 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
     normalized = String.downcase(body)
 
     if String.contains?(normalized, ["order", "buy", "purchase", "send", "deliver"]) do
-      @suppliers
-      |> Enum.flat_map(fn {_id, supplier} -> Map.keys(supplier.items) end)
-      |> Enum.uniq()
-      |> Enum.find_value(:no_order, fn item_id ->
-        item_pattern = Regex.escape(item_id)
-
-        [
-          ~r/(?:#{item_pattern})\D{0,12}(\d+)/,
-          ~r/(\d+)\D{0,12}(?:#{item_pattern})/
-        ]
-        |> Enum.find_value(fn pattern ->
-          case Regex.run(pattern, normalized) do
-            [_, quantity] -> {:ok, item_id, String.to_integer(quantity)}
-            _ -> nil
-          end
+      matches =
+        @suppliers
+        |> Enum.flat_map(fn {_id, supplier} -> Map.keys(supplier.items) end)
+        |> Enum.uniq()
+        |> Enum.flat_map(fn item_id ->
+          item_id
+          |> item_aliases()
+          |> Enum.find_value(fn alias_text ->
+            case quantity_for_alias(normalized, alias_text) do
+              nil -> nil
+              quantity -> {item_id, quantity}
+            end
+          end)
+          |> List.wrap()
         end)
-      end)
+
+      case matches do
+        [] -> :no_order
+        [{item_id, quantity}] -> {:ok, item_id, quantity}
+        _ -> {:ambiguous_order, matches}
+      end
     else
       :no_order
     end
+  end
+
+  defp item_aliases(item_id) do
+    spaced = String.replace(item_id, "_", " ")
+
+    [item_id, spaced, pluralize(spaced)]
+    |> Enum.uniq()
+  end
+
+  defp pluralize(text) do
+    cond do
+      String.ends_with?(text, "box") -> text <> "es"
+      String.ends_with?(text, "y") -> String.replace_suffix(text, "y", "ies")
+      true -> text <> "s"
+    end
+  end
+
+  defp quantity_for_alias(normalized, alias_text) do
+    alias_pattern = Regex.escape(alias_text)
+    item_pattern = "(?<![a-z0-9_])#{alias_pattern}(?![a-z0-9_])"
+
+    [
+      ~r/(?:#{item_pattern})\D{0,24}(\d+)/,
+      ~r/(\d+)\D{0,24}(?:#{item_pattern})/
+    ]
+    |> Enum.find_value(fn pattern ->
+      case Regex.run(pattern, normalized) do
+        [_, quantity] -> String.to_integer(quantity)
+        _ -> nil
+      end
+    end)
   end
 
   defp quote_text(supplier_id) do

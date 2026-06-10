@@ -59,7 +59,9 @@ Phase 1 adds:
 - `LemonSim.Examples.VendingBench` is the nested-agent operations benchmark
   target for the original Vending-Bench: operator strategy, physical-worker
   execution, suppliers, inventory, demand, pricing, incidents, and objective
-  net-worth scoring.
+  net-worth scoring. Free-form supplier messages intentionally reject
+  multi-product order emails so ambiguous model attempts become visible
+  benchmark events instead of silently confirming only the first parsed item.
 - `LemonSim.Examples.VendingBench.Arena` is the Vending-Bench 2 / Arena
   follow-on surface: several operators run independent vending businesses in
   the same location, shared item prices create demand pressure, agents can

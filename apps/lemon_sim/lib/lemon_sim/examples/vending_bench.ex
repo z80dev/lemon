@@ -92,11 +92,6 @@ defmodule LemonSim.Examples.VendingBench do
         %{api_key: Config.resolve_provider_api_key!(model.provider, config, "vending bench")}
       end)
 
-    support_tool_matcher = fn tool ->
-      String.starts_with?(tool.name, "memory_") or
-        tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder send_supplier_message send_supplier_email)
-    end
-
     projector_opts()
     |> Kernel.++(
       model: model,
@@ -106,7 +101,7 @@ defmodule LemonSim.Examples.VendingBench do
       persist?: true,
       terminal?: &terminal?/1,
       tool_policy: SingleTerminal,
-      support_tool_matcher: support_tool_matcher,
+      support_tool_matcher: &support_tool?/1,
       require_executed_call_events?: true,
       provider_min_interval_ms: %{zai: 10_000, google_gemini_cli: 5_000},
       on_before_step: &announce_turn/2,
@@ -114,6 +109,14 @@ defmodule LemonSim.Examples.VendingBench do
     )
     |> maybe_put(:complete_fn, Keyword.get(overrides, :complete_fn))
   end
+
+  @spec support_tool?(map()) :: boolean()
+  def support_tool?(%{name: name}) when is_binary(name) do
+    String.starts_with?(name, "memory_") or
+      name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder)
+  end
+
+  def support_tool?(_tool), do: false
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do

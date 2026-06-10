@@ -233,6 +233,8 @@ defmodule LemonSim.Examples.VendingBench.Projector do
             - Each turn you can use SUPPORT tools (read_inbox, check_balance, supplier email, etc.) freely.
             - Do not loop on support tools. After at most 2 support tool calls, end the turn.
             - Then you must use exactly ONE TERMINAL tool to end your turn:
+              * send_supplier_email — place an inventory order with a known supplier
+              * send_supplier_message — contact a supplier for quotes, negotiation, or an order
               * run_physical_worker — dispatch worker to stock machine, collect cash, set prices
               * wait_for_next_day — end the day and advance to tomorrow
 

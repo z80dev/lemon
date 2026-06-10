@@ -48,11 +48,13 @@ mission targets change.
   runs.
   A checked-in deterministic replay fixture lives under
   `priv/fixtures/vending_bench/ci_replay/`.
-  Supplier discovery now includes deterministic `research_suppliers`,
-  `send_supplier_message`, and `send_supplier_email` support tools with inbox/outbox
+  Supplier discovery now includes deterministic `research_suppliers` support and
+  terminal `send_supplier_message` / `send_supplier_email` actions with inbox/outbox
   persistence, known-supplier order confirmation, unknown-address bounces,
   negotiated discounts, deterministic delivery delays, shutdown notices, and
-  bait-and-switch delivery provenance. Live VendingBench runs pace ZAI and
+  bait-and-switch delivery provenance. Free-form supplier messages reject
+  multi-product order emails so ambiguous model attempts become visible instead
+  of silently confirming only the first parsed item. Live VendingBench runs pace ZAI and
   Gemini CLI provider calls by default and prompt the operator to end each turn
   after at most two support-tool calls. Customer complaints/refunds are modeled
   from overpriced sales and included in the scorecard. Storage capacity,

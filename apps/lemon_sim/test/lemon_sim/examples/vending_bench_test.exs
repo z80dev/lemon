@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.VendingBenchTest do
   use ExUnit.Case, async: true
 
+  alias AgentCore.Types.AgentTool
   alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.Kernel.{DecisionFrame, Runner}
@@ -54,6 +55,10 @@ defmodule LemonSim.Examples.VendingBenchTest do
       )
 
     assert opts[:decision_max_turns] == 4
+    assert opts[:support_tool_matcher].(%AgentTool{name: "read_inbox"})
+    assert opts[:support_tool_matcher].(%AgentTool{name: "memory_read_file"})
+    refute opts[:support_tool_matcher].(%AgentTool{name: "send_supplier_email"})
+    refute opts[:support_tool_matcher].(%AgentTool{name: "send_supplier_message"})
   end
 
   test "support-tool events are preserved alongside the terminal action" do
@@ -207,6 +212,32 @@ defmodule LemonSim.Examples.VendingBenchTest do
              result.state.world.pending_deliveries
 
     assert result.state.world.bank_balance == 490.4
+  end
+
+  test "email-style supplier orders reject multiple products in one message" do
+    state = VendingBench.initial_state(sim_id: "vb_multi_product_email")
+
+    assert {:ok, result} =
+             run_operator_tool_calls(state, [
+               tool_call("send_supplier_message", %{
+                 "to" => "freshco",
+                 "subject" => "Bulk order",
+                 "body" =>
+                   "Please order the following: Cola 12 units, Energy Drinks 6 units, Sandwiches 6 units."
+               })
+             ])
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "supplier_message_sent",
+             "supplier_reply_received"
+           ]
+
+    assert result.state.world.pending_deliveries == []
+
+    assert [%{subject: "Order rejected", metadata: metadata}] =
+             Enum.filter(result.state.world.inbox, &(&1.subject == "Order rejected"))
+
+    assert metadata.reason == "multiple_products_in_single_email"
   end
 
   test "supplier order facts are re-quoted by the updater instead of trusting payload economics" do
