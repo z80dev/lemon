@@ -20,6 +20,8 @@
 .lemon/media-artifacts/
 .lemon/media-jobs/
 .lemon/proofs/
+.lemon/sim_memory/
+.lemon/store/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
@@ -32,6 +34,7 @@ docs/agent-loop/runs/
 
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
+/lemon-main-*.zip
 
 # Local Rust sidecar build artifacts
 native/lemon-wasm-runtime/target/
