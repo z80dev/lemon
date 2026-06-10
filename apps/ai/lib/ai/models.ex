@@ -58,6 +58,18 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 32_000
+    },
+    "gpt-5.5" => %Model{
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: :openai_codex_responses,
+      provider: :"openai-codex",
+      base_url: "https://chatgpt.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
     }
   }
 

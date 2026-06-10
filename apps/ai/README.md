@@ -134,7 +134,8 @@ should not advertise `gemini-3.1-pro` if the live `v1beta` API returns 404 for
 
 `:"openai-codex"` is a separate ChatGPT/Codex OAuth catalog layered on top of the
 direct OpenAI list. It may include OAuth-only model IDs that do not appear in the
-API-key `/v1/models` response.
+API-key `/v1/models` response, including Codex subscription IDs such as
+`gpt-5.5`.
 
 Anthropic-compatible providers also normalize restored map-shaped content blocks
 during request building. That keeps replayed session history usable when message

@@ -47,6 +47,7 @@ defmodule Ai.ModelsLegacyTest do
     test "returns oauth-only openai-codex model ids" do
       spark = Models.get_model(:"openai-codex", "gpt-5.3-codex-spark")
       mini = Models.get_model(:"openai-codex", "codex-mini-latest")
+      gpt55 = Models.get_model(:"openai-codex", "gpt-5.5")
 
       assert %Model{} = spark
       assert spark.api == :openai_codex_responses
@@ -57,6 +58,11 @@ defmodule Ai.ModelsLegacyTest do
       assert mini.api == :openai_codex_responses
       assert mini.provider == :"openai-codex"
       assert mini.base_url == "https://chatgpt.com"
+
+      assert %Model{} = gpt55
+      assert gpt55.api == :openai_codex_responses
+      assert gpt55.provider == :"openai-codex"
+      assert gpt55.base_url == "https://chatgpt.com"
     end
 
     test "returns google model by id" do
