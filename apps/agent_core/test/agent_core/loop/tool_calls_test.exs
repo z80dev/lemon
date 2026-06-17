@@ -152,7 +152,8 @@ defmodule AgentCore.Loop.ToolCallsTest do
     assert_receive {:slow_tool_started, "call_abort_pending"}, 5_000
     :ok = AbortSignal.abort(signal)
 
-    {results, _steering_messages, updated_context, updated_new_messages} = Task.await(runner, 5_000)
+    {results, _steering_messages, updated_context, updated_new_messages} =
+      Task.await(runner, 5_000)
 
     refute_received {:queued_tool_started, "call_abort_queued"}
 

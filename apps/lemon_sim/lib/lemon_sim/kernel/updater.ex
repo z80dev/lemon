@@ -11,5 +11,6 @@ defmodule LemonSim.Kernel.Updater do
               event :: LemonSim.Kernel.Event.t() | map(),
               opts :: keyword()
             ) ::
-              {:ok, LemonSim.Kernel.State.t(), LemonSim.Kernel.DecisionSignal.t()} | {:error, term()}
+              {:ok, LemonSim.Kernel.State.t(), LemonSim.Kernel.DecisionSignal.t()}
+              | {:error, term()}
 end

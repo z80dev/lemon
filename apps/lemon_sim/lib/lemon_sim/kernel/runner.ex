@@ -26,7 +26,12 @@ defmodule LemonSim.Kernel.Runner do
   @doc """
   Applies events in order and stops on the first `:decide` signal.
   """
-  @spec ingest_events(LemonSim.Kernel.State.t(), [LemonSim.Kernel.Event.t() | map()], module(), keyword()) ::
+  @spec ingest_events(
+          LemonSim.Kernel.State.t(),
+          [LemonSim.Kernel.Event.t() | map()],
+          module(),
+          keyword()
+        ) ::
           {:ok, LemonSim.Kernel.State.t(), LemonSim.Kernel.DecisionSignal.t()} | {:error, term()}
   def ingest_events(state, events, updater, opts \\ [])
       when is_list(events) and is_atom(updater) do

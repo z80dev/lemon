@@ -4,7 +4,9 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
   @behaviour LemonSim.Kernel.Updater
 
   import LemonSim.Examples.Helpers
-  import LemonSim.Examples.Helpers.UpdaterHelpers, only: [maybe_store_thought: 2, reject_action: 4]
+
+  import LemonSim.Examples.Helpers.UpdaterHelpers,
+    only: [maybe_store_thought: 2, reject_action: 4]
 
   alias LemonCore.MapHelpers
   alias LemonSim.Kernel.State
