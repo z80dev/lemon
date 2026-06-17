@@ -22,6 +22,7 @@ defmodule LemonSimUi.SimManager do
     Auction,
     Diplomacy,
     DungeonCrawl,
+    TcgShop,
     VendingBench
   }
 
@@ -659,6 +660,41 @@ defmodule LemonSimUi.SimManager do
     e -> {:error, Exception.message(e)}
   end
 
+  defp build_initial_state(:tcg_shop, sim_id, opts) do
+    max_days = Keyword.get(opts, :max_days, 14)
+    max_turns = Keyword.get(opts, :max_turns, Keyword.get(opts, :driver_max_turns, 180))
+
+    config = load_project_config()
+
+    {model, stream_options} =
+      case Keyword.get(opts, :operator_model_spec) ||
+             opts |> Keyword.get(:model_specs, []) |> List.first() do
+        nil -> resolve_default_model_for_ui()
+        spec -> resolve_model_stream_options!(spec, config, "tcg shop")
+      end
+
+    initial_state =
+      TcgShop.initial_state(
+        sim_id: sim_id,
+        max_days: max_days,
+        model: model
+      )
+
+    modules = TcgShop.modules()
+
+    run_opts =
+      TcgShop.default_opts(model: model, stream_options: stream_options)
+      |> Keyword.put(:driver_max_turns, max_turns)
+      |> Keyword.put(:persist?, true)
+      |> Keyword.put(:on_before_step, nil)
+      |> Keyword.put(:on_after_step, nil)
+      |> Keyword.put(:support_tool_matcher, &TcgShop.support_tool?/1)
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
   defp build_initial_state(domain, _sim_id, _opts) do
     {:error, {:unknown_domain, domain}}
   end
@@ -1107,6 +1143,7 @@ defmodule LemonSimUi.SimManager do
   defp generate_id(:survivor), do: "srv_#{random_hex(4)}"
   defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
   defp generate_id(:vending_bench), do: "vb_#{random_hex(4)}"
+  defp generate_id(:tcg_shop), do: "tcg_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp domain_from_sim_id("ww_" <> _), do: :werewolf
@@ -1116,6 +1153,7 @@ defmodule LemonSimUi.SimManager do
   defp domain_from_sim_id("srv_" <> _), do: :survivor
   defp domain_from_sim_id("spc_" <> _), do: :space_station
   defp domain_from_sim_id("vb_" <> _), do: :vending_bench
+  defp domain_from_sim_id("tcg_" <> _), do: :tcg_shop
   defp domain_from_sim_id(_), do: :unknown
 
   defp build_resume_opts(:werewolf, state) do

@@ -63,4 +63,23 @@ defmodule LemonSimUi.SimDashboardLiveTest do
     assert html =~ "GLM-5"
     assert html =~ ~s(value="glm-5")
   end
+
+  test "launch form exposes TCG Shop as a one-operator domain", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/admin")
+
+    view
+    |> element("aside button[phx-click=\"toggle_new_sim_form\"]")
+    |> render_click()
+
+    html =
+      view
+      |> form("#new-sim-form", %{"domain" => "tcg_shop"})
+      |> render_change()
+
+    assert html =~ "TCG Shop"
+    assert html =~ ~s(value="tcg_shop")
+    assert html =~ "Operator (1)"
+    assert html =~ ~s(min="1")
+    assert html =~ ~s(max="1")
+  end
 end

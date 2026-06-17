@@ -56,6 +56,7 @@ lib/
         diplomacy_board.ex                 Territory/faction display for :diplomacy
         dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
         vending_bench_board.ex             Retro VendingBench machine view, generated product sprites, Arena standings, operations, supplier/fault signals, and scorecard display
+        tcg_shop_board.ex                  Local game store view for TCG Shop finances, sealed inventory, singles, market pulse, customers, and scorecard
 test/
   lemon_sim_ui/
     live/
@@ -86,6 +87,7 @@ test/
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
 | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
 | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier, refund, fault, trade, and scorecard display |
+| `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | `LemonSimUi.Live.Components.TcgShopBoard` | TCG Shop dashboard for sealed lines, singles, market pulse, customers, and scorecard metrics |
 
 ## Common Modification Patterns
 
@@ -113,6 +115,7 @@ test/
 Board components are pure stateless `Phoenix.Component` functions. They receive `:world` (the `LemonSim.State.world` map) and optionally `:interactive`. They do not hold any state — all data is derived from `world` in the function body before the `~H"""` template.
 
 When adding display fields, read them with `LemonCore.MapHelpers.get_key/2` (or the local `get_val/3` helper already defined in most board components) to tolerate both atom and string keys in the world map.
+VendingBench board data may come from JSON checkpoint artifacts, so do not use `String.to_atom/1` for slot, product, supplier, or agent ids while rendering.
 
 ### Changing Runner Behavior (step interval, retry count)
 

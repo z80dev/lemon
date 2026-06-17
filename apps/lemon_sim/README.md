@@ -67,6 +67,11 @@ Phase 1 adds:
   the same location, shared item prices create demand pressure, agents can
   message, pay, trade, sell supplier leads, trigger price wars, and surface
   collusion signals. The leaderboard scores each agent by final money balance.
+- `LemonSim.Examples.TcgShop` is a single-operator local game store benchmark
+  with Pokemon, Yu-Gi-Oh!, One Piece, Dragon Ball Super, and accessory product
+  lines. It models sealed allocation, collection buying, singles liquidity,
+  grading submissions, weekly events, online-order fulfillment, release demand
+  spikes, reputation, and net-worth scoring.
 
 Run them with:
 
@@ -86,6 +91,19 @@ refunds, and scorecard failure modes:
 ```bash
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_fixture
 mix lemon.sim.vending_bench --preset ci --offline-strategy pressure --sim-id vb_pressure_fixture
+```
+
+TCG Shop also has deterministic no-LLM modes. `baseline` keeps a conservative
+cash-balanced local game store stocked across Pokemon, Yu-Gi-Oh!, One Piece,
+Dragon Ball Super, and accessories. `pressure` deliberately exercises market
+research, One Piece/Pokemon allocation pressure, local collection buys, grading
+submissions, weekly events, online-order packing, and scorecard evidence:
+
+```bash
+mix lemon.sim.tcg_shop --preset ci --offline-strategy baseline --sim-id tcg_ci_baseline
+mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure --sim-id tcg_ci_pressure
+mix lemon.sim.verify apps/lemon_sim/priv/game_logs/tcg_shop/tcg_ci_baseline
+mix lemon.sim.score apps/lemon_sim/priv/game_logs/tcg_shop/tcg_ci_baseline
 ```
 
 Vending-Bench 1.0 benchmark runs use `--preset paper`, which sets the horizon

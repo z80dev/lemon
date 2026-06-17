@@ -48,6 +48,7 @@ Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is s
 | Diplomacy | `:diplomacy` | Faction negotiation and territory control |
 | Dungeon Crawl | `:dungeon_crawl` | Cooperative party-based dungeon run |
 | VendingBench | `:vending_bench` | Watchable nested-agent vending operation and Vending-Bench Arena worlds with model labels, standings, supplier inbox/outbox, deliveries, refunds, machine faults, PvP messages/payments/trades/leads, price wars, collusion signals, and scorecard signals |
+| TCG Shop | `:tcg_shop` | Single-operator local game store with sealed allocations, collection buys, singles, grading, events, online orders, market pulses, and scorecard signals |
 
 ### Multi-Model Assignment
 
@@ -91,6 +92,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.DiplomacyBoard` | `lib/lemon_sim_ui/live/components/diplomacy_board.ex` | Territory map and faction negotiation display |
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
 | `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier delivery, refund, machine fault, PvP payment/trade/lead/price-war/collusion, and scorecard display |
+| `LemonSimUi.Live.Components.TcgShopBoard` | `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | TCG Shop dashboard for sealed inventory, singles, market pulse, customer queue, and scorecard display |
 | `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/vending_bench/start/:preset_id` to the public launcher, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |
@@ -279,6 +281,8 @@ Tests use `LemonSimUi.ConnCase` backed by `Phoenix.ConnTest` and `Phoenix.LiveVi
 - Sim list display when a state exists in the store
 - Navigation from lobby to sim detail via `render_patch/2`
 - Board component rendering for each domain
+- TCG Shop domain detection and board rendering for sealed inventory, singles,
+  market pulse, and customer queue
 
 Individual test files:
 

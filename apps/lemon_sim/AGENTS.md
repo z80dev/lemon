@@ -82,6 +82,16 @@ mission targets change.
   score the leaderboard by money balance. Arena worlds expose competitor,
   message, payment, and trade tools when run through the live VendingBench
   action space.
+- `LemonSim.Examples.TcgShop` is the TCG-shop business benchmark: a
+  single-operator local game store with Pokemon, Yu-Gi-Oh!, One Piece, Dragon
+  Ball Super, and accessory lines. It models sealed allocations, local
+  collection buys, singles inventory, grading submissions, store events,
+  online-order fulfillment, release-calendar demand spikes, reputation, and
+  net-worth scoring. It supports deterministic `baseline` and `pressure`
+  artifact runs through `mix lemon.sim.tcg_shop --preset ci --offline-strategy
+  baseline` and `mix lemon.sim.tcg_shop --preset ci --offline-strategy
+  pressure`; bundles are compatible with `mix lemon.sim.verify` and
+  `mix lemon.sim.score`.
 
 ## Key Files
 
@@ -129,6 +139,7 @@ Boundary namespaces:
 | `lib/lemon_sim/examples/diplomacy/performance.ex` | `LemonSim.Examples.Diplomacy.Performance` | Produces Diplomacy-lite metrics for negotiation volume, support usage, territory capture, and final board conversion |
 | `lib/lemon_sim/examples/space_station/performance.ex` | `LemonSim.Examples.SpaceStation.Performance` | Produces Space Station Crisis metrics for crew utility, sabotage pressure, vote accuracy, and special-role usage |
 | `lib/lemon_sim/examples/stock_market/performance.ex` | `LemonSim.Examples.StockMarket.Performance` | Produces Stock Market Arena metrics for call accuracy, whisper activity, trade execution, and portfolio returns |
+| `lib/lemon_sim/examples/tcg_shop.ex` | `LemonSim.Examples.TcgShop` | Single-operator TCG shop benchmark facade and projector configuration |
 
 ## Design Boundaries
 
@@ -149,6 +160,7 @@ Boundary namespaces:
 - `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
 - VendingBench supplier orders are command/fact based: model-facing tools emit `place_supplier_order`, and the updater quotes suppliers and emits `supplier_order_placed`; do not trust model-origin payloads for cost, delivery day, substitutions, or affordability.
 - VendingBench artifact files must be written atomically with `LemonSim.Bench.Artifacts.AtomicFile`. The artifact registry is mutable only through `VendingBench.ArtifactRegistry`, which serializes updates and writes atomically.
+- TCG Shop should keep business rules in `examples/tcg_shop/*`; UI components may render scorecards and world snapshots but must not decide economics.
 - `State.version` tracks all state mutations, not just appended events.
 - When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
 - After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.

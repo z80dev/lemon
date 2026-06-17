@@ -250,6 +250,7 @@ defmodule LemonSimUi.SimDashboardLive do
                :pandemic,
                :murder_mystery,
                :supply_chain,
+               :tcg_shop,
                :vending_bench
              ] ->
           player_count = parse_int(params["player_count"], default_player_count(domain))
@@ -632,7 +633,7 @@ defmodule LemonSimUi.SimDashboardLive do
                   name="domain"
                   label="Domain Protocol"
                   value={@new_sim_domain}
-                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Skirmish", "skirmish"}, {"Werewolf", "werewolf"}, {"Stock Market", "stock_market"}, {"Survivor", "survivor"}, {"Space Station", "space_station"}, {"Auction", "auction"}, {"Diplomacy", "diplomacy"}, {"Dungeon Crawl", "dungeon_crawl"}, {"Courtroom", "courtroom"}, {"Startup Incubator", "startup_incubator"}, {"Intel Network", "intel_network"}, {"Legislature", "legislature"}, {"Pandemic", "pandemic"}, {"Murder Mystery", "murder_mystery"}, {"Supply Chain", "supply_chain"}, {"Vending Bench", "vending_bench"}]}
+                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Skirmish", "skirmish"}, {"Werewolf", "werewolf"}, {"Stock Market", "stock_market"}, {"Survivor", "survivor"}, {"Space Station", "space_station"}, {"Auction", "auction"}, {"Diplomacy", "diplomacy"}, {"Dungeon Crawl", "dungeon_crawl"}, {"Courtroom", "courtroom"}, {"Startup Incubator", "startup_incubator"}, {"Intel Network", "intel_network"}, {"Legislature", "legislature"}, {"Pandemic", "pandemic"}, {"Murder Mystery", "murder_mystery"}, {"Supply Chain", "supply_chain"}, {"Vending Bench", "vending_bench"}, {"TCG Shop", "tcg_shop"}]}
                   class="bg-slate-900/80 border-glass-border focus:border-cyan-500!"
                 />
 
@@ -694,7 +695,7 @@ defmodule LemonSimUi.SimDashboardLive do
                           options={[{"Full Party (4)", "4"}, {"Trio (3)", "3"}, {"Duo (2)", "2"}]}
                         />
                       <% else %>
-                      <%= if @new_sim_domain in ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain vending_bench) do %>
+                      <%= if @new_sim_domain in ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain vending_bench tcg_shop) do %>
                         <.input name="player_count" label={player_count_label(@new_sim_domain)} type="number" value={@new_player_count} min={min_players(@new_sim_domain)} max={max_players(@new_sim_domain)} />
                         <div class="mt-3 pt-3 border-t border-glass-border/50">
                           <div class="text-[10px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2">Model Assignment</div>
@@ -829,7 +830,7 @@ defmodule LemonSimUi.SimDashboardLive do
           <!-- Board + details layout -->
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
             <!-- Left: Visual board -->
-            <% full_width_board = @domain_type in [:werewolf, :stock_market, :survivor, :space_station, :auction, :diplomacy, :dungeon_crawl, :courtroom, :startup_incubator, :intel_network, :legislature, :pandemic, :murder_mystery, :supply_chain, :vending_bench] %>
+            <% full_width_board = @domain_type in [:werewolf, :stock_market, :survivor, :space_station, :auction, :diplomacy, :dungeon_crawl, :courtroom, :startup_incubator, :intel_network, :legislature, :pandemic, :murder_mystery, :supply_chain, :vending_bench, :tcg_shop] %>
             <div class={[
               "glass-card rounded-xl flex flex-col overflow-hidden",
               if(full_width_board, do: "xl:col-span-9 h-[calc(100vh-14rem)]", else: "xl:col-span-7 p-6 min-h-[500px]")
@@ -928,6 +929,11 @@ defmodule LemonSimUi.SimDashboardLive do
                     />
                   <% :vending_bench -> %>
                     <VendingBenchBoard.render
+                      world={@selected_sim.world}
+                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
+                    />
+                  <% :tcg_shop -> %>
+                    <LemonSimUi.Live.Components.TcgShopBoard.render
                       world={@selected_sim.world}
                       interactive={@human_player != nil && @selected_sim.sim_id in @running}
                     />
@@ -1127,6 +1133,7 @@ defmodule LemonSimUi.SimDashboardLive do
   defp player_count_label("murder_mystery"), do: "Number of Guests (6)"
   defp player_count_label("supply_chain"), do: "Number of Tiers (4)"
   defp player_count_label("vending_bench"), do: "Operator (1)"
+  defp player_count_label("tcg_shop"), do: "Operator (1)"
   defp player_count_label(_), do: "Number of Players"
 
   defp min_players("stock_market"), do: 3
@@ -1142,6 +1149,7 @@ defmodule LemonSimUi.SimDashboardLive do
   defp min_players("murder_mystery"), do: 6
   defp min_players("supply_chain"), do: 4
   defp min_players("vending_bench"), do: 1
+  defp min_players("tcg_shop"), do: 1
   defp min_players(_), do: 5
 
   defp max_players("stock_market"), do: 6
@@ -1157,6 +1165,7 @@ defmodule LemonSimUi.SimDashboardLive do
   defp max_players("murder_mystery"), do: 6
   defp max_players("supply_chain"), do: 4
   defp max_players("vending_bench"), do: 1
+  defp max_players("tcg_shop"), do: 1
   defp max_players(_), do: 8
 
   defp default_player_count(:stock_market), do: 4
@@ -1172,6 +1181,7 @@ defmodule LemonSimUi.SimDashboardLive do
   defp default_player_count(:murder_mystery), do: 6
   defp default_player_count(:supply_chain), do: 4
   defp default_player_count(:vending_bench), do: 1
+  defp default_player_count(:tcg_shop), do: 1
   defp default_player_count(_), do: 6
 
   # -- Model helpers --

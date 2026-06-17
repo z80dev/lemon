@@ -12,14 +12,40 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
   alias LemonSimUi.Live.Components.DiplomacyBoard
   alias LemonSimUi.Live.Components.DungeonCrawlBoard
   alias LemonSimUi.Live.Components.SurvivorBoard
+  alias LemonSimUi.Live.Components.TcgShopBoard
   alias LemonSimUi.Live.Components.VendingBenchBoard
   alias LemonSimUi.Live.Components.EventLog
   alias LemonSimUi.Live.Components.PlanHistory
   alias LemonSimUi.Live.Components.RunLog
   alias LemonSimUi.Live.Components.MemoryViewer
+  alias LemonSimUi.SimHelpers
   alias LemonSim.Kernel.{Event, State}
+  alias LemonSim.Examples.TcgShop
 
   # ── TicTacToeBoard ─────────────────────────────────────────────────
+
+  describe "TcgShopBoard" do
+    test "SimHelpers detects TCG shop worlds before generic day-number domains" do
+      state = State.new(sim_id: "tcg_test", world: TcgShop.initial_world(seed: 11))
+
+      assert SimHelpers.infer_domain_type(state) == :tcg_shop
+      assert SimHelpers.sim_summary(state).world_summary =~ "Day 1/14"
+    end
+
+    test "renders shop finances, franchises, market pulse, and customer queue" do
+      world = TcgShop.initial_world(seed: 11)
+
+      html = render_component(&TcgShopBoard.render/1, world: world)
+
+      assert html =~ "TCG Shop"
+      assert html =~ "Pokemon"
+      assert html =~ "Yu-Gi-Oh!"
+      assert html =~ "One Piece"
+      assert html =~ "Dragon Ball Super"
+      assert html =~ "Singles Case"
+      assert html =~ "Customer Queue"
+    end
+  end
 
   describe "TicTacToeBoard" do
     test "renders with empty board" do
@@ -259,6 +285,50 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "coin return sticks intermittently"
       assert html =~ "Substituted Sparkling Water"
       assert html =~ "Delayed 1d"
+    end
+
+    test "renders JSON-decoded catalog items without interning product ids" do
+      product_id = "limited_release_#{System.unique_integer([:positive])}"
+
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom(product_id)
+      end
+
+      world = %{
+        "status" => "in_progress",
+        "phase" => "operating",
+        "day_number" => 1,
+        "max_days" => 7,
+        "bank_balance" => 500.0,
+        "cash_in_machine" => 0.0,
+        "daily_fee" => 2.0,
+        "machine" => %{
+          "slots" => %{
+            "A1" => %{
+              "slot_type" => "small",
+              "item_id" => product_id,
+              "inventory" => 3,
+              "price" => 4.25
+            }
+          }
+        },
+        "storage" => %{"inventory" => %{}, "capacity_units" => 20},
+        "catalog" => %{
+          product_id => %{"display_name" => "Limited Release Soda"}
+        },
+        "recent_sales" => [
+          %{"slot_id" => "A1", "item_id" => product_id, "quantity" => 1, "revenue" => 4.25}
+        ]
+      }
+
+      html = render_component(&VendingBenchBoard.render/1, world: world)
+
+      assert html =~ "Limited Release Soda"
+      assert html =~ "$4.25"
+
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom(product_id)
+      end
     end
   end
 
@@ -978,6 +1048,57 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Live Event Feed"
       assert html =~ "Supplier Order Placed"
       assert html =~ "12x Chips"
+    end
+
+    test "uses the leader world and arena events for artifact-backed VendingBench Arena logs" do
+      state =
+        State.new(
+          sim_id: "vb_arena_log_test",
+          world: %{
+            mode: "vending_bench_arena",
+            status: "complete",
+            day_number: 365,
+            max_days: 365,
+            arena_agents: [
+              %{
+                id: "alex",
+                name: "Alex Market",
+                money_balance: 20_298.94,
+                world: %{
+                  status: "complete",
+                  phase: "operator_turn",
+                  day_number: 365,
+                  max_days: 365,
+                  time_minutes: 540,
+                  bank_balance: 20_298.94,
+                  cash_in_machine: 78.89,
+                  pending_deliveries: []
+                }
+              }
+            ],
+            arena_events: [
+              %{
+                kind: "arena_price_war_detected",
+                item_id: "candy_bar",
+                cheapest_agent_id: "alex",
+                expensive_agent_id: "devon",
+                spread: 0.3
+              }
+            ]
+          },
+          recent_events: []
+        )
+
+      html = render_component(&RunLog.render/1, state: state, running: false)
+
+      assert html =~ "365/365"
+      assert html =~ "09:00"
+      assert html =~ "Operator Turn"
+      assert html =~ "$20298.94"
+      assert html =~ "$78.89"
+      assert html =~ "Arena Price War Detected"
+      assert html =~ "Price war on Candy Bar"
+      refute html =~ "$0.00"
     end
   end
 
