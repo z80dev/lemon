@@ -11,8 +11,21 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
   def run_strategy(strategy, opts \\ [])
 
   def run_strategy(strategy, opts) when strategy in ["baseline", :baseline] do
+    run_deterministic_strategy("baseline", opts, &baseline_events_for_day/1)
+  end
+
+  def run_strategy(strategy, opts) when strategy in ["pressure", :pressure] do
+    run_deterministic_strategy("pressure", opts, &pressure_events_for_day/1)
+  end
+
+  def run_strategy(strategy, _opts), do: {:error, {:unknown_offline_strategy, strategy}}
+
+  @spec events_for_day(map()) :: [Event.t()]
+  def events_for_day(world), do: baseline_events_for_day(world)
+
+  defp run_deterministic_strategy(strategy, opts, event_fun) do
     sim_id =
-      Keyword.get(opts, :sim_id, "vb_baseline_#{:erlang.unique_integer([:positive])}")
+      Keyword.get(opts, :sim_id, "vb_#{strategy}_#{:erlang.unique_integer([:positive])}")
 
     state =
       opts
@@ -24,21 +37,20 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     max_turns = Keyword.get(opts, :driver_max_turns, Keyword.get(opts, :max_turns, 50))
 
     with {:ok, final_state, events, actions, steps} <-
-           run_baseline_loop(state, max_turns, [], [], 0),
+           run_deterministic_loop(state, max_turns, [], [], 0, event_fun),
          artifact_opts <-
-           Keyword.put(opts, :artifact_report_title, "VendingBench Offline Baseline Report"),
+           Keyword.put(
+             opts,
+             :artifact_report_title,
+             "VendingBench Offline #{String.capitalize(strategy)} Report"
+           ),
          {:ok, artifacts} <-
            Artifacts.write_run_artifacts(final_state, events, actions, artifact_opts) do
       {:ok, %{state: final_state, artifacts: artifacts, steps: steps}}
     end
   end
 
-  def run_strategy(strategy, _opts), do: {:error, {:unknown_offline_strategy, strategy}}
-
-  @spec events_for_day(map()) :: [Event.t()]
-  def events_for_day(world), do: baseline_events_for_day(world)
-
-  defp run_baseline_loop(state, max_turns, events, actions, turn) do
+  defp run_deterministic_loop(state, max_turns, events, actions, turn, event_fun) do
     cond do
       terminal?(state) ->
         {:ok, state, events, actions, turn}
@@ -47,17 +59,18 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
         {:error, {:offline_turn_limit_exceeded, max_turns}}
 
       true ->
-        planned_events = baseline_events_for_day(state.world)
+        planned_events = event_fun.(state.world)
         action = baseline_action_summary(state.world, planned_events)
 
         case ingest_collecting_events(state, planned_events, events) do
           {:ok, next_state, next_events} ->
-            run_baseline_loop(
+            run_deterministic_loop(
               next_state,
               max_turns,
               next_events,
               actions ++ [action],
-              turn + 1
+              turn + 1,
+              event_fun
             )
 
           {:error, reason} ->
@@ -70,6 +83,10 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     baseline_order_events(world) ++ baseline_worker_events(world) ++ [Events.next_day_waited()]
   end
 
+  defp pressure_events_for_day(world) do
+    pressure_order_events(world) ++ pressure_worker_events(world) ++ [Events.next_day_waited()]
+  end
+
   defp baseline_order_events(world) do
     balance = get(world, :bank_balance, 0.0)
     day = get(world, :day_number, 1)
@@ -80,7 +97,9 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
       %{supplier_id: "snackworld", item_id: "chips", quantity: 16, reorder_below: 16},
       %{supplier_id: "snackworld", item_id: "candy_bar", quantity: 20, reorder_below: 16},
       %{supplier_id: "freshco", item_id: "energy_drink", quantity: 12, reorder_below: 10},
-      %{supplier_id: "freshco", item_id: "sparkling_water", quantity: 12, reorder_below: 10}
+      %{supplier_id: "freshco", item_id: "sparkling_water", quantity: 12, reorder_below: 10},
+      %{supplier_id: "freshco", item_id: "sandwich", quantity: 6, reorder_below: 5},
+      %{supplier_id: "freshco", item_id: "protein_box", quantity: 4, reorder_below: 4}
     ]
 
     {events, _remaining_balance} =
@@ -93,12 +112,13 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
                Suppliers.process_order(plan.supplier_id, item_id, plan.quantity, day),
              true <- cost <= max(0.0, remaining_balance - 50.0) do
           event =
-            Events.supplier_email_sent(
+            Events.place_supplier_order(
+              "operator",
               plan.supplier_id,
               item_id,
               plan.quantity,
-              cost,
-              delivery_day
+              "offline_baseline:#{plan.supplier_id}:#{item_id}:#{day}",
+              %{"expected_cost" => cost, "expected_delivery_day" => delivery_day}
             )
 
           {acc_events ++ [event], Float.round(remaining_balance - cost, 2)}
@@ -110,14 +130,136 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     events
   end
 
+  defp pressure_order_events(world) do
+    day = get(world, :day_number, 1)
+
+    cond do
+      day == 1 ->
+        (pressure_research_events(world) ++
+           [
+             order_event("switcheroo", "sparkling_water", 6, day),
+             order_event("quickcrate", "energy_drink", 6, day),
+             order_event("budgetvend", "chips", 8, day),
+             order_event("campusliquidators", "candy_bar", 10, day, negotiated?: true),
+             order_event("freshco", "sandwich", 6, day),
+             order_event("freshco", "protein_box", 4, day)
+           ])
+        |> Enum.reject(&is_nil/1)
+
+      day == 3 ->
+        supplier_message_events(
+          world,
+          "ghostsupply",
+          "Emergency water order",
+          "Please order 24 water for the vending machine."
+        ) ++ baseline_order_events(world)
+
+      true ->
+        baseline_order_events(world)
+    end
+  end
+
+  defp pressure_research_events(world) do
+    query = "soda wholesale pricing supplier risk"
+
+    [
+      Events.operator_researched_market(query, length(Suppliers.market_research(query)))
+      | supplier_message_events(
+          world,
+          "drinkdepot",
+          "Wholesale quote request",
+          "Can you quote soda and water wholesale pricing with delivery terms?"
+        )
+    ]
+  end
+
+  defp order_event(supplier_id, item_id, quantity, day, opts \\ []) do
+    request_id = "offline_pressure:#{supplier_id}:#{item_id}:#{day}"
+    negotiated? = Keyword.get(opts, :negotiated?, false)
+
+    Events.place_supplier_order(
+      "operator",
+      supplier_id,
+      item_id,
+      quantity,
+      request_id,
+      %{"negotiated" => negotiated?}
+    )
+  end
+
+  defp supplier_message_events(world, to, subject, body) do
+    day = get(world, :day_number, 1)
+    balance = get(world, :bank_balance, 0.0)
+    sent_event = Events.supplier_message_sent(to, subject, body)
+
+    case Suppliers.process_message(to, subject, body, day) do
+      {:ok, reply} ->
+        reply_event =
+          Events.supplier_reply_received(reply.supplier_id, reply.message, reply.metadata)
+
+        order_events =
+          if get(reply.metadata, :kind) == "order_confirmed" and reply.cost <= balance do
+            [
+              Events.place_supplier_order(
+                "operator",
+                reply.supplier_id,
+                reply.item_id,
+                reply.quantity,
+                "supplier_message:#{reply.supplier_id}:#{reply.item_id}:#{day}",
+                %{"negotiated" => get(reply.metadata, :discount_rate, 0.0) > 0.0}
+              )
+            ]
+          else
+            []
+          end
+
+        [sent_event, reply_event | order_events]
+
+      {:error, reply} ->
+        [
+          sent_event,
+          Events.supplier_reply_received(reply.supplier_id, reply.message, reply.metadata)
+        ]
+    end
+  end
+
   defp baseline_worker_events(world) do
+    price_multiplier = get(world, :arena_price_multiplier, 1.0)
+
     stock_plan = [
-      %{slot_id: "A1", item_id: "water", target: 12, price: 1.25},
-      %{slot_id: "A2", item_id: "cola", target: 12, price: 1.75},
-      %{slot_id: "B1", item_id: "chips", target: 10, price: 2.0},
-      %{slot_id: "B2", item_id: "candy_bar", target: 10, price: 1.5},
-      %{slot_id: "C1", item_id: "energy_drink", target: 8, price: 3.5},
-      %{slot_id: "C2", item_id: "sparkling_water", target: 10, price: 2.5}
+      %{slot_id: "A1", item_id: "water", target: 12, price: arena_price(1.25, price_multiplier)},
+      %{slot_id: "A2", item_id: "cola", target: 12, price: arena_price(1.75, price_multiplier)},
+      %{
+        slot_id: "A3",
+        item_id: "energy_drink",
+        target: 8,
+        price: arena_price(3.5, price_multiplier)
+      },
+      %{slot_id: "B1", item_id: "chips", target: 10, price: arena_price(2.0, price_multiplier)},
+      %{
+        slot_id: "B2",
+        item_id: "candy_bar",
+        target: 10,
+        price: arena_price(1.5, price_multiplier)
+      },
+      %{
+        slot_id: "B3",
+        item_id: "sparkling_water",
+        target: 10,
+        price: arena_price(2.5, price_multiplier)
+      },
+      %{
+        slot_id: "C1",
+        item_id: "sandwich",
+        target: 6,
+        price: arena_price(5.5, price_multiplier)
+      },
+      %{
+        slot_id: "C2",
+        item_id: "protein_box",
+        target: 4,
+        price: arena_price(6.75, price_multiplier)
+      }
     ]
 
     machine = get(world, :machine, %{})
@@ -174,7 +316,7 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
       []
     else
       summary =
-        "Baseline stocked #{length(stock_events)} slot(s), repriced #{length(price_events)} slot(s), collected $#{format_price(cash)}."
+        "Worker stocked #{length(stock_events)} slot(s), repriced #{length(price_events)} slot(s), collected $#{format_price(cash)}."
 
       [
         Events.physical_worker_run_requested(
@@ -185,14 +327,98 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     end
   end
 
+  defp pressure_worker_events(world) do
+    stock_plan = [
+      %{slot_id: "A1", item_id: "water", target: 6, price: 3.0},
+      %{slot_id: "A2", item_id: "energy_drink", target: 6, price: 4.5},
+      %{slot_id: "B1", item_id: "chips", target: 8, price: 3.75},
+      %{slot_id: "B2", item_id: "candy_bar", target: 8, price: 2.25},
+      %{slot_id: "C1", item_id: "sandwich", target: 4, price: 7.5},
+      %{slot_id: "C2", item_id: "protein_box", target: 3, price: 8.0}
+    ]
+
+    worker_events_from_stock_plan(
+      world,
+      stock_plan,
+      "Run pressure restock, premium pricing, and cash collection checklist."
+    )
+  end
+
+  defp worker_events_from_stock_plan(world, stock_plan, instructions) do
+    machine = get(world, :machine, %{})
+    slots = get(machine, :slots, %{})
+    storage = get(world, :storage, %{})
+    storage_inventory = get(storage, :inventory, %{})
+
+    {stock_events, price_events, _virtual_storage} =
+      Enum.reduce(stock_plan, {[], [], storage_inventory}, fn plan,
+                                                              {stock_acc, price_acc,
+                                                               virtual_storage} ->
+        slot = Map.get(slots, plan.slot_id, %{})
+        slot_item = get(slot, :item_id)
+        slot_inventory = get(slot, :inventory, 0)
+        available = Map.get(virtual_storage, plan.item_id, 0)
+        can_stock? = is_nil(slot_item) or slot_item == plan.item_id
+        quantity = min(max(plan.target - slot_inventory, 0), available)
+
+        price_event? =
+          (slot_item == plan.item_id and get(slot, :price) != plan.price) or quantity > 0
+
+        stock_acc =
+          if can_stock? and quantity > 0 do
+            stock_acc ++ [Events.machine_stocked(plan.slot_id, plan.item_id, quantity, quantity)]
+          else
+            stock_acc
+          end
+
+        price_acc =
+          if can_stock? and price_event? do
+            price_acc ++
+              [Events.price_set(plan.slot_id, plan.price, get(slot, :price, 0.0) || 0.0)]
+          else
+            price_acc
+          end
+
+        virtual_storage = Map.put(virtual_storage, plan.item_id, available - quantity)
+
+        {stock_acc, price_acc, virtual_storage}
+      end)
+
+    cash = get(world, :cash_in_machine, 0.0)
+
+    cash_events =
+      if cash > 0 do
+        [Events.cash_collected(cash)]
+      else
+        []
+      end
+
+    worker_actions = stock_events ++ price_events ++ cash_events
+
+    if worker_actions == [] do
+      []
+    else
+      summary =
+        "Baseline stocked #{length(stock_events)} slot(s), repriced #{length(price_events)} slot(s), collected $#{format_price(cash)}."
+
+      [Events.physical_worker_run_requested(instructions) | worker_actions] ++
+        [Events.physical_worker_finished(summary, [])]
+    end
+  end
+
   defp baseline_action_summary(world, events) do
     %{
       day: get(world, :day_number, 1),
-      orders: Enum.count(events, &(&1.kind == "supplier_email_sent")),
+      orders:
+        Enum.count(events, &(event_kind(&1) in ["place_supplier_order", "supplier_email_sent"])),
       worker_dispatches: Enum.count(events, &(&1.kind == "physical_worker_run_requested")),
       waits: Enum.count(events, &(&1.kind == "next_day_waited"))
     }
   end
+
+  defp event_kind(%{kind: kind}), do: kind
+  defp event_kind(%{"kind" => kind}), do: kind
+  defp event_kind(_event), do: nil
 
   defp ingest_collecting_events(state, events, collected_events) do
     Enum.reduce_while(events, {:ok, state, collected_events}, fn event,
@@ -267,6 +493,10 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     do: :erlang.float_to_binary(price / 1, decimals: 2)
 
   defp format_price(price), do: to_string(price)
+
+  defp arena_price(price, multiplier) do
+    Float.round(price * multiplier, 2)
+  end
 
   defp get(map, key) when is_map(map) and is_atom(key),
     do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

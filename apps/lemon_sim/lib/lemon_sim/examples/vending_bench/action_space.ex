@@ -39,11 +39,13 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
       check_storage_tool(world),
       inspect_supplier_directory_tool(),
       research_suppliers_tool(),
+      research_market_tool(),
       review_recent_sales_tool(world),
       create_reminder_tool(world),
       list_reminders_tool(world),
       complete_reminder_tool(world)
     ]
+    |> Kernel.++(arena_support_tools(world))
   end
 
   defp read_inbox_tool(world) do
@@ -281,6 +283,95 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
     }
   end
 
+  defp research_market_tool do
+    %AgentTool{
+      name: "research_market",
+      description:
+        "Search deterministic market notes for demand patterns, wholesale price expectations, supplier risk, and competitive pricing.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{
+            "type" => "string",
+            "description" => "Search query, for example soda wholesale pricing or weekend demand"
+          }
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      label: "Research Market",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        query = Map.get(params, "query", "")
+        results = Suppliers.market_research(query)
+
+        text =
+          if results == [] do
+            "No market research results found for #{inspect(query)}."
+          else
+            results
+            |> Enum.with_index(1)
+            |> Enum.map(fn {result, index} ->
+              "#{index}. #{result.title}\n   #{result.body}"
+            end)
+            |> Enum.join("\n\n")
+          end
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content(text)],
+           details: %{"event" => Events.operator_researched_market(query, length(results))},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp arena_support_tools(world) do
+    if arena_world?(world), do: [read_competitor_board_tool(world)], else: []
+  end
+
+  defp read_competitor_board_tool(world) do
+    peers = get(world, :arena_peer_directory, [])
+
+    %AgentTool{
+      name: "read_competitor_board",
+      description:
+        "Review known Arena competitors, public product overlap, and recent PvP interactions.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{},
+        "required" => [],
+        "additionalProperties" => false
+      },
+      label: "Read Competitors",
+      execute: fn _tool_call_id, _params, _signal, _on_update ->
+        lines =
+          if peers == [] do
+            ["No competitors are registered in this Arena world."]
+          else
+            Enum.map(peers, fn peer ->
+              "#{get(peer, :id, "?")}: #{get(peer, :name, "competitor")}"
+            end)
+          end
+
+        interactions = [
+          "Messages sent: #{length(get(world, :arena_outbox, []))}",
+          "Payments sent: #{length(get(world, :arena_payments_sent, []))}",
+          "Trades recorded: #{length(get(world, :arena_trades, []))}",
+          "Supplier leads: #{length(get(world, :arena_supplier_leads, []))}",
+          "Price-war signals: #{length(get(world, :arena_price_wars, []))}"
+        ]
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content(Enum.join(lines ++ interactions, "\n"))],
+           details: %{"event" => Events.operator_checked_competitors(length(peers))},
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
   defp create_reminder_tool(world) do
     %AgentTool{
       name: "create_reminder",
@@ -403,12 +494,130 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
   # -- Terminal Tools --
 
   defp build_terminal_tools(world, state, opts) do
-    [
-      send_supplier_message_tool(world),
-      send_supplier_email_tool(world),
-      run_physical_worker_tool(world, state, opts),
-      wait_for_next_day_tool()
-    ]
+    arena_terminal_tools(world) ++
+      [
+        send_supplier_message_tool(world),
+        send_supplier_email_tool(world),
+        run_physical_worker_tool(world, state, opts),
+        wait_for_next_day_tool()
+      ]
+  end
+
+  defp arena_terminal_tools(world) do
+    if arena_world?(world) do
+      [
+        send_arena_message_tool(world),
+        send_arena_money_tool(world),
+        trade_with_agent_tool(world)
+      ]
+    else
+      []
+    end
+  end
+
+  defp send_arena_message_tool(world) do
+    %AgentTool{
+      name: "send_arena_message",
+      description:
+        "Send a direct Arena message to another vending operator. Use this for negotiation, partnership offers, price-war warnings, or supplier-lead sales.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "to_agent_id" => %{"type" => "string", "description" => "Recipient agent id"},
+          "subject" => %{"type" => "string", "description" => "Message subject"},
+          "body" => %{"type" => "string", "description" => "Message body"}
+        },
+        "required" => ["to_agent_id", "subject", "body"],
+        "additionalProperties" => false
+      },
+      label: "Message Rival",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        from_agent_id = get(world, :arena_agent_id, "operator")
+        to_agent_id = Map.get(params, "to_agent_id", "")
+        subject = Map.get(params, "subject", "")
+        body = Map.get(params, "body", "")
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("Arena message sent to #{to_agent_id}.")],
+           details: %{
+             "event" => Events.arena_message_sent(from_agent_id, to_agent_id, subject, body)
+           },
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp send_arena_money_tool(world) do
+    %AgentTool{
+      name: "send_arena_money",
+      description:
+        "Send money to another Arena operator for a trade, supplier lead, refund, or partnership settlement.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "to_agent_id" => %{"type" => "string", "description" => "Recipient agent id"},
+          "amount" => %{"type" => "number", "description" => "Dollar amount to send"},
+          "memo" => %{"type" => "string", "description" => "Payment memo"}
+        },
+        "required" => ["to_agent_id", "amount", "memo"],
+        "additionalProperties" => false
+      },
+      label: "Send Money",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        from_agent_id = get(world, :arena_agent_id, "operator")
+        to_agent_id = Map.get(params, "to_agent_id", "")
+        amount = Map.get(params, "amount", 0.0)
+        memo = Map.get(params, "memo", "")
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("Arena payment queued to #{to_agent_id}.")],
+           details: %{
+             "event" => Events.arena_money_sent(from_agent_id, to_agent_id, amount, memo)
+           },
+           trust: :trusted
+         }}
+      end
+    }
+  end
+
+  defp trade_with_agent_tool(world) do
+    %AgentTool{
+      name: "trade_with_agent",
+      description:
+        "Sell inventory from storage to another Arena operator. This transfers stock and records a PvP trade.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "to_agent_id" => %{"type" => "string", "description" => "Buying agent id"},
+          "item_id" => %{"type" => "string", "description" => "Item id to sell"},
+          "quantity" => %{"type" => "integer", "description" => "Units to sell"},
+          "amount" => %{"type" => "number", "description" => "Total payment amount"}
+        },
+        "required" => ["to_agent_id", "item_id", "quantity", "amount"],
+        "additionalProperties" => false
+      },
+      label: "Trade Goods",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        from_agent_id = get(world, :arena_agent_id, "operator")
+        to_agent_id = Map.get(params, "to_agent_id", "")
+        item_id = Map.get(params, "item_id", "")
+        quantity = Map.get(params, "quantity", 0)
+        amount = Map.get(params, "amount", 0.0)
+
+        {:ok,
+         %AgentToolResult{
+           content: [AgentCore.text_content("Arena trade queued with #{to_agent_id}.")],
+           details: %{
+             "event" =>
+               Events.arena_trade_completed(from_agent_id, to_agent_id, item_id, quantity, amount)
+           },
+           trust: :trusted
+         }}
+      end
+    }
   end
 
   defp send_supplier_message_tool(world) do
@@ -757,6 +966,10 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
           other
       end
     end)
+  end
+
+  defp arena_world?(world) do
+    is_binary(get(world, :arena_agent_id, nil)) or get(world, :arena_peer_directory, []) != []
   end
 
   defp get(map, key, default) when is_map(map) and is_atom(key),

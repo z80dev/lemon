@@ -113,7 +113,7 @@ defmodule LemonSim.Examples.VendingBench do
   @spec support_tool?(map()) :: boolean()
   def support_tool?(%{name: name}) when is_binary(name) do
     String.starts_with?(name, "memory_") or
-      name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder)
+      name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers research_market review_recent_sales create_reminder list_reminders complete_reminder read_competitor_board)
   end
 
   def support_tool?(_tool), do: false

@@ -17,7 +17,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     * `--preset` - Run preset: ci, paper, v2
     * `--arena` - Run deterministic Vending-Bench Arena mode
     * `--arena-agents` - Number of arena agents, up to 5 for the baseline
-    * `--offline-strategy` - Deterministic strategy to run without model credentials
+    * `--offline-strategy` - Deterministic strategy to run without model credentials (`baseline` or `pressure`)
     * `--artifact-dir` - Directory for offline run artifacts
     * `--resume-artifact-dir` - Resume a live run from a checkpoint artifact directory
     * `--live-step-timeout-ms` - Outer timeout for one live operator step

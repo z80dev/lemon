@@ -57,8 +57,11 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert opts[:decision_max_turns] == 4
     assert opts[:support_tool_matcher].(%AgentTool{name: "read_inbox"})
     assert opts[:support_tool_matcher].(%AgentTool{name: "memory_read_file"})
+    assert opts[:support_tool_matcher].(%AgentTool{name: "research_market"})
+    assert opts[:support_tool_matcher].(%AgentTool{name: "read_competitor_board"})
     refute opts[:support_tool_matcher].(%AgentTool{name: "send_supplier_email"})
     refute opts[:support_tool_matcher].(%AgentTool{name: "send_supplier_message"})
+    refute opts[:support_tool_matcher].(%AgentTool{name: "send_arena_money"})
   end
 
   test "support-tool events are preserved alongside the terminal action" do
@@ -212,6 +215,84 @@ defmodule LemonSim.Examples.VendingBenchTest do
              result.state.world.pending_deliveries
 
     assert result.state.world.bank_balance == 490.4
+  end
+
+  test "market research and supplier quote replies persist structured V2 evidence" do
+    state = VendingBench.initial_state(sim_id: "vb_market_research_quote")
+
+    assert {:ok, result} =
+             run_operator_tool_calls(
+               state,
+               [
+                 tool_call("research_market", %{"query" => "soda wholesale pricing"}),
+                 tool_call("send_supplier_message", %{
+                   "to" => "drinkdepot",
+                   "subject" => "Bulk quote request",
+                   "body" => "Can you quote soda and water wholesale pricing?"
+                 })
+               ],
+               support_tool_matcher: &support_tool?/1
+             )
+
+    assert Enum.map(result.events, & &1.kind) == [
+             "operator_researched_market",
+             "supplier_message_sent",
+             "supplier_reply_received"
+           ]
+
+    assert [%{query: "soda wholesale pricing", result_count: count}] =
+             result.state.world.market_research_history
+
+    assert count > 0
+
+    assert [%{metadata: metadata}] = result.state.world.supplier_quote_history
+    assert metadata.kind == "quote"
+    assert metadata.supplier_behavior == "honest_bulk"
+    assert Enum.any?(metadata.items, &(&1.item_id == "cola" and &1.unit_cost == 0.5))
+  end
+
+  test "arena worlds expose competitor tools and authoritative payment and trade accounting" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_arena_tools")
+      |> put_in([Access.key(:world), :arena_agent_id], "alex")
+      |> put_in([Access.key(:world), :arena_agent_name], "Alex Market")
+      |> put_in([Access.key(:world), :arena_peer_directory], [
+        %{id: "blair", name: "Blair Snacks"}
+      ])
+      |> put_in([Access.key(:world), :storage, :inventory], %{"water" => 10})
+      |> put_in([Access.key(:world), :storage, :batches], [
+        %{item_id: "water", quantity: 10, received_day: 1}
+      ])
+
+    assert {:ok, tools} = ActionSpace.tools(state, [])
+    names = Enum.map(tools, & &1.name)
+    assert "read_competitor_board" in names
+    assert "send_arena_message" in names
+    assert "send_arena_money" in names
+    assert "trade_with_agent" in names
+
+    assert {:ok, paid_state, :skip} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.arena_money_sent("alex", "blair", 5.0, "lead")],
+               VendingBench.modules().updater
+             )
+
+    assert paid_state.world.bank_balance == 495.0
+    assert [%{to_agent_id: "blair", amount: 5.0}] = paid_state.world.arena_payments_sent
+
+    assert {:ok, traded_state, :skip} =
+             Runner.ingest_events(
+               paid_state,
+               [VendingBench.Events.arena_trade_completed("alex", "blair", "water", 4, 3.4)],
+               VendingBench.modules().updater
+             )
+
+    assert traded_state.world.bank_balance == 498.4
+    assert traded_state.world.storage.inventory["water"] == 6
+
+    assert [%{to_agent_id: "blair", item_id: "water", quantity: 4}] =
+             traded_state.world.arena_trades
   end
 
   test "email-style supplier orders reject multiple products in one message" do
@@ -783,6 +864,36 @@ defmodule LemonSim.Examples.VendingBenchTest do
              VendingBench.DemandModel.weekday_multiplier(7)
   end
 
+  test "performance summary preserves catalog metadata from JSON-decoded worlds" do
+    world = %{
+      "bank_balance" => 100.0,
+      "cash_in_machine" => 5.0,
+      "storage" => %{
+        "inventory" => %{"water" => 2},
+        "batches" => [],
+        "capacity_units" => 160,
+        "spoiled_units" => 0,
+        "overflow_units" => 0,
+        "spoilage_loss" => 0.0
+      },
+      "catalog" => %{"water" => %{"display_name" => "Water", "wholesale_cost" => 0.4}},
+      "machine" => %{
+        "slots" => %{"A1" => %{"item_id" => "water", "inventory" => 1, "price" => 1.25}}
+      },
+      "sales_history" => [%{"item_id" => "water", "quantity" => 2, "revenue" => 2.5, "day" => 1}],
+      "supplier_order_history" => [],
+      "supplier_incident_history" => [],
+      "customer_complaints" => [],
+      "day_number" => 2
+    }
+
+    summary = VendingBench.Performance.summarize(world)
+
+    assert summary.inventory_value_wholesale == 1.2
+    assert summary.cost_of_goods_sold == 0.8
+    assert [%{display_name: "Water", units: 2, revenue: 2.5}] = summary.sales_by_item
+  end
+
   test "overpriced sales generate customer complaints and refunds" do
     state =
       VendingBench.initial_state(sim_id: "vb_customer_refund", seed: 1)
@@ -1047,6 +1158,11 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert state.world.day_number == 7
     assert state.world.physical_worker_run_count > 0
     assert state.world.sales_history != []
+    assert state.world.coordination_failures == 0
+    assert state.world.machine.slots["A3"].item_id == "energy_drink"
+    assert state.world.machine.slots["B3"].item_id == "sparkling_water"
+    assert state.world.machine.slots["C1"].item_id == "sandwich"
+    assert state.world.machine.slots["C2"].item_id == "protein_box"
 
     assert File.exists?(artifacts.final_world)
     assert File.exists?(artifacts.events)
@@ -1072,7 +1188,14 @@ defmodule LemonSim.Examples.VendingBenchTest do
     first_event = event_lines |> hd() |> Jason.decode!()
 
     assert first_event["ts_ms"] == 0
-    assert File.read!(artifacts.events) =~ "\"kind\":\"game_over\""
+    events_jsonl = File.read!(artifacts.events)
+    commands_jsonl = File.read!(artifacts.commands)
+    facts_jsonl = File.read!(artifacts.facts)
+
+    assert events_jsonl =~ "\"kind\":\"game_over\""
+    refute events_jsonl =~ "\"kind\":\"action_rejected\""
+    assert commands_jsonl =~ "\"kind\":\"place_supplier_order\""
+    assert facts_jsonl =~ "\"kind\":\"supplier_order_placed\""
     assert File.read!(artifacts.replay_html) =~ "VendingBench Replay"
     scorecard = artifacts.scorecard |> File.read!() |> Jason.decode!()
     manifest = artifacts.manifest |> File.read!() |> Jason.decode!()
@@ -1080,7 +1203,14 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert get_in(scorecard, ["score_modes", "v1_net_worth"]) > 0
     assert get_in(scorecard, ["score_modes", "money_balance"]) >= 0
-    assert get_in(scorecard, ["score_modes", "lemon_operational_score"]) >= 0
+    assert get_in(scorecard, ["score_modes", "lemon_operational_score"]) > 0
+    assert scorecard["coordination_failures"] == 0
+    assert scorecard["total_revenue"] > 0
+    assert scorecard["gross_profit"] > 0
+    assert is_list(scorecard["sales_by_item"])
+    assert Enum.any?(scorecard["sales_by_item"], &(&1["item_id"] == "water"))
+    assert is_list(scorecard["supplier_scorecard"])
+    assert Enum.any?(scorecard["supplier_scorecard"], &(&1["supplier_id"] == "freshco"))
     assert is_map(scorecard["failure_modes"])
     assert manifest["schema_version"] == "lemon_sim.run.v1"
     assert manifest["sim"]["id"] == "vending_bench"
@@ -1114,6 +1244,60 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert Enum.any?(replay.timeline, &(&1.kind == "game_over"))
   end
 
+  test "offline pressure strategy exercises adversarial suppliers and customer refunds" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_pressure_#{System.unique_integer([:positive])}")
+
+    assert {:ok, %{state: state, artifacts: artifacts, steps: 7}} =
+             VendingBench.run_offline_strategy(
+               "pressure",
+               sim_id: "vb_pressure_test",
+               max_days: 7,
+               seed: 7,
+               driver_max_turns: 10,
+               artifact_dir: artifact_dir
+             )
+
+    assert state.world.status == "complete"
+    assert state.world.coordination_failures == 0
+    assert length(state.world.supplier_incident_history) >= 3
+    assert length(state.world.market_research_history) == 1
+    assert length(state.world.supplier_quote_history) == 1
+    assert state.world.refunds_paid > 0
+    assert length(state.world.customer_complaints) > 0
+
+    assert [%{metadata: %{kind: "quote", supplier_behavior: "honest_bulk"}}] =
+             state.world.supplier_quote_history
+
+    assert Enum.any?(state.world.inbox, fn message ->
+             message.subject == "Supplier shutdown" and message.from == "ghostsupply"
+           end)
+
+    events_jsonl = File.read!(artifacts.events)
+    commands_jsonl = File.read!(artifacts.commands)
+    facts_jsonl = File.read!(artifacts.facts)
+    scorecard = artifacts.scorecard |> File.read!() |> Jason.decode!()
+
+    assert events_jsonl =~ "\"kind\":\"customer_refund_paid\""
+    assert events_jsonl =~ "\"kind\":\"supplier_reply_received\""
+    refute events_jsonl =~ "\"kind\":\"action_rejected\""
+    assert commands_jsonl =~ "\"kind\":\"place_supplier_order\""
+    assert facts_jsonl =~ "\"kind\":\"supplier_order_placed\""
+    assert scorecard["supplier_incident_count"] >= 3
+    assert scorecard["market_research_count"] == 1
+    assert scorecard["supplier_quote_count"] == 1
+    assert scorecard["customer_complaint_count"] > 0
+    assert get_in(scorecard, ["failure_modes", "customer_trust_damage"])
+
+    assert Enum.any?(scorecard["supplier_scorecard"], fn supplier ->
+             supplier["supplier_id"] in ["switcheroo", "quickcrate", "budgetvend"] and
+               supplier["incidents"] > 0
+           end)
+
+    assert {:ok, %{scorecard: ^scorecard}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
+  end
+
   test "arena baseline runs multiple vending agents with individual scoring and trades" do
     artifact_dir =
       Path.join(System.tmp_dir!(), "vb_arena_test_#{System.unique_integer([:positive])}")
@@ -1136,10 +1320,26 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert length(world.leaderboard) == 3
     assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_message_sent"))
     assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_trade_completed"))
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_money_sent"))
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_supplier_lead_shared"))
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_price_war_detected"))
+    assert Enum.any?(world.arena_events, &(get_in(&1, [:kind]) == "arena_collusion_signal"))
+
+    assert Enum.any?(
+             world.arena_events,
+             &(get_in(&1, [:kind]) == "arena_price_war_detected" and get_in(&1, [:spread]) > 0)
+           )
 
     assert Enum.any?(world.arena_agents, fn agent ->
              agent.world.machine.slots["A1"].arena_demand_multiplier != nil
            end)
+
+    water_prices =
+      world.arena_agents
+      |> Enum.map(&get_in(&1, [:world, :machine, :slots, "A1", :price]))
+      |> Enum.uniq()
+
+    assert length(water_prices) > 1
 
     assert File.exists?(result.artifacts.final_world)
     assert File.exists?(result.artifacts.arena_world)
@@ -1154,6 +1354,10 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert scorecard["mode"] == "vending_bench_arena"
     assert scorecard["agent_count"] == 3
     assert scorecard["trade_count"] >= 1
+    assert scorecard["payment_count"] >= 1
+    assert scorecard["supplier_lead_count"] >= 1
+    assert scorecard["price_war_count"] == 1
+    assert scorecard["collusion_signal_count"] >= 1
 
     File.rm_rf!(artifact_dir)
   end
@@ -1706,7 +1910,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
   defp support_tool?(tool) do
     String.starts_with?(tool.name, "memory_") or
-      tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers review_recent_sales create_reminder list_reminders complete_reminder)
+      tool.name in ~w(read_inbox check_balance check_storage inspect_supplier_directory research_suppliers research_market review_recent_sales create_reminder list_reminders complete_reminder read_competitor_board)
   end
 
   defp run_operator_tool_calls(state, tool_calls, opts \\ []) do

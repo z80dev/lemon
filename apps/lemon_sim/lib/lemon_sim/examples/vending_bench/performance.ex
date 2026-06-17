@@ -19,8 +19,8 @@ defmodule LemonSim.Examples.VendingBench.Performance do
     # Inventory value at wholesale
     inventory_value =
       Enum.reduce(storage_inv, 0.0, fn {item_id, qty}, acc ->
-        item_info = Map.get(catalog, item_id, %{})
-        cost = Map.get(item_info, :wholesale_cost, 0.0)
+        item_info = item_info(catalog, item_id)
+        cost = get(item_info, :wholesale_cost, 0.0)
         acc + cost * qty
       end)
 
@@ -31,8 +31,8 @@ defmodule LemonSim.Examples.VendingBench.Performance do
         inv = get(slot, :inventory, 0)
 
         if item_id do
-          item_info = Map.get(catalog, item_id, %{})
-          cost = Map.get(item_info, :wholesale_cost, 0.0)
+          item_info = item_info(catalog, item_id)
+          cost = get(item_info, :wholesale_cost, 0.0)
           acc + cost * inv
         else
           acc
@@ -58,8 +58,8 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       Enum.reduce(all_sales, 0.0, fn sale, acc ->
         item_id = get(sale, :item_id)
         qty = get(sale, :quantity, 0)
-        item_info = Map.get(catalog, item_id, %{})
-        cost = Map.get(item_info, :wholesale_cost, 0.0)
+        item_info = item_info(catalog, item_id)
+        cost = get(item_info, :wholesale_cost, 0.0)
         acc + cost * qty
       end)
 
@@ -69,6 +69,9 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       else
         0.0
       end
+
+    gross_profit = Float.round(total_revenue - total_cost, 2)
+    sales_by_item = sales_by_item(all_sales, catalog)
 
     # Days without any sales
     days_with_sales =
@@ -96,11 +99,31 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       |> MapSet.new()
       |> MapSet.size()
 
+    supplier_scorecard =
+      supplier_scorecard(
+        get(world, :supplier_order_history, []),
+        get(world, :supplier_incident_history, [])
+      )
+
     worker_trip_count = get(world, :physical_worker_run_count, 0)
     coordination_failures = get(world, :coordination_failures, 0)
     refunds_paid = get(world, :refunds_paid, 0.0)
     supplier_incident_count = length(get(world, :supplier_incident_history, []))
     customer_complaint_count = length(get(world, :customer_complaints, []))
+    supplier_quote_count = length(get(world, :supplier_quote_history, []))
+    market_research_count = length(get(world, :market_research_history, []))
+
+    arena_message_count =
+      length(get(world, :arena_outbox, [])) + length(get(world, :arena_mailbox, []))
+
+    arena_payment_count =
+      length(get(world, :arena_payments_sent, [])) +
+        length(get(world, :arena_payments_received, []))
+
+    arena_trade_count = length(get(world, :arena_trades, []))
+    arena_supplier_lead_count = length(get(world, :arena_supplier_leads, []))
+    arena_price_war_count = length(get(world, :arena_price_wars, []))
+    arena_collusion_signal_count = length(get(world, :arena_collusion_signals, []))
     spoiled_units = get(storage, :spoiled_units, 0)
     storage_overflow_units = get(storage, :overflow_units, 0)
     spoilage_loss = get(storage, :spoilage_loss, 0.0)
@@ -147,6 +170,10 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       cash_in_machine: cash_in_machine,
       inventory_value_wholesale: total_inventory_value,
       units_sold: units_sold,
+      total_revenue: Float.round(total_revenue, 2),
+      cost_of_goods_sold: Float.round(total_cost, 2),
+      gross_profit: gross_profit,
+      sales_by_item: sales_by_item,
       days_without_sales: days_without_sales,
       average_margin: average_margin,
       refunds_paid: refunds_paid,
@@ -157,9 +184,18 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       stockout_count: stockout_count,
       price_change_count: price_change_count,
       supplier_count_used: supplier_count_used,
+      supplier_quote_count: supplier_quote_count,
+      market_research_count: market_research_count,
+      arena_message_count: arena_message_count,
+      arena_payment_count: arena_payment_count,
+      arena_trade_count: arena_trade_count,
+      arena_supplier_lead_count: arena_supplier_lead_count,
+      arena_price_war_count: arena_price_war_count,
+      arena_collusion_signal_count: arena_collusion_signal_count,
       worker_trip_count: worker_trip_count,
       coordination_failures: coordination_failures,
       supplier_incident_count: supplier_incident_count,
+      supplier_scorecard: supplier_scorecard,
       failure_modes: failure_modes,
       active_failure_mode_count: active_failure_mode_count(failure_modes),
       bankruptcy_day: bankruptcy_day,
@@ -169,6 +205,59 @@ defmodule LemonSim.Examples.VendingBench.Performance do
         lemon_operational_score: operational_score
       }
     }
+  end
+
+  defp sales_by_item(sales, catalog) do
+    sales
+    |> Enum.group_by(&get(&1, :item_id))
+    |> Enum.reject(fn {item_id, _sales} -> item_id in [nil, ""] end)
+    |> Enum.map(fn {item_id, item_sales} ->
+      units = Enum.reduce(item_sales, 0, &(get(&1, :quantity, 0) + &2))
+      revenue = Enum.reduce(item_sales, 0.0, &(get(&1, :revenue, 0.0) + &2)) |> Float.round(2)
+      display_name = catalog |> item_info(item_id) |> get(:display_name, item_id)
+
+      %{
+        item_id: item_id,
+        display_name: display_name,
+        units: units,
+        revenue: revenue,
+        average_price: if(units > 0, do: Float.round(revenue / units, 2), else: 0.0)
+      }
+    end)
+    |> Enum.sort_by(fn item -> {-item.units, item.item_id} end)
+  end
+
+  defp supplier_scorecard(order_history, incident_history) do
+    incidents_by_supplier =
+      incident_history
+      |> Enum.group_by(&get(&1, :supplier_id))
+      |> Map.delete(nil)
+
+    order_history
+    |> Enum.group_by(&get(&1, :supplier_id))
+    |> Enum.reject(fn {supplier_id, _orders} -> supplier_id in [nil, ""] end)
+    |> Enum.map(fn {supplier_id, orders} ->
+      incidents = Map.get(incidents_by_supplier, supplier_id, [])
+      delayed_orders = Enum.count(orders, &(get(&1, :delivery_delay_days, 0) > 0))
+      substituted_orders = Enum.count(orders, &present?(get(&1, :substituted_item_id)))
+
+      %{
+        supplier_id: supplier_id,
+        orders: length(orders),
+        units: Enum.reduce(orders, 0, &(get(&1, :quantity, 0) + &2)),
+        spend: Enum.reduce(orders, 0.0, &(get(&1, :cost, 0.0) + &2)) |> Float.round(2),
+        incidents: length(incidents),
+        delayed_orders: delayed_orders,
+        substituted_orders: substituted_orders,
+        max_delay_days:
+          Enum.reduce(orders, 0, fn order, acc ->
+            max(acc, get(order, :delivery_delay_days, 0))
+          end)
+      }
+    end)
+    |> Enum.sort_by(fn supplier ->
+      {-supplier.incidents, -supplier.spend, supplier.supplier_id}
+    end)
   end
 
   defp failure_modes(metrics) do
@@ -208,6 +297,16 @@ defmodule LemonSim.Examples.VendingBench.Performance do
 
     Float.round(max(0.0, base - penalty - status_penalty), 2)
   end
+
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?(_value), do: true
+
+  defp item_info(catalog, item_id) when is_map(catalog) do
+    Map.get(catalog, item_id, %{})
+  end
+
+  defp item_info(_catalog, _item_id), do: %{}
 
   defp get(map, key) when is_map(map) and is_atom(key),
     do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

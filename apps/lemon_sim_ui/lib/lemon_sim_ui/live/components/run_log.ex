@@ -187,20 +187,60 @@ defmodule LemonSimUi.Live.Components.RunLog do
 
   defp event_summary(event) do
     payload = event_payload(event)
+    kind = event_kind(event)
 
     cond do
-      event_kind(event) == "action_rejected" ->
+      kind == "action_rejected" ->
         "Rejected: #{get(payload, :reason, "unknown reason")}"
 
-      event_kind(event) == "supplier_reply_received" ->
+      kind == "supplier_reply_received" ->
         supplier = get(payload, :supplier_id, get(payload, :from, "supplier"))
         message = get(payload, :message, get(payload, :body, "reply received"))
         "#{supplier}: #{message}"
 
-      event_kind(event) == "place_supplier_order" ->
+      kind == "place_supplier_order" ->
         "#{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} from #{get(payload, :supplier_id, "supplier")}"
 
-      event_kind(event) == "sale_realized" ->
+      kind == "supplier_order_placed" ->
+        order_summary(payload)
+
+      kind == "delivery_arrived" ->
+        "#{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} delivered from #{get(payload, :supplier_id, "supplier")} on day #{get(payload, :day, "?")}"
+
+      kind == "customer_refund_paid" ->
+        "Refunded $#{format_money(get(payload, :amount, 0))} for #{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))}: #{humanize(get(payload, :reason, "customer refund"))}"
+
+      kind == "arena_message_sent" ->
+        "#{get(payload, :from_agent_id, "?")} messaged #{get(payload, :to_agent_id, "?")}: #{get(payload, :subject, "arena message")}"
+
+      kind == "arena_money_sent" ->
+        "#{get(payload, :from_agent_id, "?")} paid #{get(payload, :to_agent_id, "?")} $#{format_money(get(payload, :amount, 0))}: #{get(payload, :memo, "arena payment")}"
+
+      kind == "arena_trade_completed" ->
+        "#{get(payload, :from_agent_id, "?")} sold #{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} to #{get(payload, :to_agent_id, "?")} for $#{format_money(get(payload, :amount, 0))}"
+
+      kind == "arena_supplier_lead_shared" ->
+        "#{get(payload, :from_agent_id, "?")} shared #{get(payload, :supplier_id, "supplier")} with #{get(payload, :to_agent_id, "?")}"
+
+      kind == "arena_price_war_detected" ->
+        "Price war on #{humanize(get(payload, :item_id, "item"))}: #{get(payload, :cheapest_agent_id, "?")} undercut #{get(payload, :expensive_agent_id, "?")}"
+
+      kind == "arena_collusion_signal" ->
+        "Collusion signal from #{get(payload, :from_agent_id, "?")} to #{get(payload, :to_agent_id, "?")}: #{humanize(get(payload, :item_id, "item"))}"
+
+      kind == "inventory_spoiled" ->
+        "#{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} spoiled; loss $#{format_money(get(payload, :loss, 0))}"
+
+      kind == "storage_overflow_discarded" ->
+        "#{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} discarded due to storage overflow"
+
+      kind == "price_set" ->
+        "Slot #{get(payload, :slot_id, "?")} priced at $#{format_money(get(payload, :new_price, 0))}"
+
+      kind == "machine_stocked" ->
+        "Stocked #{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} into #{get(payload, :slot_id, "?")}"
+
+      kind == "sale_realized" ->
         "#{get(payload, :quantity, "?")}x #{humanize(get(payload, :item_id, "item"))} sold from #{get(payload, :slot_id, "?")} for $#{format_money(get(payload, :revenue, 0))}"
 
       text = get(payload, :summary, nil) ->
@@ -222,6 +262,31 @@ defmodule LemonSimUi.Live.Components.RunLog do
         |> Enum.join(" ")
     end
     |> truncate(220)
+  end
+
+  defp order_summary(payload) do
+    supplier = get(payload, :supplier_id, "supplier")
+    item = get(payload, :item_id, get(payload, :delivered_item_id, "item"))
+    ordered_item = get(payload, :ordered_item_id, item)
+    quantity = get(payload, :quantity, "?")
+    cost = get(payload, :cost, 0)
+    delivery_day = get(payload, :delivery_day, "?")
+    delay_days = get(payload, :delivery_delay_days, 0)
+    substituted_item = get(payload, :substituted_item_id, nil)
+
+    issue =
+      cond do
+        substituted_item not in [nil, ""] or ordered_item != item ->
+          " with substitution #{humanize(ordered_item)} -> #{humanize(item)}"
+
+        delay_days > 0 ->
+          " with #{delay_days}d delay"
+
+        true ->
+          ""
+      end
+
+    "#{quantity}x #{humanize(item)} from #{supplier} confirmed for $#{format_money(cost)}, arrives day #{delivery_day}#{issue}"
   end
 
   defp error_message(error), do: error |> get(:message, inspect(error)) |> truncate(220)

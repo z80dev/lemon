@@ -38,6 +38,17 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
+  def operator_researched_market(query, result_count) do
+    Event.new("operator_researched_market", %{
+      "query" => query,
+      "result_count" => result_count
+    })
+  end
+
+  def operator_checked_competitors(agent_count) do
+    Event.new("operator_checked_competitors", %{"agent_count" => agent_count})
+  end
+
   def operator_created_reminder(reminder_id, day, text) do
     Event.new("operator_created_reminder", %{
       "reminder_id" => reminder_id,
@@ -59,6 +70,61 @@ defmodule LemonSim.Examples.VendingBench.Events do
       "to" => to,
       "subject" => subject,
       "body" => body
+    })
+  end
+
+  def arena_message_sent(from_agent_id, to_agent_id, subject, body) do
+    Event.new("arena_message_sent", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "subject" => subject,
+      "body" => body
+    })
+  end
+
+  def arena_money_sent(from_agent_id, to_agent_id, amount, memo) do
+    Event.new("arena_money_sent", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "amount" => amount,
+      "memo" => memo
+    })
+  end
+
+  def arena_trade_completed(from_agent_id, to_agent_id, item_id, quantity, amount) do
+    Event.new("arena_trade_completed", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "amount" => amount
+    })
+  end
+
+  def arena_supplier_lead_shared(from_agent_id, to_agent_id, supplier_id, amount) do
+    Event.new("arena_supplier_lead_shared", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "supplier_id" => supplier_id,
+      "amount" => amount
+    })
+  end
+
+  def arena_price_war_detected(item_id, cheapest_agent_id, expensive_agent_id, spread) do
+    Event.new("arena_price_war_detected", %{
+      "item_id" => item_id,
+      "cheapest_agent_id" => cheapest_agent_id,
+      "expensive_agent_id" => expensive_agent_id,
+      "spread" => spread
+    })
+  end
+
+  def arena_collusion_signal(from_agent_id, to_agent_id, item_id, proposal) do
+    Event.new("arena_collusion_signal", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "item_id" => item_id,
+      "proposal" => proposal
     })
   end
 

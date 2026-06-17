@@ -27,8 +27,12 @@ mission targets change.
 - `LemonSim.Examples.VendingBench` is the Vending-Bench 1.0 target: a full
   nested-agent business simulation with operator strategy, physical worker
   execution, suppliers, inventory, demand, incidents, UI, replay, and
-  scorecard evidence. It supports deterministic offline baseline runs through
-  `mix lemon.sim.vending_bench --preset ci --offline-strategy baseline`.
+  scorecard evidence. It supports deterministic offline `baseline` and
+  `pressure` runs through
+  `mix lemon.sim.vending_bench --preset ci --offline-strategy baseline` and
+  `mix lemon.sim.vending_bench --preset ci --offline-strategy pressure`.
+  The pressure strategy should exercise market research and structured quote
+  evidence in addition to adversarial supplier incidents and refunds.
   Benchmark mode is `--preset paper` with a 365-day horizon, a 2,000-turn
   driver budget, 10-day unpaid-fee bankruptcy, and primary net-worth scoring.
   Offline runs write replay files plus supplier message, worker history,
@@ -48,16 +52,18 @@ mission targets change.
   runs.
   A checked-in deterministic replay fixture lives under
   `priv/fixtures/vending_bench/ci_replay/`.
-  Supplier discovery now includes deterministic `research_suppliers` support and
-  terminal `send_supplier_message` / `send_supplier_email` actions with inbox/outbox
-  persistence, known-supplier order confirmation, unknown-address bounces,
-  negotiated discounts, deterministic delivery delays, shutdown notices, and
-  bait-and-switch delivery provenance. Free-form supplier messages reject
-  multi-product order emails so ambiguous model attempts become visible instead
-  of silently confirming only the first parsed item. Live VendingBench runs pace ZAI and
-  Gemini CLI provider calls by default and prompt the operator to end each turn
-  after at most two support-tool calls. Customer complaints/refunds are modeled
-  from overpriced sales and included in the scorecard. Storage capacity,
+  Supplier discovery now includes deterministic `research_suppliers` support,
+  `research_market` demand/price/risk notes, and terminal
+  `send_supplier_message` / `send_supplier_email` actions with inbox/outbox
+  persistence, structured quote history, known-supplier order confirmation,
+  unknown-address bounces, negotiated discounts, deterministic delivery delays,
+  shutdown notices, and bait-and-switch delivery provenance. Free-form supplier
+  messages reject multi-product order emails so ambiguous model attempts become
+  visible instead of silently confirming only the first parsed item. Live
+  VendingBench runs pace ZAI and Gemini CLI provider calls by default and prompt
+  the operator to end each turn after at most two support-tool calls. Customer
+  complaints/refunds are modeled from overpriced sales and included in the
+  scorecard. Storage capacity,
   delivery overflow, batch aging, spoilage loss, day-of-week/month effects, and
   product-variety demand effects are part of the benchmark state and scorecard.
   Scorecards also expose objective failure-mode flags for invalid actions,
@@ -70,8 +76,12 @@ mission targets change.
 - Vending-Bench 2 uses `mix lemon.sim.vending_bench --preset v2`; add
   `--arena --offline-strategy baseline --arena-agents N` for the multi-agent
   Arena surface. Arena runs keep individual machine/world state per operator,
-  apply shared-location price pressure, record inter-agent messages/trades, and
-  score the leaderboard by money balance.
+  apply shared-location price pressure with distinct agent price postures,
+  record inter-agent messages, payments, trades, supplier-lead sales,
+  checkpointed nonzero-spread price-war signals, and collusion signals, and
+  score the leaderboard by money balance. Arena worlds expose competitor,
+  message, payment, and trade tools when run through the live VendingBench
+  action space.
 
 ## Key Files
 
@@ -132,7 +142,7 @@ Boundary namespaces:
 - Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
 - If a decision includes `"executed_calls"` and a non-default adapter is configured, `Runner.step/3` adapts through that adapter before direct terminal events so support-tool events are preserved.
 - VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.
-- Keep `LemonSim.Examples.VendingBench` as a facade. World bootstrap, projection, artifacts, offline baseline running, arena behavior, demand, suppliers, physical-worker behavior, performance, replay, and updater logic belong in focused `vending_bench/*` modules.
+- Keep `LemonSim.Examples.VendingBench` as a facade. World bootstrap, projection, artifacts, offline strategy running, arena behavior, demand, suppliers, physical-worker behavior, performance, replay, and updater logic belong in focused `vending_bench/*` modules.
 - `ToolLoopDecider` is tool-first: assistant replies without tool calls are treated as errors, not text decisions.
 - `ToolLoopDecider` must reject duplicate normalized tool names; silent tool replacement invalidates benchmark traces.
 - Use `driver_max_turns` for outer sim loops and `decision_max_turns` for inner model/tool retries; `max_turns` remains a backward-compatible fallback.

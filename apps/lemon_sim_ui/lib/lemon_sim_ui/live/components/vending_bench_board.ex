@@ -11,6 +11,10 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     arena_agents = MapHelpers.get_key(world, :arena_agents) || []
     arena_messages = MapHelpers.get_key(world, :arena_messages) || []
     arena_trades = MapHelpers.get_key(world, :arena_trades) || []
+    arena_payments = MapHelpers.get_key(world, :arena_payments) || []
+    arena_supplier_leads = MapHelpers.get_key(world, :arena_supplier_leads) || []
+    arena_price_wars = MapHelpers.get_key(world, :arena_price_wars) || []
+    arena_collusion_signals = MapHelpers.get_key(world, :arena_collusion_signals) || []
     display_world = arena_display_world(world, arena_agents)
     performance = LemonSim.Examples.VendingBench.Performance.summarize(display_world)
 
@@ -54,6 +58,9 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     top_product = top_product_name(recent_sales, catalog)
     headline = broadcast_headline(performance, pending_deliveries, customer_complaints)
     story_beats = story_beats(world, display_world, performance, top_product)
+    sales_by_item = performance |> get_val(:sales_by_item, []) |> Enum.take(5)
+    supplier_scorecard = performance |> get_val(:supplier_scorecard, []) |> Enum.take(5)
+    active_failure_modes = active_failure_modes(performance)
 
     # Time formatting
     time_display = format_time(time_minutes)
@@ -108,6 +115,10 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       |> assign(:arena_agents, arena_agents)
       |> assign(:arena_messages, arena_messages)
       |> assign(:arena_trades, arena_trades)
+      |> assign(:arena_payments, arena_payments)
+      |> assign(:arena_supplier_leads, arena_supplier_leads)
+      |> assign(:arena_price_wars, arena_price_wars)
+      |> assign(:arena_collusion_signals, arena_collusion_signals)
       |> assign(:weather, weather)
       |> assign(:season, season)
       |> assign(:weather_kind, weather_kind)
@@ -118,6 +129,9 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
       |> assign(:top_product, top_product)
       |> assign(:headline, headline)
       |> assign(:story_beats, story_beats)
+      |> assign(:sales_by_item, sales_by_item)
+      |> assign(:supplier_scorecard, supplier_scorecard)
+      |> assign(:active_failure_modes, active_failure_modes)
 
     ~H"""
     <div class="relative w-full font-sans" style="background: #0a0f0d; color: #e8f0ea; min-height: 640px; max-width: 100%; overflow-x: hidden; box-sizing: border-box;">
@@ -410,7 +424,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
         <div style="padding: 12px 20px; border-bottom: 1px solid #1a3024; background: #10110c;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap;">
             <div style="font-size: 10px; letter-spacing: 2px; color: #fbbf24; font-weight: 900;">ARENA STANDINGS</div>
-            <div style="font-size: 10px; color: #bfa76a;">Same location · individual scoring · price pressure active · <%= length(@arena_messages) %> messages · <%= length(@arena_trades) %> trades</div>
+            <div style="font-size: 10px; color: #bfa76a;">Same location · individual scoring · price pressure active · <%= length(@arena_messages) %> messages · <%= length(@arena_trades) %> trades · <%= length(@arena_payments) %> payments · <%= length(@arena_supplier_leads) %> leads · <%= length(@arena_price_wars) %> price wars · <%= length(@arena_collusion_signals) %> collusion flags</div>
           </div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">
             <%= for {agent, rank} <- Enum.with_index(@arena_agents, 1) do %>
@@ -427,6 +441,31 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
               </div>
             <% end %>
           </div>
+          <%= if @arena_price_wars != [] or @arena_supplier_leads != [] or @arena_collusion_signals != [] do %>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 8px;">
+              <%= if @arena_price_wars != [] do %>
+                <% latest = List.last(@arena_price_wars) %>
+                <div style="border: 1px solid rgba(96,165,250,0.24); border-radius: 8px; background: rgba(96,165,250,0.06); padding: 9px 10px;">
+                  <div style="font-size: 10px; color: #93c5fd; font-weight: 900; margin-bottom: 4px;">PRICE WAR</div>
+                  <div style="font-size: 11px; color: #dbeafe;"><%= get_val(latest, :item_id, "?") %> · <%= get_val(latest, :cheapest_agent_id, "?") %> undercut <%= get_val(latest, :expensive_agent_id, "?") %> by $<%= format_money(get_val(latest, :spread, 0)) %></div>
+                </div>
+              <% end %>
+              <%= if @arena_supplier_leads != [] do %>
+                <% latest = List.last(@arena_supplier_leads) %>
+                <div style="border: 1px solid rgba(52,211,153,0.24); border-radius: 8px; background: rgba(52,211,153,0.06); padding: 9px 10px;">
+                  <div style="font-size: 10px; color: #6ee7b7; font-weight: 900; margin-bottom: 4px;">SUPPLIER LEAD</div>
+                  <div style="font-size: 11px; color: #d1fae5;"><%= get_val(latest, :supplier_id, "?") %> shared from <%= get_val(latest, :from_agent_id, "?") %> to <%= get_val(latest, :to_agent_id, "?") %></div>
+                </div>
+              <% end %>
+              <%= if @arena_collusion_signals != [] do %>
+                <% latest = List.last(@arena_collusion_signals) %>
+                <div style="border: 1px solid rgba(248,113,113,0.24); border-radius: 8px; background: rgba(248,113,113,0.06); padding: 9px 10px;">
+                  <div style="font-size: 10px; color: #fca5a5; font-weight: 900; margin-bottom: 4px;">COLLUSION SIGNAL</div>
+                  <div style="font-size: 11px; color: #fee2e2;"><%= get_val(latest, :from_agent_id, "?") %> -> <%= get_val(latest, :to_agent_id, "?") %>: <%= get_val(latest, :item_id, "?") %></div>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
         </div>
       <% end %>
 
@@ -480,6 +519,28 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
           <div style="height: 1px; background: #1a3024; margin: 0 12px 12px;"></div>
 
+          <!-- Sales Mix -->
+          <div style="padding: 0 12px 12px;">
+            <div style="font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700; margin-bottom: 8px;">
+              SALES MIX
+            </div>
+            <%= if @sales_by_item == [] do %>
+              <div style="font-size: 11px; color: #2d5940; font-style: italic;">No product sales yet</div>
+            <% else %>
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <%= for item <- @sales_by_item do %>
+                  <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; background: rgba(96,165,250,0.06);">
+                    <span style="font-size: 10px; color: #bfdbfe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><%= get_val(item, :display_name, humanize(to_string(get_val(item, :item_id, "item")))) %></span>
+                    <span style="font-size: 10px; color: #60a5fa; font-family: monospace;"><%= get_val(item, :units, 0) %>u</span>
+                    <span style="font-size: 10px; color: #34d399; font-family: monospace;">$<%= format_money(get_val(item, :revenue, 0)) %></span>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+
+          <div style="height: 1px; background: #1a3024; margin: 0 12px 12px;"></div>
+
           <!-- Worker Status -->
           <div style="padding: 0 12px 10px;">
             <div style="font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700; margin-bottom: 8px;">
@@ -507,7 +568,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
           <div class="vb-machine-marquee">
             <div style="min-width: 0;">
               <div style="font-size: 10px; letter-spacing: 2px; font-weight: 900;">LEMON VENDBOT</div>
-              <div style="font-size: 20px; line-height: 1; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <div style="font-size: 18px; line-height: 1.08; font-weight: 900; overflow: hidden; overflow-wrap: anywhere; max-height: 40px;">
                 <%= @headline %>
               </div>
             </div>
@@ -674,6 +735,39 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
           <div style="height: 1px; background: #1a3024; margin: 12px 12px;"></div>
 
+          <!-- Supplier Ledger -->
+          <div style="padding: 0 12px 10px;">
+            <div style="font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700; margin-bottom: 8px;">
+              SUPPLIER LEDGER
+            </div>
+            <%= if @supplier_scorecard == [] do %>
+              <div style="font-size: 11px; color: #2d5940; font-style: italic;">No orders yet</div>
+            <% else %>
+              <div style="display: flex; flex-direction: column; gap: 5px;">
+                <%= for supplier <- @supplier_scorecard do %>
+                  <% incidents = get_val(supplier, :incidents, 0) %>
+                  <% delayed = get_val(supplier, :delayed_orders, 0) %>
+                  <% substituted = get_val(supplier, :substituted_orders, 0) %>
+                  <div style={"border: 1px solid #{if incidents > 0, do: "rgba(251,191,36,0.35)", else: "#1a3024"}; border-radius: 6px; background: #{if incidents > 0, do: "rgba(251,191,36,0.07)", else: "rgba(16,185,129,0.04)"}; padding: 7px 8px;"}>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px;">
+                      <span style="font-size: 10px; color: #6ee7b7; font-family: monospace; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><%= get_val(supplier, :supplier_id, "?") %></span>
+                      <span style="font-size: 10px; color: #34d399; font-family: monospace;">$<%= format_money(get_val(supplier, :spend, 0)) %></span>
+                    </div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; font-size: 9px; color: #80a894; font-family: monospace;">
+                      <span><%= get_val(supplier, :orders, 0) %> orders</span>
+                      <span><%= get_val(supplier, :units, 0) %> units</span>
+                      <%= if incidents > 0 do %><span style="color: #fbbf24;"><%= incidents %> issue(s)</span><% end %>
+                      <%= if delayed > 0 do %><span style="color: #fbbf24;"><%= delayed %> delayed</span><% end %>
+                      <%= if substituted > 0 do %><span style="color: #fbbf24;"><%= substituted %> substituted</span><% end %>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+
+          <div style="height: 1px; background: #1a3024; margin: 0 12px 12px;"></div>
+
           <!-- Operational Signals -->
           <div style="padding: 0 12px 10px;">
             <div style="font-size: 10px; letter-spacing: 2px; color: #166534; font-weight: 700; margin-bottom: 8px;">
@@ -706,6 +800,15 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
               <% fault = List.last(@machine_fault_reports) %>
               <div style="margin-top: 8px; padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(251,191,36,0.25); background: rgba(251,191,36,0.06); font-size: 10px; color: #fbbf24; line-height: 1.4;">
                 Fault: <%= humanize(to_string(get_val(fault, :severity, "low"))) %> · <%= truncate(to_string(get_val(fault, :description, "")), 72) %>
+              </div>
+            <% end %>
+            <%= if @active_failure_modes != [] do %>
+              <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px;">
+                <%= for mode <- @active_failure_modes do %>
+                  <span style="border: 1px solid rgba(248,113,113,0.28); background: rgba(248,113,113,0.08); color: #fca5a5; border-radius: 999px; padding: 3px 7px; font-size: 9px; font-weight: 800;">
+                    <%= mode %>
+                  </span>
+                <% end %>
               </div>
             <% end %>
           </div>
@@ -946,6 +1049,13 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     end
   end
 
+  defp active_failure_modes(performance) do
+    performance
+    |> get_val(:failure_modes, %{})
+    |> Enum.filter(fn {_mode, active?} -> active? end)
+    |> Enum.map(fn {mode, _active?} -> mode |> to_string() |> humanize() end)
+  end
+
   defp arena_display_world(world, []) do
     world
   end
@@ -985,7 +1095,9 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
         [
           "#{length(agents)} agents competing",
           "#{length(get_val(world, :arena_messages, []))} arena message(s)",
-          "#{length(get_val(world, :arena_trades, []))} arena trade(s)"
+          "#{length(get_val(world, :arena_trades, []))} arena trade(s)",
+          "#{length(get_val(world, :arena_payments, []))} arena payment(s)",
+          "#{length(get_val(world, :arena_price_wars, []))} price-war signal(s)"
         ]
     end
   end

@@ -121,11 +121,41 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         recent_sales: [
           %{slot_id: "A1", item_id: "sparkling_water", quantity: 2, revenue: 5.0, day: 3}
         ],
+        sales_history: [
+          %{slot_id: "A1", item_id: "sparkling_water", quantity: 2, revenue: 5.0, day: 3},
+          %{slot_id: "B1", item_id: "chips", quantity: 1, revenue: 2.0, day: 3}
+        ],
         customer_complaints: [
+          %{
+            item_id: "sparkling_water",
+            amount: 2.5,
+            reason: "customer_complaint_overpriced_sale"
+          },
+          %{item_id: "chips", amount: 2.0, reason: "customer_complaint_overpriced_sale"},
           %{item_id: "sparkling_water", amount: 2.5, reason: "customer_complaint_overpriced_sale"}
         ],
         supplier_incident_history: [
           %{supplier_id: "switcheroo", ordered_item_id: "sparkling_water"}
+        ],
+        supplier_order_history: [
+          %{
+            supplier_id: "switcheroo",
+            item_id: "water",
+            ordered_item_id: "sparkling_water",
+            quantity: 8,
+            cost: 8.8,
+            delivery_delay_days: 1,
+            substituted_item_id: "water"
+          },
+          %{
+            supplier_id: "snackworld",
+            item_id: "chips",
+            ordered_item_id: "chips",
+            quantity: 12,
+            cost: 10.8,
+            delivery_delay_days: 0,
+            substituted_item_id: nil
+          }
         ],
         machine_fault_reports: [
           %{description: "coin return sticks intermittently", severity: "medium", day: 3}
@@ -136,6 +166,32 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         ],
         arena_messages: [%{kind: "arena_message_sent"}],
         arena_trades: [%{kind: "arena_trade_completed"}],
+        arena_payments: [%{kind: "arena_money_sent"}],
+        arena_supplier_leads: [
+          %{
+            kind: "arena_supplier_lead_shared",
+            supplier_id: "drinkdepot",
+            from_agent_id: "alex",
+            to_agent_id: "blair"
+          }
+        ],
+        arena_price_wars: [
+          %{
+            kind: "arena_price_war_detected",
+            item_id: "water",
+            cheapest_agent_id: "alex",
+            expensive_agent_id: "blair",
+            spread: 0.5
+          }
+        ],
+        arena_collusion_signals: [
+          %{
+            kind: "arena_collusion_signal",
+            from_agent_id: "alex",
+            to_agent_id: "blair",
+            item_id: "water"
+          }
+        ],
         refunds_paid: 2.5,
         physical_worker_last_report: %{summary: "Collected cash and topped off A1."},
         physical_worker_run_count: 2,
@@ -169,6 +225,13 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Alex Market"
       assert html =~ "1 messages"
       assert html =~ "1 trades"
+      assert html =~ "1 payments"
+      assert html =~ "1 leads"
+      assert html =~ "1 price wars"
+      assert html =~ "1 collusion flags"
+      assert html =~ "PRICE WAR"
+      assert html =~ "SUPPLIER LEAD"
+      assert html =~ "COLLUSION SIGNAL"
       assert html =~ "Collected cash and topped off A1."
       assert html =~ "Sparkling Water"
       assert html =~ "D4"
@@ -176,12 +239,20 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "$5.00"
       assert html =~ "Refunds Paid"
       assert html =~ "Spoilage Loss"
+      assert html =~ "SALES MIX"
+      assert html =~ "2u"
       assert html =~ "Spoiled Units"
       assert html =~ "Overflow Units"
       assert html =~ "Failure Modes"
+      assert html =~ "Unmanaged Spoilage"
+      assert html =~ "Customer Trust Damage"
       assert html =~ "Open Reminders"
       assert html =~ "Check delayed water delivery"
       assert html =~ "(8/20)"
+      assert html =~ "SUPPLIER LEDGER"
+      assert html =~ "switcheroo"
+      assert html =~ "1 issue"
+      assert html =~ "substituted"
       assert html =~ "Supplier Issues"
       assert html =~ "Customer Complaints"
       assert html =~ "Machine Faults"
@@ -906,7 +977,7 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "order queued"
       assert html =~ "Live Event Feed"
       assert html =~ "Supplier Order Placed"
-      assert html =~ "item_id=Chips"
+      assert html =~ "12x Chips"
     end
   end
 

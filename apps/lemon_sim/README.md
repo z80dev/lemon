@@ -65,8 +65,8 @@ Phase 1 adds:
 - `LemonSim.Examples.VendingBench.Arena` is the Vending-Bench 2 / Arena
   follow-on surface: several operators run independent vending businesses in
   the same location, shared item prices create demand pressure, agents can
-  message and trade, and the leaderboard scores each agent by final money
-  balance.
+  message, pay, trade, sell supplier leads, trigger price wars, and surface
+  collusion signals. The leaderboard scores each agent by final money balance.
 
 Run them with:
 
@@ -76,11 +76,16 @@ mix lemon.sim.skirmish
 mix lemon.sim.poker
 ```
 
-Vending Bench also has a deterministic, no-LLM baseline mode for CI and
-mechanics smoke tests:
+Vending Bench also has deterministic, no-LLM modes for CI and mechanics smoke
+tests. `baseline` runs a conservative operator with legal slot-size stocking,
+normal suppliers, and command/fact artifact emission. `pressure` uses the same
+harness but intentionally exercises market research, a structured supplier
+quote, adversarial suppliers, a shutdown notice, premium pricing, customer
+refunds, and scorecard failure modes:
 
 ```bash
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_fixture
+mix lemon.sim.vending_bench --preset ci --offline-strategy pressure --sim-id vb_pressure_fixture
 ```
 
 Vending-Bench 1.0 benchmark runs use `--preset paper`, which sets the horizon
@@ -92,9 +97,14 @@ mix lemon.sim.vending_bench --preset paper --sim-id vb_paper
 ```
 
 Vending-Bench 2 runs use `--preset v2`, which keeps the 365-day horizon and
-uses money balance as the primary score. Add `--arena` for the multi-agent
-Arena variant. The deterministic baseline supports up to five named operators
-without model credentials:
+uses money balance as the primary score. The V2 tool surface includes
+deterministic market research, structured supplier quote ledgers, persistent
+reminders, and supplier replies that expose adversarial pricing, negotiation,
+delays, shutdowns, substitutions, and refunds. Add `--arena` for the
+multi-agent Arena variant. The deterministic baseline supports up to five named
+operators without model credentials; Arena agents use distinct pricing postures
+so shared-location demand pressure and checkpointed nonzero-spread price-war
+signals are visible in the event log:
 
 ```bash
 mix lemon.sim.vending_bench --preset v2 --arena --offline-strategy baseline --arena-agents 5 --sim-id vb_arena
@@ -124,10 +134,13 @@ mix lemon.sim.vending_bench_replay apps/lemon_sim/priv/game_logs/vending_bench/<
 ```
 
 Arena artifact directories write `final_world.json`, `arena_world.json`,
-`arena_events.jsonl`, `arena_actions.jsonl`, `arena_scorecard.json`, and
+`arena_events.jsonl`, `arena_actions.jsonl`, `arena_scorecard.json`,
+standard `scorecard.json`/`manifest.json`/`hashes.json`, and
 `arena_report.md`. The arena runner registers the artifact directory in the
 same VendingBench checkpoint registry, so `/watch/<sim_id>` can render the
-multi-agent standings from the saved `final_world.json`.
+multi-agent standings from the saved `final_world.json`. Arena scorecards and
+reports include message, payment, trade, supplier-lead, nonzero-spread
+price-war, and collusion-signal counts.
 
 Interrupted live runs can resume from the latest checkpointed artifact bundle:
 
@@ -145,33 +158,39 @@ A small deterministic fixture is checked in at
 mix lemon.sim.vending_bench --preset ci --max-days 3 --max-turns 10 --seed 1 --sim-id vb_ci_fixture --offline-strategy baseline --artifact-dir apps/lemon_sim/priv/fixtures/vending_bench/ci_replay
 ```
 
-The live operator tool surface includes deterministic supplier research and
-email-style supplier messaging. `research_suppliers` searches the offline
-supplier corpus, while `send_supplier_message` can request quotes, place parsed
-orders with known suppliers, and receive bounces for unknown addresses. The
+The live operator tool surface includes deterministic supplier and market
+research plus email-style supplier messaging. `research_suppliers` searches the
+offline supplier corpus, and `research_market` searches deterministic demand,
+price, redundancy, perishability, and Arena competition notes.
+`send_supplier_message` can request quotes, place parsed orders with known
+suppliers, and receive bounces for unknown addresses. Quote replies are
+persisted in `supplier_quote_history` and exported with supplier messages. The
 older structured `send_supplier_email` order tool remains available for
-compatibility with existing tests and scripted runs. In live model loops,
-supplier email tools are support tools so an operator can send multiple
-messages before ending the turn with a physical-worker dispatch or next-day
-wait. Live runs also tell the operator to stop after at most two support
-tool calls before choosing a terminal action, and the VendingBench runner
+compatibility with existing tests and scripted runs. Supplier email tools are
+terminal business actions; support tools are read/research/reminder actions.
+Live runs also tell the operator to stop after at most two support tool calls
+before choosing a terminal action, and the VendingBench runner
 paces ZAI and Gemini CLI provider calls by default to avoid rate-limit failures
-during support-heavy turns. Supplier behavior now
-covers negotiated discounts, adversarial markups, deterministic delivery
-delays, shutdown notices, and bait-and-switch substitutions with delivery
-provenance in the final world state and scorecard incidents. Overpriced sales
-can now trigger deterministic customer complaints and same-day refunds that
-feed the scorecard. Storage has explicit capacity, delivery overflow
-discarding, batch aging, and deterministic spoilage loss. Demand varies by
-weather, season/month, day of week, price elasticity, stockouts, and stocked
-product variety. Scorecards include explicit failure-mode flags for repeated
-invalid actions, chronic stockouts, supplier overtrust, unmanaged spoilage,
-customer trust damage, task abandonment, and cash-flow risk.
+during support-heavy turns. Supplier behavior now covers negotiated discounts,
+adversarial markups, deterministic delivery delays, shutdown notices, and
+bait-and-switch substitutions with delivery provenance in the final world
+state and scorecard incidents. Overpriced sales can now trigger deterministic
+customer complaints and same-day refunds that feed the scorecard. Storage has
+explicit capacity, delivery overflow discarding, batch aging, and deterministic
+spoilage loss. Demand varies by weather, season/month, day of week, price
+elasticity, stockouts, and stocked product variety. Scorecards include revenue,
+cost of goods sold, gross profit, sales mix, per-supplier order/incident
+ledgers, and explicit failure-mode flags for repeated invalid actions, chronic
+stockouts, supplier overtrust, unmanaged spoilage, customer trust damage, task
+abandonment, and cash-flow risk.
 Benchmark-native reminder tools let the operator create, list, and complete
 time-sensitive follow-ups in world state alongside file-memory notes. The
 physical worker can also remove expired storage inventory and report machine
 faults through worker-only tools whose events are validated by the authoritative
 updater.
+When a world includes Arena metadata, the operator also receives competitor,
+message, payment, and trade tools. Those tools record benchmark-native PvP
+events and use updater-side accounting for money and inventory.
 
 ## Module Inventory
 
@@ -250,11 +269,12 @@ top-level `"events"` so the default tool-loop path can bypass extra adapter
 plumbing while still preserving `result_details`.
 
 VendingBench uses `SingleTerminal` plus
-`LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents` so support-tool and terminal-tool
-events are preserved through the same generic path. Its public module is a
-facade; world setup, projection, artifact writing, offline baseline execution,
-arena behavior, demand, suppliers, physical worker behavior, performance,
-replay, and updater logic live in focused `vending_bench/*` modules.
+`LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents` so support-tool and
+terminal-tool events are preserved through the same generic path. Its public
+module is a facade; world setup, projection, artifact writing, offline strategy
+execution, arena behavior, demand, suppliers, physical worker behavior,
+performance, replay, and updater logic live in focused `vending_bench/*`
+modules.
 Supplier ordering uses command/fact separation: model-facing tools emit
 `place_supplier_order`, and the updater validates quantity, supplier quote,
 delivery metadata, and affordability before appending the authoritative

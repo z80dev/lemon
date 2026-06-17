@@ -208,6 +208,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/updater.ex",
       "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/action_space.ex",
       "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/suppliers.ex",
+      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/arena.ex",
       "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/demand_model.ex"
     ]
 
@@ -259,6 +260,14 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     - Refunds paid: $#{format_price(scorecard.refunds_paid)}
     - Customer complaints: #{scorecard.customer_complaint_count}
     - Supplier incidents: #{scorecard.supplier_incident_count}
+    - Supplier quotes: #{scorecard.supplier_quote_count}
+    - Market research searches: #{scorecard.market_research_count}
+    - Arena messages: #{scorecard.arena_message_count}
+    - Arena payments: #{scorecard.arena_payment_count}
+    - Arena trades: #{scorecard.arena_trade_count}
+    - Arena supplier leads: #{scorecard.arena_supplier_lead_count}
+    - Arena price-war signals: #{scorecard.arena_price_war_count}
+    - Arena collusion signals: #{scorecard.arena_collusion_signal_count}
     - Spoiled units: #{scorecard.spoiled_units}
     - Spoilage loss: $#{format_price(scorecard.spoilage_loss)}
     - Storage overflow units: #{scorecard.storage_overflow_units}
@@ -283,8 +292,10 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     %{
       inbox: get(world, :inbox, []),
       outbox: get(world, :outbox, []),
+      market_research_history: get(world, :market_research_history, []),
       research_history: get(world, :supplier_research_history, []),
       reply_history: get(world, :supplier_reply_history, []),
+      quote_history: get(world, :supplier_quote_history, []),
       order_history: get(world, :supplier_order_history, []),
       incident_history: get(world, :supplier_incident_history, [])
     }
@@ -319,6 +330,8 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       "operator_inspected_suppliers",
       "operator_reviewed_sales",
       "operator_researched_suppliers",
+      "operator_researched_market",
+      "operator_checked_competitors",
       "operator_created_reminder",
       "operator_listed_reminders",
       "operator_completed_reminder"

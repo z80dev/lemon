@@ -135,6 +135,39 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
     }
   }
 
+  @market_research [
+    %{
+      title: "Campus vending sales pattern",
+      body:
+        "Weekend traffic lifts drinks and snack demand, while prepared food demand is strongest on weekdays around lunch.",
+      tags: ~w(demand weekend weekday lunch snacks drinks prepared food sales)
+    },
+    %{
+      title: "Bulk beverage wholesale benchmark",
+      body:
+        "Reasonable soda and water wholesale prices are usually far below retail. Push back on quotes near street price.",
+      tags: ~w(wholesale beverage soda water negotiation price quote margin)
+    },
+    %{
+      title: "Perishable inventory warning",
+      body:
+        "Sandwiches and protein boxes can sell well, but stale storage ties up cash and can spoil before it reaches the machine.",
+      tags: ~w(perishable sandwich protein spoilage storage inventory)
+    },
+    %{
+      title: "Supplier redundancy note",
+      body:
+        "Operators should keep at least one backup supplier per category because delays and shutdowns can stop sales.",
+      tags: ~w(supplier backup delay shutdown redundancy plan b)
+    },
+    %{
+      title: "Arena location competitive pricing",
+      body:
+        "When several machines sell the same item at one location, the cheapest machine captures more demand and can trigger price wars.",
+      tags: ~w(arena competition price war pricing demand location)
+    }
+  ]
+
   @spec directory() :: map()
   def directory, do: @suppliers
 
@@ -173,6 +206,36 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
           "#{supplier.description} Supplier id #{id}. Delivery #{supplier.delivery_days} day(s). Carries #{supplier.items |> Map.keys() |> Enum.sort() |> Enum.join(", ")}."
       }
     end)
+  end
+
+  @spec market_research(String.t()) :: [%{title: String.t(), body: String.t()}]
+  def market_research(query) when is_binary(query) do
+    terms = query_terms(query)
+
+    market_results =
+      @market_research
+      |> Enum.filter(fn entry ->
+        searchable =
+          [entry.title, entry.body, Enum.join(entry.tags, " ")]
+          |> Enum.join(" ")
+          |> String.downcase()
+
+        terms == [] or Enum.any?(terms, &String.contains?(searchable, &1))
+      end)
+      |> Enum.map(&Map.take(&1, [:title, :body]))
+
+    supplier_results =
+      query
+      |> research()
+      |> Enum.map(fn result ->
+        %{
+          title: "Supplier lead: #{result.title}",
+          body: result.body
+        }
+      end)
+
+    (market_results ++ supplier_results)
+    |> Enum.take(8)
   end
 
   @spec process_message(String.t(), String.t(), String.t(), pos_integer()) ::
@@ -237,11 +300,21 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
               end
 
             :no_order ->
+              negotiated? = negotiated?(subject <> "\n" <> body)
+              quote = quote_details(supplier_id, negotiated?)
+
               {:ok,
                %{
                  supplier_id: supplier_id,
-                 message: quote_text(supplier_id),
-                 metadata: %{kind: "quote", to: supplier.email, subject: subject}
+                 message: quote_text(supplier_id, negotiated?),
+                 metadata:
+                   %{
+                     kind: "quote",
+                     to: supplier.email,
+                     subject: subject,
+                     negotiated: negotiated?
+                   }
+                   |> Map.merge(quote)
                }}
 
             {:ambiguous_order, matches} ->
@@ -414,22 +487,58 @@ defmodule LemonSim.Examples.VendingBench.Suppliers do
     end)
   end
 
-  defp quote_text(supplier_id) do
+  defp quote_text(supplier_id, negotiated?) do
     case Map.fetch(@suppliers, supplier_id) do
       {:ok, supplier} ->
         items =
-          supplier.items
-          |> Enum.sort_by(fn {item_id, _info} -> item_id end)
-          |> Enum.map(fn {item_id, info} ->
-            "#{item_id}: $#{format_price(info.cost)}/unit, min #{info.min_order}"
+          supplier
+          |> quote_items(negotiated?)
+          |> Enum.map(fn item ->
+            "#{item.item_id}: $#{format_price(item.unit_cost)}/unit, min #{item.min_order}"
           end)
           |> Enum.join("; ")
 
-        "#{supplier.name} quote: #{items}. Delivery #{supplier.delivery_days} day(s). Behavior: #{supplier.behavior}."
+        negotiation =
+          if negotiated? and negotiated_discount(supplier, true) > 0.0 do
+            " Negotiated discount included."
+          else
+            ""
+          end
+
+        "#{supplier.name} quote: #{items}. Delivery #{supplier.delivery_days} day(s). Behavior: #{supplier.behavior}.#{negotiation}"
 
       :error ->
         "Supplier unavailable."
     end
+  end
+
+  defp quote_details(supplier_id, negotiated?) do
+    case Map.fetch(@suppliers, supplier_id) do
+      {:ok, supplier} ->
+        %{
+          supplier_behavior: supplier.behavior,
+          delivery_days: supplier.delivery_days,
+          items: quote_items(supplier, negotiated?),
+          discount_rate: negotiated_discount(supplier, negotiated?)
+        }
+
+      :error ->
+        %{}
+    end
+  end
+
+  defp quote_items(supplier, negotiated?) do
+    discount = negotiated_discount(supplier, negotiated?)
+
+    supplier.items
+    |> Enum.sort_by(fn {item_id, _info} -> item_id end)
+    |> Enum.map(fn {item_id, info} ->
+      %{
+        item_id: item_id,
+        unit_cost: Float.round(info.cost * (1.0 + supplier.markup) * (1.0 - discount), 2),
+        min_order: info.min_order
+      }
+    end)
   end
 
   defp format_price(price) when is_float(price), do: :erlang.float_to_binary(price, decimals: 2)
