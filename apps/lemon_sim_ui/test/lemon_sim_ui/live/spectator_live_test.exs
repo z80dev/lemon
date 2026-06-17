@@ -105,6 +105,48 @@ defmodule LemonSimUi.SpectatorLiveTest do
     File.rm_rf!(artifact_dir)
   end
 
+  test "uses arena leader world for vending bench spectator header", %{conn: conn} do
+    sim_id = "test_spectator_vb_arena_header"
+
+    leader_world =
+      LemonSim.Examples.VendingBench.initial_state(sim_id: "#{sim_id}_leader", max_days: 365).world
+      |> Map.merge(%{
+        day_number: 365,
+        max_days: 365,
+        phase: "operator_turn",
+        status: "complete"
+      })
+
+    state =
+      State.new(
+        sim_id: sim_id,
+        world: %{
+          "mode" => "vending_bench_arena",
+          "day_number" => 365,
+          "max_days" => 365,
+          "status" => "complete",
+          "arena_agents" => [
+            %{
+              "agent_id" => "alex",
+              "agent_name" => "Alex Market",
+              "world" => leader_world
+            }
+          ]
+        }
+      )
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    on_exit(fn ->
+      LemonSim.Kernel.Store.delete_state(sim_id)
+    end)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ "Day 365/365"
+    assert html =~ "Operator Turn"
+    refute html =~ "Operating"
+  end
+
   test "renders character profiles in bio strip when present", %{conn: conn} do
     world = LemonSim.Examples.Werewolf.initial_world(player_count: 5)
 

@@ -7,8 +7,14 @@ defmodule LemonSimUi.Live.Components.RunLog do
   attr(:running, :boolean, default: nil)
 
   def render(assigns) do
-    world = assigns.state.world
-    events = assigns.state.recent_events |> List.wrap() |> Enum.take(-14) |> Enum.reverse()
+    world = display_world(assigns.state.world)
+
+    events =
+      assigns.state
+      |> display_events()
+      |> Enum.take(-14)
+      |> Enum.reverse()
+
     plan_history = assigns.state.plan_history |> List.wrap() |> Enum.take(-10) |> Enum.reverse()
     runner_errors = MapHelpers.get_key(world, :runner_errors) || []
     decision_insights = decision_insights(world, events, runner_errors)
@@ -161,6 +167,29 @@ defmodule LemonSimUi.Live.Components.RunLog do
     """
   end
 
+  defp display_world(world) do
+    case {MapHelpers.get_key(world, :mode), MapHelpers.get_key(world, :arena_agents)} do
+      {"vending_bench_arena", [leader | _]} ->
+        case get(leader, :world, nil) do
+          leader_world when is_map(leader_world) -> leader_world
+          _ -> world
+        end
+
+      _ ->
+        world
+    end
+  end
+
+  defp display_events(state) do
+    recent_events = state.recent_events |> List.wrap()
+
+    if recent_events == [] and MapHelpers.get_key(state.world, :mode) == "vending_bench_arena" do
+      state.world |> MapHelpers.get_key(:arena_events) |> List.wrap()
+    else
+      recent_events
+    end
+  end
+
   defp step_summary(step), do: get(step, :summary, "Step")
   defp step_rationale(step), do: step |> get(:rationale, nil) |> present_string()
 
@@ -183,7 +212,13 @@ defmodule LemonSimUi.Live.Components.RunLog do
   end
 
   defp event_kind(event), do: get(event, :kind, "event")
-  defp event_payload(event), do: get(event, :payload, %{})
+
+  defp event_payload(event) do
+    case get(event, :payload, nil) do
+      nil when is_map(event) -> Map.drop(event, [:kind, "kind"])
+      payload -> payload
+    end
+  end
 
   defp event_summary(event) do
     payload = event_payload(event)

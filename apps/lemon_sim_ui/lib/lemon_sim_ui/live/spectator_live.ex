@@ -262,7 +262,7 @@ defmodule LemonSimUi.SpectatorLive do
   attr(:running, :boolean, required: true)
 
   defp vending_spectator_view(assigns) do
-    world = assigns.state.world
+    world = vending_display_world(assigns.state.world)
     day_number = LemonCore.MapHelpers.get_key(world, :day_number) || 1
     max_days = LemonCore.MapHelpers.get_key(world, :max_days) || 30
     phase = LemonCore.MapHelpers.get_key(world, :phase) || "operating"
@@ -462,6 +462,27 @@ defmodule LemonSimUi.SpectatorLive do
 
   defp status_badge("dead", _role), do: "bg-red-900/40 text-red-400 border-red-500/30"
   defp status_badge(_, _), do: "bg-emerald-900/40 text-emerald-400 border-emerald-500/30"
+
+  defp vending_display_world(world) do
+    case {LemonCore.MapHelpers.get_key(world, :mode),
+          LemonCore.MapHelpers.get_key(world, :arena_agents)} do
+      {"vending_bench_arena", [leader | _]} ->
+        case {LemonCore.MapHelpers.get_key(world, :machine),
+              LemonCore.MapHelpers.get_key(leader, :world)} do
+          {nil, leader_world} when is_map(leader_world) ->
+            leader_world
+
+          {%{} = machine, leader_world} when map_size(machine) == 0 and is_map(leader_world) ->
+            leader_world
+
+          _ ->
+            world
+        end
+
+      _ ->
+        world
+    end
+  end
 
   defp queue_werewolf_state(socket, updated_state) do
     if socket.assigns.domain_type == :werewolf do

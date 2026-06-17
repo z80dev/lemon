@@ -909,7 +909,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
   # -- Helpers --
 
   defp get_slot(slots, key) when is_map(slots) do
-    Map.get(slots, key, Map.get(slots, String.to_atom(key), %{}))
+    MapHelpers.get_key(slots, key) || %{}
   end
 
   defp get_slot(_slots, _key), do: %{}
@@ -918,14 +918,8 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
 
   defp get_item_name(catalog, item_id) when is_map(catalog) do
     item_id_str = to_string(item_id)
-    item_id_atom = if is_atom(item_id), do: item_id, else: String.to_atom(item_id_str)
 
-    info =
-      Map.get(
-        catalog,
-        item_id_str,
-        Map.get(catalog, item_id_atom, Map.get(catalog, item_id, nil))
-      )
+    info = MapHelpers.get_key(catalog, item_id_str) || Map.get(catalog, item_id)
 
     case info do
       nil ->
