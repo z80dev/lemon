@@ -12,9 +12,10 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     * `--max-turns` - Maximum decision turns (default: 180)
     * `--seed` - Random seed for deterministic runs
     * `--sim-id` - Explicit simulation id for deterministic artifact names/content
-    * `--preset` - Run preset: ci, paper
-    * `--offline-strategy` - Deterministic strategy to run without model credentials (`baseline` or `pressure`)
+    * `--preset` - Run preset: ci, stress, paper
+    * `--offline-strategy` - Deterministic strategy to run without model credentials (`baseline`, `pressure`, or `overextended`)
     * `--artifact-dir` - Directory for offline run artifacts
+    * `--deterministic-artifacts` - Pin artifact timestamps and path labels for byte-reproducible bundles
     * `--persist` - Persist final state (default: true)
     * `--help` - Show this help
   """
@@ -30,6 +31,7 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     preset: :string,
     offline_strategy: :string,
     artifact_dir: :string,
+    deterministic_artifacts: :boolean,
     help: :boolean
   ]
 
@@ -55,6 +57,7 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
       |> maybe_put(:persist?, opts[:persist])
       |> maybe_put(:driver_max_turns, opts[:max_turns])
       |> maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
 
     strategy = opts[:offline_strategy] || "baseline"
 
@@ -84,8 +87,15 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     |> Keyword.put(:driver_max_turns, 200)
   end
 
+  defp apply_preset(opts, "stress") do
+    opts
+    |> Keyword.put(:max_days, 14)
+    |> Keyword.put(:driver_max_turns, 80)
+    |> Keyword.put(:persist?, false)
+  end
+
   defp apply_preset(_opts, preset) do
-    Mix.shell().error("Unknown preset #{preset}. Expected one of: ci, paper")
+    Mix.shell().error("Unknown preset #{preset}. Expected one of: ci, stress, paper")
     exit({:shutdown, 1})
   end
 

@@ -56,7 +56,7 @@ lib/
         diplomacy_board.ex                 Territory/faction display for :diplomacy
         dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
         vending_bench_board.ex             Retro VendingBench machine view, generated product sprites, Arena standings, operations, supplier/fault signals, and scorecard display
-        tcg_shop_board.ex                  Local game store view for TCG Shop finances, sealed inventory, singles, market pulse, customers, and scorecard
+        tcg_shop_board.ex                  Local game store view for TCG Shop finances, sealed inventory, sealed openings, loose-pack inventory/sales, special-order deposits/fulfillment, supplier credit, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, market pulse, online marketplace channels, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, shrinkage, customers, and scorecard
 test/
   lemon_sim_ui/
     live/
@@ -75,7 +75,7 @@ test/
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose the fixed VendingBench launcher |
 | `lib/lemon_sim_ui/controllers/vending_bench_launch_controller.ex` | `LemonSimUi.VendingBenchLaunchController` | Public non-JS route for the fixed VendingBench launcher |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/admin` and `/admin/sims/:sim_id`; handles sim launch and admin/detail flows |
-| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf and VendingBench, subscribes to sim/lobby updates, and refreshes CLI VendingBench runs from checkpoint artifacts |
+| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf, VendingBench, and TCG Shop, subscribes to sim/lobby updates, and refreshes CLI VendingBench runs from checkpoint artifacts |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
 | `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public load-balancer/smoke-test health check |
@@ -87,7 +87,7 @@ test/
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
 | `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
 | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier, refund, fault, trade, and scorecard display |
-| `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | `LemonSimUi.Live.Components.TcgShopBoard` | TCG Shop dashboard for sealed lines, singles, market pulse, customers, and scorecard metrics |
+| `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | `LemonSimUi.Live.Components.TcgShopBoard` | TCG Shop dashboard for sealed lines, sealed openings, loose-pack inventory/sales, special-order deposits/fulfillment, supplier credit, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, market pulse, online marketplace channels, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, shrinkage, customers, and scorecard metrics |
 
 ## Common Modification Patterns
 

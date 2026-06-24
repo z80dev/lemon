@@ -8,7 +8,7 @@ defmodule LemonSim.Examples.VendingBench.Replay do
   @required_files ~w(final_world.json events.jsonl actions.jsonl scorecard.json)
 
   @spec build(String.t()) :: {:ok, map()} | {:error, term()}
-  def build(artifact_dir) when is_binary(artifact_dir) do
+  def build(artifact_dir, opts \\ []) when is_binary(artifact_dir) do
     with :ok <- validate_artifact_dir(artifact_dir),
          {:ok, final_world} <- read_json(Path.join(artifact_dir, "final_world.json")),
          {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
@@ -22,7 +22,7 @@ defmodule LemonSim.Examples.VendingBench.Replay do
            read_optional_json(Path.join(artifact_dir, "operator_transcript.json"), %{}),
          {:ok, reminders} <- read_optional_json(Path.join(artifact_dir, "reminders.json"), []) do
       replay = %{
-        artifact_dir: artifact_dir,
+        artifact_dir: artifact_dir_value(artifact_dir, opts),
         sim_id: Map.get(scorecard, "sim_id", "unknown"),
         status: Map.get(scorecard, "status", Map.get(final_world, "status", "unknown")),
         day_number: Map.get(scorecard, "day_number", Map.get(final_world, "day_number")),
@@ -45,7 +45,7 @@ defmodule LemonSim.Examples.VendingBench.Replay do
 
   @spec write_browser(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def write_browser(artifact_dir, opts \\ []) do
-    with {:ok, replay} <- build(artifact_dir) do
+    with {:ok, replay} <- build(artifact_dir, opts) do
       output_dir = Keyword.get(opts, :output_dir, artifact_dir)
       File.mkdir_p!(output_dir)
 
@@ -123,6 +123,10 @@ defmodule LemonSim.Examples.VendingBench.Replay do
     </body>
     </html>
     """
+  end
+
+  defp artifact_dir_value(artifact_dir, opts) do
+    if Keyword.get(opts, :deterministic?, false), do: ".", else: artifact_dir
   end
 
   defp validate_artifact_dir(artifact_dir) do

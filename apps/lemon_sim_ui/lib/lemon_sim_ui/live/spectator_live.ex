@@ -15,6 +15,7 @@ defmodule LemonSimUi.SpectatorLive do
   alias LemonSimUi.Live.Components.{
     WerewolfBoard,
     VendingBenchBoard,
+    TcgShopBoard,
     RunLog,
     EventLog
   }
@@ -49,7 +50,7 @@ defmodule LemonSimUi.SpectatorLive do
 
       state ->
         domain_type = SimHelpers.infer_domain_type(state)
-        supported = domain_type in [:werewolf, :vending_bench]
+        supported = domain_type in [:werewolf, :vending_bench, :tcg_shop]
 
         if connected?(socket) && supported do
           LemonCore.Bus.subscribe(LemonSimUi.SimManager.lobby_topic())
@@ -67,7 +68,7 @@ defmodule LemonSimUi.SpectatorLive do
             state: state,
             domain_type: domain_type,
             supported: supported,
-            playback: if(supported, do: WerewolfPlayback.new(state), else: nil),
+            playback: if(domain_type == :werewolf, do: WerewolfPlayback.new(state), else: nil),
             playback_timer_ref: nil,
             artifact_dir: artifact_dir,
             artifact_timer_ref: nil,
@@ -183,18 +184,25 @@ defmodule LemonSimUi.SpectatorLive do
         <% !@supported -> %>
           <.not_supported sim_id={@sim_id} domain_type={@domain_type} />
         <% true -> %>
-          <%= if @domain_type == :vending_bench do %>
-            <.vending_spectator_view
-              state={@state}
-              sim_id={@sim_id}
-              running={@running}
-            />
-          <% else %>
-            <.spectator_view
-              state={@state}
-              sim_id={@sim_id}
-              running={@running}
-            />
+          <%= case @domain_type do %>
+            <% :vending_bench -> %>
+              <.vending_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+              />
+            <% :tcg_shop -> %>
+              <.tcg_shop_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+              />
+            <% _ -> %>
+              <.spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+              />
           <% end %>
           <div :if={@game_over_redirect} class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center">
             <div class="text-center glass-panel p-10 rounded-2xl max-w-md">
@@ -247,7 +255,7 @@ defmodule LemonSimUi.SpectatorLive do
           <span class="text-fuchsia-400">{SimHelpers.domain_label(@domain_type)}</span> simulation.
         </p>
         <p class="text-slate-500 text-sm">
-          Spectator mode is currently available for Werewolf and VendingBench games.
+          Spectator mode is currently available for Werewolf, VendingBench, and TCG Shop games.
         </p>
         <a href="/" class="inline-block mt-6 glass-button px-6 py-2 rounded-lg text-sm">
           Back to Dashboard
@@ -307,6 +315,61 @@ defmodule LemonSimUi.SpectatorLive do
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
         <VendingBenchBoard.render world={@state.world} interactive={false} />
+        <RunLog.render state={@state} running={@running} />
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+
+  defp tcg_shop_spectator_view(assigns) do
+    day_number = LemonCore.MapHelpers.get_key(assigns.state.world, :day_number) || 1
+    max_days = LemonCore.MapHelpers.get_key(assigns.state.world, :max_days) || 14
+    phase = LemonCore.MapHelpers.get_key(assigns.state.world, :phase) || "operator_turn"
+
+    assigns =
+      assigns
+      |> assign(:day_number, day_number)
+      |> assign(:max_days, max_days)
+      |> assign(:phase, phase)
+
+    ~H"""
+    <div class="flex flex-col min-h-screen bg-[#100d08] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-amber-900/60 bg-slate-950/75 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-amber-300 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-amber-300">TCG Shop</span>
+              <span class="text-slate-600">|</span>
+              <span>Day {@day_number}/{@max_days}</span>
+              <span class="text-slate-600">|</span>
+              <span class="capitalize">{format_phase(@phase)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 overflow-y-auto overflow-x-hidden p-4" style="scrollbar-gutter: stable;">
+        <TcgShopBoard.render world={@state.world} interactive={false} />
         <RunLog.render state={@state} running={@running} />
       </div>
     </div>

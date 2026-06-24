@@ -6,19 +6,22 @@ defmodule Mix.Tasks.Lemon.Sim.Score do
   """
 
   use Mix.Task
+  alias LemonSim.Bench.Artifacts.Verifier
 
   @impl true
   def run(args) do
     case args do
       [artifact_dir] ->
-        path = Path.join(artifact_dir, "scorecard.json")
-
-        with {:ok, body} <- File.read(path),
-             {:ok, scorecard} <- Jason.decode(body) do
+        with {:ok, verified} <- Verifier.verify_run(artifact_dir),
+             scorecard when is_map(scorecard) <- verified.scorecard do
           Mix.shell().info(Jason.encode!(scorecard, pretty: true))
         else
+          nil ->
+            Mix.shell().error("Could not read verified scorecard: missing scorecard")
+            exit({:shutdown, 1})
+
           {:error, reason} ->
-            Mix.shell().error("Could not read scorecard: #{inspect(reason)}")
+            Mix.shell().error("Could not read verified scorecard: #{inspect(reason)}")
             exit({:shutdown, 1})
         end
 

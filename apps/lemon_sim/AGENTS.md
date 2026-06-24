@@ -38,6 +38,8 @@ mission targets change.
   Offline runs write replay files plus supplier message, worker history,
   reminder, and operator transcript JSON artifacts; existing artifact
   directories can be rebuilt with `mix lemon.sim.vending_bench_replay DIR`.
+  Use `--deterministic-artifacts` with fixed `--seed`, `--sim-id`, and
+  `--artifact-dir` when artifact bytes must reproduce across directories.
   Live runs with `artifact_dir` checkpoint the artifact bundle after each
   operator turn so long runs leave partial worlds, events, scorecards,
   and replay browsers before terminal completion. Live checkpoints also persist
@@ -85,13 +87,44 @@ mission targets change.
 - `LemonSim.Examples.TcgShop` is the TCG-shop business benchmark: a
   single-operator local game store with Pokemon, Yu-Gi-Oh!, One Piece, Dragon
   Ball Super, and accessory lines. It models sealed allocations, local
-  collection buys, singles inventory, grading submissions, store events,
-  online-order fulfillment, release-calendar demand spikes, reputation, and
-  net-worth scoring. It supports deterministic `baseline` and `pressure`
-  artifact runs through `mix lemon.sim.tcg_shop --preset ci --offline-strategy
-  baseline` and `mix lemon.sim.tcg_shop --preset ci --offline-strategy
-  pressure`; bundles are compatible with `mix lemon.sim.verify` and
-  `mix lemon.sim.score`.
+  collection buys, singles inventory, grading submissions, preorder deposits
+  and release-day fulfillment, short-run promotion campaigns, store events
+  with inventory-backed prize support and store-credit prize fallback,
+  customer special orders/holds with deposit liability and stock reservation,
+  consignment singles with consignor payables, paid league memberships with
+  deferred service liability/revenue recognition, supplier-account standing
+  that links invoice payment behavior to credit/allocation outcomes,
+  working-capital credit-line debt with interest, partial distributor allocations and fill rates, inventory-constrained
+  online-order fulfillment, backorders, stockout/service trust damage,
+  persistent customer personas with loyalty/satisfaction, operator staff-hour
+  limits, scheduled part-time staffing coverage, regular payroll,
+  overtime/backlog pressure, fatigue-driven shrinkage,
+  loss-prevention controls that reduce shrinkage risk,
+  inventory aging and stale-stock markdowns, COGS/gross-margin accounting,
+  sealed-product opening into singles inventory with EV/chase-hit tracking,
+  loose-pack preparation from sealed boxes with counter/event pack sell-through,
+  online marketplace channel/listing management with marketplace fees,
+  register cash/card tender splitting, bank deposits, and drawer reconciliation,
+  local customer returns/store-credit refunds,
+  buylist store-credit liability/redemption,
+  merchant/payment fees, shipping labels, refunds/chargebacks, distributor
+  credit terms, damaged-delivery receiving and supplier claims, accounts payable, fixed rent/utilities/insurance overhead,
+  operating-profit accounting, sanctioned organized-play capacity/no-show/turn-away economics,
+  sales-tax liability/remittance,
+  release-calendar demand spikes, deterministic market repricing, collection
+  condition/authentication risk, grade-result variance, raw/graded singles
+  liquidity, local market share, competitor reactions to stockouts and pricing,
+  realistic query-sensitive market research notes, counterparty transcript
+  artifacts for supplier/customer/staff/grading/consignment flows, explicit
+  failure-mode scorecard flags, reputation, and net-worth scoring. It supports
+  deterministic `baseline`, `pressure`, and deliberately overextended artifact runs through
+  `mix lemon.sim.tcg_shop --preset ci --offline-strategy baseline` and
+  `mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure`; use
+  `mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended` for
+  a realistic bad-operator trace. Bundles are compatible with
+  `mix lemon.sim.verify` and `mix lemon.sim.score`. Use
+  `--deterministic-artifacts` with fixed `--seed`, `--sim-id`, and
+  `--artifact-dir` for byte-reproducible offline bundles.
 
 ## Key Files
 

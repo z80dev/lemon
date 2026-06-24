@@ -70,8 +70,31 @@ Phase 1 adds:
 - `LemonSim.Examples.TcgShop` is a single-operator local game store benchmark
   with Pokemon, Yu-Gi-Oh!, One Piece, Dragon Ball Super, and accessory product
   lines. It models sealed allocation, collection buying, singles liquidity,
-  grading submissions, weekly events, online-order fulfillment, release demand
-  spikes, reputation, and net-worth scoring.
+  grading submissions, sealed-product opening into singles inventory,
+  loose-pack preparation from sealed boxes with counter/event pack sales,
+  buylist store credit, preorder deposits and release-day
+  fulfillment, customer special orders/holds with deposit liability and stock
+  reservation, weekly events with inventory-backed prize support and store-credit
+  prize fallback, consignment singles with consignor payables, paid league
+  memberships with deferred service liability/revenue recognition,
+  short-run promotion campaigns, supplier-account standing tied to invoice
+  payment behavior, working-capital credit-line debt with interest, partial
+  distributor fills, distributor credit terms, damaged-delivery supplier claims, and accounts payable,
+  inventory-constrained online-order fulfillment, backorders, stockout/service
+  trust damage, persistent customer personas with loyalty/satisfaction,
+  operator staff-hour limits, scheduled part-time staffing coverage,
+  regular payroll, overtime/backlog pressure,
+  loss-prevention controls that reduce shrinkage risk,
+  COGS, gross-margin, fixed-overhead, and operating-profit accounting,
+  sanctioned organized-play capacity/no-show/turn-away economics,
+  inventory aging and stale-stock markdowns,
+  release demand spikes, fatigue-driven shrinkage, loss-prevention controls, merchant/payment fees,
+  shipping labels, online marketplace/listing fees, cash/card tender splits, register deposits, drawer reconciliation over/short, local returns/store-credit refunds, refunds/chargebacks, sales-tax
+  liability/remittance, deterministic market repricing, collection
+  condition/authentication risk, grade-result variance, local market share,
+  competitor reactions to stockouts and shelf pricing, query-sensitive market
+  research notes, counterparty transcript artifacts, explicit failure-mode
+  scorecard flags, reputation, and net-worth scoring.
 
 Run them with:
 
@@ -93,18 +116,43 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 mix lemon.sim.vending_bench --preset ci --offline-strategy pressure --sim-id vb_pressure_fixture
 ```
 
+For byte-reproducible offline artifact bundles, pass an explicit `--seed`,
+`--sim-id`, `--artifact-dir`, and `--deterministic-artifacts`. This pins manifest
+timestamps and uses artifact-root-relative path labels inside generated reports
+and replay metadata.
+
 TCG Shop also has deterministic no-LLM modes. `baseline` keeps a conservative
 cash-balanced local game store stocked across Pokemon, Yu-Gi-Oh!, One Piece,
 Dragon Ball Super, and accessories. `pressure` deliberately exercises market
 research, One Piece/Pokemon allocation pressure, local collection buys, grading
-submissions, weekly events, online-order packing, and scorecard evidence:
+submissions, weekly events, online-order packing/backorders, singles and graded
+card sell-through, supplier fill-rate shortfalls, customer loyalty/satisfaction,
+preorder reservations and release shortfalls, local competitor pressure, market-share drift,
+marketing spend and promoted sales, sales-tax remittance, merchant/payment
+  fees, shipping labels, supplier invoice payment, supplier account standing,
+  effective supplier credit limits, working-capital debt/interest, register cash deposits/reconciliation, buylist store-credit
+  liability/redemption, customer special-order deposits/fulfillment,
+  consignment commission and payout liabilities,
+  paid membership sales with deferred revenue recognition,
+  organized-play prize fulfillment, event capacity/no-shows/turn-aways, sealed-product opening EV, loose-pack prep/sell-through, local return policy/writeoffs, scheduled part-time staffing, stale accessory markdowns, COGS/gross margin, fixed overhead, operating profit, refunds/chargebacks, regular payroll,
+overtime pressure, inventory shrinkage, stale-stock markdown pressure, condition markdowns, authentication
+failures, stockout signals, and scorecard evidence:
 
 ```bash
 mix lemon.sim.tcg_shop --preset ci --offline-strategy baseline --sim-id tcg_ci_baseline
 mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure --sim-id tcg_ci_pressure
+mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended --sim-id tcg_stress_bad_operator
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/tcg_shop/tcg_ci_baseline
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/tcg_shop/tcg_ci_baseline
 ```
+
+TCG Shop supports the same `--deterministic-artifacts` mode for repeatable
+offline bundles when `--seed`, `--sim-id`, and `--artifact-dir` are fixed.
+
+`overextended` is intentionally realistic but poor operating behavior: it
+overcommits preorders and special orders, draws the credit line, overspends on
+marketing/events/channel setup, runs high shelf markups, and exposes the
+resulting failure modes in the scorecard and `counterparty_transcript.json`.
 
 Vending-Bench 1.0 benchmark runs use `--preset paper`, which sets the horizon
 to 365 simulated days, uses a 2,000-turn driver budget, preserves the original
@@ -150,6 +198,11 @@ mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 mix lemon.sim.vending_bench_replay apps/lemon_sim/priv/game_logs/vending_bench/<sim_id>
 ```
+
+`verify` checks `manifest.json`, the `hashes.json` schema, required benchmark
+files, manifest integrity hashes, and hashed file contents. `score` uses the
+same verifier before printing `scorecard.json`, so tampered scorecards or
+reports are rejected instead of displayed.
 
 Arena artifact directories write `final_world.json`, `arena_world.json`,
 `arena_events.jsonl`, `arena_actions.jsonl`, `arena_scorecard.json`,

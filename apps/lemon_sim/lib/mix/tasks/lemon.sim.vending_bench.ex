@@ -19,6 +19,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     * `--arena-agents` - Number of arena agents, up to 5 for the baseline
     * `--offline-strategy` - Deterministic strategy to run without model credentials (`baseline` or `pressure`)
     * `--artifact-dir` - Directory for offline run artifacts
+    * `--deterministic-artifacts` - Pin artifact timestamps and path labels for byte-reproducible bundles
     * `--resume-artifact-dir` - Resume a live run from a checkpoint artifact directory
     * `--live-step-timeout-ms` - Outer timeout for one live operator step
     * `--persist` - Persist final state (default: true)
@@ -40,6 +41,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     arena_agents: :integer,
     offline_strategy: :string,
     artifact_dir: :string,
+    deterministic_artifacts: :boolean,
     resume_artifact_dir: :string,
     live_step_timeout_ms: :integer,
     help: :boolean
@@ -67,6 +69,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       |> maybe_put(:persist?, opts[:persist])
       |> maybe_put(:driver_max_turns, opts[:max_turns])
       |> maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
       |> maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
 
     result = run_mode(opts, run_opts)

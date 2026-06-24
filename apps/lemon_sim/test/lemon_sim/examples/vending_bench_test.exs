@@ -1215,6 +1215,8 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert manifest["schema_version"] == "lemon_sim.run.v1"
     assert manifest["sim"]["id"] == "vending_bench"
     assert manifest["integrity"]["events_sha256"] == hashes["files"]["events.jsonl"]
+    assert hashes["schema_version"] == "lemon_sim.hashes.v1"
+    assert is_binary(hashes["files"]["report.md"])
     assert is_binary(hashes["prompt_sha256"])
     assert is_binary(hashes["tool_schema_sha256"])
 
@@ -1242,6 +1244,61 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert replay.reminders == reminders
     assert is_list(replay.machine_fault_reports)
     assert Enum.any?(replay.timeline, &(&1.kind == "game_over"))
+
+    File.write!(artifacts.report, File.read!(artifacts.report) <> "\ntampered\n")
+
+    assert {:error, {:hash_mismatch, "report.md"}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
+  end
+
+  test "offline deterministic artifact mode is byte-reproducible across output directories" do
+    artifact_dir_a =
+      Path.join(System.tmp_dir!(), "vb_repro_a_#{System.unique_integer([:positive])}")
+
+    artifact_dir_b =
+      Path.join(System.tmp_dir!(), "vb_repro_b_#{System.unique_integer([:positive])}")
+
+    on_exit(fn ->
+      File.rm_rf!(artifact_dir_a)
+      File.rm_rf!(artifact_dir_b)
+    end)
+
+    run_opts = [
+      sim_id: "vb_repro_test",
+      max_days: 3,
+      seed: 17,
+      driver_max_turns: 6,
+      deterministic_artifacts?: true
+    ]
+
+    assert {:ok, _} =
+             VendingBench.run_offline_strategy(
+               "baseline",
+               Keyword.put(run_opts, :artifact_dir, artifact_dir_a)
+             )
+
+    assert {:ok, _} =
+             VendingBench.run_offline_strategy(
+               "baseline",
+               Keyword.put(run_opts, :artifact_dir, artifact_dir_b)
+             )
+
+    bundle_a = deterministic_bundle(artifact_dir_a)
+    bundle_b = deterministic_bundle(artifact_dir_b)
+
+    assert bundle_a.hashes == bundle_b.hashes
+    assert bundle_a.manifest == bundle_b.manifest
+    assert bundle_a.report == bundle_b.report
+    assert bundle_a.replay == bundle_b.replay
+
+    assert get_in(bundle_a.manifest, ["runtime", "started_at"]) == "1970-01-01T00:00:00Z"
+    assert get_in(bundle_a.manifest, ["runtime", "finished_at"]) == "1970-01-01T00:00:00Z"
+    assert bundle_a.replay["artifact_dir"] == "."
+    refute bundle_a.report =~ artifact_dir_a
+    refute bundle_b.report =~ artifact_dir_b
+
+    assert {:ok, _} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_a)
+    assert {:ok, _} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_b)
   end
 
   test "offline pressure strategy exercises adversarial suppliers and customer refunds" do
@@ -1906,6 +1963,27 @@ defmodule LemonSim.Examples.VendingBenchTest do
       headers: %{},
       compat: nil
     }
+  end
+
+  defp deterministic_bundle(artifact_dir) do
+    %{
+      hashes: artifact_json(artifact_dir, "hashes.json"),
+      manifest: artifact_json(artifact_dir, "manifest.json"),
+      replay: artifact_json(artifact_dir, "replay.json"),
+      report: artifact_text(artifact_dir, "report.md")
+    }
+  end
+
+  defp artifact_json(artifact_dir, file) do
+    artifact_dir
+    |> artifact_text(file)
+    |> Jason.decode!()
+  end
+
+  defp artifact_text(artifact_dir, file) do
+    artifact_dir
+    |> Path.join(file)
+    |> File.read!()
   end
 
   defp support_tool?(tool) do

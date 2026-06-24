@@ -3,8 +3,9 @@ defmodule LemonSimUi.AdminSimController do
 
   alias LemonSimUi.SimManager
 
-  @player_count_domains ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain vending_bench)a
+  @player_count_domains ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain)a
   @multi_model_domains ~w(werewolf stock_market survivor space_station)a
+  @watchable_domains ~w(werewolf vending_bench tcg_shop)a
 
   def create(conn, params) do
     with {:ok, domain} <- parse_domain(params["domain"]),
@@ -88,7 +89,8 @@ defmodule LemonSimUi.AdminSimController do
       :pandemic,
       :murder_mystery,
       :supply_chain,
-      :vending_bench
+      :vending_bench,
+      :tcg_shop
     ]
   end
 
@@ -115,6 +117,30 @@ defmodule LemonSimUi.AdminSimController do
      []
      |> maybe_put_string(:sim_id, params["sim_id"])
      |> maybe_put_int(:party_size, params["party_size"])}
+  end
+
+  defp build_start_opts(:vending_bench, params) do
+    {:ok,
+     []
+     |> maybe_put_string(:sim_id, params["sim_id"])
+     |> maybe_put_int(:max_days, params["max_days"])
+     |> maybe_put_int(:max_turns, params["max_turns"])
+     |> maybe_put_int(:driver_max_turns, params["driver_max_turns"])
+     |> maybe_put_string(:operator_model_spec, params["operator_model_spec"])
+     |> maybe_put_string(:physical_worker_model_spec, params["physical_worker_model_spec"])
+     |> maybe_put_string(:model_spec, params["model_spec"])
+     |> maybe_put_string(:worker_model_spec, params["worker_model_spec"])}
+  end
+
+  defp build_start_opts(:tcg_shop, params) do
+    {:ok,
+     []
+     |> maybe_put_string(:sim_id, params["sim_id"])
+     |> maybe_put_int(:max_days, params["max_days"])
+     |> maybe_put_int(:max_turns, params["max_turns"])
+     |> maybe_put_int(:driver_max_turns, params["driver_max_turns"])
+     |> maybe_put_string(:operator_model_spec, params["operator_model_spec"])
+     |> maybe_put_model_specs(params["model_specs"])}
   end
 
   defp build_start_opts(domain, params) when domain in @player_count_domains do
@@ -186,7 +212,7 @@ defmodule LemonSimUi.AdminSimController do
 
   defp normalize_string(_), do: nil
 
-  defp watch_url(:werewolf, sim_id), do: url(~p"/watch/#{sim_id}")
+  defp watch_url(domain, sim_id) when domain in @watchable_domains, do: url(~p"/watch/#{sim_id}")
   defp watch_url(_domain, _sim_id), do: nil
 
   defp format_reason(reason) when is_binary(reason), do: reason

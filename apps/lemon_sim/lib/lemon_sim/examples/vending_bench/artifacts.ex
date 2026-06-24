@@ -6,6 +6,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
 
   @default_artifact_root "apps/lemon_sim/priv/game_logs/vending_bench"
   @sim_version "2.0.0"
+  @deterministic_artifact_timestamp "1970-01-01T00:00:00Z"
 
   def write_run_artifacts(state, events, actions, opts) do
     artifact_dir =
@@ -47,6 +48,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
 
     prompts = prompt_artifacts(state)
     tool_schemas = tool_schema_artifact(state, opts)
+    report = artifact_report(state, scorecard, paths, opts)
 
     contents = %{
       paths.final_world => Jason.encode!(jsonable(state.world), pretty: true),
@@ -65,12 +67,16 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
         Jason.encode!(operator_transcript_artifact(actions, events), pretty: true),
       paths.reminders => Jason.encode!(jsonable(get(state.world, :reminders, [])), pretty: true),
       paths.operator_system_prompt => prompts.operator_system,
-      paths.operator_initial_prompt => prompts.operator_initial
+      paths.operator_initial_prompt => prompts.operator_initial,
+      paths.report => report
     }
 
     Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
 
-    {:ok, _replay_paths} = Replay.write_browser(artifact_dir)
+    {:ok, _replay_paths} =
+      Replay.write_browser(artifact_dir,
+        deterministic?: Keyword.get(opts, :deterministic_artifacts?, false)
+      )
 
     all_contents =
       contents
@@ -85,8 +91,6 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       paths.manifest,
       Jason.encode!(manifest_artifact(state, hashes, opts), pretty: true)
     )
-
-    AtomicFile.write!(paths.report, artifact_report(state, scorecard, paths, opts))
 
     {:ok, paths}
   end
@@ -174,7 +178,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
   end
 
   defp manifest_artifact(state, hashes, opts) do
-    now = DateTime.utc_now() |> DateTime.to_iso8601()
+    now = artifact_timestamp(opts)
 
     %{
       schema_version: "lemon_sim.run.v1",
@@ -200,6 +204,19 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       }
     }
     |> jsonable()
+  end
+
+  defp artifact_timestamp(opts) do
+    cond do
+      is_binary(Keyword.get(opts, :artifact_timestamp)) ->
+        Keyword.fetch!(opts, :artifact_timestamp)
+
+      Keyword.get(opts, :deterministic_artifacts?, false) ->
+        @deterministic_artifact_timestamp
+
+      true ->
+        DateTime.utc_now() |> DateTime.to_iso8601()
+    end
   end
 
   defp ruleset_hash do
@@ -275,17 +292,25 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
 
     ## Artifacts
 
-    - Final world: #{paths.final_world}
-    - Events: #{paths.events}
-    - Actions: #{paths.actions}
-    - Supplier messages: #{paths.supplier_messages}
-    - Worker history: #{paths.worker_history}
-    - Operator transcript: #{paths.operator_transcript}
-    - Reminders: #{paths.reminders}
-    - Scorecard: #{paths.scorecard}
-    - Replay JSON: #{paths.replay_json}
-    - Replay browser: #{paths.replay_html}
+    - Final world: #{artifact_path(paths.final_world, paths, opts)}
+    - Events: #{artifact_path(paths.events, paths, opts)}
+    - Actions: #{artifact_path(paths.actions, paths, opts)}
+    - Supplier messages: #{artifact_path(paths.supplier_messages, paths, opts)}
+    - Worker history: #{artifact_path(paths.worker_history, paths, opts)}
+    - Operator transcript: #{artifact_path(paths.operator_transcript, paths, opts)}
+    - Reminders: #{artifact_path(paths.reminders, paths, opts)}
+    - Scorecard: #{artifact_path(paths.scorecard, paths, opts)}
+    - Replay JSON: #{artifact_path(paths.replay_json, paths, opts)}
+    - Replay browser: #{artifact_path(paths.replay_html, paths, opts)}
     """
+  end
+
+  defp artifact_path(path, paths, opts) do
+    if Keyword.get(opts, :deterministic_artifacts?, false) do
+      Path.relative_to(path, Path.dirname(paths.report))
+    else
+      path
+    end
   end
 
   defp supplier_messages_artifact(world) do

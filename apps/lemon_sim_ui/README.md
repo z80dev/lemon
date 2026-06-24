@@ -28,7 +28,7 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
 - `LemonSim.Bus` topic for the currently viewed sim — for per-step world updates
 
-Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast.
+Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
 
 On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
@@ -48,7 +48,7 @@ Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is s
 | Diplomacy | `:diplomacy` | Faction negotiation and territory control |
 | Dungeon Crawl | `:dungeon_crawl` | Cooperative party-based dungeon run |
 | VendingBench | `:vending_bench` | Watchable nested-agent vending operation and Vending-Bench Arena worlds with model labels, standings, supplier inbox/outbox, deliveries, refunds, machine faults, PvP messages/payments/trades/leads, price wars, collusion signals, and scorecard signals |
-| TCG Shop | `:tcg_shop` | Single-operator local game store with sealed allocations, collection buys, singles, grading, events, online orders, market pulses, and scorecard signals |
+| TCG Shop | `:tcg_shop` | Single-operator local game store with sealed allocations/openings, loose-pack prep/sell-through, special orders/holds, supplier credit and standing, damaged-delivery supplier claims, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns/store-credit refunds, buylist store credit, consignment payables, memberships, preorders, promotion campaigns, collection buys, singles, grading, organized-play capacity/prize support, inventory aging, online orders, marketplace channel/listing fees, market pulses, tax ledger, COGS/gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, local competition, loss prevention, shrinkage, and scorecard signals |
 
 ### Multi-Model Assignment
 
@@ -73,7 +73,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims and, when enabled, a fixed VendingBench launcher |
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
 | `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Admin dashboard LiveView for sim launch and detail flows |
-| `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf and VendingBench with no admin controls |
+| `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf, VendingBench, and TCG Shop with no admin controls |
 | `LemonSimUi.WerewolfPlayback` | `lib/lemon_sim_ui/werewolf_playback.ex` | Buffers exact Werewolf snapshots and applies dwell heuristics so live viewing stays legible |
 | `LemonSimUi.AdminSimController` | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | Protected JSON API for starting and stopping sims remotely |
 | `LemonSimUi.HealthController` | `lib/lemon_sim_ui/controllers/health_controller.ex` | Public health check used by load balancers and smoke tests |
@@ -92,7 +92,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.DiplomacyBoard` | `lib/lemon_sim_ui/live/components/diplomacy_board.ex` | Territory map and faction negotiation display |
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
 | `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier delivery, refund, machine fault, PvP payment/trade/lead/price-war/collusion, and scorecard display |
-| `LemonSimUi.Live.Components.TcgShopBoard` | `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | TCG Shop dashboard for sealed inventory, singles, market pulse, customer queue, and scorecard display |
+| `LemonSimUi.Live.Components.TcgShopBoard` | `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | TCG Shop dashboard for sealed inventory/openings, loose-pack inventory and sales, special-order deposits/fulfillment, supplier credit/accounts payable, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns/store-credit refunds, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, graded-card lots, grading risk, market pulse, online marketplace channel/listing fees, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, customer loyalty/satisfaction, staff hours, supplier fill rate, stockouts, shrinkage, backorders, and scorecard display |
 | `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/vending_bench/start/:preset_id` to the public launcher, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |
@@ -131,7 +131,7 @@ The public lobby is available at `http://localhost:4090/` and the admin dashboar
 3. Configure domain-specific options (player count, model assignments, map preset, etc.).
 4. Click "INITIALIZE". The sim starts immediately and its entry appears in the sidebar.
 5. Click a sim entry to open the detail view, which shows the domain board, event log, agent strategy (plan history), and data banks (memory files).
-6. For Werewolf and VendingBench sims, share `/watch/<sim_id>` for the public spectator page.
+6. For Werewolf, VendingBench, and TCG Shop sims, share `/watch/<sim_id>` for the public spectator page.
 
 ### Auto-Loop Operations
 
@@ -172,7 +172,7 @@ curl -X POST http://localhost:4090/api/admin/sims/ww_showmatch_001/stop \
   -H 'authorization: Bearer YOUR_ADMIN_TOKEN'
 ```
 
-The create response includes the private admin URL and, for Werewolf and VendingBench, the public `watch_url`.
+The create response includes the private admin URL and, for Werewolf, VendingBench, and TCG Shop, the public `watch_url`.
 
 ## Production Deployment
 
@@ -282,7 +282,9 @@ Tests use `LemonSimUi.ConnCase` backed by `Phoenix.ConnTest` and `Phoenix.LiveVi
 - Navigation from lobby to sim detail via `render_patch/2`
 - Board component rendering for each domain
 - TCG Shop domain detection and board rendering for sealed inventory, singles,
-  market pulse, and customer queue
+  supplier credit, supplier standing, financing, register cash/card tenders, drawer reconciliation, local returns, sealed openings, consignment payables, memberships, preorders, promotions, organized-play capacity, market pulse, tax ledger, gross
+  margin, fixed overhead, operating profit, refunds, channel costs, payroll, local competition, inventory aging, shrinkage, and
+  customer queue
 
 Individual test files:
 

@@ -3,9 +3,10 @@ defmodule LemonSim.Examples.TcgShop do
   Trading card game shop simulation built on LemonSim.
 
   A single-operator local game store benchmark where an agent manages sealed
-  product, singles, buylist collection buying, grading submissions, events,
-  online orders, and volatile franchise demand across Pokemon, Yu-Gi-Oh!,
-  One Piece, Dragon Ball Super, and accessories.
+  product, singles, buylist collection buying, consignment, league memberships,
+  grading submissions, events, customer special orders, online orders, and
+  volatile franchise demand across Pokemon, Yu-Gi-Oh!, One Piece, Dragon Ball
+  Super, and accessories.
   """
 
   alias LemonCore.Config.Modular
@@ -46,7 +47,14 @@ defmodule LemonSim.Examples.TcgShop do
             _ -> 0
           end
 
-        {line_id, %{on_hand: starter_qty, price: line.suggested_price}}
+        starter_age =
+          case line.category do
+            "accessory" -> 6
+            "sealed" -> 3
+            _ -> 0
+          end
+
+        {line_id, %{on_hand: starter_qty, price: line.suggested_price, age_days: starter_age}}
       end)
 
     %{
@@ -59,29 +67,129 @@ defmodule LemonSim.Examples.TcgShop do
       seed: seed,
       starting_balance: starting_balance,
       bank_balance: starting_balance,
+      starting_cash_drawer_balance: Keyword.get(opts, :cash_drawer_balance, 350.0),
+      cash_drawer_balance: Keyword.get(opts, :cash_drawer_balance, 350.0),
+      local_cash_tender_rate: Keyword.get(opts, :local_cash_tender_rate, 0.32),
       daily_rent: Keyword.get(opts, :daily_rent, 125.0),
+      daily_utilities: Keyword.get(opts, :daily_utilities, 22.5),
+      daily_insurance: Keyword.get(opts, :daily_insurance, 7.5),
+      sales_tax_rate: Keyword.get(opts, :sales_tax_rate, 0.0825),
+      sales_tax_liability: 0.0,
+      store_credit_liability: 0.0,
+      loss_prevention_score: 0,
+      payment_processing_rate: Keyword.get(opts, :payment_processing_rate, 0.029),
+      payment_processing_fixed_fee: Keyword.get(opts, :payment_processing_fixed_fee, 0.3),
+      online_shipping_label_cost: Keyword.get(opts, :online_shipping_label_cost, 4.25),
+      online_channel: %{
+        platform: "local_pickup",
+        listing_quality: "basic",
+        demand_multiplier: 1.0,
+        marketplace_fee_rate: 0.0,
+        setup_cost: 0.0
+      },
+      supplier_credit_limit: Keyword.get(opts, :supplier_credit_limit, 2_500.0),
+      supplier_terms_days: Keyword.get(opts, :supplier_terms_days, 7),
+      supplier_late_fee_rate: Keyword.get(opts, :supplier_late_fee_rate, 0.035),
+      credit_line_limit: Keyword.get(opts, :credit_line_limit, 3_000.0),
+      credit_line_balance: 0.0,
+      credit_line_apr: Keyword.get(opts, :credit_line_apr, 0.18),
+      play_space: %{
+        seats: Keyword.get(opts, :event_seats, 32),
+        sanction_fee: Keyword.get(opts, :event_sanction_fee, 6.0),
+        judge_hourly_wage: Keyword.get(opts, :event_judge_hourly_wage, 20.0)
+      },
       reputation: 55,
       online_rating: 4.4,
+      operations: %{
+        daily_staff_hours: 10.0,
+        staff_hours_remaining: 10.0,
+        regular_hourly_wage: 18.0,
+        scheduled_staff_hours: 0.0,
+        scheduled_staff_hours_remaining: 0.0,
+        scheduled_staff_cost: 0.0,
+        cumulative_regular_payroll: 0.0,
+        cumulative_overtime_hours: 0.0,
+        cumulative_overtime_cost: 0.0,
+        fatigue: 0,
+        backlog_tasks: []
+      },
       catalog: catalog,
       inventory: inventory,
       supplier_directory: supplier_directory(),
+      supplier_accounts: supplier_accounts(),
       pending_deliveries: [],
       pending_grading: [],
+      active_promotions: [],
       singles_case: %{
         cards_on_hand: 160,
         total_market_value: 1_750.0,
         graded_cards: []
       },
+      pack_inventory: %{},
+      special_order_liability: 0.0,
+      consignment_lots: [],
+      consignment_payable: 0.0,
+      active_memberships: [],
+      membership_liability: 0.0,
       release_calendar: Catalog.release_calendar(max_days),
       market_pulses: [market_pulse(1, seed, Catalog.release_calendar(max_days))],
-      customer_queue: initial_customer_queue(),
+      customer_base: initial_customer_base(),
+      customer_queue: initial_customer_queue(initial_customer_base(), "Pokemon"),
+      competitive_position: %{
+        local_market_share_pct: 34.0,
+        competitor_pressure: 0,
+        price_reputation: "fair",
+        last_reaction: "opening baseline"
+      },
       competitor_snapshot: competitor_snapshot(1, seed),
+      pending_preorders: [],
+      pending_special_orders: [],
       sales_history: [],
       buylist_history: [],
+      sealed_opening_history: [],
+      pack_preparation_history: [],
+      pack_sale_history: [],
+      staffing_history: [],
+      loss_prevention_history: [],
+      consignment_history: [],
+      consignment_sale_history: [],
+      consignment_payout_history: [],
+      membership_history: [],
+      store_credit_history: [],
       supplier_order_history: [],
+      delivery_receipt_history: [],
+      pending_supplier_invoices: [],
+      supplier_invoice_history: [],
+      supplier_claim_history: [],
+      supplier_account_history: [],
+      debt_history: [],
+      cash_handling_history: [],
       price_history: [],
       tournament_history: [],
       grading_history: [],
+      grading_result_history: [],
+      authentication_loss_history: [],
+      singles_sale_history: [],
+      graded_sale_history: [],
+      preorder_history: [],
+      preorder_fulfillment_history: [],
+      special_order_history: [],
+      special_order_fulfillment_history: [],
+      stockout_history: [],
+      shrinkage_history: [],
+      stale_inventory_history: [],
+      service_issue_history: [],
+      refund_history: [],
+      return_history: [],
+      customer_history: [],
+      competitor_history: [],
+      operations_history: [],
+      payroll_history: [],
+      overhead_history: [],
+      transaction_cost_history: [],
+      promotion_history: [],
+      tax_history: [],
+      online_channel_history: [],
       research_history: [],
       online_order_history: [],
       invalid_action_count: 0,
@@ -141,7 +249,9 @@ defmodule LemonSim.Examples.TcgShop do
               net_worth: Performance.scorecard(world).net_worth,
               reputation: get(world, :reputation, 50),
               online_rating: get(world, :online_rating, 4.3),
+              operations: get(world, :operations, %{}),
               pending_deliveries: get(world, :pending_deliveries, []),
+              pending_special_orders: get(world, :pending_special_orders, []),
               pending_grading: get(world, :pending_grading, [])
             }
           }
@@ -163,6 +273,8 @@ defmodule LemonSim.Examples.TcgShop do
               market_pulse: List.last(get(frame.world, :market_pulses, [])),
               release_calendar: get(frame.world, :release_calendar, []),
               customer_queue: get(frame.world, :customer_queue, []),
+              customer_base: get(frame.world, :customer_base, %{}),
+              competitive_position: get(frame.world, :competitive_position, %{}),
               competitors: get(frame.world, :competitor_snapshot, %{})
             }
           }
@@ -268,6 +380,22 @@ defmodule LemonSim.Examples.TcgShop do
     ]
   end
 
+  def supplier_accounts do
+    supplier_directory()
+    |> Enum.reject(&(&1.id == "local_collections"))
+    |> Enum.into(%{}, fn supplier ->
+      {supplier.id,
+       %{
+         supplier: supplier.id,
+         standing: 55,
+         status: "current",
+         invoices_paid: 0,
+         late_invoices: 0,
+         last_event_day: nil
+       }}
+    end)
+  end
+
   def market_pulse(day, seed, calendar) do
     release =
       Enum.find(calendar, fn item -> item.day == day end) ||
@@ -314,14 +442,99 @@ defmodule LemonSim.Examples.TcgShop do
     |> Enum.sort_by(& &1.line_id)
   end
 
-  defp initial_customer_queue do
-    [
-      %{type: "player", need: "Pokemon sealed for weekend league", urgency: "high"},
-      %{type: "collector", need: "clean One Piece chase singles", urgency: "medium"},
-      %{type: "parent", need: "starter-friendly accessories", urgency: "medium"},
-      %{type: "competitive", need: "Yu-Gi-Oh! staples after regional results", urgency: "high"}
-    ]
+  defp initial_customer_base do
+    %{
+      "league_regulars" => %{
+        name: "League regulars",
+        type: "player",
+        size: 28,
+        loyalty: 62,
+        satisfaction: 70,
+        spend_per_visit: 28.0,
+        preferred_franchise: "Pokemon",
+        need: "Pokemon sealed and accessories for weekly league"
+      },
+      "competitive_grinders" => %{
+        name: "Competitive grinders",
+        type: "competitive",
+        size: 14,
+        loyalty: 52,
+        satisfaction: 64,
+        spend_per_visit: 44.0,
+        preferred_franchise: "Yu-Gi-Oh!",
+        need: "metagame singles, sleeves, and testing space"
+      },
+      "collectors" => %{
+        name: "Collectors",
+        type: "collector",
+        size: 18,
+        loyalty: 48,
+        satisfaction: 60,
+        spend_per_visit: 72.0,
+        preferred_franchise: "One Piece",
+        need: "clean chase singles and graded cards"
+      },
+      "parents_new_players" => %{
+        name: "Parents and new players",
+        type: "parent",
+        size: 24,
+        loyalty: 55,
+        satisfaction: 68,
+        spend_per_visit: 22.0,
+        preferred_franchise: "Pokemon",
+        need: "starter-friendly sealed product and supplies"
+      },
+      "online_buyers" => %{
+        name: "Online buyers",
+        type: "online",
+        size: 42,
+        loyalty: 46,
+        satisfaction: 66,
+        spend_per_visit: 38.0,
+        preferred_franchise: "One Piece",
+        need: "well-packed sealed orders at fair prices"
+      }
+    }
   end
+
+  defp initial_customer_queue(customer_base, featured_franchise) do
+    customer_base
+    |> Enum.map(fn {segment_id, segment} ->
+      %{
+        segment_id: segment_id,
+        type: get(segment, :type, "customer"),
+        name: get(segment, :name, segment_id),
+        need: queue_need(segment, featured_franchise),
+        urgency: queue_urgency(segment, featured_franchise),
+        loyalty: get(segment, :loyalty, 50),
+        satisfaction: get(segment, :satisfaction, 50)
+      }
+    end)
+    |> Enum.sort_by(fn customer ->
+      {urgency_rank(get(customer, :urgency, "medium")), -get(customer, :loyalty, 50)}
+    end)
+    |> Enum.take(4)
+  end
+
+  defp queue_need(segment, featured_franchise) do
+    if get(segment, :preferred_franchise, "") == featured_franchise do
+      "#{featured_franchise} demand spike: #{get(segment, :need, "")}"
+    else
+      get(segment, :need, "")
+    end
+  end
+
+  defp queue_urgency(segment, featured_franchise) do
+    cond do
+      get(segment, :preferred_franchise, "") == featured_franchise -> "high"
+      get(segment, :satisfaction, 50) < 45 -> "at_risk"
+      true -> "medium"
+    end
+  end
+
+  defp urgency_rank("high"), do: 0
+  defp urgency_rank("at_risk"), do: 1
+  defp urgency_rank(_), do: 2
 
   defp get(map, key, default) do
     MapHelpers.get_key(map, key) || default
