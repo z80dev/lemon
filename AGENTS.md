@@ -312,6 +312,7 @@ Key env vars:
 - `OPENAI_API_KEY` - OpenAI provider
 - `LEMON_LOG_LEVEL` - Log level (debug/info/warning/error)
 - `LEMON_STORE_PATH` - Persistent store path
+- `LEMON_HARNESS_SKILLS_DIR` - Override harness-compatible global skills path (`~/.agents/skills`) for isolated runtimes/tests
 - `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod

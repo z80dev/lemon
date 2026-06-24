@@ -306,3 +306,5 @@ The global agent directory (`~/.lemon/agent`) is shared between `lemon_skills` a
 4. `~/.lemon/agent` (default)
 
 This ensures skills and the coding agent share a single on-disk location.
+
+The harness-compatible global skill directory defaults to `~/.agents/skills`. Isolated runtimes and tests can override it with `LEMON_HARNESS_SKILLS_DIR` or `config :lemon_skills, :harness_global_skills_dir`.

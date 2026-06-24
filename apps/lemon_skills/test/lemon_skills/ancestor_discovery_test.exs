@@ -16,14 +16,8 @@ defmodule LemonSkills.AncestorDiscoveryTest do
   end
 
   test "find_git_repo_root/1 returns nil when not in git repo" do
-    cwd =
-      Path.join([System.tmp_dir!(), "lemon_skills_no_git_#{System.unique_integer([:positive])}"])
-
-    File.mkdir_p!(cwd)
-
+    cwd = "/lemon-skills-no-git-#{System.unique_integer([:positive])}"
     assert Config.find_git_repo_root(cwd) == nil
-
-    File.rm_rf(cwd)
   end
 
   test "collect_ancestor_agents_skill_dirs/1 walks up to git root", %{tmp_dir: tmp_dir} do

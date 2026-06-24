@@ -138,9 +138,21 @@ defmodule LemonSkills.Config do
   def global_skills_dirs do
     [
       global_skills_dir(),
-      Path.join([System.user_home!(), ".agents", "skills"])
+      harness_global_skills_dir()
     ]
     |> Enum.uniq()
+  end
+
+  @doc """
+  Get the harness-compatible global skills directory.
+
+  Returns `~/.agents/skills` unless overridden for tests or isolated runtimes.
+  """
+  @spec harness_global_skills_dir() :: String.t()
+  def harness_global_skills_dir do
+    System.get_env("LEMON_HARNESS_SKILLS_DIR") ||
+      Application.get_env(:lemon_skills, :harness_global_skills_dir) ||
+      Path.join([System.user_home!(), ".agents", "skills"])
   end
 
   @doc """

@@ -1,9 +1,25 @@
 defmodule CodingAgent.ResourceLoaderTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.ResourceLoader
+  alias LemonSkills.Config, as: SkillConfig
 
   @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp_dir} do
+    previous_harness_dir_env = System.get_env("LEMON_HARNESS_SKILLS_DIR")
+    previous_harness_dir = Application.get_env(:lemon_skills, :harness_global_skills_dir)
+    harness_dir = Path.join(tmp_dir, "harness-skills")
+
+    System.put_env("LEMON_HARNESS_SKILLS_DIR", harness_dir)
+
+    on_exit(fn ->
+      restore_env("LEMON_HARNESS_SKILLS_DIR", previous_harness_dir_env)
+      restore_app_env(:lemon_skills, :harness_global_skills_dir, previous_harness_dir)
+    end)
+
+    :ok
+  end
 
   describe "load_instructions/1" do
     test "loads from tmp_dir even when no local files exist", %{tmp_dir: tmp_dir} do
@@ -152,7 +168,7 @@ defmodule CodingAgent.ResourceLoaderTest do
 
     test "loads skills from ~/.agents/skills/*/SKILL.md", %{tmp_dir: tmp_dir} do
       skill_name = "agents-global-#{System.unique_integer([:positive])}"
-      skill_dir = Path.join([System.user_home!(), ".agents", "skills", skill_name])
+      skill_dir = Path.join(SkillConfig.harness_global_skills_dir(), skill_name)
       File.mkdir_p!(skill_dir)
       File.write!(Path.join(skill_dir, "SKILL.md"), "Agents global skill")
 
@@ -180,7 +196,7 @@ defmodule CodingAgent.ResourceLoaderTest do
 
     test "loads a specific skill from ~/.agents/skills", %{tmp_dir: tmp_dir} do
       skill_name = "agents-specific-#{System.unique_integer([:positive])}"
-      skill_dir = Path.join([System.user_home!(), ".agents", "skills", skill_name])
+      skill_dir = Path.join(SkillConfig.harness_global_skills_dir(), skill_name)
       File.mkdir_p!(skill_dir)
       File.write!(Path.join(skill_dir, "SKILL.md"), "Agents specific skill")
 
@@ -190,6 +206,12 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert result == {:ok, "Agents specific skill"}
     end
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
+
+  defp restore_app_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_app_env(app, key, value), do: Application.put_env(app, key, value)
 
   describe "resource_exists?/2" do
     test "returns false when file doesn't exist", %{tmp_dir: tmp_dir} do

@@ -31,6 +31,7 @@ defmodule CodingAgent.ResourceLoader do
   """
 
   alias CodingAgent.Config
+  alias LemonSkills.Config, as: SkillConfig
 
   # Standard instruction file names
   @instruction_files ["CLAUDE.md", "AGENTS.md"]
@@ -505,7 +506,7 @@ defmodule CodingAgent.ResourceLoader do
     [
       Path.join([cwd, ".lemon", "skill"]),
       Path.join([Config.agent_dir(), "skill"]),
-      Path.join([System.user_home!(), ".agents", "skills"])
+      SkillConfig.harness_global_skills_dir()
     ]
     |> Enum.uniq()
   end
