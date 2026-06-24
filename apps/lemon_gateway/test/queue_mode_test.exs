@@ -8,7 +8,7 @@ defmodule LemonGateway.QueueModeTest do
     refute Map.has_key?(Map.from_struct(%Job{}), :queue_mode)
   end
 
-  test "ExecutionRequest remains the queue-semantic-free public gateway contract" do
+  test "ExecutionRequest remains the queue-semantic-free gateway-private adapter" do
     job = %Job{
       run_id: "run_1",
       session_key: "agent:test:main",
@@ -36,5 +36,19 @@ defmodule LemonGateway.QueueModeTest do
     assert_raise ArgumentError,
                  ~r/missing router-owned conversation_key/,
                  fn -> LemonGateway.Scheduler.submit_execution(request) end
+  end
+
+  test "Runtime.submit_execution/1 accepts only core execution commands" do
+    request = %ExecutionRequest{
+      run_id: "run_private_request",
+      session_key: "agent:test:main",
+      prompt: "hello",
+      engine_id: "codex",
+      conversation_key: {:session, "agent:test:main"}
+    }
+
+    assert_raise FunctionClauseError, fn ->
+      apply(LemonGateway.Runtime, :submit_execution, [request])
+    end
   end
 end

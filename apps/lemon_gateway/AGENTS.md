@@ -11,7 +11,7 @@ Gateway-native transports such as email, Farcaster, and webhook are ingress shim
 **Entry point**: `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
 The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reintroduce it.
 
-**Core loop**: Router -> `ExecutionRequest` -> Scheduler -> ThreadWorker -> Run -> Engine -> bus events.
+**Core loop**: Router -> `LemonCore.ExecutionCommand` -> Runtime -> `ExecutionRequest` -> Scheduler -> ThreadWorker -> Run -> Engine -> bus events.
 
 **Key principle**: Gateway owns slot allocation, worker/process lifecycle, and engine safety rails. `ThreadWorker` is now a dumb per-conversation launcher; `EngineLock` remains defense-in-depth, not the source of product semantics.
 
@@ -414,7 +414,7 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `cancel_flow_test.exs` | End-to-end cancel flow |
 
 `LemonGateway.Run` must convert `engine.start_run/3` crashes into normal error completions so slots, locks, and router observers are always released. Do not let engine startup exceptions kill the run process before `:run_completed` is emitted.
-| `queue_mode_test.exs` | Router/gateway boundary coverage for legacy queue-mode adapters that still normalize into `ExecutionRequest` |
+| `queue_mode_test.exs` | Router/gateway boundary coverage for queue-semantic-free commands and private `ExecutionRequest` adapters |
 | `run_transport_agnostic_test.exs` | Run process transport-agnostic behavior |
 | `cli_adapter_test.exs` | CliAdapter shared logic |
 | `cli_adapter_claude_test.exs` | Claude-specific CliAdapter behavior |

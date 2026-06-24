@@ -2,9 +2,9 @@ defmodule LemonGateway.RunSupervisor do
   @moduledoc """
   DynamicSupervisor that manages `LemonGateway.Run` processes.
 
-  Public gateway callers must provide `%{execution_request: %ExecutionRequest{}}`
-  args here. Each run is started as a temporary child so it is not restarted on
-  failure.
+  Internal gateway callers provide `%{execution_request: %ExecutionRequest{}}`
+  after the public runtime boundary converts a core execution command. Each run
+  is started as a temporary child so it is not restarted on failure.
   """
   use DynamicSupervisor
 

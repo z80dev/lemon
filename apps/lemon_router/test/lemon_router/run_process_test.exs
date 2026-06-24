@@ -107,6 +107,18 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule RejectingScheduler do
+    @moduledoc false
+
+    def available?, do: true
+
+    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
+      pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
+      if is_pid(pid), do: send(pid, {:rejecting_scheduler_submit, request})
+      {:error, :temporary_failure}
+    end
+  end
+
   defmodule TestRunOrchestrator do
     @moduledoc false
     use GenServer
@@ -520,6 +532,40 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe ":submit_to_gateway retry/backoff" do
+    test "does not mark run submitted when scheduler rejects execution" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_request(run_id)
+
+      :persistent_term.put({RejectingScheduler, :notify_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({RejectingScheduler, :notify_pid})
+      end)
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 gateway_scheduler: RejectingScheduler
+               })
+
+      assert_receive {:rejecting_scheduler_submit,
+                      %LemonCore.ExecutionCommand{
+                        run_id: ^run_id,
+                        session_key: ^session_key
+                      }},
+                     500
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.gateway_submitted? == false and state.gateway_submit_attempt > 0
+             end)
+
+      GenServer.stop(pid)
+    end
+
     test "retries until scheduler becomes available and submits the job once" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")

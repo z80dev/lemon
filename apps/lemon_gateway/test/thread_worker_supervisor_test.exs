@@ -126,9 +126,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   end
 
   defp submit_job(%Job{} = job) do
-    LemonGateway.submit(
-      ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
-    )
+    job
+    |> command_from_job()
+    |> LemonGateway.submit()
   end
 
   defp enqueue_job(pid, %Job{} = job) when is_pid(pid) do
@@ -136,6 +136,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       pid,
       {:enqueue, ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))}
     )
+  end
+
+  defp command_from_job(%Job{} = job) do
+    job
+    |> ExecutionRequest.from_job(conversation_key: test_conversation_key(job))
+    |> ExecutionRequest.to_command()
   end
 
   defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})

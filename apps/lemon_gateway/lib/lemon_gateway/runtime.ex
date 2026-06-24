@@ -2,7 +2,7 @@ defmodule LemonGateway.Runtime do
   @moduledoc """
   Runtime API for submitting and cancelling gateway runs.
 
-  Provides the queue-free execution entry point used by transports plus
+  Provides the queue-free execution entry point used by the router plus
   cancellation helpers for active runs by progress message ID or run ID.
   """
 
@@ -11,19 +11,13 @@ defmodule LemonGateway.Runtime do
   alias LemonCore.ExecutionCommand
   alias LemonGateway.ExecutionRequest
 
-  @doc "Submits an execution request to the scheduler."
+  @doc "Submits a core execution command to the scheduler."
   @impl true
-  @spec submit_execution(ExecutionCommand.t() | ExecutionRequest.t()) :: :ok
+  @spec submit_execution(ExecutionCommand.t()) :: :ok
   def submit_execution(%ExecutionCommand{} = command) do
     command
     |> ExecutionCommand.ensure_conversation_key()
     |> ExecutionRequest.from_command()
-    |> LemonGateway.Scheduler.submit_execution()
-  end
-
-  def submit_execution(%ExecutionRequest{} = request) do
-    request
-    |> ExecutionRequest.ensure_conversation_key()
     |> LemonGateway.Scheduler.submit_execution()
   end
 

@@ -22,9 +22,15 @@ defmodule LemonGatewayTest do
   end
 
   defp submit_job(%Job{} = job) do
-    LemonGateway.submit(
-      ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
-    )
+    job
+    |> command_from_job()
+    |> LemonGateway.submit()
+  end
+
+  defp command_from_job(%Job{} = job) do
+    job
+    |> ExecutionRequest.from_job(conversation_key: test_conversation_key(job))
+    |> ExecutionRequest.to_command()
   end
 
   defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
@@ -34,7 +40,7 @@ defmodule LemonGatewayTest do
   defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
     do: {:session, session_key}
 
-  describe "ExecutionRequest compatibility" do
+  describe "ExecutionRequest adapter" do
     test "from_job/1 preserves execution fields while omitting queue_mode" do
       job = %Job{
         run_id: "run-1",
@@ -61,6 +67,19 @@ defmodule LemonGatewayTest do
       assert request.tool_policy == job.tool_policy
       assert request.meta.origin == :test
       refute Map.has_key?(request_map, :queue_mode)
+    end
+
+    test "LemonGateway.submit/1 accepts only core execution commands" do
+      job = %Job{
+        run_id: "run-1",
+        session_key: "agent:default:main",
+        prompt: "hello",
+        engine_id: "lemon"
+      }
+
+      request = ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
+
+      assert_raise FunctionClauseError, fn -> apply(LemonGateway, :submit, [request]) end
     end
   end
 

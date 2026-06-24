@@ -1,6 +1,6 @@
 defmodule LemonGateway do
   @moduledoc """
-  Public API for submitting execution requests to the Lemon Gateway.
+  Public API for submitting execution commands to the Lemon Gateway.
 
   The gateway orchestrates AI agent runs across multiple transport channels
   (Telegram, Discord, Email, Farcaster, XMTP, Webhooks) and engine backends
@@ -20,15 +20,13 @@ defmodule LemonGateway do
   """
 
   alias LemonCore.ExecutionCommand
-  alias LemonGateway.ExecutionRequest
 
   @doc """
-  Submits an execution request for execution.
+  Submits an execution command for execution.
 
   The request is routed through the scheduler, which handles concurrency
   limiting per conversation key.
   """
-  @spec submit(ExecutionCommand.t() | ExecutionRequest.t()) :: :ok
+  @spec submit(ExecutionCommand.t()) :: :ok
   def submit(%ExecutionCommand{} = command), do: LemonGateway.Runtime.submit_execution(command)
-  def submit(%ExecutionRequest{} = request), do: LemonGateway.Runtime.submit_execution(request)
 end

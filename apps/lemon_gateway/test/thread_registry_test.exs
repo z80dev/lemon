@@ -742,9 +742,7 @@ defmodule LemonGateway.ThreadRegistryTest do
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      LemonGateway.submit(
-        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
-      )
+      LemonGateway.submit(command_from_job(job))
 
       # The worker should be registered
       Process.sleep(50)
@@ -778,12 +776,7 @@ defmodule LemonGateway.ThreadRegistryTest do
             meta: %{notify_pid: self(), user_msg_id: 1}
           }
 
-          LemonGateway.submit(
-            LemonGateway.ExecutionRequest.from_job(
-              job,
-              conversation_key: {:session, job.session_key}
-            )
-          )
+          LemonGateway.submit(command_from_job(job))
 
           job
         end
@@ -823,12 +816,7 @@ defmodule LemonGateway.ThreadRegistryTest do
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      LemonGateway.submit(
-        LemonGateway.ExecutionRequest.from_job(
-          job1,
-          conversation_key: {:session, job1.session_key}
-        )
-      )
+      LemonGateway.submit(command_from_job(job1))
 
       assert_receive {:lemon_gateway_run_completed, ^job1, _}, 2000
 
@@ -842,12 +830,7 @@ defmodule LemonGateway.ThreadRegistryTest do
         meta: %{notify_pid: self(), user_msg_id: 2}
       }
 
-      LemonGateway.submit(
-        LemonGateway.ExecutionRequest.from_job(
-          job2,
-          conversation_key: {:session, job2.session_key}
-        )
-      )
+      LemonGateway.submit(command_from_job(job2))
 
       Process.sleep(50)
       worker_pid = ThreadRegistry.whereis(thread_key)
@@ -1031,5 +1014,11 @@ defmodule LemonGateway.ThreadRegistryTest do
           do_wait_for_unregistration(key, deadline)
         end
     end
+  end
+
+  defp command_from_job(%LemonGateway.Types.Job{} = job) do
+    job
+    |> LemonGateway.ExecutionRequest.from_job(conversation_key: {:session, job.session_key})
+    |> LemonGateway.ExecutionRequest.to_command()
   end
 end

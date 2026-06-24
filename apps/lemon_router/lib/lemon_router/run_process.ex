@@ -202,14 +202,27 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
 
       runtime_available?(state.engine_runtime) ->
-        submit_runtime_execution(state.engine_runtime, state)
+        case submit_runtime_execution(state.engine_runtime, state) do
+          :ok ->
+            Logger.debug(
+              "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
+                "session_key=#{inspect(state.session_key)}"
+            )
 
-        Logger.debug(
-          "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
-            "session_key=#{inspect(state.session_key)}"
-        )
+            {:noreply, %{state | gateway_submitted?: true, gateway_submit_attempt: 0}}
 
-        {:noreply, %{state | gateway_submitted?: true, gateway_submit_attempt: 0}}
+          {:error, reason} ->
+            delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
+            Process.send_after(self(), :submit_to_gateway, delay_ms)
+
+            Logger.warning(
+              "Engine runtime rejected submit for run_id=#{inspect(state.run_id)} " <>
+                "reason=#{inspect(reason)}; retrying in #{delay_ms}ms " <>
+                "(attempt=#{state.gateway_submit_attempt + 1})"
+            )
+
+            {:noreply, %{state | gateway_submit_attempt: state.gateway_submit_attempt + 1}}
+        end
 
       true ->
         delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
@@ -816,10 +829,21 @@ defmodule LemonRouter.RunProcess do
 
   defp submit_runtime_execution(runtime, state) do
     if is_map(state.execution_request) and function_exported?(runtime, :submit_execution, 1) do
-      runtime.submit_execution(ExecutionCommand.ensure_conversation_key(state.execution_request))
+      case runtime.submit_execution(
+             ExecutionCommand.ensure_conversation_key(state.execution_request)
+           ) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:unexpected_submit_result, other}}
+      end
     else
       :ok
     end
+  rescue
+    error -> {:error, {error.__struct__, Exception.message(error)}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp normalize_execution_request(

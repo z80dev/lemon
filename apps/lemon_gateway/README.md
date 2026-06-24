@@ -12,12 +12,12 @@ Part of the `lemon` Elixir umbrella project.
                         | Email  SMS  Voice  Farcaster  Webhook   |
                         +-------------------+---------------------+
                                             |
-                               ExecutionRequest
+                               ExecutionCommand
                                             |
                                             v
                         +-------------------+---------------------+
                         |           LemonGateway.Runtime           |
-                        |         submit_execution/1               |
+                        |  submit_execution/1 -> ExecutionRequest  |
                         +-------------------+---------------------+
                                             |
                                             v
@@ -137,7 +137,7 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
-| `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway input contract with no queue semantics |
+| `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway-private scheduler adapter with no queue semantics |
 | `LemonGateway.Types` | `types.ex` | Legacy compatibility types (`Job`, `engine_id`, `lane`) |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |

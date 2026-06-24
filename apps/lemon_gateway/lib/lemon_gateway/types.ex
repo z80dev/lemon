@@ -14,9 +14,9 @@ defmodule LemonGateway.Types do
     @moduledoc """
     Internal engine-facing compatibility type for gateway run execution.
 
-    New router and gateway submission code should use
-    `LemonGateway.ExecutionRequest`. `Job` remains inside gateway run execution
-    and in compatibility helpers while engines still speak this shape.
+    Public router and gateway submission code should use
+    `LemonCore.ExecutionCommand`. `Job` remains inside gateway run execution and
+    in compatibility helpers while engines still speak this shape.
 
     ## Fields
 
