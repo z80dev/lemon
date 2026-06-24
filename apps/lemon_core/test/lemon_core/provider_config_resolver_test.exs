@@ -144,6 +144,30 @@ defmodule LemonCore.ProviderConfigResolverTest do
       assert result.location == "europe-west4"
       assert result.service_account_json == "{\"key\":\"value\"}"
     end
+
+    test "explicit provider_config supplements cached config and normalizes string keys", %{
+      home: home
+    } do
+      global_dir = Path.join(home, ".lemon")
+      File.mkdir_p!(global_dir)
+
+      File.write!(Path.join(global_dir, "config.toml"), """
+      [providers.google_vertex]
+      location = "us-central1"
+      """)
+
+      result =
+        ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+          provider_config: %{
+            "project" => "explicit-project",
+            "service_account_json" => "{\"key\":\"value\"}"
+          }
+        })
+
+      assert result.project == "explicit-project"
+      assert result.location == "us-central1"
+      assert result.service_account_json == "{\"key\":\"value\"}"
+    end
   end
 
   describe "google_gemini_cli" do

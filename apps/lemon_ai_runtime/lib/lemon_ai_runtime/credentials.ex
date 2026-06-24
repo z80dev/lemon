@@ -339,10 +339,10 @@ defmodule LemonAiRuntime.Credentials do
 
   defp vertex_credentials_available?(provider_cfg, opts) do
     resolved =
-      :google_vertex
-      |> ProviderConfigResolver.resolve_for_provider(
-        stream_provider_input(provider_cfg, %{}, opts, :google_vertex)
-      )
+      ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+        cwd: Keyword.get(opts, :cwd),
+        provider_config: provider_cfg
+      })
 
     present_value?(resolved[:api_key]) or
       present_value?(resolved[:service_account_json]) or
@@ -367,43 +367,6 @@ defmodule LemonAiRuntime.Credentials do
     cwd = Keyword.get(opts, :cwd)
 
     case provider_id do
-      :google_vertex ->
-        base_opts
-        |> Map.put(:cwd, cwd)
-        |> maybe_put(
-          :project,
-          first_non_empty_binary([
-            Map.get(base_opts, :project),
-            provider_config_value(provider_cfg, :project),
-            provider_config_value(provider_cfg, :project_id),
-            resolve_secret_api_key(provider_config_value(provider_cfg, :project_secret),
-              env_fallback: true
-            )
-          ])
-        )
-        |> maybe_put(
-          :location,
-          first_non_empty_binary([
-            Map.get(base_opts, :location),
-            provider_config_value(provider_cfg, :location),
-            resolve_secret_api_key(provider_config_value(provider_cfg, :location_secret),
-              env_fallback: true
-            )
-          ])
-        )
-        |> maybe_put(
-          :service_account_json,
-          first_non_empty_binary([
-            Map.get(base_opts, :service_account_json),
-            provider_config_value(provider_cfg, :service_account_json),
-            resolve_secret_api_key(
-              provider_config_value(provider_cfg, :service_account_json_secret),
-              env_fallback: true
-            )
-          ])
-        )
-        |> maybe_put(:api_key, provider_config_value(provider_cfg, :api_key))
-
       :bedrock_converse_stream ->
         headers =
           base_opts

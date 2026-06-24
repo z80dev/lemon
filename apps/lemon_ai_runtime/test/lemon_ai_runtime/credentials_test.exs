@@ -280,6 +280,20 @@ defmodule LemonAiRuntime.CredentialsTest do
     assert decoded["projectId"] == "managed-proj-123"
   end
 
+  test "google vertex credential check resolves explicit provider config through shared resolver" do
+    assert {:ok, _} = Secrets.set("vertex_sa", "{\"client_email\":\"svc@example.com\"}")
+
+    providers = %{
+      "google_vertex" => %{
+        "project" => "vertex-project",
+        "location" => "us-central1",
+        "service_account_json_secret" => "vertex_sa"
+      }
+    }
+
+    assert LemonAiRuntime.provider_has_credentials?(:google_vertex, providers)
+  end
+
   test "oauth secret dispatcher falls back to runtime resolvers when configured module is unavailable" do
     Application.put_env(
       :lemon_ai_runtime,

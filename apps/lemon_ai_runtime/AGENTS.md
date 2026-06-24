@@ -24,6 +24,10 @@ This app is the Lemon-owned boundary for AI auth/config/runtime concerns that ar
 - No new external app should introduce new direct `Ai.Auth.*` usage; migrate through `LemonAiRuntime.Auth.*`.
 - Callers that only need Codex auth availability should use `LemonAiRuntime.Auth.OpenAICodexOAuth.available?/0`.
 - Prefer new Lemon-owned callers to use `LemonAiRuntime` for provider credential checks and stream option shaping.
+- Vertex project, location, and inline service account JSON config/env/secret
+  resolution belongs in this boundary before `Ai` is invoked; the Vertex
+  provider keeps only protocol authentication from explicit stream options,
+  ADC file path, or `gcloud`.
 - Use `LemonAiRuntime.ProviderStatus.snapshot/1` when operator surfaces need
   redacted readiness booleans, route-plan previews, credential-pool summaries,
   and routing-profile distributions without raw API keys, secret names, base

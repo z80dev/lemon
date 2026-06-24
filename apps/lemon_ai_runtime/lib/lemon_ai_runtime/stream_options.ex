@@ -119,39 +119,7 @@ defmodule LemonAiRuntime.StreamOptions do
 
   defp google_vertex_input(base_opts, provider_cfg) do
     stream_options_to_map(base_opts)
-    |> maybe_put(
-      :project,
-      first_non_empty_binary([
-        base_opts.project,
-        provider_config_value(provider_cfg, :project),
-        provider_config_value(provider_cfg, :project_id),
-        Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :project_secret),
-          env_fallback: true
-        )
-      ])
-    )
-    |> maybe_put(
-      :location,
-      first_non_empty_binary([
-        base_opts.location,
-        provider_config_value(provider_cfg, :location),
-        Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :location_secret),
-          env_fallback: true
-        )
-      ])
-    )
-    |> maybe_put(
-      :service_account_json,
-      first_non_empty_binary([
-        base_opts.service_account_json,
-        provider_config_value(provider_cfg, :service_account_json),
-        Credentials.resolve_secret_api_key(
-          provider_config_value(provider_cfg, :service_account_json_secret),
-          env_fallback: true
-        )
-      ])
-    )
-    |> maybe_put(:api_key, provider_config_value(provider_cfg, :api_key))
+    |> Map.put(:provider_config, provider_cfg)
   end
 
   defp azure_input(base_opts, provider_cfg) do

@@ -205,13 +205,56 @@ defmodule LemonCore.ProviderConfigResolver do
   # Internal helpers
   # ============================================================================
 
+  @provider_config_key_aliases %{
+    "access_key_id_secret" => :access_key_id_secret,
+    "api_key" => :api_key,
+    "api_key_secret" => :api_key_secret,
+    "api_version" => :api_version,
+    "base_url" => :base_url,
+    "deployment_name_map" => :deployment_name_map,
+    "location" => :location,
+    "location_secret" => :location_secret,
+    "project" => :project,
+    "project_id" => :project_id,
+    "projectId" => :projectId,
+    "project_secret" => :project_secret,
+    "region" => :region,
+    "resource_name" => :resource_name,
+    "secret_access_key_secret" => :secret_access_key_secret,
+    "service_account_json" => :service_account_json,
+    "service_account_json_secret" => :service_account_json_secret,
+    "session_token_secret" => :session_token_secret
+  }
+
   defp get_provider_config(name, opts) do
     cwd = if is_map(opts), do: Map.get(opts, :cwd), else: nil
-    config = LemonCore.Config.cached(cwd)
-    Map.get(config.providers, name, %{})
-  rescue
-    _ -> %{}
+
+    cached =
+      try do
+        LemonCore.Config.cached(cwd).providers
+        |> Map.get(name, %{})
+      rescue
+        _ -> %{}
+      end
+
+    Map.merge(cached, explicit_provider_config(opts))
   end
+
+  defp explicit_provider_config(opts) when is_map(opts) do
+    opts
+    |> Map.get(:provider_config, Map.get(opts, "provider_config", %{}))
+    |> normalize_provider_config()
+  end
+
+  defp explicit_provider_config(_), do: %{}
+
+  defp normalize_provider_config(config) when is_map(config) do
+    Map.new(config, fn {key, value} ->
+      {Map.get(@provider_config_key_aliases, key, key), value}
+    end)
+  end
+
+  defp normalize_provider_config(_), do: %{}
 
   defp resolve_secret(nil), do: nil
 

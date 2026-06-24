@@ -592,8 +592,8 @@ Run with: `mix test --include integration`
 
 Lemon callers resolve config, secrets, and OAuth state through
 `LemonAiRuntime` before calling `Ai`. Providers consume concrete values from
-`Ai.Types.StreamOptions`; process env reads are only standalone fallback
-behavior for direct `ai` usage.
+`Ai.Types.StreamOptions`; process env reads are only standalone authentication
+fallback behavior for direct `ai` usage.
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
@@ -610,10 +610,10 @@ behavior for direct `ai` usage.
 | `AWS_REGION` | Bedrock provider | AWS region (default: `us-east-1`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI provider | JSON credential payload (`{"token","projectId"}`) |
-| `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
-| `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Google Vertex provider | Inline service account JSON |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex provider | Service account JSON file path |
+| `GOOGLE_CLOUD_PROJECT` | LemonAiRuntime Vertex option resolver | GCP project ID (also checks `GCLOUD_PROJECT`) |
+| `GOOGLE_CLOUD_LOCATION` | LemonAiRuntime Vertex option resolver | GCP region |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | LemonAiRuntime Vertex option resolver | Inline service account JSON |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex provider | ADC service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` / `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client credentials |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |

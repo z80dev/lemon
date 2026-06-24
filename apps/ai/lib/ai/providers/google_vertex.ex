@@ -8,11 +8,12 @@ defmodule Ai.Providers.GoogleVertex do
   ## Authentication
 
   Uses Application Default Credentials (ADC) or service account authentication.
-  Project and location should be resolved by the caller and passed in stream
-  options.
+  Project, location, and inline service account JSON should be resolved by the
+  caller and passed in stream options.
 
   Authentication is handled via:
   - Application Default Credentials (gcloud auth)
+  - Inline service account JSON passed in stream options
   - Service account key file (GOOGLE_APPLICATION_CREDENTIALS)
 
   ## Features
@@ -131,8 +132,7 @@ defmodule Ai.Providers.GoogleVertex do
       # Try service account JSON from opts, then resolved config (set via secrets)
       service_account_json =
         Map.get(opts, :service_account_json) ||
-          Map.get(resolved, :service_account_json) ||
-          System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+          Map.get(resolved, :service_account_json)
 
       credentials_path = System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
 

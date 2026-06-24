@@ -20,6 +20,10 @@ Current scope:
   providers like Vertex, Azure, Bedrock, Gemini CLI, and OpenAI-compatible
   providers such as Z.ai/Kimi/Minimax that need provider-specific API keys and
   base URLs.
+- Vertex project, location, and inline service account JSON config/env/secret
+  resolution is handled before `Ai` is invoked; the Vertex provider keeps only
+  protocol authentication from explicit stream options, ADC file path, or
+  `gcloud`.
 - Lemon apps should stop depending on `Ai.Auth.*` directly and use
   `LemonAiRuntime.Auth.*` instead.
 - Callers that only need to know whether Codex OAuth is available should check

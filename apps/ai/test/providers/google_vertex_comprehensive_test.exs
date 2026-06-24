@@ -36,7 +36,6 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
     previous_google_credentials = System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
-    previous_google_credentials_json = System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
     on_exit(fn ->
       Req.default_options(previous_defaults)
@@ -46,12 +45,6 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         System.put_env("GOOGLE_APPLICATION_CREDENTIALS", previous_google_credentials)
       else
         System.delete_env("GOOGLE_APPLICATION_CREDENTIALS")
-      end
-
-      if is_binary(previous_google_credentials_json) do
-        System.put_env("GOOGLE_APPLICATION_CREDENTIALS_JSON", previous_google_credentials_json)
-      else
-        System.delete_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
       end
     end)
 
@@ -237,13 +230,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses GOOGLE_APPLICATION_CREDENTIALS_JSON env when access token is absent" do
+    test "uses service_account_json option when access token is absent" do
       System.delete_env("GOOGLE_APPLICATION_CREDENTIALS")
-      System.put_env("GOOGLE_APPLICATION_CREDENTIALS_JSON", "{")
 
       model = test_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{project: "proj", location: "us-central1"}
+      opts = %StreamOptions{project: "proj", location: "us-central1", service_account_json: "{"}
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
