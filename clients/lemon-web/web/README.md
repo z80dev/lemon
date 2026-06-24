@@ -46,7 +46,7 @@ Session list behavior is opinionated by default:
 ## Local development
 
 ```bash
-cd clients/lemon-web/web
+cd clients/lemon-web
 npm install
 npm run dev
 ```

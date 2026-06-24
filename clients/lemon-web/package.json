@@ -7,7 +7,7 @@
     "shared"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c green,blue \"npm --workspace server run dev\" \"npm --workspace web run dev\"",
+    "dev": "concurrently -n shared,server,web -c yellow,green,blue \"npm --workspace shared run dev\" \"npm --workspace server run dev\" \"npm --workspace web run dev\"",
     "build": "npm --workspace shared run build && npm --workspace server run build && npm --workspace web run build",
     "start": "npm --workspace server run start",
     "typecheck": "npm --workspace shared run typecheck && npm --workspace server run typecheck && npm --workspace web run typecheck",

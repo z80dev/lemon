@@ -16,6 +16,10 @@ export function ChatView() {
   const isNearBottomRef = useRef(true);
 
   const messageList = useMemo(() => messages ?? [], [messages]);
+  const lastMessage = messageList.at(-1);
+  const scrollVersion = lastMessage
+    ? `${getMessageKey(lastMessage)}:${lastMessage.content?.length ?? 0}`
+    : '';
 
   /**
    * Check if user is within AUTO_SCROLL_THRESHOLD pixels of the bottom.
@@ -41,7 +45,7 @@ export function ChatView() {
     if (isNearBottomRef.current) {
       feed.scrollTop = feed.scrollHeight;
     }
-  }, [messageList.length]);
+  }, [messageList.length, scrollVersion]);
 
   /**
    * On initial mount or session change, scroll to bottom.

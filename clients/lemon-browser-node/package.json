@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "playwright-core": "1.58.1",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.0.18",

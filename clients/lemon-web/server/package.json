@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@lemon-web/shared": "file:../shared",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

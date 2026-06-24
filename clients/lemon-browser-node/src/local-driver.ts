@@ -139,6 +139,7 @@ async function main() {
 
   process.stdin.setEncoding('utf8');
   let buf = '';
+  let queue = Promise.resolve();
 
   process.stdin.on('data', (chunk) => {
     buf += chunk;
@@ -149,11 +150,20 @@ async function main() {
       buf = buf.slice(idx + 1);
       if (!line) continue;
 
-      void executeLocalDriverRequest({
-        line,
-        invoke: (method, methodArgs) =>
-          chrome.withPage((page) => handleBrowserMethod(page, method, methodArgs)),
-      }).then((response) => {
+      const response = queue.then(() =>
+        executeLocalDriverRequest({
+          line,
+          invoke: (method, methodArgs) =>
+            chrome.withPage((page) => handleBrowserMethod(page, method, methodArgs)),
+        }),
+      );
+
+      queue = response.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      void response.then((response) => {
         writeLine(response);
       });
     }

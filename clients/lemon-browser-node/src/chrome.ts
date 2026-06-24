@@ -194,7 +194,7 @@ function redactEndpoint(endpoint: string): string {
   }
 }
 
-function defaultChromeExecutable(): string | null {
+export function defaultChromeExecutable(): string | null {
   const envExe = (process.env.LEMON_CHROME_EXECUTABLE || process.env.CHROME_EXECUTABLE || '').trim();
   if (envExe) return envExe;
 
@@ -211,13 +211,32 @@ function defaultChromeExecutable(): string | null {
     return null;
   }
 
-  // Linux/Windows: rely on PATH resolution by spawn.
   const pathCandidates = process.platform === 'win32'
     ? ['chrome.exe', 'msedge.exe']
     : ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'brave', 'microsoft-edge'];
 
-  // If the command is on PATH, returning it is sufficient.
-  return pathCandidates[0] ?? null;
+  return findExecutableOnPath(pathCandidates);
+}
+
+function findExecutableOnPath(candidates: string[]): string | null {
+  const searchPath = process.env.PATH || '';
+
+  for (const dir of searchPath.split(path.delimiter)) {
+    if (!dir) continue;
+
+    for (const candidate of candidates) {
+      const fullPath = path.join(dir, candidate);
+
+      try {
+        fs.accessSync(fullPath, fs.constants.X_OK);
+        return fullPath;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  return null;
 }
 
 function isClosedTargetError(err: unknown): boolean {

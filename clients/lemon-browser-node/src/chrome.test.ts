@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-import { ChromeSession } from './chrome.js';
+import { ChromeSession, defaultChromeExecutable } from './chrome.js';
 
 const TEST_CONFIG = {
   cdpPort: 18800,
@@ -53,5 +56,50 @@ describe('ChromeSession.withPage', () => {
     await expect(session.withPage(operation)).rejects.toThrow('selector not found');
     expect(reconnect).not.toHaveBeenCalled();
     expect(operation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('defaultChromeExecutable', () => {
+  it('uses the first executable browser candidate found on PATH', () => {
+    if (process.platform === 'darwin') {
+      return;
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lemon-browser-path-'));
+    const executable = path.join(tmpDir, process.platform === 'win32' ? 'msedge.exe' : 'chromium');
+    const originalPath = process.env.PATH;
+    const originalLemonChrome = process.env.LEMON_CHROME_EXECUTABLE;
+    const originalChrome = process.env.CHROME_EXECUTABLE;
+
+    fs.writeFileSync(executable, '#!/usr/bin/env sh\nexit 0\n');
+    fs.chmodSync(executable, 0o755);
+
+    try {
+      delete process.env.LEMON_CHROME_EXECUTABLE;
+      delete process.env.CHROME_EXECUTABLE;
+      process.env.PATH = tmpDir;
+
+      expect(defaultChromeExecutable()).toBe(executable);
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+
+      if (originalLemonChrome === undefined) {
+        delete process.env.LEMON_CHROME_EXECUTABLE;
+      } else {
+        process.env.LEMON_CHROME_EXECUTABLE = originalLemonChrome;
+      }
+
+      if (originalChrome === undefined) {
+        delete process.env.CHROME_EXECUTABLE;
+      } else {
+        process.env.CHROME_EXECUTABLE = originalChrome;
+      }
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
