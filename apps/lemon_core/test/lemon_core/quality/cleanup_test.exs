@@ -59,13 +59,27 @@ defmodule LemonCore.Quality.CleanupTest do
       assert report.deleted_files == []
     end
 
-    test "prune with apply: true attempts deletion" do
-      report = Cleanup.prune(root: @repo_root, apply: true)
+    test "prune with apply: true deletes only files under the requested root" do
+      tmp_dir = Path.join(System.tmp_dir!(), "cleanup_test_#{System.unique_integer([:positive])}")
+      runs_dir = Path.join(tmp_dir, "docs/agent-loop/runs")
+      old_run_file = Path.join(runs_dir, "old-run.jsonl")
 
-      assert is_binary(report.root)
-      assert is_list(report.old_run_files)
-      # deleted_files may or may not be empty depending on actual file state
-      assert is_list(report.deleted_files)
+      File.mkdir_p!(runs_dir)
+      File.write!(old_run_file, "old run")
+
+      old_mtime = {{2020, 1, 1}, {0, 0, 0}}
+      File.touch!(old_run_file, old_mtime)
+
+      try do
+        report = Cleanup.prune(root: tmp_dir, today: ~D[2024-01-15], apply: true)
+
+        assert report.root == tmp_dir
+        assert report.old_run_files == [old_run_file]
+        assert report.deleted_files == [old_run_file]
+        refute File.exists?(old_run_file)
+      after
+        File.rm_rf!(tmp_dir)
+      end
     end
 
     test "prune respects custom retention days" do

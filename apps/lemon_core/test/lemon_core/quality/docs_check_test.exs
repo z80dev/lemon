@@ -3,11 +3,11 @@ defmodule LemonCore.Quality.DocsCheckTest do
 
   alias LemonCore.Quality.DocsCheck
 
-  @repo_root Path.expand("../../../../..", __DIR__)
-
   describe "run/1" do
-    test "docs check passes for the repository catalog" do
-      assert {:ok, report} = DocsCheck.run(root: @repo_root)
+    test "docs check passes for a valid catalog" do
+      tmp_dir = create_valid_tmp_dir()
+
+      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
       assert report.issue_count == 0
       assert report.checked_files > 0
       assert is_binary(report.root)
@@ -22,6 +22,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "nonexistent.md", owner: "test", last_reviewed: Date.from_iso8601!("2020-01-01"), max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -34,12 +35,16 @@ defmodule LemonCore.Quality.DocsCheckTest do
     end
 
     test "accepts custom today date for freshness checks" do
-      assert {:ok, report} = DocsCheck.run(root: @repo_root, today: Date.utc_today())
+      tmp_dir = create_valid_tmp_dir()
+
+      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
       assert is_integer(report.checked_files)
     end
 
     test "report structure contains all required fields" do
-      assert {:ok, report} = DocsCheck.run(root: @repo_root)
+      tmp_dir = create_valid_tmp_dir()
+
+      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
 
       assert Map.has_key?(report, :root)
       assert Map.has_key?(report, :checked_files)
@@ -68,12 +73,14 @@ defmodule LemonCore.Quality.DocsCheckTest do
       try do
         # Add the missing file to catalog (paths are relative to docs/ directory)
         catalog_path = Path.join(tmp_dir, "docs/catalog.exs")
+
         catalog_content = """
         [
           %{path: "docs/README.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365},
           %{path: "docs/guide.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
         ]
         """
+
         File.write!(catalog_path, catalog_content)
 
         assert {:ok, report} = DocsCheck.run(root: tmp_dir)
@@ -87,11 +94,13 @@ defmodule LemonCore.Quality.DocsCheckTest do
   describe "entry shape validation" do
     test "detects missing required fields in catalog entries" do
       tmp_dir = create_tmp_dir()
+
       catalog_content = """
       [
         %{owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -106,11 +115,13 @@ defmodule LemonCore.Quality.DocsCheckTest do
 
     test "detects invalid owner field" do
       tmp_dir = create_tmp_dir()
+
       catalog_content = """
       [
         %{path: "test.md", owner: "", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
       File.write!(Path.join(tmp_dir, "test.md"), "content")
 
@@ -126,11 +137,13 @@ defmodule LemonCore.Quality.DocsCheckTest do
 
     test "detects invalid max_age_days field" do
       tmp_dir = create_tmp_dir()
+
       catalog_content = """
       [
         %{path: "test.md", owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: -1}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
       File.write!(Path.join(tmp_dir, "test.md"), "content")
 
@@ -146,11 +159,13 @@ defmodule LemonCore.Quality.DocsCheckTest do
 
     test "detects missing last_reviewed field" do
       tmp_dir = create_tmp_dir()
+
       catalog_content = """
       [
         %{path: "test.md", owner: "test", max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -167,11 +182,13 @@ defmodule LemonCore.Quality.DocsCheckTest do
   describe "file existence checks" do
     test "detects catalog entries pointing to non-existent files" do
       tmp_dir = create_tmp_dir()
+
       catalog_content = """
       [
         %{path: "missing.md", owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -194,6 +211,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "exists.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -217,6 +235,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "stale.md", owner: "test", last_reviewed: "#{Date.to_iso8601(old_date)}" |> Date.from_iso8601!(), max_age_days: 30}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -241,6 +260,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "fresh.md", owner: "test", last_reviewed: "#{Date.to_iso8601(recent_date)}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -262,6 +282,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -285,6 +306,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "target.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -304,6 +326,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -323,6 +346,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -342,6 +366,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
       ]
       """
+
       File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
       try do
@@ -408,6 +433,20 @@ defmodule LemonCore.Quality.DocsCheckTest do
     tmp_dir
   end
 
+  defp create_valid_tmp_dir do
+    tmp_dir = create_tmp_dir()
+
+    File.write!(Path.join(tmp_dir, "docs/README.md"), "# README")
+
+    File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
+    [
+      %{path: "docs/README.md", owner: "test", last_reviewed: ~D[2026-06-01], max_age_days: 365}
+    ]
+    """)
+
+    tmp_dir
+  end
+
   defp create_tmp_dir_with_structure do
     tmp_dir = create_tmp_dir()
 
@@ -422,6 +461,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
       %{path: "docs/README.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
     ]
     """
+
     File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
 
     tmp_dir

@@ -20,8 +20,6 @@ defmodule Mix.Tasks.Lemon.Quality do
 
   @impl true
   def run(args) do
-    Mix.Task.run("app.start")
-
     {opts, _rest, _invalid} =
       OptionParser.parse(args,
         switches: [root: :string, validate_config: :boolean],
@@ -101,6 +99,8 @@ defmodule Mix.Tasks.Lemon.Quality do
   end
 
   defp validate_config do
+    Mix.Task.run("app.start")
+
     Mix.shell().info("Validating Lemon configuration...")
 
     case Modular.load_with_validation([]) do

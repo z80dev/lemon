@@ -1,6 +1,8 @@
 defmodule LemonCore.ReloadTest do
   use ExUnit.Case, async: false
 
+  @moduletag :reload
+
   alias Lemon.Reload
 
   defmodule TestCodeChangeServer do

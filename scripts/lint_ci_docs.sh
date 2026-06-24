@@ -173,28 +173,83 @@ else
   pass "J24: release.yml has no generic fallback release-note body"
 fi
 
-if [ -x "$ROOT/scripts/verify_release_runtime_boot" ] &&
-   grep -q 'scripts/verify_release_runtime_boot {artifact-directory}' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'channel_readiness.json' "$ROOT/scripts/verify_release_runtime_boot" 2>/dev/null &&
-   grep -q 'readiness_summary.json' "$ROOT/scripts/verify_release_runtime_boot" 2>/dev/null &&
-   grep -q 'channel_readiness.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'readiness_summary.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'channel_readiness.json' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'readiness_summary.json' "$ROOT/docs/support.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+script = root / "scripts/verify_release_runtime_boot"
+requirements = [
+    ("docs/release/release_checklist_and_support_policy.md", "scripts/verify_release_runtime_boot {artifact-directory}"),
+    ("scripts/verify_release_runtime_boot", "channel_readiness.json"),
+    ("scripts/verify_release_runtime_boot", "readiness_summary.json"),
+    ("docs/release/release_checklist_and_support_policy.md", "channel_readiness.json"),
+    ("docs/release/release_checklist_and_support_policy.md", "readiness_summary.json"),
+    ("docs/support.md", "channel_readiness.json"),
+    ("docs/support.md", "readiness_summary.json"),
+]
+missing = []
+if not script.exists() or not script.stat().st_mode & 0o111:
+    missing.append("scripts/verify_release_runtime_boot is missing or not executable")
+
+contents = {}
+for relative_path, token in requirements:
+    content = contents.setdefault(
+        relative_path,
+        (root / relative_path).read_text(encoding="utf-8"),
+    )
+    if token not in content:
+        missing.append(f"{relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J24: runtime boot verifier is documented"
 else
   fail "J24: runtime boot verifier is missing or undocumented"
 fi
 
-if grep -q 'scripts/verify_release_artifacts release-artifacts' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
-   grep -q 'fail_on_unmatched_files: true' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+path = root / ".github/workflows/release.yml"
+content = path.read_text(encoding="utf-8")
+tokens = [
+    "scripts/verify_release_artifacts release-artifacts",
+    "fail_on_unmatched_files: true",
+]
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J24: release.yml verifies assembled artifacts before publishing"
 else
   fail "J24: release.yml can publish without verifying assembled artifacts"
 fi
 
-if grep -q 'Verify the assembled artifact directory before publishing' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
-   grep -q 'Generate a manifest.json with version, channel, and SHA-256 checksums' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+path = root / ".github/workflows/release.yml"
+content = path.read_text(encoding="utf-8")
+tokens = [
+    "Verify the assembled artifact directory before publishing",
+    "Generate a manifest.json with version, channel, and SHA-256 checksums",
+]
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J24: release.yml summary matches artifact verification behavior"
 else
   fail "J24: release.yml summary is stale for artifact verification behavior"
@@ -300,29 +355,77 @@ else
   fail "J26: live-eval.yml is missing"
 fi
 
-if grep -q 'workflow_dispatch:' "$LIVE_EVAL_WORKFLOW" 2>/dev/null &&
-   ! grep -qE '(^|[[:space:]])pull_request:|(^|[[:space:]])push:' "$LIVE_EVAL_WORKFLOW" 2>/dev/null; then
+if python3 - "$LIVE_EVAL_WORKFLOW" <<'PYEOF'
+from pathlib import Path
+import re
+import sys
+
+content = Path(sys.argv[1]).read_text(encoding="utf-8")
+if "workflow_dispatch:" not in content:
+    sys.exit(1)
+if re.search(r"(^|[ \t])pull_request:|(^|[ \t])push:", content, re.M):
+    sys.exit(1)
+PYEOF
+then
   pass "J26: live-eval.yml is manual-only"
 else
   fail "J26: live-eval.yml must be workflow_dispatch-only"
 fi
 
-if grep -q 'otp-version: "28.5"' "$LIVE_EVAL_WORKFLOW" 2>/dev/null &&
-   grep -q 'elixir-version: "1.19.5"' "$LIVE_EVAL_WORKFLOW" 2>/dev/null; then
+if python3 - "$LIVE_EVAL_WORKFLOW" <<'PYEOF'
+from pathlib import Path
+import sys
+
+content = Path(sys.argv[1]).read_text(encoding="utf-8")
+tokens = ['otp-version: "28.5"', 'elixir-version: "1.19.5"']
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"live-eval.yml missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J26: live-eval.yml uses supported BEAM toolchain"
 else
   fail "J26: live-eval.yml does not use Elixir 1.19.5 / OTP 28.5"
 fi
 
-if grep -q 'secrets.LEMON_EVAL_API_KEY' "$LIVE_EVAL_WORKFLOW" 2>/dev/null &&
-   grep -q 'scripts/test live-eval' "$LIVE_EVAL_WORKFLOW" 2>/dev/null; then
+if python3 - "$LIVE_EVAL_WORKFLOW" <<'PYEOF'
+from pathlib import Path
+import sys
+
+content = Path(sys.argv[1]).read_text(encoding="utf-8")
+tokens = ["secrets.LEMON_EVAL_API_KEY", "scripts/test live-eval"]
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"live-eval.yml missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J26: live-eval.yml runs the canonical live-eval lane with secret-backed credentials"
 else
   fail "J26: live-eval.yml must run scripts/test live-eval with LEMON_EVAL_API_KEY secret support"
 fi
 
-if grep -q 'live-eval.yml' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'live-eval.yml' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+requirements = [
+    ("docs/testing.md", "live-eval.yml"),
+    ("docs/release/release_checklist_and_support_policy.md", "live-eval.yml"),
+]
+missing = []
+for relative_path, token in requirements:
+    content = (root / relative_path).read_text(encoding="utf-8")
+    if token not in content:
+        missing.append(f"{relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J26: live-eval workflow is documented"
 else
   fail "J26: live-eval workflow is not documented in testing and release docs"
@@ -356,455 +459,681 @@ else
   fail "J27: release-readiness scripts are not executable: ${READINESS_SCRIPT_MODE_ERRORS[*]}"
 fi
 
-if grep -q 'scripts/audit_1_0_readiness {version} {artifact-directory}' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/audit_1_0_readiness' "$ROOT/docs/plans/lemon-1.0-mainstream-readiness.md" 2>/dev/null; then
-  pass "J27: final 1.0 readiness audit is documented"
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+files = {
+    "audit": root / "scripts/audit_1_0_readiness",
+    "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
+    "launch_ledger": root / "docs/plans/lemon-1.0-mainstream-readiness.md",
+}
+contents = {name: path.read_text(encoding="utf-8") for name, path in files.items()}
+
+contracts = [
+    (
+        "final 1.0 readiness audit is documented",
+        [
+            ("release_docs", "scripts/audit_1_0_readiness {version} {artifact-directory}"),
+            ("launch_ledger", "scripts/audit_1_0_readiness"),
+        ],
+    ),
+    (
+        "final readiness audit prints blocker next steps",
+        [
+            ("audit", "gh workflow run live-eval.yml --ref v$VERSION"),
+            ("audit", "gh run watch {run-id} --exit-status"),
+            ("audit", "scripts/live_discord_matrix.py --channel-id"),
+        ],
+    ),
+    (
+        "final readiness audit requires Discord external-sender live proof",
+        [
+            ("audit", "LEMON_DISCORD_LIVE_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON"),
+            ("audit", "verify_discord_live_redacted_proof"),
+            ("audit", "discord_user_inbound_prompt_round_trip"),
+            ("audit", "discord_markdown_code_rendering"),
+            ("audit", "discord_long_output_chunking"),
+            ("audit", "discord_tool_success_failure_rendering"),
+            ("audit", "discord_file_delivery"),
+            ("release_docs", "LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json"),
+            (
+                "release_docs",
+                "LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json",
+            ),
+            ("release_docs", "scripts/live_discord_matrix.py --channel-id 1475727417372049419"),
+        ],
+    ),
+    (
+        "final readiness audit requires Discord media slash proof",
+        [
+            ("audit", "LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON"),
+            ("audit", "verify_discord_media_slash_redacted_proof"),
+            ("audit", "LEMON_DISCORD_ALL_SLASH_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON"),
+            ("audit", "verify_discord_all_slash_redacted_proof"),
+            ("audit", "verify_discord_all_slash_proof"),
+            ("audit", "contains_media_slash_registration"),
+            ("audit", "contains_all_slash_registration"),
+            ("audit", "discord_media_slash_registration"),
+            ("audit", "discord_all_slash_registration"),
+            ("audit", "--check-media-slash-registration"),
+            ("audit", "--check-all-slash-registration"),
+            (
+                "release_docs",
+                "LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-slash-registration-latest.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_ALL_SLASH_PROOF_JSON=tmp/discord-all-slash-proof-check.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-all-slash-registration-latest.json",
+            ),
+            ("release_docs", "--check-media-slash-registration"),
+            ("release_docs", "--check-all-slash-registration"),
+        ],
+    ),
+    (
+        "final readiness audit requires MEDIA directive proof",
+        [
+            ("audit", "verify_media_directive_redacted_proofs"),
+            ("audit", "LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON"),
+            ("audit", "telegram_forum_topic_media_directive_delivery"),
+            ("audit", "discord_media_directive_delivery"),
+            ("audit", "contains_media_directive"),
+            ("audit", "directive_leaked"),
+            ("audit", "--topic-media-directive-delivery"),
+            ("audit", "--wait-media-directive-delivery"),
+            (
+                "release_docs",
+                "LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/telegram-media-directive-latest.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-directive-latest.json",
+            ),
+            ("release_docs", "--proof-path .lemon/proofs/telegram-media-directive-latest.json"),
+            ("release_docs", "--proof-path .lemon/proofs/discord-media-directive-latest.json"),
+        ],
+    ),
+    (
+        "final readiness audit requires Discord DM/free-response/client-click proof",
+        [
+            ("audit", "verify_discord_dm_redacted_proof"),
+            ("audit", "verify_discord_free_response_redacted_proof"),
+            ("audit", "verify_discord_slash_client_click_proof"),
+            ("audit", "LEMON_DISCORD_DM_REDACTED_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON"),
+            ("audit", "discord_dm_prompt_round_trip"),
+            ("audit", "discord_free_response_trigger_round_trip"),
+            ("audit", "message_content_intent_declared"),
+            ("audit", "discord_slash_client_click_observed"),
+            ("audit", "discord_slash_client_click_safe_mentions"),
+            ("audit", "--wait-slash-client-click-proof"),
+            ("audit", "Discord DM proof reason_kind"),
+            ("audit", "Discord free-response proof reason_kind"),
+            ("audit", "Discord slash client-click proof reason_kind"),
+            ("audit", "real_client_click_proof"),
+            (
+                "release_docs",
+                "LEMON_DISCORD_DM_REDACTED_PROOF_JSON=.lemon/proofs/discord-dm-latest.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON=.lemon/proofs/discord-free-response-latest.json",
+            ),
+            (
+                "release_docs",
+                "LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON=.lemon/proofs/discord-slash-client-click-proof-latest.json",
+            ),
+            ("release_docs", "--wait-dm-inbound"),
+            ("release_docs", "--wait-free-response-trigger"),
+            ("release_docs", "--wait-slash-client-click-proof"),
+            ("release_docs", "--check-slash-client-click-proof"),
+            ("audit", "--proof-path .lemon/proofs/discord-slash-client-click-check-latest.json"),
+            ("release_docs", "--proof-path .lemon/proofs/discord-slash-client-click-check-latest.json"),
+        ],
+    ),
+]
+
+missing = []
+for label, requirements in contracts:
+    for file_key, token in requirements:
+        if token not in contents[file_key]:
+            missing.append(f"{label}: {files[file_key].relative_to(root)} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
+  pass "J27: final readiness audit structured proof contracts are documented"
 else
-  fail "J27: final 1.0 readiness audit is not documented in release docs and launch ledger"
+  fail "J27: final readiness audit structured proof contracts are missing terms"
 fi
 
-if grep -q 'gh workflow run live-eval.yml --ref v$VERSION' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'gh run watch {run-id} --exit-status' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_discord_matrix.py --channel-id' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null; then
-  pass "J27: final readiness audit prints blocker next steps"
-else
-  fail "J27: final readiness audit does not print blocker next steps"
-fi
+if python3 - "$ROOT" <<'PYEOF'
+import sys
+from pathlib import Path
 
-if grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_live_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_user_inbound_prompt_round_trip' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_markdown_code_rendering' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_long_output_chunking' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_tool_success_failure_rendering' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_file_delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/live_discord_matrix.py --channel-id 1475727417372049419' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires Discord external-sender live proof"
-else
-  fail "J27: final readiness audit does not require documented Discord external-sender live proof"
-fi
+root = Path(sys.argv[1])
+files = {
+    "audit": root / "scripts/audit_1_0_readiness",
+    "image_smoke": root / "scripts/live_media_image_smoke.exs",
+    "speech_smoke": root / "scripts/live_media_speech_smoke.exs",
+    "transcription_smoke": root / "scripts/live_media_transcription_smoke.exs",
+    "video_smoke": root / "scripts/live_media_video_smoke.exs",
+    "testing": root / "docs/testing.md",
+    "support": root / "docs/support.md",
+    "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
+    "support_bundle": root / "apps/lemon_core/lib/lemon_core/doctor/support_bundle.ex",
+    "support_bundle_test": root / "apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs",
+    "media_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/media_status.ex",
+    "control_plane_readme": root / "apps/lemon_control_plane/README.md",
+}
+contents = {key: path.read_text() for key, path in files.items()}
 
-if grep -q 'LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_media_slash_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ALL_SLASH_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_all_slash_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_all_slash_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'contains_media_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'contains_all_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_media_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_all_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--check-media-slash-registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--check-all-slash-registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-slash-registration-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ALL_SLASH_PROOF_JSON=tmp/discord-all-slash-proof-check.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-all-slash-registration-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--check-media-slash-registration' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--check-all-slash-registration' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires Discord media slash proof"
-else
-  fail "J27: final readiness audit does not require documented Discord media slash proof"
-fi
+requirements = [
+    ("audit", "verify_media_provider_proofs"),
+    ("audit", "verify_media_provider_proof"),
+    ("audit", "LEMON_MEDIA_IMAGE_PROOF_JSON"),
+    ("audit", "LEMON_MEDIA_SPEECH_PROOF_JSON"),
+    ("audit", "LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON"),
+    ("audit", "LEMON_MEDIA_VISION_PROOF_JSON"),
+    ("audit", "LEMON_MEDIA_VIDEO_PROOF_JSON"),
+    ("audit", "media_provider_openai_image"),
+    ("audit", "media_provider_vertex_imagen"),
+    ("audit", "media_provider_openai_tts"),
+    ("audit", "media_provider_elevenlabs_tts"),
+    ("audit", "media_provider_google_tts"),
+    ("audit", "media_provider_openai_transcribe"),
+    ("audit", "media_provider_deepgram_transcribe"),
+    ("audit", "media_provider_openai_vision"),
+    ("audit", "media_provider_openai_video"),
+    ("audit", "media_provider_vertex_veo"),
+    ("audit", "safe_reason_label"),
+    ("audit", "media proof reason_kind"),
+    ("audit", "media proof remediation hint"),
+    ("audit", "media proof rerun command"),
+    ("audit", "permission_denied"),
+    ("audit", "payment_required"),
+    ("image_smoke", "provider_prefixed_model_not_supported_for_media_type"),
+    ("speech_smoke", "provider_prefixed_model_not_supported_for_media_type"),
+    ("speech_smoke", "@default_elevenlabs_voice_id"),
+    ("transcription_smoke", "provider_prefixed_model_not_supported_for_media_type"),
+    ("video_smoke", "provider_prefixed_model_not_supported_for_media_type"),
+    ("testing", "provider-prefixed OpenAI-compatible routing"),
+    ("support", "provider-prefixed OpenAI-compatible routing"),
+    ("testing", "openai_image_http_error:billing_limit_user_error"),
+    ("testing", "vertex_imagen_http_error:permission_denied"),
+    ("testing", "google_tts_http_error:permission_denied"),
+    ("testing", "vertex_veo_create_http_error:permission_denied"),
+    ("release_docs", "--provider vertex_imagen"),
+    ("release_docs", "--provider google_tts"),
+    ("release_docs", "--provider vertex_veo"),
+    ("release_docs", "media_provider_vertex_imagen"),
+    ("release_docs", "media_provider_vertex_veo"),
+    ("release_docs", "google_tts"),
+    ("testing", "elevenlabs_tts_http_error:payment_required"),
+    ("testing", "deepgram_transcribe"),
+    ("release_docs", "Deepgram evidence"),
+    ("release_docs", "ElevenLabs proof script uses"),
+    ("audit", "lemon.media_image_smoke"),
+    ("audit", "lemon.media_speech_smoke"),
+    ("audit", "lemon.media_transcription_smoke"),
+    ("audit", "lemon.media_vision_smoke"),
+    ("audit", "lemon.media_video_smoke"),
+    ("release_docs", "LEMON_MEDIA_IMAGE_PROOF_JSON=.lemon/proofs/media-image-smoke-latest.json"),
+    ("release_docs", "LEMON_MEDIA_SPEECH_PROOF_JSON=.lemon/proofs/media-speech-smoke-latest.json"),
+    ("release_docs", "LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON=.lemon/proofs/media-transcription-smoke-latest.json"),
+    ("release_docs", "LEMON_MEDIA_VISION_PROOF_JSON=.lemon/proofs/media-vision-smoke-latest.json"),
+    ("release_docs", "LEMON_MEDIA_VIDEO_PROOF_JSON=.lemon/proofs/media-video-smoke-latest.json"),
+    ("release_docs", "mix run --no-start scripts/live_media_image_smoke.exs"),
+    ("release_docs", "mix run --no-start scripts/live_media_speech_smoke.exs"),
+    ("release_docs", "mix run --no-start scripts/live_media_transcription_smoke.exs"),
+    ("release_docs", "mix run --no-start scripts/live_media_vision_smoke.exs"),
+    ("release_docs", "mix run --no-start scripts/live_media_video_smoke.exs"),
+    ("audit", "mix run --no-start scripts/live_media_image_smoke.exs"),
+    ("audit", "mix run --no-start scripts/live_media_speech_smoke.exs"),
+    ("audit", "mix run --no-start scripts/live_media_transcription_smoke.exs"),
+    ("audit", "mix run --no-start scripts/live_media_vision_smoke.exs"),
+    ("audit", "mix run --no-start scripts/live_media_video_smoke.exs"),
+    ("support_bundle", "provider_live"),
+    ("support_bundle_test", "provider_live"),
+    ("media_status", '"providerProofs"'),
+    ("control_plane_readme", "provider-backed media proof lane state"),
+    ("support", "redacted `provider_live` summary"),
+    ("support", "JSON-RPC `media.status` also includes redacted provider-backed media proof"),
+    ("support", "same `--provider` rerun flag"),
+    ("audit", "--proof-path .lemon/proofs/media-image-smoke-latest.json"),
+    ("audit", "--proof-path .lemon/proofs/media-speech-smoke-latest.json"),
+    ("audit", "--proof-path .lemon/proofs/media-transcription-smoke-latest.json"),
+    ("audit", "--proof-path .lemon/proofs/media-vision-smoke-latest.json"),
+    ("audit", "--proof-path .lemon/proofs/media-video-smoke-latest.json"),
+    ("release_docs", "--proof-path .lemon/proofs/media-image-smoke-latest.json"),
+    ("release_docs", "--proof-path .lemon/proofs/media-speech-smoke-latest.json"),
+    ("release_docs", "--proof-path .lemon/proofs/media-transcription-smoke-latest.json"),
+    ("release_docs", "--proof-path .lemon/proofs/media-vision-smoke-latest.json"),
+    ("release_docs", "--proof-path .lemon/proofs/media-video-smoke-latest.json"),
+    ("audit", "--api-key-secret SECRET_NAME"),
+    ("release_docs", "--api-key-secret SECRET_NAME"),
+]
 
-if grep -q '^verify_media_directive_redacted_proofs$' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'telegram_forum_topic_media_directive_delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_media_directive_delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'contains_media_directive' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'directive_leaked' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--topic-media-directive-delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--wait-media-directive-delivery' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/telegram-media-directive-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-directive-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/telegram-media-directive-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/discord-media-directive-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires MEDIA directive proof"
-else
-  fail "J27: final readiness audit does not require documented MEDIA directive proof"
-fi
+missing = []
+for file_key, token in requirements:
+    if token not in contents[file_key]:
+        missing.append(f"{files[file_key].relative_to(root)} missing {token!r}")
 
-if grep -q 'verify_discord_dm_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_free_response_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_slash_client_click_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_DM_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_dm_prompt_round_trip' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_free_response_trigger_round_trip' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'message_content_intent_declared' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_slash_client_click_observed' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_slash_client_click_safe_mentions' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--wait-slash-client-click-proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'Discord DM proof reason_kind' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'Discord free-response proof reason_kind' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'Discord slash client-click proof reason_kind' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'real_client_click_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_DM_REDACTED_PROOF_JSON=.lemon/proofs/discord-dm-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON=.lemon/proofs/discord-free-response-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON=.lemon/proofs/discord-slash-client-click-proof-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--wait-dm-inbound' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--wait-free-response-trigger' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--wait-slash-client-click-proof' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--check-slash-client-click-proof' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/discord-slash-client-click-check-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/discord-slash-client-click-check-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires Discord DM/free-response/client-click proof"
-else
-  fail "J27: final readiness audit does not require documented Discord DM/free-response/client-click proof"
-fi
-
-if grep -q 'verify_media_provider_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_media_provider_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_IMAGE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_SPEECH_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_VISION_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_VIDEO_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_openai_image' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_vertex_imagen' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_openai_tts' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_elevenlabs_tts' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_google_tts' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_openai_transcribe' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_deepgram_transcribe' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_openai_vision' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_openai_video' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media_provider_vertex_veo' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'safe_reason_label' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media proof reason_kind' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media proof remediation hint' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'media proof rerun command' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'permission_denied' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'payment_required' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'provider_prefixed_model_not_supported_for_media_type' "$ROOT/scripts/live_media_image_smoke.exs" 2>/dev/null &&
-   grep -q 'provider_prefixed_model_not_supported_for_media_type' "$ROOT/scripts/live_media_speech_smoke.exs" 2>/dev/null &&
-   grep -q '@default_elevenlabs_voice_id' "$ROOT/scripts/live_media_speech_smoke.exs" 2>/dev/null &&
-   grep -q 'provider_prefixed_model_not_supported_for_media_type' "$ROOT/scripts/live_media_transcription_smoke.exs" 2>/dev/null &&
-   grep -q 'provider_prefixed_model_not_supported_for_media_type' "$ROOT/scripts/live_media_video_smoke.exs" 2>/dev/null &&
-   grep -q 'provider-prefixed OpenAI-compatible routing' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'provider-prefixed OpenAI-compatible routing' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'openai_image_http_error:billing_limit_user_error' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'vertex_imagen_http_error:permission_denied' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'google_tts_http_error:permission_denied' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'vertex_veo_create_http_error:permission_denied' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q -- '--provider vertex_imagen' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--provider google_tts' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--provider vertex_veo' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'media_provider_vertex_imagen' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'media_provider_vertex_veo' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'google_tts' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'elevenlabs_tts_http_error:payment_required' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'deepgram_transcribe' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'Deepgram evidence' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'ElevenLabs proof script uses' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'lemon.media_image_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.media_speech_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.media_transcription_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.media_vision_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.media_video_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_IMAGE_PROOF_JSON=.lemon/proofs/media-image-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_SPEECH_PROOF_JSON=.lemon/proofs/media-speech-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON=.lemon/proofs/media-transcription-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_VISION_PROOF_JSON=.lemon/proofs/media-vision-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MEDIA_VIDEO_PROOF_JSON=.lemon/proofs/media-video-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_image_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_speech_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_transcription_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_vision_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_video_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_image_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_speech_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_transcription_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_vision_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mix run --no-start scripts/live_media_video_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'provider_live' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/support_bundle.ex" 2>/dev/null &&
-   grep -q 'provider_live' "$ROOT/apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs" 2>/dev/null &&
-   grep -q '"providerProofs"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/media_status.ex" 2>/dev/null &&
-   grep -q 'provider-backed media proof lane state' "$ROOT/apps/lemon_control_plane/README.md" 2>/dev/null &&
-   grep -q 'redacted `provider_live` summary' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'JSON-RPC `media.status` also includes redacted provider-backed media proof' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'same `--provider` rerun flag' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-image-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-speech-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-transcription-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-vision-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-video-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-image-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-speech-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-transcription-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-vision-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--proof-path .lemon/proofs/media-video-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--api-key-secret SECRET_NAME' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q -- '--api-key-secret SECRET_NAME' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J27: final readiness audit requires provider-backed media proof"
 else
   fail "J27: final readiness audit does not require documented provider-backed media proof"
 fi
 
-if grep -q 'verify_openai_compat_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_OPENAI_COMPAT_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_openai_compat_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q '.lemon/proofs/openai-compat-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'external_openai_sdk_client' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'external_python_sdk_client' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'non_vision_image_rejection' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_OPENAI_COMPAT_PROOF_JSON=.lemon/proofs/openai-compat-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'openai_compat.api_preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/live_openai_compat_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires OpenAI-compatible API proof"
+if proof_contract_labels=$(python3 - "$ROOT" <<'PYEOF'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+files = {
+    "audit": root / "scripts/audit_1_0_readiness",
+    "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
+    "support": root / "docs/support.md",
+    "browser_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/browser_status.ex",
+    "lsp_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/lsp_diagnostics_status.ex",
+}
+contents = {key: path.read_text() for key, path in files.items()}
+
+contracts = [
+    (
+        "J27: final readiness audit requires OpenAI-compatible API proof",
+        [
+            ("audit", "verify_openai_compat_proof"),
+            ("audit", "LEMON_OPENAI_COMPAT_PROOF_JSON"),
+            ("audit", "scripts/live_openai_compat_smoke.exs"),
+            ("audit", ".lemon/proofs/openai-compat-smoke-latest.json"),
+            ("audit", "external_openai_sdk_client"),
+            ("audit", "external_python_sdk_client"),
+            ("audit", "non_vision_image_rejection"),
+            ("release_docs", "LEMON_OPENAI_COMPAT_PROOF_JSON=.lemon/proofs/openai-compat-smoke-latest.json"),
+            ("release_docs", "openai_compat.api_preview"),
+            ("release_docs", "scripts/live_openai_compat_smoke.exs"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires browser proof",
+        [
+            ("audit", "verify_browser_proof"),
+            ("audit", "LEMON_BROWSER_PROOF_JSON"),
+            ("audit", "scripts/live_browser_smoke.exs"),
+            ("audit", ".lemon/proofs/browser-smoke-latest.json"),
+            ("audit", "browser_cdp_attach_completed"),
+            ("audit", "browser_analyze_model_visible_image_included"),
+            ("audit", "includes_raw_paths"),
+            ("audit", "includes_screenshot_bytes"),
+            ("release_docs", "LEMON_BROWSER_PROOF_JSON=.lemon/proofs/browser-smoke-latest.json"),
+            ("release_docs", "browser.preview"),
+            ("release_docs", "scripts/live_browser_smoke.exs"),
+            ("browser_status", '"liveProof"'),
+            ("support", "browser operator diagnostics through JSON-RPC `browser.status`"),
+            ("support", "live browser proof"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires ACP proof",
+        [
+            ("audit", "verify_acp_proofs"),
+            ("audit", "LEMON_ACP_STDIO_PROOF_JSON"),
+            ("audit", "LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON"),
+            ("audit", "LEMON_ACP_OFFICIAL_SDK_PROOF_JSON"),
+            ("audit", "scripts/live_acp_stdio_smoke.exs"),
+            ("audit", "scripts/live_acp_stdio_external_client.mjs"),
+            ("audit", "scripts/live_acp_official_sdk_client.mjs"),
+            ("audit", "lemon.acp_stdio_smoke"),
+            ("audit", "lemon.acp_stdio_external_client_smoke"),
+            ("audit", "lemon.acp_official_sdk_client_smoke"),
+            ("release_docs", "LEMON_ACP_STDIO_PROOF_JSON=.lemon/proofs/acp-stdio-smoke-latest.json"),
+            ("release_docs", "LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON=.lemon/proofs/acp-stdio-external-client-latest.json"),
+            ("release_docs", "LEMON_ACP_OFFICIAL_SDK_PROOF_JSON=.lemon/proofs/acp-official-sdk-client-latest.json"),
+            ("release_docs", "acp.preview"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires MCP proof",
+        [
+            ("audit", "verify_mcp_proofs"),
+            ("audit", "LEMON_MCP_STDIO_PROOF_JSON"),
+            ("audit", "LEMON_MCP_HTTP_PROOF_JSON"),
+            ("audit", "LEMON_MCP_SSE_PROOF_JSON"),
+            ("audit", "scripts/live_mcp_stdio_smoke.exs"),
+            ("audit", "scripts/live_mcp_http_smoke.exs"),
+            ("audit", "scripts/live_mcp_sse_smoke.exs"),
+            ("audit", "mcp_stdio_smoke"),
+            ("audit", "mcp_http_smoke"),
+            ("audit", "mcp_sse_smoke"),
+            ("release_docs", "LEMON_MCP_STDIO_PROOF_JSON=.lemon/proofs/mcp-stdio-latest.json"),
+            ("release_docs", "LEMON_MCP_HTTP_PROOF_JSON=.lemon/proofs/mcp-http-latest.json"),
+            ("release_docs", "LEMON_MCP_SSE_PROOF_JSON=.lemon/proofs/mcp-sse-latest.json"),
+            ("release_docs", "mcp.preview"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires LSP proof",
+        [
+            ("audit", "verify_lsp_proofs"),
+            ("audit", "LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON"),
+            ("audit", "LEMON_LSP_REAL_REPO_PROOF_JSON"),
+            ("audit", "scripts/live_lsp_server_smoke.exs"),
+            ("audit", "lsp_project_fixtures_smoke"),
+            ("audit", "lsp_real_repo_fixtures_smoke"),
+            ("release_docs", "LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON=.lemon/proofs/lsp-project-fixtures-latest.json"),
+            ("release_docs", "LEMON_LSP_REAL_REPO_PROOF_JSON=.lemon/proofs/lsp-real-repo-fixtures-latest.json"),
+            ("release_docs", "lsp.preview"),
+            ("lsp_status", "Map.put(:proofs, lsp_proof_status(project_dir))"),
+            ("support", "recent redacted LSP proof artifacts"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires extension and WASM proof",
+        [
+            ("audit", "verify_extension_proofs"),
+            ("audit", "LEMON_EXTENSION_HOST_PROOF_JSON"),
+            ("audit", "LEMON_WASM_TELEMETRY_PROOF_JSON"),
+            ("audit", "LEMON_WASM_POLICY_PROOF_JSON"),
+            ("audit", "LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON"),
+            ("audit", "LEMON_WASM_LIFECYCLE_PROOF_JSON"),
+            ("audit", "scripts/live_extension_host_smoke.exs"),
+            ("audit", "scripts/live_wasm_telemetry_smoke.exs"),
+            ("audit", "scripts/live_wasm_policy_smoke.exs"),
+            ("audit", "scripts/live_extension_registry_audit_smoke.exs"),
+            ("audit", "scripts/live_wasm_lifecycle_smoke.exs"),
+            ("audit", "extension_host_smoke"),
+            ("audit", "wasm_tool_telemetry_smoke"),
+            ("audit", "wasm_policy_smoke"),
+            ("audit", "extension_registry_audit_smoke"),
+            ("audit", "wasm_lifecycle_smoke"),
+            ("release_docs", "LEMON_EXTENSION_HOST_PROOF_JSON=.lemon/proofs/extension-host-smoke-latest.json"),
+            ("release_docs", "LEMON_WASM_TELEMETRY_PROOF_JSON=.lemon/proofs/wasm-tool-telemetry-latest.json"),
+            ("release_docs", "LEMON_WASM_POLICY_PROOF_JSON=.lemon/proofs/wasm-policy-latest.json"),
+            ("release_docs", "LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON=.lemon/proofs/extension-registry-audit-latest.json"),
+            ("release_docs", "LEMON_WASM_LIFECYCLE_PROOF_JSON=.lemon/proofs/wasm-lifecycle-latest.json"),
+            ("release_docs", "extensions.wasm_lifecycle"),
+        ],
+    ),
+]
+
+missing = []
+for label, requirements in contracts:
+    for file_key, token in requirements:
+        if token not in contents[file_key]:
+            missing.append(f"{label}: {files[file_key].relative_to(root)} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+
+for label, _requirements in contracts:
+    print(label)
+PYEOF
+); then
+  while IFS= read -r label; do
+    [ -n "$label" ] && pass "$label"
+  done <<< "$proof_contract_labels"
 else
-  fail "J27: final readiness audit does not require documented OpenAI-compatible API proof"
+  fail "J27: final readiness audit preview proof contracts are incomplete"
 fi
 
-if grep -q 'verify_browser_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_BROWSER_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_browser_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q '.lemon/proofs/browser-smoke-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'browser_cdp_attach_completed' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'browser_analyze_model_visible_image_included' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'includes_raw_paths' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'includes_screenshot_bytes' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_BROWSER_PROOF_JSON=.lemon/proofs/browser-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'browser.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/live_browser_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q '"liveProof"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/browser_status.ex" 2>/dev/null &&
-   grep -q 'browser operator diagnostics through JSON-RPC `browser.status`' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'live browser proof' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires browser proof"
+if readiness_contract_labels=$(python3 - "$ROOT" <<'PYEOF'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+files = {
+    "audit": root / "scripts/audit_1_0_readiness",
+    "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
+    "support": root / "docs/support.md",
+    "compare": root / "docs/compare.md",
+    "docs_readme": root / "docs/README.md",
+    "vitepress": root / "docs/.vitepress/config.js",
+    "channel_matrix": root / "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
+    "terminal_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/terminal_backends_status.ex",
+    "proofs_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex",
+    "proof_launch_gates": root / "apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex",
+    "channels_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/channels_status.ex",
+    "cron_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex",
+    "control_plane_readme": root / "apps/lemon_control_plane/README.md",
+    "control_plane_agents": root / "apps/lemon_control_plane/AGENTS.md",
+}
+contents = {key: path.read_text() for key, path in files.items()}
+
+contracts = [
+    (
+        "J27: final readiness audit requires terminal backend proof",
+        [
+            ("audit", "verify_terminal_backend_proof"),
+            ("audit", "LEMON_TERMINAL_BACKEND_PROOF_JSON"),
+            ("audit", "scripts/live_terminal_backend_smoke.exs"),
+            ("audit", ".lemon/proofs/terminal-backend-latest.json"),
+            ("audit", "local_pty"),
+            ("release_docs", "LEMON_TERMINAL_BACKEND_PROOF_JSON=.lemon/proofs/terminal-backend-latest.json"),
+            ("release_docs", "terminal.backends_live"),
+            ("release_docs", "scripts/live_terminal_backend_smoke.exs"),
+            ("terminal_status", '"liveProof"'),
+            ("terminal_status", '"terminalHardening"'),
+            ("support", "Control-plane `terminal.backends.status` includes the same terminal live-proof"),
+        ],
+    ),
+    (
+        "J27: proof status exposes launch-gate summaries",
+        [
+            ("proofs_status", '"launchGates"'),
+            ("proofs_status", "ProofLaunchGates.status"),
+            ("proof_launch_gates", '"discordDm"'),
+            ("proof_launch_gates", '"discordSlashRegistration"'),
+            ("proof_launch_gates", '"providerMedia"'),
+            ("control_plane_readme", "Discord slash registration"),
+            ("control_plane_readme", "launch-gate summaries"),
+            ("support", "Discord slash registration"),
+            ("support", "`launchGates` summary"),
+        ],
+    ),
+    (
+        "J27: channel status exposes compact launch-gate summary maps",
+        [
+            ("channels_status", '"launchGateStatuses"'),
+            ("channels_status", '"launchGateReasonKinds"'),
+            ("control_plane_readme", "compact gate status/reason maps"),
+            ("control_plane_agents", "compact gate status/reason maps"),
+            ("support", "launchGateStatuses"),
+            ("support", "launchGateReasonKinds"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires cron proof",
+        [
+            ("audit", "verify_cron_proofs"),
+            ("audit", "LEMON_CRON_DIAGNOSTICS_PROOF_JSON"),
+            ("audit", "LEMON_CRON_RUNTIME_RESTART_PROOF_JSON"),
+            ("audit", "LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON"),
+            ("audit", "scripts/live_cron_diagnostics_smoke.exs"),
+            ("audit", "scripts/live_cron_runtime_restart_smoke.exs"),
+            ("audit", "scripts/live_cron_channel_origin_smoke.exs"),
+            ("audit", "lemon.cron_diagnostics_smoke"),
+            ("audit", "lemon.cron_runtime_restart_smoke"),
+            ("audit", "lemon.cron_channel_origin_smoke"),
+            ("release_docs", "LEMON_CRON_DIAGNOSTICS_PROOF_JSON=.lemon/proofs/cron-diagnostics-latest.json"),
+            ("release_docs", "LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json"),
+            ("release_docs", "LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json"),
+            ("release_docs", "cron.preview"),
+            ("cron_status", "suppressedSlotCount"),
+            ("cron_status", "retryScheduledCount"),
+            ("support", "control-plane `cron.status` surfaces cron scheduler health"),
+        ],
+    ),
+    (
+        "J27: final readiness audit enforces public Hermes-gap support boundaries",
+        [
+            ("audit", "verify_public_support_boundaries"),
+            ("support", "OpenAI-compatible API server behavior"),
+            ("support", "ACP editor integration"),
+            ("support", "checkpointing for destructive shell commands"),
+            ("support", "first-class browser automation"),
+            ("support", "production support for third-party plugins"),
+            ("support", "Discord support is bounded to the live-proven path"),
+            ("compare", "Discord behavior beyond the live-proven text-first and file-delivery boundary"),
+            ("compare", "stable Telegram and Discord text-first support"),
+        ],
+    ),
+    (
+        "J27: final readiness audit requires bounded channel command parity matrix",
+        [
+            ("audit", "verify_channel_command_matrix"),
+            ("docs_readme", "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md"),
+            ("vitepress", "lemon-channel-command-parity-matrix-2026-05-12"),
+            ("channel_matrix", "Stable Telegram text-first command boundary"),
+            ("channel_matrix", "Preview Discord command boundary"),
+            ("channel_matrix", "Hermes drop-in command parity is not a Lemon 1.0 claim"),
+        ],
+    ),
+]
+
+missing = []
+for label, requirements in contracts:
+    for file_key, token in requirements:
+        if token not in contents[file_key]:
+            missing.append(f"{label}: {files[file_key].relative_to(root)} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+
+for label, _requirements in contracts:
+    print(label)
+PYEOF
+); then
+  while IFS= read -r label; do
+    [ -n "$label" ] && pass "$label"
+  done <<< "$readiness_contract_labels"
 else
-  fail "J27: final readiness audit does not require documented browser proof"
+  fail "J27: readiness proof and support boundary contracts are incomplete"
 fi
 
-if grep -q 'verify_acp_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_ACP_STDIO_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_ACP_OFFICIAL_SDK_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_acp_stdio_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_acp_stdio_external_client.mjs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_acp_official_sdk_client.mjs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.acp_stdio_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.acp_stdio_external_client_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.acp_official_sdk_client_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_ACP_STDIO_PROOF_JSON=.lemon/proofs/acp-stdio-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON=.lemon/proofs/acp-stdio-external-client-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_ACP_OFFICIAL_SDK_PROOF_JSON=.lemon/proofs/acp-official-sdk-client-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'acp.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires ACP proof"
-else
-  fail "J27: final readiness audit does not require documented ACP proof"
-fi
+if handoff_contract_labels=$(python3 - "$ROOT" <<'PYEOF'
+import sys
+from pathlib import Path
 
-if grep -q 'verify_mcp_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MCP_STDIO_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MCP_HTTP_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MCP_SSE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_mcp_stdio_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_mcp_http_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_mcp_sse_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mcp_stdio_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mcp_http_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'mcp_sse_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_MCP_STDIO_PROOF_JSON=.lemon/proofs/mcp-stdio-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MCP_HTTP_PROOF_JSON=.lemon/proofs/mcp-http-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_MCP_SSE_PROOF_JSON=.lemon/proofs/mcp-sse-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'mcp.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires MCP proof"
-else
-  fail "J27: final readiness audit does not require documented MCP proof"
-fi
+root = Path(sys.argv[1])
+files = {
+    "audit": root / "scripts/audit_1_0_readiness",
+    "discord_matrix": root / "scripts/live_discord_matrix.py",
+    "proof_diagnostics": root / "apps/lemon_core/lib/lemon_core/doctor/proof_diagnostics.ex",
+    "proofs_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex",
+    "channel_diagnostics": root / "apps/lemon_core/lib/lemon_core/doctor/channel_diagnostics.ex",
+    "channel_matrix": root / "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
+    "support": root / "docs/support.md",
+    "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
+    "testing": root / "docs/testing.md",
+    "completion_audit": root / "docs/plans/lemon-1.0-completion-audit-2026-05-12.md",
+}
+contents = {key: path.read_text() for key, path in files.items()}
 
-if grep -q 'verify_lsp_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_LSP_REAL_REPO_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_lsp_server_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lsp_project_fixtures_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lsp_real_repo_fixtures_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON=.lemon/proofs/lsp-project-fixtures-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_LSP_REAL_REPO_PROOF_JSON=.lemon/proofs/lsp-real-repo-fixtures-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'lsp.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'Map.put(:proofs, lsp_proof_status(project_dir))' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/lsp_diagnostics_status.ex" 2>/dev/null &&
-   grep -q 'recent redacted LSP proof artifacts' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires LSP proof"
-else
-  fail "J27: final readiness audit does not require documented LSP proof"
-fi
+contracts = [
+    (
+        "J27: rollback slash alias, audit gate, and proof coverage stay documented",
+        [
+            ("discord_matrix", "rollback_command_schema/0"),
+            ("discord_matrix", "--check-rollback-slash-registration"),
+            ("discord_matrix", "--register-rollback-slash-command"),
+            ("discord_matrix", "contains_rollback_slash_registration"),
+            ("audit", "verify_discord_rollback_slash_proof"),
+            ("audit", "verify_discord_rollback_slash_redacted_proof"),
+            ("audit", "LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON"),
+            ("audit", "LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON"),
+            ("audit", "discord_rollback_slash_registration"),
+            ("audit", "contains_rollback_slash_registration"),
+            ("audit", "expected != 16"),
+            ("proof_diagnostics", "contains_rollback_slash_registration"),
+            ("proofs_status", "containsRollbackSlashRegistration"),
+            ("channel_diagnostics", '"rollback"'),
+            ("channel_matrix", "Rollback: `/rollback`"),
+            ("channel_matrix", "checkpoint/rollback/kanban/media"),
+            ("support", "contains_rollback_slash_registration"),
+            ("release_docs", "LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON=tmp/discord-rollback-slash-proof-check.json"),
+            (
+                "release_docs",
+                "LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-rollback-slash-registration-latest.json",
+            ),
+            ("release_docs", "--check-rollback-slash-registration"),
+            ("testing", "--register-rollback-slash-command"),
+            ("testing", "--check-rollback-slash-registration"),
+        ],
+    ),
+    (
+        "J27: release handoff docs avoid duplicate workflow runs",
+        [
+            ("release_docs", "Do not use both paths"),
+            ("release_docs", "-f channel=stable"),
+            ("release_docs", "refusing to publish with a dirty tree"),
+            ("release_docs", "git log -1 --oneline"),
+            ("release_docs", "git rev-list --count origin/main..HEAD"),
+            ("release_docs", "git log --oneline origin/main..HEAD"),
+            ("release_docs", "git push origin main"),
+        ],
+    ),
+    (
+        "J27: live-eval handoff requires watching the intended run",
+        [
+            ("testing", "gh run watch {run-id} --exit-status"),
+            ("release_docs", "gh run watch {run-id} --exit-status"),
+            ("completion_audit", "gh run watch {run-id} --exit-status"),
+            ("audit", "gh run watch {run-id} --exit-status"),
+        ],
+    ),
+    (
+        "J27: live-eval handoff documents repository secret setup",
+        [
+            ("testing", "gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon"),
+            ("release_docs", "gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon"),
+            ("completion_audit", "gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon"),
+            ("audit", "gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon"),
+        ],
+    ),
+]
 
-if grep -q 'verify_extension_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_EXTENSION_HOST_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_WASM_TELEMETRY_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_WASM_POLICY_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_WASM_LIFECYCLE_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_extension_host_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_wasm_telemetry_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_wasm_policy_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_extension_registry_audit_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_wasm_lifecycle_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'extension_host_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'wasm_tool_telemetry_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'wasm_policy_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'extension_registry_audit_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'wasm_lifecycle_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_EXTENSION_HOST_PROOF_JSON=.lemon/proofs/extension-host-smoke-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_WASM_TELEMETRY_PROOF_JSON=.lemon/proofs/wasm-tool-telemetry-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_WASM_POLICY_PROOF_JSON=.lemon/proofs/wasm-policy-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON=.lemon/proofs/extension-registry-audit-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_WASM_LIFECYCLE_PROOF_JSON=.lemon/proofs/wasm-lifecycle-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'extensions.wasm_lifecycle' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires extension and WASM proof"
-else
-  fail "J27: final readiness audit does not require documented extension and WASM proof"
-fi
+missing = []
+for label, requirements in contracts:
+    for file_key, token in requirements:
+        if token not in contents[file_key]:
+            missing.append(f"{label}: {files[file_key].relative_to(root)} missing {token!r}")
 
-if grep -q 'verify_terminal_backend_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_TERMINAL_BACKEND_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_terminal_backend_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q '.lemon/proofs/terminal-backend-latest.json' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'local_pty' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_TERMINAL_BACKEND_PROOF_JSON=.lemon/proofs/terminal-backend-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'terminal.backends_live' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/live_terminal_backend_smoke.exs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q '"liveProof"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/terminal_backends_status.ex" 2>/dev/null &&
-   grep -q '"terminalHardening"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/terminal_backends_status.ex" 2>/dev/null &&
-   grep -q 'Control-plane `terminal.backends.status` includes the same terminal live-proof' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires terminal backend proof"
-else
-  fail "J27: final readiness audit does not require documented terminal backend proof"
-fi
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
 
-if grep -q '"launchGates"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex" 2>/dev/null &&
-   grep -q 'ProofLaunchGates.status' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex" 2>/dev/null &&
-   grep -q '"discordDm"' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex" 2>/dev/null &&
-   grep -q '"discordSlashRegistration"' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex" 2>/dev/null &&
-   grep -q '"providerMedia"' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex" 2>/dev/null &&
-   grep -q 'Discord slash registration' "$ROOT/apps/lemon_control_plane/README.md" 2>/dev/null &&
-   grep -q 'launch-gate summaries' "$ROOT/apps/lemon_control_plane/README.md" 2>/dev/null &&
-   grep -q 'Discord slash registration' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q '`launchGates` summary' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: proof status exposes launch-gate summaries"
+for label, _requirements in contracts:
+    print(label)
+PYEOF
+); then
+  while IFS= read -r label; do
+    [ -n "$label" ] && pass "$label"
+  done <<< "$handoff_contract_labels"
 else
-  fail "J27: proof status launch-gate summaries are not documented"
-fi
-
-if grep -q '"launchGateStatuses"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/channels_status.ex" 2>/dev/null &&
-   grep -q '"launchGateReasonKinds"' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/channels_status.ex" 2>/dev/null &&
-   grep -q 'compact gate status/reason maps' "$ROOT/apps/lemon_control_plane/README.md" 2>/dev/null &&
-   grep -q 'compact gate status/reason maps' "$ROOT/apps/lemon_control_plane/AGENTS.md" 2>/dev/null &&
-   grep -q 'launchGateStatuses' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'launchGateReasonKinds' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: channel status exposes compact launch-gate summary maps"
-else
-  fail "J27: channel status launch-gate summary maps are not documented"
-fi
-
-if grep -q 'verify_cron_proofs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_CRON_DIAGNOSTICS_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_CRON_RUNTIME_RESTART_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_cron_diagnostics_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_cron_runtime_restart_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/live_cron_channel_origin_smoke.exs' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.cron_diagnostics_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.cron_runtime_restart_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'lemon.cron_channel_origin_smoke' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_CRON_DIAGNOSTICS_PROOF_JSON=.lemon/proofs/cron-diagnostics-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'cron.preview' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'suppressedSlotCount' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex" 2>/dev/null &&
-   grep -q 'retryScheduledCount' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex" 2>/dev/null &&
-   grep -q 'control-plane `cron.status` surfaces cron scheduler health' "$ROOT/docs/support.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires cron proof"
-else
-  fail "J27: final readiness audit does not require documented cron proof"
-fi
-
-if grep -q 'verify_public_support_boundaries' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'OpenAI-compatible API server behavior' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'ACP editor integration' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'checkpointing for destructive shell commands' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'first-class browser automation' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'production support for third-party plugins' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'Discord support is bounded to the live-proven path' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'Discord behavior beyond the live-proven text-first and file-delivery boundary' "$ROOT/docs/compare.md" 2>/dev/null &&
-   grep -q 'stable Telegram and Discord text-first support' "$ROOT/docs/compare.md" 2>/dev/null; then
-  pass "J27: final readiness audit enforces public Hermes-gap support boundaries"
-else
-  fail "J27: public support docs do not consistently bound unresolved Hermes-only surfaces"
-fi
-
-if grep -q 'verify_channel_command_matrix' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md' "$ROOT/docs/README.md" 2>/dev/null &&
-   grep -q 'lemon-channel-command-parity-matrix-2026-05-12' "$ROOT/docs/.vitepress/config.js" 2>/dev/null &&
-   grep -q 'Stable Telegram text-first command boundary' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'Preview Discord command boundary' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'Hermes drop-in command parity is not a Lemon 1.0 claim' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null; then
-  pass "J27: final readiness audit requires bounded channel command parity matrix"
-else
-  fail "J27: channel command parity matrix is missing, unlinked, or not bounded"
-fi
-
-if grep -q 'rollback_command_schema/0' "$ROOT/scripts/live_discord_matrix.py" 2>/dev/null &&
-   grep -q -- '--check-rollback-slash-registration' "$ROOT/scripts/live_discord_matrix.py" 2>/dev/null &&
-   grep -q -- '--register-rollback-slash-command' "$ROOT/scripts/live_discord_matrix.py" 2>/dev/null &&
-   grep -q 'contains_rollback_slash_registration' "$ROOT/scripts/live_discord_matrix.py" 2>/dev/null &&
-   grep -q 'verify_discord_rollback_slash_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'verify_discord_rollback_slash_redacted_proof' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'discord_rollback_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'contains_rollback_slash_registration' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'expected != 16' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'contains_rollback_slash_registration' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/proof_diagnostics.ex" 2>/dev/null &&
-   grep -q 'containsRollbackSlashRegistration' "$ROOT/apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex" 2>/dev/null &&
-   grep -q '"rollback"' "$ROOT/apps/lemon_core/lib/lemon_core/doctor/channel_diagnostics.ex" 2>/dev/null &&
-   grep -q 'Rollback: `/rollback`' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'checkpoint/rollback/kanban/media' "$ROOT/docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'contains_rollback_slash_registration' "$ROOT/docs/support.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON=tmp/discord-rollback-slash-proof-check.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-rollback-slash-registration-latest.json' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--check-rollback-slash-registration' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '--register-rollback-slash-command' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q -- '--check-rollback-slash-registration' "$ROOT/docs/testing.md" 2>/dev/null; then
-  pass "J27: rollback slash alias, audit gate, and proof coverage stay documented"
-else
-  fail "J27: rollback slash alias, audit gate, or proof coverage documentation drifted"
-fi
-
-if grep -q 'Do not use both paths' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q -- '-f channel=stable' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'refusing to publish with a dirty tree' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'git log -1 --oneline' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'git rev-list --count origin/main..HEAD' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'git log --oneline origin/main..HEAD' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'git push origin main' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
-  pass "J27: release handoff docs avoid duplicate workflow runs"
-else
-  fail "J27: release handoff docs do not require pushing readiness changes before tag publish or do not distinguish tag-push and manual-dispatch paths"
-fi
-
-if grep -q 'gh run watch {run-id} --exit-status' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'gh run watch {run-id} --exit-status' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'gh run watch {run-id} --exit-status' "$ROOT/docs/plans/lemon-1.0-completion-audit-2026-05-12.md" 2>/dev/null &&
-   grep -q 'gh run watch {run-id} --exit-status' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null; then
-  pass "J27: live-eval handoff requires watching the intended run"
-else
-  fail "J27: live-eval handoff does not require watching the intended run"
-fi
-
-if grep -q 'gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon' "$ROOT/docs/plans/lemon-1.0-completion-audit-2026-05-12.md" 2>/dev/null &&
-   grep -q 'gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null; then
-  pass "J27: live-eval handoff documents repository secret setup"
-else
-  fail "J27: live-eval handoff does not document repository secret setup"
+  fail "J27: rollback and release handoff contracts are incomplete"
 fi
 
 # ── J28: first-party BEAM toolchain pins must stay current ───────────────────
@@ -845,241 +1174,446 @@ else
   fail "J29: scripts/verify_docs_site is missing or not executable"
 fi
 
-if grep -q 'scripts/verify_docs_site' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/verify_docs_site' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+requirements = [
+    ("scripts/audit_1_0_readiness", "scripts/verify_docs_site"),
+    ("docs/release/release_checklist_and_support_policy.md", "scripts/verify_docs_site"),
+]
+missing = []
+for relative_path, token in requirements:
+    content = (root / relative_path).read_text(encoding="utf-8")
+    if token not in content:
+        missing.append(f"{relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J29: final readiness audit includes documented docs-site verification"
 else
   fail "J29: final readiness audit does not include documented docs-site verification"
 fi
 
 # ── J30: final audit must include canonical local release-candidate tests ────
-if grep -q 'scripts/test fast' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/test quality' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/test eval-fast' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null &&
-   grep -q 'scripts/test clients' "$ROOT/scripts/audit_1_0_readiness" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+path = root / "scripts/audit_1_0_readiness"
+content = path.read_text(encoding="utf-8")
+tokens = [
+    "scripts/test fast",
+    "scripts/test quality",
+    "scripts/test eval-fast",
+    "scripts/test clients",
+]
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J30: final readiness audit runs canonical local test lanes"
 else
   fail "J30: final readiness audit is missing one or more canonical local test lanes"
 fi
 
-if grep -q 'scripts/test fast' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/test quality' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/test eval-fast' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'scripts/test clients' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+path = root / "docs/release/release_checklist_and_support_policy.md"
+content = path.read_text(encoding="utf-8")
+tokens = [
+    "scripts/test fast",
+    "scripts/test quality",
+    "scripts/test eval-fast",
+    "scripts/test clients",
+]
+missing = [token for token in tokens if token not in content]
+if missing:
+    print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J30: release checklist documents canonical local test lanes"
 else
   fail "J30: release checklist does not document all canonical local test lanes"
 fi
 
 # ── J31: OSV supply-chain scan parity must stay wired and documented ────────
-if grep -q 'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q 'security-events: write' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=mix.lock' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=clients/lemon-cli/uv.lock' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=clients/lemon-web/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=clients/lemon-tui/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=clients/lemon-browser-node/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=apps/lemon_gateway/priv/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q -- '--lockfile=tools/diagrams/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q 'fail-on-vuln: false' "$ROOT/.github/workflows/osv-scanner.yml" 2>/dev/null &&
-   grep -q 'OSV Scanner workflow' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q '94c523f0c' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+requirements = [
+    (
+        "OSV scanner workflow",
+        [
+            (".github/workflows/osv-scanner.yml", "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5"),
+            (".github/workflows/osv-scanner.yml", "security-events: write"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=mix.lock"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-cli/uv.lock"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-web/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-tui/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-browser-node/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=apps/lemon_gateway/priv/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=tools/diagrams/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "fail-on-vuln: false"),
+            ("docs/release/release_checklist_and_support_policy.md", "OSV Scanner workflow"),
+            ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "94c523f0c"),
+        ],
+    ),
+]
+contents = {}
+missing = []
+for label, checks in requirements:
+    for relative_path, token in checks:
+        content = contents.setdefault(
+            relative_path,
+            (root / relative_path).read_text(encoding="utf-8"),
+        )
+        if token not in content:
+            missing.append(f"{label}: {relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J31: OSV scanner supply-chain parity workflow is documented"
 else
   fail "J31: OSV scanner supply-chain parity workflow is missing or undocumented"
 fi
 
 # ── J32: PR history integrity check must stay wired and documented ───────────
-if grep -q 'name: History Check' "$ROOT/.github/workflows/history-check.yml" 2>/dev/null &&
-   grep -q 'pull_request:' "$ROOT/.github/workflows/history-check.yml" 2>/dev/null &&
-   grep -q 'fetch-depth: 0' "$ROOT/.github/workflows/history-check.yml" 2>/dev/null &&
-   grep -q 'git merge-base "origin/${GITHUB_BASE_REF}" HEAD' "$ROOT/.github/workflows/history-check.yml" 2>/dev/null &&
-   grep -q 'no common ancestor' "$ROOT/.github/workflows/history-check.yml" 2>/dev/null &&
-   grep -q 'History Check workflow' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'unrelated-history PRs' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'history-check.yml' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q '94c523f0c' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+requirements = [
+    (".github/workflows/history-check.yml", "name: History Check"),
+    (".github/workflows/history-check.yml", "pull_request:"),
+    (".github/workflows/history-check.yml", "fetch-depth: 0"),
+    (".github/workflows/history-check.yml", 'git merge-base "origin/${GITHUB_BASE_REF}" HEAD'),
+    (".github/workflows/history-check.yml", "no common ancestor"),
+    ("docs/release/release_checklist_and_support_policy.md", "History Check workflow"),
+    ("docs/release/release_checklist_and_support_policy.md", "unrelated-history PRs"),
+    ("docs/testing.md", "history-check.yml"),
+    ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "94c523f0c"),
+]
+contents = {}
+missing = []
+for relative_path, token in requirements:
+    content = contents.setdefault(
+        relative_path,
+        (root / relative_path).read_text(encoding="utf-8"),
+    )
+    if token not in content:
+        missing.append(f"{relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J32: PR history integrity check is wired and documented"
 else
   fail "J32: PR history integrity check is missing or undocumented"
 fi
 
 # ── J33: Python CLI package checks must stay wired and documented ────────────
-if grep -q 'name: Python CLI' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'python-version: "3.13"' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'astral-sh/setup-uv@v6' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'uv sync --locked --dev' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'uv run ruff check src tests' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'uv run pytest' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'uv build --sdist --wheel' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'lemon-cli-distributions' "$ROOT/.github/workflows/python-cli.yml" 2>/dev/null &&
-   grep -q 'uv run ruff check src tests' "$ROOT/scripts/test" 2>/dev/null &&
-   grep -q 'uv build --sdist --wheel' "$ROOT/scripts/test" 2>/dev/null &&
-   grep -q 'lemon-cli' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'Python CLI package workflow' "$ROOT/docs/release/release_checklist_and_support_policy.md" 2>/dev/null &&
-   grep -q 'PyPI-style CLI package' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+requirements = [
+    (".github/workflows/python-cli.yml", "name: Python CLI"),
+    (".github/workflows/python-cli.yml", 'python-version: "3.13"'),
+    (".github/workflows/python-cli.yml", "astral-sh/setup-uv@v6"),
+    (".github/workflows/python-cli.yml", "uv sync --locked --dev"),
+    (".github/workflows/python-cli.yml", "uv run ruff check src tests"),
+    (".github/workflows/python-cli.yml", "uv run pytest"),
+    (".github/workflows/python-cli.yml", "uv build --sdist --wheel"),
+    (".github/workflows/python-cli.yml", "lemon-cli-distributions"),
+    ("scripts/test", "uv run ruff check src tests"),
+    ("scripts/test", "uv build --sdist --wheel"),
+    ("docs/testing.md", "lemon-cli"),
+    ("docs/release/release_checklist_and_support_policy.md", "Python CLI package workflow"),
+    ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "PyPI-style CLI package"),
+]
+contents = {}
+missing = []
+for relative_path, token in requirements:
+    content = contents.setdefault(
+        relative_path,
+        (root / relative_path).read_text(encoding="utf-8"),
+    )
+    if token not in content:
+        missing.append(f"{relative_path} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J33: Python CLI package check workflow is wired and documented"
 else
   fail "J33: Python CLI package check workflow is missing or undocumented"
 fi
 
 # ── J34: Script-send CLI must stay scoped to Telegram/Discord and documented ─
-if grep -q 'defmodule LemonChannels.ScriptSend' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q '@supported_platforms ~w(discord telegram)' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'defmodule Mix.Tasks.Lemon.Send' "$ROOT/apps/lemon_channels/lib/mix/tasks/lemon.send.ex" 2>/dev/null &&
-   grep -q 'defp exit_code(:missing_target), do: 2' "$ROOT/apps/lemon_channels/lib/mix/tasks/lemon.send.ex" 2>/dev/null &&
-   grep -q 'use - to force stdin' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'attach: :keep' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'normalize_attachments' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'attachment_filename' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'attachment_count' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'telegram_target_aliases' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'discord_target_aliases' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'gateway_section_value(:telegram' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'gateway_section_value(:discord' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'default_account_id("telegram"' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'account: :string' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'thread: :string' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'topic: :string' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'reply_to: :string' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'payload_account_id' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'normalize_thread_option' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'normalize_reply_to' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'filter_known_targets_by_account' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q -- '--account ID' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q -- '--thread ID' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q -- '--topic ID' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q -- '--reply-to ID' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'dry_run: :boolean' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'maybe_deliver(payload, %{dry_run?: true}' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'delivery_message_ids' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'at most #{max} --attach files are supported' "$ROOT/apps/lemon_channels/lib/mix/tasks/lemon.send.ex" 2>/dev/null &&
-   grep -q 'alias_suffix' "$ROOT/apps/lemon_channels/lib/mix/tasks/lemon.send.ex" 2>/dev/null &&
-   grep -q 'batch_file_params' "$ROOT/apps/lemon_channels/lib/lemon_channels/adapters/discord/outbound.ex" 2>/dev/null &&
-   grep -q 'delivery_message_id' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'known_targets("telegram", account_id)' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'resolve_telegram_named_target' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'telegram:@username' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-	   grep -q 'known_targets("discord", account_id)' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'resolve_discord_named_target' "$ROOT/apps/lemon_channels/lib/lemon_channels/script_send.ex" 2>/dev/null &&
-   grep -q 'def list_available' "$ROOT/apps/lemon_channels/lib/lemon_channels/telegram/known_target_store.ex" 2>/dev/null &&
-   grep -q 'defmodule LemonChannels.Discord.KnownTargetStore' "$ROOT/apps/lemon_channels/lib/lemon_channels/discord/known_target_store.ex" 2>/dev/null &&
-   grep -q 'maybe_index_known_target' "$ROOT/apps/lemon_channels/lib/lemon_channels/adapters/discord/transport.ex" 2>/dev/null &&
-   grep -q 'LemonChannels.Telegram.KnownTargetStore' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'resolves unique Telegram known chat names' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'resolves unique Telegram known topic names' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'parses default targets from gateway config' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'environment default targets and accounts take precedence over gateway config' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'default account scopes known-name resolution' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'scopes Discord known-name resolution by account' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'filters known targets by account for list mode' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'parses standalone thread and topic target options' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'rejects conflicting thread target options' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'builds and delivers payload with reply target' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'rejects empty reply target' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-	   grep -q 'telegram:#Lemon Ops:Deploys' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'LemonChannels.Discord.KnownTargetStore' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'discord:#ops' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'discord:#ops:deploys' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'builds and delivers Telegram attachment payload' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'builds and delivers multiple Discord attachment payloads' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'preserves Telegram batch attachment message ids' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'dry run validates attachment payload without delivery' "$ROOT/apps/lemon_channels/test/lemon_channels/script_send_test.exs" 2>/dev/null &&
-   grep -q 'file delivery uploads a bounded file batch' "$ROOT/apps/lemon_channels/test/lemon_channels/adapters/discord/outbound_test.exs" 2>/dev/null &&
-   grep -q './bin/lemon send --to telegram:<chat_id>' "$ROOT/README.md" 2>/dev/null &&
-   grep -q -- '--attach' "$ROOT/README.md" 2>/dev/null &&
-   grep -q -- '--dry-run' "$ROOT/README.md" 2>/dev/null &&
-   grep -q 'repeated `--attach` uploads up to 10 files' "$ROOT/README.md" 2>/dev/null &&
-   grep -q 'Telegram/Discord known-target windows' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q 'exact reusable aliases' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q 'env/config defaults' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q -- '--account <id>' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q 'LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q -- '--thread <id-or-name>' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q -- '--topic <id-or-name>' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q -- '--reply-to <message-id>' "$ROOT/README.md" 2>/dev/null &&
-	   grep -q 'discord:#ops' "$ROOT/README.md" 2>/dev/null &&
-   grep -q 'telegram:@lemon_ops' "$ROOT/README.md" 2>/dev/null &&
-   grep -q './bin/lemon send --to telegram:<chat_id>' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q -- '--attach' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q -- '--dry-run' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'dry_run' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'attachment_filename' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'attachment_count' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'extra_message_ids' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q './bin/lemon send --list telegram' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'known_targets' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q 'exact reusable `aliases`' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q 'config fallbacks' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q -- '--account <id>' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q 'Default account ids' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q -- '--thread <id-or-name>' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q -- '--topic <id-or-name>' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q -- '--reply-to <message-id>' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-	   grep -q 'LemonChannels.Discord.KnownTargetStore' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'discord:#channel:thread-name' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'telegram:@username' "$ROOT/apps/lemon_channels/README.md" 2>/dev/null &&
-   grep -q 'MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/script_send_test.exs --seed 1' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q -- '--file -' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'bounded `message_id` extraction' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'repeated `--attach` payload construction up to 10 files' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'batch delivery `extra_message_ids` extraction' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'list-mode alias metadata' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'config-backed default targets' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'account-scoped delivery and known-target resolution' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'config-backed default account ids' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'standalone thread/topic target overrides' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'reply-to payload routing' "$ROOT/docs/testing.md" 2>/dev/null &&
-	   grep -q 'dry-run validation without delivery' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'attachment usage/input failures return `2`' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'usage/config/input failures return `2`' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'Telegram known-target discovery' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'unique Telegram known-name resolution' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'Discord known-target discovery' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'unique Discord known-name resolution' "$ROOT/docs/testing.md" 2>/dev/null &&
-   grep -q 'ScriptSend.run/2' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-   grep -q -- '--attach' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-   grep -q -- '--dry-run' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q 'exact reusable `aliases`' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q 'config fallbacks' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q -- '--account <id>' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q 'LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q -- '--thread <id-or-name>' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q -- '--topic <id-or-name>' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q -- '--reply-to <message-id>' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q 'telegram:@username' "$ROOT/apps/lemon_channels/AGENTS.md" 2>/dev/null &&
-	   grep -q 'default_chat_id' "$ROOT/docs/config.md" 2>/dev/null &&
-	   grep -q 'default_channel_id' "$ROOT/docs/config.md" 2>/dev/null &&
-	   grep -q 'default_account_id' "$ROOT/docs/config.md" 2>/dev/null &&
-	   grep -q 'default_chat_id' "$ROOT/examples/config.example.toml" 2>/dev/null &&
-	   grep -q 'default_account_id' "$ROOT/examples/config.example.toml" 2>/dev/null &&
-	   grep -q 'default_channel_id' "$ROOT/examples/config.example.toml" 2>/dev/null &&
-	   grep -q 'default_channel_id' "$ROOT/apps/lemon_core/lib/lemon_core/config/gateway.ex" 2>/dev/null &&
-	   grep -q 'Telegram/Discord `./bin/lemon send` script notification path' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'BEAM-store known-target discovery' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'exact list-mode aliases' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'config-backed default targets' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'default account ids' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'account-scoped delivery and known-target resolution' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'standalone thread/topic' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'reply-to payload routing' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-	   grep -q 'unique Telegram/Discord known-name resolution' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'LemonChannels.Discord.KnownTargetStore' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'discord:#channel:thread-name' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'bounded multi-attachment script artifact uploads' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'credential-free dry-run validation' "$ROOT/docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md" 2>/dev/null &&
-   grep -q 'Slice 373: Script-send multi-attachment uploads' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-   grep -q 'Slice 374: Script-send batch delivery ids' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-   grep -q 'Slice 375: Script-send dry-run validation' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 376: Telegram named script-send target resolution' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 377: Script-send list aliases' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 378: Script-send config defaults' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 379: Script-send account selection' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 380: Script-send thread and topic options' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 381: Script-send default account ids' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'Slice 382: Script-send reply-to routing' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null &&
-	   grep -q 'attachment_filename' "$ROOT/docs/plans/lemon-hermes-agent-harness-parity-scorecard.md" 2>/dev/null; then
+if python3 - "$ROOT" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+files = {
+    "script_send": root / "apps/lemon_channels/lib/lemon_channels/script_send.ex",
+    "send_task": root / "apps/lemon_channels/lib/mix/tasks/lemon.send.ex",
+    "discord_outbound": root / "apps/lemon_channels/lib/lemon_channels/adapters/discord/outbound.ex",
+    "telegram_store": root / "apps/lemon_channels/lib/lemon_channels/telegram/known_target_store.ex",
+    "discord_store": root / "apps/lemon_channels/lib/lemon_channels/discord/known_target_store.ex",
+    "discord_transport": root / "apps/lemon_channels/lib/lemon_channels/adapters/discord/transport.ex",
+    "script_send_test": root / "apps/lemon_channels/test/lemon_channels/script_send_test.exs",
+    "discord_outbound_test": root / "apps/lemon_channels/test/lemon_channels/adapters/discord/outbound_test.exs",
+    "root_readme": root / "README.md",
+    "channels_readme": root / "apps/lemon_channels/README.md",
+    "testing_docs": root / "docs/testing.md",
+    "channels_agents": root / "apps/lemon_channels/AGENTS.md",
+    "config_docs": root / "docs/config.md",
+    "config_example": root / "examples/config.example.toml",
+    "gateway_config": root / "apps/lemon_core/lib/lemon_core/config/gateway.ex",
+    "parity_matrix": root / "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
+    "scorecard": root / "docs/plans/lemon-hermes-agent-harness-parity-scorecard.md",
+}
+contents = {name: path.read_text(encoding="utf-8") for name, path in files.items()}
+
+contracts = [
+    (
+        "script-send implementation surface",
+        [
+            ("script_send", "defmodule LemonChannels.ScriptSend"),
+            ("script_send", "@supported_platforms ~w(discord telegram)"),
+            ("send_task", "defmodule Mix.Tasks.Lemon.Send"),
+            ("send_task", "defp exit_code(:missing_target), do: 2"),
+            ("script_send", "use - to force stdin"),
+            ("script_send", "attach: :keep"),
+            ("script_send", "normalize_attachments"),
+            ("script_send", "attachment_filename"),
+            ("script_send", "attachment_count"),
+            ("script_send", "telegram_target_aliases"),
+            ("script_send", "discord_target_aliases"),
+            ("script_send", "gateway_section_value(:telegram"),
+            ("script_send", "gateway_section_value(:discord"),
+            ("script_send", 'default_account_id("telegram"'),
+            ("script_send", "LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID"),
+            ("script_send", "account: :string"),
+            ("script_send", "thread: :string"),
+            ("script_send", "topic: :string"),
+            ("script_send", "reply_to: :string"),
+            ("script_send", "payload_account_id"),
+            ("script_send", "normalize_thread_option"),
+            ("script_send", "normalize_reply_to"),
+            ("script_send", "filter_known_targets_by_account"),
+            ("script_send", "--account ID"),
+            ("script_send", "--thread ID"),
+            ("script_send", "--topic ID"),
+            ("script_send", "--reply-to ID"),
+            ("script_send", "dry_run: :boolean"),
+            ("script_send", "maybe_deliver(payload, %{dry_run?: true}"),
+            ("script_send", "delivery_message_ids"),
+            ("send_task", "at most #{max} --attach files are supported"),
+            ("send_task", "alias_suffix"),
+            ("discord_outbound", "batch_file_params"),
+            ("script_send", "delivery_message_id"),
+            ("script_send", 'known_targets("telegram", account_id)'),
+            ("script_send", "resolve_telegram_named_target"),
+            ("script_send", "telegram:@username"),
+            ("script_send", 'known_targets("discord", account_id)'),
+            ("script_send", "resolve_discord_named_target"),
+        ],
+    ),
+    (
+        "known-target stores and indexing",
+        [
+            ("telegram_store", "def list_available"),
+            ("discord_store", "defmodule LemonChannels.Discord.KnownTargetStore"),
+            ("discord_transport", "maybe_index_known_target"),
+        ],
+    ),
+    (
+        "script-send tests",
+        [
+            ("script_send_test", "LemonChannels.Telegram.KnownTargetStore"),
+            ("script_send_test", "resolves unique Telegram known chat names"),
+            ("script_send_test", "resolves unique Telegram known topic names"),
+            ("script_send_test", "parses default targets from gateway config"),
+            ("script_send_test", "environment default targets and accounts take precedence over gateway config"),
+            ("script_send_test", "default account scopes known-name resolution"),
+            ("script_send_test", "scopes Discord known-name resolution by account"),
+            ("script_send_test", "filters known targets by account for list mode"),
+            ("script_send_test", "parses standalone thread and topic target options"),
+            ("script_send_test", "rejects conflicting thread target options"),
+            ("script_send_test", "builds and delivers payload with reply target"),
+            ("script_send_test", "rejects empty reply target"),
+            ("script_send_test", "telegram:#Lemon Ops:Deploys"),
+            ("script_send_test", "LemonChannels.Discord.KnownTargetStore"),
+            ("script_send_test", "discord:#ops"),
+            ("script_send_test", "discord:#ops:deploys"),
+            ("script_send_test", "builds and delivers Telegram attachment payload"),
+            ("script_send_test", "builds and delivers multiple Discord attachment payloads"),
+            ("script_send_test", "preserves Telegram batch attachment message ids"),
+            ("script_send_test", "dry run validates attachment payload without delivery"),
+            ("discord_outbound_test", "file delivery uploads a bounded file batch"),
+        ],
+    ),
+    (
+        "root README script-send docs",
+        [
+            ("root_readme", "./bin/lemon send --to telegram:<chat_id>"),
+            ("root_readme", "--attach"),
+            ("root_readme", "--dry-run"),
+            ("root_readme", "repeated `--attach` uploads up to 10 files"),
+            ("root_readme", "Telegram/Discord known-target windows"),
+            ("root_readme", "exact reusable aliases"),
+            ("root_readme", "env/config defaults"),
+            ("root_readme", "--account <id>"),
+            ("root_readme", "LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID"),
+            ("root_readme", "--thread <id-or-name>"),
+            ("root_readme", "--topic <id-or-name>"),
+            ("root_readme", "--reply-to <message-id>"),
+            ("root_readme", "discord:#ops"),
+            ("root_readme", "telegram:@lemon_ops"),
+        ],
+    ),
+    (
+        "lemon_channels README script-send docs",
+        [
+            ("channels_readme", "./bin/lemon send --to telegram:<chat_id>"),
+            ("channels_readme", "--attach"),
+            ("channels_readme", "--dry-run"),
+            ("channels_readme", "dry_run"),
+            ("channels_readme", "attachment_filename"),
+            ("channels_readme", "attachment_count"),
+            ("channels_readme", "extra_message_ids"),
+            ("channels_readme", "./bin/lemon send --list telegram"),
+            ("channels_readme", "known_targets"),
+            ("channels_readme", "exact reusable `aliases`"),
+            ("channels_readme", "config fallbacks"),
+            ("channels_readme", "--account <id>"),
+            ("channels_readme", "Default account ids"),
+            ("channels_readme", "--thread <id-or-name>"),
+            ("channels_readme", "--topic <id-or-name>"),
+            ("channels_readme", "--reply-to <message-id>"),
+            ("channels_readme", "LemonChannels.Discord.KnownTargetStore"),
+            ("channels_readme", "discord:#channel:thread-name"),
+            ("channels_readme", "telegram:@username"),
+        ],
+    ),
+    (
+        "script-send test documentation",
+        [
+            ("testing_docs", "MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/script_send_test.exs --seed 1"),
+            ("testing_docs", "--file -"),
+            ("testing_docs", "bounded `message_id` extraction"),
+            ("testing_docs", "repeated `--attach` payload construction up to 10 files"),
+            ("testing_docs", "batch delivery `extra_message_ids` extraction"),
+            ("testing_docs", "list-mode alias metadata"),
+            ("testing_docs", "config-backed default targets"),
+            ("testing_docs", "account-scoped delivery and known-target resolution"),
+            ("testing_docs", "config-backed default account ids"),
+            ("testing_docs", "standalone thread/topic target overrides"),
+            ("testing_docs", "reply-to payload routing"),
+            ("testing_docs", "dry-run validation without delivery"),
+            ("testing_docs", "attachment usage/input failures return `2`"),
+            ("testing_docs", "usage/config/input failures return `2`"),
+            ("testing_docs", "Telegram known-target discovery"),
+            ("testing_docs", "unique Telegram known-name resolution"),
+            ("testing_docs", "Discord known-target discovery"),
+            ("testing_docs", "unique Discord known-name resolution"),
+        ],
+    ),
+    (
+        "script-send app guide docs",
+        [
+            ("channels_agents", "ScriptSend.run/2"),
+            ("channels_agents", "--attach"),
+            ("channels_agents", "--dry-run"),
+            ("channels_agents", "exact reusable `aliases`"),
+            ("channels_agents", "config fallbacks"),
+            ("channels_agents", "--account <id>"),
+            ("channels_agents", "LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID"),
+            ("channels_agents", "--thread <id-or-name>"),
+            ("channels_agents", "--topic <id-or-name>"),
+            ("channels_agents", "--reply-to <message-id>"),
+            ("channels_agents", "telegram:@username"),
+        ],
+    ),
+    (
+        "script-send config docs",
+        [
+            ("config_docs", "default_chat_id"),
+            ("config_docs", "default_channel_id"),
+            ("config_docs", "default_account_id"),
+            ("config_example", "default_chat_id"),
+            ("config_example", "default_account_id"),
+            ("config_example", "default_channel_id"),
+            ("gateway_config", "default_channel_id"),
+        ],
+    ),
+    (
+        "script-send parity docs",
+        [
+            ("parity_matrix", "Telegram/Discord `./bin/lemon send` script notification path"),
+            ("parity_matrix", "BEAM-store known-target discovery"),
+            ("parity_matrix", "exact list-mode aliases"),
+            ("parity_matrix", "config-backed default targets"),
+            ("parity_matrix", "default account ids"),
+            ("parity_matrix", "account-scoped delivery and known-target resolution"),
+            ("parity_matrix", "standalone thread/topic"),
+            ("parity_matrix", "reply-to payload routing"),
+            ("parity_matrix", "unique Telegram/Discord known-name resolution"),
+            ("parity_matrix", "LemonChannels.Discord.KnownTargetStore"),
+            ("parity_matrix", "discord:#channel:thread-name"),
+            ("parity_matrix", "bounded multi-attachment script artifact uploads"),
+            ("parity_matrix", "credential-free dry-run validation"),
+            ("scorecard", "Slice 373: Script-send multi-attachment uploads"),
+            ("scorecard", "Slice 374: Script-send batch delivery ids"),
+            ("scorecard", "Slice 375: Script-send dry-run validation"),
+            ("scorecard", "Slice 376: Telegram named script-send target resolution"),
+            ("scorecard", "Slice 377: Script-send list aliases"),
+            ("scorecard", "Slice 378: Script-send config defaults"),
+            ("scorecard", "Slice 379: Script-send account selection"),
+            ("scorecard", "Slice 380: Script-send thread and topic options"),
+            ("scorecard", "Slice 381: Script-send default account ids"),
+            ("scorecard", "Slice 382: Script-send reply-to routing"),
+            ("scorecard", "attachment_filename"),
+        ],
+    ),
+]
+
+missing = []
+for label, requirements in contracts:
+    for file_key, token in requirements:
+        if token not in contents[file_key]:
+            missing.append(f"{label}: {files[file_key].relative_to(root)} missing {token!r}")
+
+if missing:
+    print("\n".join(missing), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
   pass "J34: script-send Telegram/Discord command is scoped and documented"
 else
   fail "J34: script-send command scope or documentation is missing"

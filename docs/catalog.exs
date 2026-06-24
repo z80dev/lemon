@@ -38,61 +38,61 @@
   %{
     path: "docs/for-dummies/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/01-big-picture.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/02-message-journey.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/03-the-front-door.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/04-the-traffic-cop.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/05-the-engine-room.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/06-the-agent.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/07-talking-to-llms.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/for-dummies/08-the-foundation.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-10],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/assistant_bootstrap_contract.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -104,7 +104,7 @@
   %{
     path: "docs/beam_agents.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -116,7 +116,7 @@
   %{
     path: "docs/context.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -134,19 +134,19 @@
   %{
     path: "docs/long-running-agent-harnesses.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/model-selection-decoupling.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/runtime-hot-reload.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -164,7 +164,7 @@
   %{
     path: "docs/testing/deterministic-test-patterns.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-04-23],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 45
   },
   %{
@@ -176,7 +176,7 @@
   %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-08],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -206,25 +206,25 @@
   %{
     path: "docs/tools/wasm.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-08],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/telemetry.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/security/secrets-keychain-audit-matrix.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-02-27],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/security/secrets-migration-guide.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-02],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -242,13 +242,13 @@
   %{
     path: "docs/contributor/ownership.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
     path: "docs/contributor/public_repo_basics.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-03-16],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 90
   },
   %{
@@ -338,7 +338,7 @@
   %{
     path: "docs/plans/2026-04-12-subagent-reasoning-surfacing-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-04-12],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 60
   },
   %{
@@ -374,31 +374,31 @@
   %{
     path: "docs/plans/lemon-1.0-completion-audit-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-sim-platform-mission-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-sim-vendingbench-equivalent-goal-2026-05-16.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-06-17],
     max_age_days: 30
   },
   %{

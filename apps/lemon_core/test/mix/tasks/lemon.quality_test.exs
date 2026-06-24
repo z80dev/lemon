@@ -122,6 +122,24 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       # Should not have config validation message when flag not provided
       refute output =~ "Validating Lemon configuration..."
     end
+
+    test "runs static checks without starting the app", %{repo_root: repo_root} do
+      {:links, links_before} = Process.info(self(), :links)
+
+      capture_io(:stdio, fn ->
+        capture_io(:stderr, fn ->
+          try do
+            Quality.run(["--root", repo_root])
+          rescue
+            Mix.Error -> :ok
+          end
+        end)
+      end)
+
+      {:links, links_after} = Process.info(self(), :links)
+
+      assert links_after == links_before
+    end
   end
 
   describe "moduledoc" do

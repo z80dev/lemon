@@ -42,8 +42,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_telegram_dependency,
       message: "Router must not depend on LemonChannels.Telegram modules directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonChannels.Telegram."],
-      exclude: ["apps/lemon_router/lib/lemon_router/agent_directory.ex"]
+      patterns: ["LemonChannels.Telegram."]
     },
     %{
       code: :router_channels_runtime_dependency,
@@ -95,8 +94,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ":telegram_pending_compaction",
         ":telegram_known_targets",
         "KnownTargetStore"
-      ],
-      exclude: ["apps/lemon_router/lib/lemon_router/agent_directory.ex"]
+      ]
     },
     %{
       code: :gateway_execution_queue_mode,
@@ -474,6 +472,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ~s|System.get_env("GOOGLE_CLOUD_PROJECT")|,
         ~s|System.get_env("GCLOUD_PROJECT")|,
         ~s|System.get_env("GOOGLE_CLOUD_LOCATION")|,
+        ~s|System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")|,
         ~s|System.get_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")|,
         ~s|System.get_env("AZURE_OPENAI_API_VERSION")|,
         ~s|System.get_env("AZURE_OPENAI_BASE_URL")|,

@@ -91,6 +91,7 @@ Runner defaults:
   - Sets MIX_ENV=test for BEAM test lanes unless a lane intentionally overrides it.
   - Creates per-invocation temp LEMON_STORE_PATH and LEMON_TEST_TMPDIR when unset.
   - BEAM test lanes scrub ambient provider/platform credentials unless LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1.
+  - Client lanes run npm ci by default; set LEMON_TEST_REUSE_NODE_MODULES=1 to reuse existing installs.
 EOF
 }
 
@@ -190,7 +191,7 @@ run_quality() {
 
 run_npm_ci_if_needed() {
   local dir="$1"
-  if [ ! -d "$dir/node_modules" ]; then
+  if [ "${LEMON_TEST_REUSE_NODE_MODULES:-}" != "1" ] || [ ! -d "$dir/node_modules" ]; then
     (cd "$dir" && npm ci)
   fi
 }

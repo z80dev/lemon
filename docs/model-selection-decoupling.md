@@ -22,7 +22,12 @@ Added `LemonRouter.ModelSelection` to centralize resolution:
   2. meta model (back-compat)
   3. session policy model
   4. profile model
-  5. router default model (`:lemon_router, :default_model`)
+  5. config default model (`LemonCore.Config.cached().agent.default_model`, backed by `[defaults]`)
+
+`SubmissionBuilder` also stores the resolved `history_model` in submission
+metadata for routing-feedback history when that feature is enabled. Runtime
+modules should not read `Application.get_env(:lemon_router, :default_model)`;
+model defaults come from Lemon config or policy stores.
 
 - **Engine precedence**:
   1. resume token engine

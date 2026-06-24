@@ -65,6 +65,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   setup do
     FileTransferMockAPI.register_sent(self())
     previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    default_cwd = fresh_root!("lemon-telegram-default-cwd")
 
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
 
@@ -72,6 +73,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       :lemon_gateway,
       @gateway_config_key,
       Map.merge(existing, %{
+        default_cwd: default_cwd,
         telegram: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI
@@ -109,6 +111,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
       :persistent_term.erase({FileTransferMockAPI, :sent})
       :persistent_term.erase({FileTransferMockAPI, :updates})
+      File.rm_rf!(default_cwd)
     end)
 
     :ok
