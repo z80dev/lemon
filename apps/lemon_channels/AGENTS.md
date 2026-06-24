@@ -66,6 +66,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/script_send.ex` | `LemonChannels.ScriptSend` | Hermes-style script notification helper for Telegram/Discord. Parses `--to`, `--file`, `--attach`, `--subject`, stdin, default target env vars, known-target list output, and builds direct text or file `OutboundPayload` structs. |
+| `lib/lemon_channels/target_directory.ex` | `LemonChannels.TargetDirectory` | Channels-owned normalized directory of recently seen Telegram and Discord targets for router/control-plane discovery. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
 | `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Temporary parser-only compatibility shim for resume lines when gateway/custom engine modules expose custom syntax. Validation and formatting should use `LemonCore.EngineCatalog` / `LemonCore.ResumeToken`. |

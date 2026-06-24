@@ -61,6 +61,7 @@ Inbound transport
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
 - Router owns pending-compaction prompt mutation.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
+- Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.
 - External apps must use `LemonRouter.Router` or `LemonCore.RouterBridge` for busy/active session queries. Router-internal read-model and registry details are not public boundaries.
 

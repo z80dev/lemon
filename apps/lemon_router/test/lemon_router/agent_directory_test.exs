@@ -3,6 +3,8 @@ defmodule LemonRouter.AgentDirectoryTest do
 
   alias LemonCore.{SessionKey, Store}
   alias LemonRouter.AgentDirectory
+  alias LemonChannels.Discord.KnownTargetStore, as: DiscordKnownTargetStore
+  alias LemonChannels.Telegram.KnownTargetStore, as: TelegramKnownTargetStore
 
   defp unique_token do
     System.unique_integer([:positive, :monotonic])
@@ -161,7 +163,7 @@ defmodule LemonRouter.AgentDirectoryTest do
     key = {"default", -100_606, 88}
 
     :ok =
-      Store.put(:telegram_known_targets, key, %{
+      TelegramKnownTargetStore.put(key, %{
         channel_id: "telegram",
         account_id: "default",
         peer_kind: :group,
@@ -185,5 +187,24 @@ defmodule LemonRouter.AgentDirectoryTest do
     assert entry.label =~ "Deployments"
     assert entry.session_count >= 1
     assert agent_id in entry.agent_ids
+  end
+
+  test "list_targets/1 includes Discord known targets without session history" do
+    :ok =
+      DiscordKnownTargetStore.put({"work", 123_456, 789}, %{
+        peer_kind: :channel,
+        channel_name: "Ops",
+        thread_name: "Deployments",
+        updated_at_ms: 4_500
+      })
+
+    targets = AgentDirectory.list_targets(channel_id: "discord", query: "deploy")
+    entry = Enum.find(targets, &(&1.target == "discord:work@123456/789"))
+
+    assert is_map(entry)
+    assert entry.label =~ "Ops"
+    assert entry.label =~ "Deployments"
+    assert entry.session_count == 0
+    assert entry.agent_ids == []
   end
 end

@@ -10,7 +10,7 @@ defmodule LemonRouter.AgentDirectory do
   to provide a "phonebook" for agent/session addressing.
   """
 
-  alias LemonChannels.Telegram.KnownTargetStore
+  alias LemonChannels.TargetDirectory
   alias LemonCore.SessionKey
 
   @peer_kind_map %{
@@ -181,7 +181,7 @@ defmodule LemonRouter.AgentDirectory do
       |> Map.new()
 
     known_routes =
-      known_telegram_targets()
+      TargetDirectory.list_known_routes()
       |> Enum.filter(fn route ->
         matches_route_map?(route, route_filter)
       end)
@@ -212,7 +212,7 @@ defmodule LemonRouter.AgentDirectory do
         peer_kind: route.peer_kind,
         peer_id: route.peer_id,
         thread_id: route.thread_id,
-        target: render_target(route),
+        target: map_get(route, :target) || render_target(route),
         label: render_target_label(route, peer_label, peer_username, topic_name),
         peer_label: peer_label,
         peer_username: peer_username,
@@ -422,50 +422,6 @@ defmodule LemonRouter.AgentDirectory do
     end)
   end
 
-  defp known_telegram_targets do
-    KnownTargetStore.list()
-    |> Enum.map(&known_telegram_target_entry/1)
-    |> Enum.reject(&is_nil/1)
-  rescue
-    _ -> []
-  end
-
-  defp known_telegram_target_entry({key, entry}) when is_tuple(key) and is_map(entry) do
-    {account_id, chat_id, topic_id} = key
-
-    with account_id when is_binary(account_id) and account_id != "" <-
-           normalize_optional_binary(account_id),
-         chat_id when is_integer(chat_id) <- parse_int(chat_id) do
-      peer_id = Integer.to_string(chat_id)
-      thread_id = parse_int(topic_id) && Integer.to_string(parse_int(topic_id))
-
-      peer_kind =
-        normalize_peer_kind(map_get(entry, :peer_kind)) || infer_telegram_peer_kind(chat_id)
-
-      %{
-        channel_id: "telegram",
-        account_id: account_id,
-        peer_kind: peer_kind,
-        peer_id: peer_id,
-        thread_id: thread_id,
-        peer_label:
-          normalize_optional_binary(
-            map_get(entry, :chat_title) || map_get(entry, :chat_display_name)
-          ),
-        peer_username: normalize_optional_binary(map_get(entry, :chat_username)),
-        topic_name: normalize_optional_binary(map_get(entry, :topic_name)),
-        chat_type: normalize_optional_binary(map_get(entry, :chat_type)),
-        updated_at_ms: normalize_int(map_get(entry, :updated_at_ms))
-      }
-    else
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp known_telegram_target_entry(_), do: nil
-
   defp render_target(route) when is_map(route) do
     if route.channel_id == "telegram" do
       account_prefix =
@@ -652,9 +608,6 @@ defmodule LemonRouter.AgentDirectory do
 
   defp route_from_signature(_),
     do: %{channel_id: nil, account_id: nil, peer_kind: nil, peer_id: nil, thread_id: nil}
-
-  defp infer_telegram_peer_kind(chat_id) when is_integer(chat_id) and chat_id < 0, do: :group
-  defp infer_telegram_peer_kind(_chat_id), do: :dm
 
   defp map_get(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
