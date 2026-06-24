@@ -58,10 +58,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       assert "-p" in args
       assert "--output-format" in args
       assert "stream-json" in args
+      assert "--input-format" in args
+      assert "text" in args
       assert "--verbose" in args
       refute "--dangerously-skip-permissions" in args
-      assert "--" in args
-      assert "Hello" in args
+      refute "--" in args
+      refute "Hello" in args
       refute "--resume" in args
     end
 
@@ -158,15 +160,15 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
   # ============================================================================
 
   describe "stdin_payload/3" do
-    test "returns nil (Claude uses CLI args for prompt)" do
+    test "returns prompt with trailing newline" do
       state = RunnerState.new()
-      assert ClaudeRunner.stdin_payload("Hello", nil, state) == nil
+      assert ClaudeRunner.stdin_payload("Hello", nil, state) == "Hello\n"
     end
 
-    test "returns nil even with resume token" do
+    test "returns prompt with resume token" do
       state = RunnerState.new()
       token = ResumeToken.new("claude", "sess_123")
-      assert ClaudeRunner.stdin_payload("Continue", token, state) == nil
+      assert ClaudeRunner.stdin_payload("Continue", token, state) == "Continue\n"
     end
   end
 
@@ -1757,9 +1759,9 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       assert %RunnerState{} = state
     end
 
-    test "stdin_payload returns nil for claude" do
+    test "stdin_payload returns prompt for claude" do
       state = RunnerState.new()
-      assert ClaudeRunner.stdin_payload("test", nil, state) == nil
+      assert ClaudeRunner.stdin_payload("test", nil, state) == "test\n"
     end
 
     test "decode_line handles valid and invalid input" do

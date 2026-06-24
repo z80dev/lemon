@@ -191,60 +191,79 @@ defmodule AgentCore.Loop.ToolCalls do
       else
         receive do
           {:tool_task_result, ref, tool_call, result, is_error} ->
-            {pending_by_ref, pending_by_mon} =
-              drop_pending_task(pending_by_ref, pending_by_mon, ref)
+            if Map.has_key?(pending_by_ref, ref) do
+              {pending_by_ref, pending_by_mon} =
+                drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
-            {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
-              start_tool_tasks(
-                tools,
-                remaining_tool_calls,
-                pending_by_ref,
-                pending_by_mon,
-                max_concurrency - map_size(pending_by_ref),
-                tool_timeout_ms,
-                signal,
-                stream,
-                tool_task_supervisor
+              {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
+                start_tool_tasks(
+                  tools,
+                  remaining_tool_calls,
+                  pending_by_ref,
+                  pending_by_mon,
+                  max_concurrency - map_size(pending_by_ref),
+                  tool_timeout_ms,
+                  signal,
+                  stream,
+                  tool_task_supervisor
+                )
+
+              LemonCore.Telemetry.emit(
+                [:agent_core, :tool_task, :end],
+                %{system_time: System.system_time()},
+                %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
               )
 
-            # Emit telemetry for tool task end
-            LemonCore.Telemetry.emit(
-              [:agent_core, :tool_task, :end],
-              %{system_time: System.system_time()},
-              %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
-            )
+              {context, new_messages, results} =
+                emit_tool_result(
+                  tool_call,
+                  result,
+                  is_error,
+                  context,
+                  new_messages,
+                  results,
+                  stream
+                )
 
-            {context, new_messages, results} =
-              emit_tool_result(
-                tool_call,
-                result,
-                is_error,
+              {context, new_messages, results} =
+                emit_start_failures(start_failures, context, new_messages, results, stream)
+
+              collect_parallel_tool_results(
                 context,
                 new_messages,
+                pending_by_ref,
+                pending_by_mon,
+                remaining_tool_calls,
+                tools,
+                tool_task_supervisor,
+                max_concurrency,
+                tool_timeout_ms,
                 results,
-                stream
+                stream,
+                signal,
+                tool_call_order,
+                base_context_message_count,
+                base_new_message_count
               )
-
-            {context, new_messages, results} =
-              emit_start_failures(start_failures, context, new_messages, results, stream)
-
-            collect_parallel_tool_results(
-              context,
-              new_messages,
-              pending_by_ref,
-              pending_by_mon,
-              remaining_tool_calls,
-              tools,
-              tool_task_supervisor,
-              max_concurrency,
-              tool_timeout_ms,
-              results,
-              stream,
-              signal,
-              tool_call_order,
-              base_context_message_count,
-              base_new_message_count
-            )
+            else
+              collect_parallel_tool_results(
+                context,
+                new_messages,
+                pending_by_ref,
+                pending_by_mon,
+                remaining_tool_calls,
+                tools,
+                tool_task_supervisor,
+                max_concurrency,
+                tool_timeout_ms,
+                results,
+                stream,
+                signal,
+                tool_call_order,
+                base_context_message_count,
+                base_new_message_count
+              )
+            end
 
           {:DOWN, mon_ref, :process, _pid, reason} ->
             case Map.get(pending_by_mon, mon_ref) do

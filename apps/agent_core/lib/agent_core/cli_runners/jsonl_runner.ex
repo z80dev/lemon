@@ -532,9 +532,10 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
     # Build command
     {cmd, args} = module.build_command(state.prompt, state.resume, state.runner_state)
+    redacted_args = redact_prompt_args(args, state.prompt)
 
     Logger.debug(
-      "JsonlRunner starting subprocess engine=#{module.engine()} cmd=#{inspect(cmd)} args=#{inspect(args)} " <>
+      "JsonlRunner starting subprocess engine=#{module.engine()} cmd=#{inspect(cmd)} args=#{inspect(redacted_args)} " <>
         "cwd=#{inspect(state.cwd)} timeout=#{inspect(state.timeout)} resume=#{inspect(state.resume)}"
     )
 
@@ -1190,6 +1191,16 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   end
 
   defp expand_tilde(path), do: path
+
+  defp redact_prompt_args(args, prompt)
+       when is_list(args) and is_binary(prompt) and prompt != "" do
+    Enum.map(args, fn
+      ^prompt -> "[redacted-prompt]"
+      arg -> arg
+    end)
+  end
+
+  defp redact_prompt_args(args, _prompt), do: args
 
   defp maybe_emit_decode_warning(reason, line, %State{} = state) do
     if state.decode_error_count < 3 do

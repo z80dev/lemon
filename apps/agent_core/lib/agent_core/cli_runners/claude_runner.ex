@@ -47,9 +47,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   ## Configuration
 
-  The runner uses the following command:
+  The runner uses the following command and sends the prompt on stdin:
 
-      claude -p --output-format stream-json --verbose [--resume SESSION_ID] -- <PROMPT>
+      claude -p --output-format stream-json --input-format text --verbose [--resume SESSION_ID]
 
   """
 
@@ -135,12 +135,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   end
 
   @impl true
-  def build_command(prompt, resume, state) do
+  def build_command(_prompt, resume, state) do
     base_args =
       [
         "-p",
         "--output-format",
         "stream-json",
+        "--input-format",
+        "text",
         "--verbose"
       ]
       |> maybe_add_permissions(state)
@@ -157,16 +159,12 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
           base_args
       end
 
-    # Add prompt after --
-    args = args ++ ["--", prompt]
-
     {"claude", args}
   end
 
   @impl true
-  def stdin_payload(_prompt, _resume, _state) do
-    # Claude takes prompt as command-line argument, not stdin
-    nil
+  def stdin_payload(prompt, _resume, _state) do
+    String.trim_trailing(prompt) <> "\n"
   end
 
   @impl true

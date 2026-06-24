@@ -224,11 +224,11 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
         args
     end
 
-    {"claude", args ++ [prompt]}
+    {"claude", args ++ ["--input-format", "text"]}
   end
 
   @impl true
-  def stdin_payload(_prompt, _resume, _state), do: nil  # Claude takes prompt as arg
+  def stdin_payload(prompt, _resume, _state), do: String.trim_trailing(prompt) <> "\n"
 
   @impl true
   def translate_event(data, state) do
