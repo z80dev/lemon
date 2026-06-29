@@ -1,10 +1,17 @@
 defmodule LemonAiRuntime.ProviderStatusTest do
   use ExUnit.Case, async: false
 
+  alias LemonCore.Secrets
+
   @env_keys ~w(
     ANTHROPIC_API_KEY
+    ANTHROPIC_TOKEN
+    CLAUDE_CODE_OAUTH_TOKEN
     OPENAI_API_KEY
+    OPENAI_CODEX_API_KEY
+    CHATGPT_TOKEN
     ZAI_API_KEY
+    LEMON_SECRETS_MASTER_KEY
     LEMON_DEFAULT_PROVIDER
     LEMON_DEFAULT_MODEL
     LEMON_PROVIDER_ROUTING_ENABLED
@@ -15,6 +22,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
   )
 
   setup do
+    clear_secrets_table()
     saved_env = Map.new(@env_keys, fn key -> {key, System.get_env(key)} end)
     Enum.each(@env_keys, &System.delete_env/1)
 
@@ -25,8 +33,11 @@ defmodule LemonAiRuntime.ProviderStatusTest do
       )
 
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+    System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
 
     on_exit(fn ->
+      clear_secrets_table()
+
       Enum.each(saved_env, fn
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
@@ -146,9 +157,60 @@ defmodule LemonAiRuntime.ProviderStatusTest do
     refute inspect(status) =~ "ZAI_API_KEY"
   end
 
+  test "openai-codex oauth readiness ignores ambient raw token env", %{cwd: cwd} do
+    write_config!(cwd, """
+    [providers.openai-codex]
+    auth_source = "oauth"
+    """)
+
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-raw-token")
+
+    status =
+      LemonAiRuntime.ProviderStatus.snapshot(%{
+        "projectDir" => cwd,
+        "provider" => "openai-codex"
+      })
+
+    provider = only_provider(status)
+
+    assert provider["provider"] == "openai_codex"
+    refute provider["credentialReady"]
+    refute inspect(status) =~ "codex-raw-token"
+  end
+
+  test "anthropic oauth readiness requires a resolvable oauth payload", %{cwd: cwd} do
+    assert {:ok, _} = Secrets.set("llm_anthropic_bad_oauth", "not-json")
+
+    write_config!(cwd, """
+    [providers.anthropic]
+    auth_source = "oauth"
+    oauth_secret = "llm_anthropic_bad_oauth"
+    """)
+
+    status =
+      LemonAiRuntime.ProviderStatus.snapshot(%{
+        "projectDir" => cwd,
+        "provider" => "anthropic"
+      })
+
+    provider = only_provider(status)
+
+    assert provider["provider"] == "anthropic"
+    refute provider["credentialReady"]
+    refute inspect(status) =~ "llm_anthropic_bad_oauth"
+  end
+
   defp write_config!(cwd, body) do
     cwd
     |> Path.join(".lemon/config.toml")
     |> File.write!(body)
+  end
+
+  defp only_provider(status), do: status["providers"] |> Enum.find(& &1["configured"])
+
+  defp clear_secrets_table do
+    Secrets.table()
+    |> LemonCore.Store.list()
+    |> Enum.each(fn {key, _} -> LemonCore.Store.delete(Secrets.table(), key) end)
   end
 end

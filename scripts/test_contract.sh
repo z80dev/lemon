@@ -49,7 +49,8 @@ if vars(runner_match.group(1)) != vars(elixir_match.group(1)):
 PY
 
 contract_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-root.XXXXXX")"
-TMPDIR="$contract_tmp_root" "$RUNNER" path >/tmp/lemon-test-contract-path.out 2>&1 &&
+contract_path_out="$contract_tmp_root/path.out"
+TMPDIR="$contract_tmp_root" "$RUNNER" path >"$contract_path_out" 2>&1 &&
   fail "path lane without args should fail"
 [ "$?" -eq 64 ] || fail "path lane without args should exit 64"
 [ -z "$(find "$contract_tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'lemon-test.*' -print -quit)" ] ||
@@ -57,18 +58,20 @@ TMPDIR="$contract_tmp_root" "$RUNNER" path >/tmp/lemon-test-contract-path.out 2>
 rm -rf "$contract_tmp_root"
 
 provided_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-provided.XXXXXX")"
-LEMON_TEST_TMPDIR="$provided_tmp" "$RUNNER" path >/tmp/lemon-test-contract-path-provided.out 2>&1 &&
+provided_path_out="$provided_tmp/path-provided.out"
+LEMON_TEST_TMPDIR="$provided_tmp" "$RUNNER" path >"$provided_path_out" 2>&1 &&
   fail "path lane without args should fail with provided tmpdir"
 [ "$?" -eq 64 ] || fail "path lane without args with provided tmpdir should exit 64"
 [ -d "$provided_tmp" ] || fail "caller-provided LEMON_TEST_TMPDIR must not be removed"
 rm -rf "$provided_tmp"
 
 live_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-live-root.XXXXXX")"
+live_eval_out="$live_tmp_root/live-eval.out"
 env -u LEMON_EVAL_API_KEY -u INTEGRATION_API_KEY -u ANTHROPIC_API_KEY \
-  TMPDIR="$live_tmp_root" "$RUNNER" live-eval >/tmp/lemon-test-contract-live-eval.out 2>&1 &&
+  TMPDIR="$live_tmp_root" "$RUNNER" live-eval >"$live_eval_out" 2>&1 &&
   fail "live-eval without credentials should fail"
 [ "$?" -eq 66 ] || fail "live-eval without credentials should exit 66"
-grep -q "requires a live model credential" /tmp/lemon-test-contract-live-eval.out ||
+grep -q "requires a live model credential" "$live_eval_out" ||
   fail "live-eval without credentials should explain missing credential"
 [ -z "$(find "$live_tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'lemon-test.*' -print -quit)" ] ||
   fail "runner-created live-eval LEMON_TEST_TMPDIR should be cleaned up on exit"
@@ -100,7 +103,8 @@ for path in sorted(root.glob("*.tar.gz")):
     encoding="utf-8",
 )
 PY
-"$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >/tmp/lemon-artifact-contract-valid.out 2>&1 ||
+artifact_valid_out="$artifact_tmp/valid.out"
+"$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
   fail "release artifact verifier should accept complete min/full Linux manifest"
 
 incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
@@ -131,9 +135,10 @@ path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
     encoding="utf-8",
 )
 PY
-"$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >/tmp/lemon-artifact-contract-incomplete.out 2>&1 &&
+artifact_incomplete_out="$incomplete_artifact_tmp/incomplete.out"
+"$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
   fail "release artifact verifier should reject manifests missing lemon_runtime_full"
-grep -q "missing required release artifact profile" /tmp/lemon-artifact-contract-incomplete.out ||
+grep -q "missing required release artifact profile" "$artifact_incomplete_out" ||
   fail "release artifact verifier should explain missing required profiles"
 
 rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
@@ -168,10 +173,13 @@ grep -q './bin/lemon usage' "$ROOT/scripts/verify_source_install" ||
   fail "source install verifier must exercise the ./bin/lemon usage wrapper"
 grep -q './bin/lemon update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
   fail "source install verifier must exercise the ./bin/lemon update wrapper"
-"$ROOT/scripts/verify_source_install" --help >/tmp/lemon-source-install-help.out 2>&1 &&
+source_install_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
+source_install_help_out="$source_install_tmp/help.out"
+"$ROOT/scripts/verify_source_install" --help >"$source_install_help_out" 2>&1 &&
   fail "source install verifier help should exit 2 like other usage paths"
 [ "$?" -eq 2 ] || fail "source install verifier help should exit 2"
-grep -q "Verifies the supported source-install path" /tmp/lemon-source-install-help.out ||
+grep -q "Verifies the supported source-install path" "$source_install_help_out" ||
   fail "source install verifier help should describe its contract"
+rm -rf "$source_install_tmp"
 
 echo "test runner contract ok"

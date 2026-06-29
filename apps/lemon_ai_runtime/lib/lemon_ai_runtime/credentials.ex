@@ -66,8 +66,12 @@ defmodule LemonAiRuntime.Credentials do
 
     case ProviderNames.canonical_name(provider) do
       "openai_codex" ->
-        present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true)) or
-          openai_codex_ambient_oauth_available?()
+        ready? =
+          present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
+
+        ready? or
+          (normalize_auth_source(provider_cfg) == :missing and
+             openai_codex_ambient_oauth_available?())
 
       "google_vertex" ->
         vertex_credentials_available?(provider_cfg, opts)
@@ -219,13 +223,31 @@ defmodule LemonAiRuntime.Credentials do
     secret_name =
       first_non_empty_binary([
         provider_config_value(provider_cfg, :oauth_secret),
-        provider_config_value(provider_cfg, :api_key_secret),
+        provider_config_value(provider_cfg, :api_key_secret)
+      ])
+
+    default_secret_name =
+      first_non_empty_binary([
         ProviderNames.oauth_default_secret_name("anthropic"),
         ProviderNames.default_secret_name("anthropic")
       ])
 
-    if(present_value?(secret_name), do: resolve_anthropic_oauth_secret(secret_name)) ||
-      LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+    cond do
+      present_value?(secret_name) ->
+        resolve_anthropic_oauth_secret(secret_name)
+
+      present_value?(default_secret_name) ->
+        case resolve_anthropic_oauth_secret(default_secret_name) do
+          value when is_binary(value) and value != "" ->
+            value
+
+          _ ->
+            LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+        end
+
+      true ->
+        LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+    end
   end
 
   defp resolve_anthropic_oauth_secret(secret_name) do

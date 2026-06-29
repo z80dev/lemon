@@ -84,6 +84,46 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
       assert Enum.any?(errors, &String.contains?(&1, "logging.level"))
     end
+
+    test "rejects malformed provider secret references" do
+      config = %Modular{
+        agent: %{
+          default_model: "claude-sonnet-4",
+          default_provider: "anthropic"
+        },
+        gateway: %{},
+        logging: %{},
+        providers: %{
+          providers: %{
+            openai: %{
+              api_key_secret: 123,
+              oauth_secret: "",
+              project_secret: "vertex_project"
+            },
+            amazon_bedrock: %{
+              access_key_id_secret: ["bad"],
+              secret_access_key_secret: "aws_secret"
+            }
+          }
+        },
+        tools: %{},
+        tui: %{},
+        features: %{}
+      }
+
+      assert {:error, errors} = Validator.validate(config)
+
+      assert Enum.any?(errors, &String.contains?(&1, "providers.providers.openai.api_key_secret"))
+      assert Enum.any?(errors, &String.contains?(&1, "providers.providers.openai.oauth_secret"))
+
+      assert Enum.any?(
+               errors,
+               &String.contains?(&1, "providers.providers.amazon_bedrock.access_key_id_secret")
+             )
+
+      refute Enum.any?(errors, &String.contains?(&1, "project_secret"))
+      refute Enum.any?(errors, &String.contains?(&1, "secret_access_key_secret"))
+    end
   end
 
   describe "validate_agent/2" do

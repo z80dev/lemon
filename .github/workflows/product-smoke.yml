@@ -23,6 +23,9 @@ on:
         required: false
         default: "lemon_runtime_full"
 
+permissions:
+  contents: read
+
 env:
   MIX_ENV: prod
   LEMON_SECRETS_MASTER_KEY: "smoke-test-dummy-key-32-chars-!!"

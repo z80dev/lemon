@@ -283,9 +283,12 @@ slash parity still requires real client-click evidence. The Discord runtime now 
 `lemon.discord_slash_client_click` proof artifacts when a real slash-command
 interaction arrives with live Discord fields and Lemon emits a safe interaction
 response, so an operator can promote that gate by clicking a command after the
-runtime is deployed or hot reloaded and then running
-`scripts/live_discord_matrix.py --wait-slash-client-click-proof --channel-id
-<channel-id> --proof-path .lemon/proofs/discord-slash-client-click-check-latest.json`.
+runtime is deployed or hot reloaded and then running:
+
+```bash
+scripts/live_discord_matrix.py --wait-slash-client-click-proof --channel-id <channel-id> --proof-path .lemon/proofs/discord-slash-client-click-check-latest.json
+```
+
 The wait mode posts a concrete operator instruction, polls the runtime proof
 artifact, and rejects stale artifacts generated before the watcher started. The validator
 emits stable reason kinds for missing, invalid, and non-promotable artifacts so

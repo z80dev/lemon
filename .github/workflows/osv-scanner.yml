@@ -13,6 +13,8 @@ on:
       - "clients/lemon-cli/uv.lock"
       - "apps/lemon_gateway/priv/package.json"
       - "apps/lemon_gateway/priv/package-lock.json"
+      - "docs/package.json"
+      - "docs/package-lock.json"
       - "tools/diagrams/package.json"
       - "tools/diagrams/package-lock.json"
       - ".github/workflows/osv-scanner.yml"
@@ -28,6 +30,8 @@ on:
       - "clients/lemon-cli/uv.lock"
       - "apps/lemon_gateway/priv/package.json"
       - "apps/lemon_gateway/priv/package-lock.json"
+      - "docs/package.json"
+      - "docs/package-lock.json"
       - "tools/diagrams/package.json"
       - "tools/diagrams/package-lock.json"
       - ".github/workflows/osv-scanner.yml"
@@ -52,5 +56,6 @@ jobs:
         --lockfile=clients/lemon-browser-node/package-lock.json
         --lockfile=clients/lemon-cli/uv.lock
         --lockfile=apps/lemon_gateway/priv/package-lock.json
+        --lockfile=docs/package-lock.json
         --lockfile=tools/diagrams/package-lock.json
       fail-on-vuln: false

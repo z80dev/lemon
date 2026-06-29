@@ -194,7 +194,7 @@ enabled = true
 provider = "perplexity"
 
 [runtime.tools.web.search.perplexity]
-api_key = "pplx-..."
+api_key = "<perplexity-api-key>"
 # base_url can be omitted; Lemon auto-selects Perplexity vs OpenRouter by key source/prefix.
 model = "perplexity/sonar-pro"
 

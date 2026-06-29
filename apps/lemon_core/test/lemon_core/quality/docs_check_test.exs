@@ -428,7 +428,11 @@ defmodule LemonCore.Quality.DocsCheckTest do
   # Helper functions
 
   defp create_tmp_dir do
-    tmp_dir = System.tmp_dir!() |> Path.join("docs_check_test_#{System.unique_integer()}")
+    tmp_dir =
+      System.tmp_dir!()
+      |> Path.join("docs_check_test_#{System.unique_integer([:positive, :monotonic])}")
+
+    File.rm_rf!(tmp_dir)
     File.mkdir_p!(Path.join(tmp_dir, "docs"))
     tmp_dir
   end

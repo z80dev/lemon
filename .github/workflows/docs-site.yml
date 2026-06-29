@@ -52,11 +52,11 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: docs/package.json
+          cache-dependency-path: docs/package-lock.json
 
       - name: Install docs deps
         working-directory: docs
-        run: npm install
+        run: npm ci
 
       - name: Audit docs tooling
         working-directory: docs

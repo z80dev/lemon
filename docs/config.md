@@ -516,7 +516,7 @@ provider = "perplexity"
 
 [runtime.tools.web.search.perplexity]
 # Optional if PERPLEXITY_API_KEY / OPENROUTER_API_KEY is set.
-api_key = "pplx-..."
+api_key = "<perplexity-api-key>"
 base_url = "https://api.perplexity.ai"
 model = "perplexity/sonar-pro"
 
@@ -718,9 +718,8 @@ voice_transcription_provider = "openai_transcribe"       # "openai_transcribe" |
 voice_transcription_model = "gpt-4o-mini-transcribe"  # optional
 voice_max_bytes = 10485760                            # optional (default: 10MB)
 
-# Optional OpenAI-compatible overrides (defaults to providers.openai)
+# Optional OpenAI-compatible endpoint override. Credentials default to [providers.openai].
 voice_transcription_base_url = "https://api.openai.com/v1"
-voice_transcription_api_key = "sk-..."
 ```
 
 Use `voice_transcription_provider = "local_transcript"` for deterministic

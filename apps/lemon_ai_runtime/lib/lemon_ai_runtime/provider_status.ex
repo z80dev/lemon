@@ -5,7 +5,6 @@ defmodule LemonAiRuntime.ProviderStatus do
 
   alias LemonAiRuntime.ProviderNames
   alias LemonCore.Config
-  alias LemonCore.Secrets
 
   @spec snapshot(map() | nil) :: map()
   def snapshot(params \\ %{}) do
@@ -252,49 +251,18 @@ defmodule LemonAiRuntime.ProviderStatus do
   end
 
   defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd) do
-    cond do
-      provider_config_value(provider_cfg, :auth_source) in ["api_key", "oauth"] ->
-        LemonAiRuntime.provider_has_credentials?("openai_codex", providers, cwd: cwd)
-
-      env_configured? ->
-        true
-
-      true ->
-        LemonAiRuntime.Auth.OpenAICodexOAuth.available?()
-    end
+    LemonAiRuntime.provider_has_credentials?("openai_codex", providers, cwd: cwd) or
+      (not present?(provider_config_value(provider_cfg, :auth_source)) && not env_configured? &&
+         LemonAiRuntime.Auth.OpenAICodexOAuth.available?())
   end
 
-  defp credential_ready?("anthropic", providers, provider_cfg, env_configured?, cwd) do
-    case provider_config_value(provider_cfg, :auth_source) do
-      "oauth" ->
-        env_configured? or
-          configured_secret_exists?(provider_cfg, :oauth_secret) or
-          configured_secret_exists?(provider_cfg, :api_key_secret) or
-          default_secret_exists?(ProviderNames.oauth_default_secret_name("anthropic")) or
-          default_secret_exists?(ProviderNames.default_secret_name("anthropic"))
-
-      _ ->
-        LemonAiRuntime.provider_has_credentials?("anthropic", providers, cwd: cwd)
-    end
+  defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd) do
+    LemonAiRuntime.provider_has_credentials?("anthropic", providers, cwd: cwd)
   end
 
   defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd) do
     LemonAiRuntime.provider_has_credentials?(canonical, providers, cwd: cwd)
   end
-
-  defp configured_secret_exists?(provider_cfg, field) do
-    provider_cfg
-    |> provider_config_value(field)
-    |> default_secret_exists?()
-  end
-
-  defp default_secret_exists?(secret_name) when is_binary(secret_name) do
-    Secrets.exists?(secret_name, prefer_env: false, env_fallback: false)
-  rescue
-    _ -> false
-  end
-
-  defp default_secret_exists?(_), do: false
 
   defp env_configured?(provider) do
     provider

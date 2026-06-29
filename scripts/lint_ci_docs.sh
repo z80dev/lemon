@@ -45,6 +45,13 @@ else
   pass "C11: examples/config.example.toml does not use plaintext api_key with real key prefixes"
 fi
 
+if grep -RInE '(^|[[:space:]])[A-Za-z0-9_]*api_key\s*=\s*"(sk-|AKIA|ya29\.|opencode-|pplx-)' \
+  "$ROOT/docs" "$ROOT/README.md" "$ROOT/examples" 2>/dev/null; then
+  fail "C11: docs/examples contain plaintext API key examples with real key prefixes"
+else
+  pass "C11: docs/examples do not contain plaintext API key examples with real key prefixes"
+fi
+
 if python3 - "$ROOT/docs/config.md" <<'PYEOF'
 import re, sys
 
@@ -64,6 +71,16 @@ then
   pass "C11: docs/config.md primary example uses api_key_secret references"
 else
   fail "C11: docs/config.md primary example still exposes plaintext api_key values"
+fi
+
+if [ -f "$ROOT/docs/package-lock.json" ] &&
+  grep -q 'cache-dependency-path: docs/package-lock.json' "$ROOT/.github/workflows/docs-site.yml" &&
+  grep -q 'run: npm ci' "$ROOT/.github/workflows/docs-site.yml" &&
+  grep -q 'npm ci' "$ROOT/scripts/verify_docs_site" &&
+  grep -q -- '--lockfile=docs/package-lock.json' "$ROOT/.github/workflows/osv-scanner.yml"; then
+  pass "C11: docs site uses a tracked lockfile across CI, local verification, and OSV"
+else
+  fail "C11: docs site lockfile contract is incomplete"
 fi
 
 # ── J17: release.yml must not reference a nonexistent step output for TIMESTAMP ─
@@ -133,22 +150,67 @@ else
   pass "J22: product-smoke.yml doctor check is not unconditionally masked"
 fi
 
-# ── J23: PR workflows must have explicit permissions blocks ──────────────────
-check_permissions() {
-  local file="$1"
-  local name="$2"
-  if ! grep -q 'permissions:' "$file" 2>/dev/null; then
-    fail "J23: $name lacks an explicit 'permissions:' block"
-  else
-    pass "J23: $name has explicit permissions"
-  fi
-}
-check_permissions "$ROOT/.github/workflows/quality.yml" "quality.yml"
-check_permissions "$ROOT/.github/workflows/release-smoke.yml" "release-smoke.yml"
-check_permissions "$ROOT/.github/workflows/docs-site.yml" "docs-site.yml"
-check_permissions "$ROOT/.github/workflows/live-eval.yml" "live-eval.yml"
-check_permissions "$ROOT/.github/workflows/history-check.yml" "history-check.yml"
-check_permissions "$ROOT/.github/workflows/python-cli.yml" "python-cli.yml"
+# ── J23: PR workflows must have explicit least-privilege permissions blocks ─
+if python3 - "$ROOT/.github/workflows" <<'PYEOF'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+failed = []
+checked = 0
+
+for path in sorted([*root.glob("*.yml"), *root.glob("*.yaml")]):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not any(line.strip() == "pull_request:" for line in lines):
+        continue
+
+    checked += 1
+    permissions = {}
+    in_block = False
+
+    for line in lines:
+        if line == "permissions:":
+            in_block = True
+            continue
+
+        if in_block and line and not line.startswith((" ", "\t")):
+            break
+
+        if in_block:
+            stripped = line.strip()
+            if ":" in stripped:
+                key, value = stripped.split(":", 1)
+                permissions[key.strip()] = value.strip()
+
+    if not permissions:
+        failed.append(path.name)
+        continue
+
+    broad = [
+        f"{key}: {value}"
+        for key, value in permissions.items()
+        if value == "write" and key not in {"pages", "id-token", "security-events"}
+    ]
+
+    if broad:
+        failed.append(f"{path.name} has broad workflow permissions: {', '.join(broad)}")
+
+    if permissions.get("contents") != "read":
+        failed.append(f"{path.name} must set contents: read at workflow scope")
+
+if failed:
+    print("\n".join(failed), file=sys.stderr)
+    sys.exit(1)
+
+if checked == 0:
+    print("no pull_request workflows found", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+then
+  pass "J23: pull_request workflows have workflow-scope permissions"
+else
+  fail "J23: one or more pull_request workflows lack workflow-scope permissions"
+fi
 
 if awk '
   /^permissions:/ {in_block=1; next}

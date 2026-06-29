@@ -16,11 +16,11 @@ trap cleanup EXIT
 
 mkdir -p "$DOCS_COPY"
 cp -a "$ROOT/docs/." "$DOCS_COPY/"
-rm -rf "$DOCS_COPY/node_modules" "$DOCS_COPY/package-lock.json" "$DOCS_COPY/.vitepress/dist"
+rm -rf "$DOCS_COPY/node_modules" "$DOCS_COPY/.vitepress/dist"
 
 cd "$DOCS_COPY"
 
-npm install
+npm ci
 npm audit --audit-level=high
 npm run build
 

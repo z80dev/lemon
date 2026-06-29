@@ -988,6 +988,7 @@ defmodule LemonCore.Config.Validator do
       end
 
     errors
+    |> validate_provider_secret_refs(name, config, "providers")
     |> validate_openai_codex_auth_source(name, config, "providers")
     |> validate_anthropic_auth_source(name, config, "providers")
   end
@@ -1026,6 +1027,7 @@ defmodule LemonCore.Config.Validator do
       end
 
     errors
+    |> validate_provider_secret_refs(name, config, "providers.providers")
     |> validate_openai_codex_auth_source(name, config, "providers.providers")
     |> validate_anthropic_auth_source(name, config, "providers.providers")
   end
@@ -1040,6 +1042,39 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp env_var_reference?(_), do: false
+
+  defp validate_provider_secret_refs(errors, name, config, path_prefix) do
+    [
+      :api_key_secret,
+      :oauth_secret,
+      :project_secret,
+      :location_secret,
+      :service_account_json_secret,
+      :access_key_id_secret,
+      :secret_access_key_secret,
+      :session_token_secret
+    ]
+    |> Enum.reduce(errors, fn field, acc ->
+      validate_provider_secret_ref(acc, name, config, path_prefix, field)
+    end)
+  end
+
+  defp validate_provider_secret_ref(errors, name, config, path_prefix, field) do
+    case Map.get(config, field) || Map.get(config, Atom.to_string(field)) do
+      nil ->
+        errors
+
+      value when is_binary(value) ->
+        if String.trim(value) == "" do
+          ["#{path_prefix}.#{name}.#{field}: cannot be empty" | errors]
+        else
+          errors
+        end
+
+      other ->
+        ["#{path_prefix}.#{name}.#{field}: must be a string (got #{inspect(other)})" | errors]
+    end
+  end
 
   defp validate_openai_codex_auth_source(errors, name, config, path_prefix) do
     if to_string(name) == "openai-codex" do

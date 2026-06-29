@@ -129,13 +129,13 @@ The public docs site should build cleanly:
 
 ```bash
 cd docs
-npm install --no-package-lock
+npm ci
 npm audit --audit-level=high
 npm run build
 find . -name "*.md" ! -path "./.vitepress/*" ! -path "./node_modules/*" | \
   xargs npx markdown-link-check --config .mlc.json --quiet
 cd ..
-rm -rf docs/node_modules docs/package-lock.json docs/.vitepress/dist
+rm -rf docs/node_modules docs/.vitepress/dist
 mix lemon.quality
 ```
 

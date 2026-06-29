@@ -624,9 +624,9 @@ For the docs package:
   - `npm audit` reports `fixAvailable: false` or the available fix would require
     an unsafe/manual major upgrade
   - the finding is recorded in the launch ledger
-- generated docs artifacts such as `docs/node_modules`,
-  `docs/package-lock.json`, and `docs/.vitepress/dist` must not remain in the
-  repository after local verification
+- generated docs artifacts such as `docs/node_modules` and
+  `docs/.vitepress/dist` must not remain in the repository after local
+  verification; `docs/package-lock.json` is tracked for `npm ci` parity
 
 As of 2026-05-11, the accepted docs-tooling findings are three moderate
 advisories in the VitePress dependency chain:

@@ -12,5 +12,8 @@
   "devDependencies": {
     "markdown-link-check": "^3.13.6",
     "vitepress": "^1.5.0"
+  },
+  "overrides": {
+    "vite": "6.4.3"
   }
 }
