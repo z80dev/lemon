@@ -302,53 +302,61 @@ defmodule CodingAgent.Session.Lifecycle do
     {:ok, lifecycle.extension_status_report, new_state}
   end
 
-  @spec reset(Session.t(), non_neg_integer()) :: Session.t()
+  @spec reset(Session.t(), non_neg_integer()) :: {:ok, Session.t()} | {:error, :busy, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
     was_streaming = state.is_streaming
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
     state = State.cancel_pending_prompt(state)
 
-    state =
-      if was_streaming do
-        Notifier.broadcast_event(state, {:canceled, :reset})
-        Notifier.complete_event_streams(state, {:canceled, :reset})
+    with :ok <-
+           wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
+      state =
+        if was_streaming do
+          Notifier.broadcast_event(state, {:canceled, :reset})
+          Notifier.complete_event_streams(state, {:canceled, :reset})
 
-        if not had_pending_prompt do
-          AgentCore.Agent.abort(state.agent)
-
-          case AgentCore.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms) do
-            :ok -> :ok
-            {:error, :timeout} -> Logger.warning("Timed out waiting for agent abort during reset")
+          if not had_pending_prompt do
+            BackgroundTasks.flush_queued_agent_events()
           end
 
-          BackgroundTasks.flush_queued_agent_events()
+          %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
+        else
+          state
         end
 
-        %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
-      else
-        state
-      end
+      :ok = AgentCore.Agent.reset(state.agent)
 
-    :ok = AgentCore.Agent.reset(state.agent)
+      previous_session_id = state.session_manager.header.id
+      new_session_manager = SessionManager.new(state.cwd)
 
-    previous_session_id = state.session_manager.header.id
-    new_session_manager = SessionManager.new(state.cwd)
+      Persistence.maybe_unregister_session(
+        previous_session_id,
+        state.register_session,
+        state.session_registry
+      )
 
-    Persistence.maybe_unregister_session(
-      previous_session_id,
-      state.register_session,
-      state.session_registry
-    )
+      Persistence.maybe_register_session(
+        new_session_manager,
+        state.cwd,
+        state.register_session,
+        state.session_registry
+      )
 
-    Persistence.maybe_register_session(
-      new_session_manager,
-      state.cwd,
-      state.register_session,
-      state.session_registry
-    )
+      Notifier.ui_set_working_message(state, nil)
+      {:ok, State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
+    else
+      {:error, :timeout} ->
+        Logger.warning("Timed out waiting for agent abort during reset")
+        {:error, :busy, state}
+    end
+  end
 
-    Notifier.ui_set_working_message(state, nil)
-    State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
+  defp wait_for_reset_abort(_state, false, _had_pending_prompt, _reset_abort_wait_ms), do: :ok
+  defp wait_for_reset_abort(_state, true, true, _reset_abort_wait_ms), do: :ok
+
+  defp wait_for_reset_abort(state, true, false, reset_abort_wait_ms) do
+    AgentCore.Agent.abort(state.agent)
+    AgentCore.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
 
   defp load_or_create_session(cwd, nil, session_id, parent_session) do

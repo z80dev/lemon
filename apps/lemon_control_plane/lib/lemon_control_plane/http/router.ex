@@ -145,7 +145,7 @@ defmodule LemonControlPlane.HTTP.Router do
 
     try do
       with {:ok, conn} <- stream_start(conn, result, kind),
-           {:ok, conn} <- stream_loop(conn, result, kind, result.stream_timeout_ms) do
+           {:ok, conn} <- stream_loop(conn, result, kind, stream_deadline_ms(result.stream_timeout_ms)) do
         conn
       else
         {:error, _reason} -> conn
@@ -162,33 +162,49 @@ defmodule LemonControlPlane.HTTP.Router do
     chunk(conn, sse_data(stream_start_object(result, kind)))
   end
 
-  defp stream_loop(conn, result, kind, timeout_ms) do
-    receive do
-      %LemonCore.Event{type: :delta, payload: payload} ->
-        text = map_get(payload, :text) || ""
-
-        stream_delta(conn, result, kind, text)
-        |> then(fn
-          {:ok, conn} -> stream_loop(conn, result, kind, timeout_ms)
-          error -> error
-        end)
-
-      %LemonCore.Event{type: :engine_action, payload: payload} ->
-        stream_tool_progress(conn, result, kind, payload)
-        |> then(fn
-          {:ok, conn} -> stream_loop(conn, result, kind, timeout_ms)
-          error -> error
-        end)
-
-      %LemonCore.Event{type: :run_completed, payload: payload} ->
-        stream_completed(conn, result, kind, payload)
-
-      %{type: :run_completed, payload: payload} ->
-        stream_completed(conn, result, kind, payload)
-    after
-      timeout_ms ->
+  defp stream_loop(conn, result, kind, deadline_ms) do
+    case stream_remaining_timeout_ms(deadline_ms) do
+      0 ->
         chunk(conn, sse_data(%{"error" => %{"message" => "stream timed out"}}))
+
+      timeout_ms ->
+        receive do
+          %LemonCore.Event{type: :delta, payload: payload} ->
+            text = map_get(payload, :text) || ""
+
+            stream_delta(conn, result, kind, text)
+            |> then(fn
+              {:ok, conn} -> stream_loop(conn, result, kind, deadline_ms)
+              error -> error
+            end)
+
+          %LemonCore.Event{type: :engine_action, payload: payload} ->
+            stream_tool_progress(conn, result, kind, payload)
+            |> then(fn
+              {:ok, conn} -> stream_loop(conn, result, kind, deadline_ms)
+              error -> error
+            end)
+
+          %LemonCore.Event{type: :run_completed, payload: payload} ->
+            stream_completed(conn, result, kind, payload)
+
+          %{type: :run_completed, payload: payload} ->
+            stream_completed(conn, result, kind, payload)
+        after
+          timeout_ms ->
+            chunk(conn, sse_data(%{"error" => %{"message" => "stream timed out"}}))
+        end
     end
+  end
+
+  defp stream_deadline_ms(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
+    System.monotonic_time(:millisecond) + timeout_ms
+  end
+
+  defp stream_deadline_ms(_timeout_ms), do: System.monotonic_time(:millisecond)
+
+  defp stream_remaining_timeout_ms(deadline_ms) do
+    max(deadline_ms - System.monotonic_time(:millisecond), 0)
   end
 
   defp stream_delta(conn, result, :chat, text) do

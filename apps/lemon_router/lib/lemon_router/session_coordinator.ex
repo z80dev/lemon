@@ -79,6 +79,18 @@ defmodule LemonRouter.SessionCoordinator do
     :ok
   end
 
+  @spec abort_run(binary(), term()) :: :ok
+  def abort_run(run_id, reason \\ :user_requested) when is_binary(run_id) do
+    coordinator_entries()
+    |> Enum.each(fn {_conversation_key, pid, _meta} ->
+      if is_pid(pid) do
+        GenServer.cast(pid, {:abort_run, run_id, reason})
+      end
+    end)
+
+    :ok
+  end
+
   @spec active_run(term()) :: {:ok, binary()} | :none
   def active_run(conversation_key) do
     with {:ok, pid} <- whereis(conversation_key) do
@@ -167,6 +179,13 @@ defmodule LemonRouter.SessionCoordinator do
   def handle_cast({:abort_session, session_key, reason}, state) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.abort_session(state, session_key, reason), state)
+
+    {:noreply, next_state}
+  end
+
+  def handle_cast({:abort_run, run_id, reason}, state) do
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.abort_run(state, run_id, reason), state)
 
     {:noreply, next_state}
   end

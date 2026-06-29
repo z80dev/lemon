@@ -54,6 +54,14 @@ defmodule LemonControlPlane.Presence do
   end
 
   @doc """
+  Updates event subscription metadata for a connection.
+  """
+  @spec update_subscriptions(String.t(), atom(), MapSet.t()) :: :ok
+  def update_subscriptions(conn_id, mode, subscriptions) do
+    GenServer.call(__MODULE__, {:update_subscriptions, conn_id, mode, subscriptions})
+  end
+
+  @doc """
   Lists all connected clients.
   """
   @spec list() :: [{String.t(), client_info()}]
@@ -131,6 +139,24 @@ defmodule LemonControlPlane.Presence do
       end
 
     {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:update_subscriptions, conn_id, mode, subscriptions}, _from, state) do
+    case :ets.lookup(state.table, conn_id) do
+      [{^conn_id, info}] ->
+        info =
+          info
+          |> Map.put(:subscription_mode, mode)
+          |> Map.put(:subscriptions, subscriptions)
+
+        :ets.insert(state.table, {conn_id, info})
+
+      [] ->
+        :ok
+    end
+
+    {:reply, :ok, state}
   end
 
   @impl true

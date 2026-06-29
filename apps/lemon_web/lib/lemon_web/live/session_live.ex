@@ -57,47 +57,51 @@ defmodule LemonWeb.SessionLive do
       {:noreply,
        assign(socket, :submit_error, "Please wait for uploads to finish before submitting.")}
     else
-      uploads = persist_uploads(socket)
+      case persist_uploads(socket) do
+        {:ok, uploads} ->
+          if prompt == "" and uploads == [] do
+            {:noreply, assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
+          else
+            submission_prompt = build_submission_prompt(prompt, uploads)
+            user_text = build_user_message(prompt, uploads)
 
-      if prompt == "" and uploads == [] do
-        {:noreply, assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
-      else
-        submission_prompt = build_submission_prompt(prompt, uploads)
-        user_text = build_user_message(prompt, uploads)
-
-        socket =
-          socket
-          |> append_message(%{
-            id: message_id("user"),
-            kind: :user,
-            content: user_text,
-            ts_ms: now_ms()
-          })
-          |> assign(:prompt, "")
-          |> assign(:submit_error, nil)
-
-        case submit_run(
-               socket.assigns.session_key,
-               socket.assigns.agent_id,
-               submission_prompt,
-               uploads
-             ) do
-          {:ok, run_id} ->
-            {:noreply, assign(socket, :last_run_id, run_id)}
-
-          {:error, reason} ->
             socket =
               socket
               |> append_message(%{
-                id: message_id("system"),
-                kind: :system,
-                content: "Submit failed: #{format_error(reason)}",
+                id: message_id("user"),
+                kind: :user,
+                content: user_text,
                 ts_ms: now_ms()
               })
-              |> assign(:submit_error, format_error(reason))
+              |> assign(:prompt, "")
+              |> assign(:submit_error, nil)
 
-            {:noreply, socket}
-        end
+            case submit_run(
+                   socket.assigns.session_key,
+                   socket.assigns.agent_id,
+                   submission_prompt,
+                   uploads
+                 ) do
+              {:ok, run_id} ->
+                {:noreply, assign(socket, :last_run_id, run_id)}
+
+              {:error, reason} ->
+                socket =
+                  socket
+                  |> append_message(%{
+                    id: message_id("system"),
+                    kind: :system,
+                    content: "Submit failed: #{format_error(reason)}",
+                    ts_ms: now_ms()
+                  })
+                  |> assign(:submit_error, format_error(reason))
+
+                {:noreply, socket}
+            end
+          end
+
+        {:error, failures} ->
+          {:noreply, assign(socket, :submit_error, upload_failure_message(failures))}
       end
     end
   end
@@ -246,37 +250,71 @@ defmodule LemonWeb.SessionLive do
   end
 
   defp persist_uploads(socket) do
+    if persist_fun = Application.get_env(:lemon_web, :upload_persist_fun) do
+      persist_fun.(socket)
+    else
+      persist_uploaded_entries(socket)
+    end
+  end
+
+  defp persist_uploaded_entries(socket) do
     upload_root = upload_root()
-    :ok = File.mkdir_p(upload_root)
 
-    consume_uploaded_entries(socket, :files, fn %{path: path}, entry ->
-      filename = sanitize_filename(entry.client_name || "upload")
+    with :ok <- File.mkdir_p(upload_root) do
+      entries =
+        consume_uploaded_entries(socket, :files, fn %{path: path}, entry ->
+          filename = sanitize_filename(entry.client_name || "upload")
 
-      destination =
-        Path.join(
-          upload_root,
-          "#{System.system_time(:millisecond)}-#{message_id("file")}-#{filename}"
-        )
+          destination =
+            Path.join(
+              upload_root,
+              "#{System.system_time(:millisecond)}-#{message_id("file")}-#{filename}"
+            )
 
-      case File.cp(path, destination) do
-        :ok ->
-          {:ok,
-           %{
-             name: entry.client_name,
-             path: destination,
-             content_type: entry.client_type,
-             size: entry.client_size
-           }}
+          case File.cp(path, destination) do
+            :ok ->
+              {:ok,
+               %{
+                 name: entry.client_name,
+                 path: destination,
+                 content_type: entry.client_type,
+                 size: entry.client_size
+               }}
 
-        {:error, reason} ->
-          {:ok,
-           %{
-             name: entry.client_name,
-             path: nil,
-             error: format_error(reason)
-           }}
+            {:error, reason} ->
+              {:ok,
+               %{
+                 name: entry.client_name,
+                 path: nil,
+                 error: format_error(reason)
+               }}
+          end
+        end)
+
+      failures = Enum.filter(entries, &(not is_binary(read(&1, :path))))
+
+      if failures == [] do
+        {:ok, entries}
+      else
+        {:error, failures}
       end
-    end)
+    else
+      {:error, reason} ->
+        {:error, [%{name: upload_root, error: format_error(reason)}]}
+    end
+  end
+
+  defp upload_failure_message(failures) do
+    files =
+      failures
+      |> Enum.map(fn file ->
+        name = read(file, :name) || "upload"
+        error = read(file, :error) || "could not be saved"
+        "#{name}: #{error}"
+      end)
+      |> Enum.join(", ")
+
+    "Upload failed: #{files}"
   end
 
   defp upload_root do

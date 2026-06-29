@@ -367,7 +367,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
-    RunStore.append_event(run_ref, event)
+    RunStore.append_event(state.run_id, event)
 
     state =
       cond do
@@ -640,13 +640,14 @@ defmodule LemonGateway.Run do
       build_event_meta(state)
     )
 
-    if state.run_ref do
+    if state.run_id do
       prompt = state.job.prompt
 
-      RunStore.finalize(state.run_ref, %{
+      RunStore.finalize(state.run_id, %{
         completed: completed,
         session_key: state.session_key,
         run_id: state.run_id,
+        run_ref: state.run_ref,
         prompt: prompt,
         duration_ms: duration_ms,
         engine: engine_id_for(state.job),

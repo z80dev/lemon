@@ -114,6 +114,39 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert :ok = EventBridge.unsubscribe_topics(["session:#{session_key}"])
       Presence.unregister(conn_id)
     end
+
+    test "filters custom subscribers before mailbox fanout" do
+      conn_id = "conn_#{System.unique_integer()}"
+      subscribed_run = "run_subscribed_#{System.unique_integer()}"
+      other_run = "run_other_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
+      assert :ok =
+               Presence.update_subscriptions(
+                 conn_id,
+                 :custom,
+                 MapSet.new(["run:#{subscribed_run}"])
+               )
+
+      flush_events()
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(:delta, %{text: "ignored"}, %{run_id: other_run})
+      )
+
+      refute_receive {:event, "chat", %{"runId" => ^other_run}, _}, 200
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(:delta, %{text: "delivered"}, %{run_id: subscribed_run})
+      )
+
+      assert_receive {:event, "chat", %{"runId" => ^subscribed_run}, _}, 500
+
+      Presence.unregister(conn_id)
+    end
   end
 
   describe "event forwarding" do

@@ -2204,17 +2204,19 @@ defmodule LemonGateway.RunTest do
       completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, _}, 2000
+      assert_receive {:run_complete, ^pid, completed}, 2000
+      run_id = completed.run_id
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run(run_ref) != nil end,
+        fn -> LemonCore.Store.get_run(run_id) != nil end,
         message: "run data was not stored"
       )
 
       # Events should be stored
-      run_data = LemonCore.Store.get_run(run_ref)
+      run_data = LemonCore.Store.get_run(run_id)
       assert run_data != nil
+      assert LemonCore.Store.get_run(run_ref) == nil
       assert length(run_data.events) >= 2
     end
 

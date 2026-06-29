@@ -64,6 +64,24 @@ defmodule LemonRouter.SessionTransitions do
     {:ok, next_state, effects}
   end
 
+  @spec abort_run(SessionState.t(), binary(), term()) ::
+          {:ok, SessionState.t(), [QueueEffect.t()]}
+  def abort_run(%SessionState{} = state, run_id, reason) when is_binary(run_id) do
+    next_state =
+      state
+      |> drop_run_queue(run_id)
+      |> drop_run_pending_steers(run_id)
+
+    effects =
+      if active_run?(state.active, run_id) do
+        [{:cancel_active, reason}]
+      else
+        []
+      end
+
+    {:ok, next_state, effects}
+  end
+
   @spec active_down(SessionState.t(), pid(), reference()) ::
           {:ok, SessionState.t(), [QueueEffect.t()]}
   def active_down(%SessionState{active: %{pid: pid, mon_ref: mon_ref}} = state, pid, mon_ref)
@@ -446,8 +464,15 @@ defmodule LemonRouter.SessionTransitions do
 
   defp active_session?(_, _session_key), do: false
 
+  defp active_run?(%{run_id: run_id}, run_id) when is_binary(run_id), do: true
+  defp active_run?(_, _run_id), do: false
+
   defp drop_session_queue(%SessionState{} = state, session_key) do
     %SessionState{state | queue: Enum.reject(state.queue, &(&1.session_key == session_key))}
+  end
+
+  defp drop_run_queue(%SessionState{} = state, run_id) do
+    %SessionState{state | queue: Enum.reject(state.queue, &(&1.run_id == run_id))}
   end
 
   defp drop_session_pending_steers(%SessionState{} = state, session_key) do
@@ -456,6 +481,24 @@ defmodule LemonRouter.SessionTransitions do
         kept =
           Enum.reject(entries, fn {submission, _mode} ->
             submission.session_key == session_key
+          end)
+
+        if kept == [] do
+          acc
+        else
+          Map.put(acc, active_run_id, kept)
+        end
+      end)
+
+    %SessionState{state | pending_steers: pending_steers}
+  end
+
+  defp drop_run_pending_steers(%SessionState{} = state, run_id) do
+    pending_steers =
+      Enum.reduce(state.pending_steers, %{}, fn {active_run_id, entries}, acc ->
+        kept =
+          Enum.reject(entries, fn {submission, _mode} ->
+            submission.run_id == run_id
           end)
 
         if kept == [] do

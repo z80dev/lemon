@@ -241,6 +241,26 @@ defmodule LemonRouter.SessionCoordinatorTest do
     refute_receive {:started, "run2", _}, 300
   end
 
+  test "abort_run/2 clears queued work before it starts", %{run_supervisor: run_supervisor} do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+
+    :ok = LemonCore.EventBridge.subscribe_run("run2")
+    assert_receive {:bridge_subscribed, "run2"}, 500
+    :ok = submit(key, "run2", "two", :collect, run_supervisor)
+    refute_receive {:started, "run2", _}, 100
+
+    :ok = SessionCoordinator.abort_run("run2", :user_requested)
+    assert_receive {:bridge_unsubscribed, "run2"}, 500
+
+    SessionCoordinator.cancel(session_key, :user_requested)
+    assert_receive {:aborted, "run1", :user_requested}, 500
+    refute_receive {:started, "run2", _}, 300
+  end
+
   test "immediate submit surfaces router_not_ready when run start fails before any active run exists" do
     key = {:session, unique_session_key()}
     dead_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})

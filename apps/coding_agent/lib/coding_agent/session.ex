@@ -447,7 +447,7 @@ defmodule CodingAgent.Session do
   @doc """
   Reset the session, clearing all messages and restarting.
   """
-  @spec reset(GenServer.server()) :: :ok
+  @spec reset(GenServer.server()) :: :ok | {:error, :busy}
   def reset(session) do
     GenServer.call(session, :reset)
   end
@@ -733,8 +733,10 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
-    new_state = Lifecycle.reset(state, @reset_abort_wait_ms)
-    {:reply, :ok, new_state}
+    case Lifecycle.reset(state, @reset_abort_wait_ms) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, :busy, new_state} -> {:reply, {:error, :busy}, new_state}
+    end
   end
 
   def handle_call({:switch_model, model}, _from, state) do

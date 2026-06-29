@@ -166,6 +166,8 @@ defmodule LemonRouter.Router do
   """
   @spec abort_run(run_id :: binary(), reason :: term()) :: :ok
   def abort_run(run_id, reason \\ :user_requested) do
+    session_coordinator().abort_run(run_id, reason)
+
     case Registry.lookup(LemonRouter.RunRegistry, run_id) do
       [{pid, _}] ->
         LemonRouter.RunProcess.abort(pid, reason)

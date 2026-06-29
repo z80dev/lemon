@@ -57,6 +57,40 @@ defmodule LemonWebTest do
            ] = socket.assigns.messages
   end
 
+  test "session live blocks submit when upload persistence fails" do
+    previous = Application.get_env(:lemon_web, :upload_persist_fun)
+
+    Application.put_env(:lemon_web, :upload_persist_fun, fn _socket ->
+      {:error, [%{name: "receipt.pdf", error: "permission denied"}]}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:lemon_web, :upload_persist_fun, previous)
+      else
+        Application.delete_env(:lemon_web, :upload_persist_fun)
+      end
+    end)
+
+    socket = %Phoenix.LiveView.Socket{
+      assigns: %{
+        __changed__: %{},
+        uploads: %{files: %{entries: []}},
+        messages: [],
+        session_key: "agent:web:browser",
+        agent_id: "default",
+        last_run_id: nil
+      }
+    }
+
+    assert {:noreply, socket} =
+             LemonWeb.SessionLive.handle_event("submit", %{"chat" => %{"prompt" => ""}}, socket)
+
+    assert socket.assigns.submit_error == "Upload failed: receipt.pdf: permission denied"
+    assert socket.assigns.messages == []
+    refute Map.has_key?(socket.assigns, :prompt)
+  end
+
   test "static LiveView entrypoint uses vendored Phoenix assets" do
     static_root = Path.expand("../priv/static/assets", __DIR__)
     app_js = File.read!(Path.join(static_root, "app.js"))

@@ -122,11 +122,15 @@ defmodule LemonControlPlane.WS.Connection do
       |> Enum.filter(&is_binary/1)
       |> Enum.reduce(state.subscriptions, &MapSet.put(&2, &1))
 
-    {:ok, %{state | subscription_mode: :custom, subscriptions: subscriptions}}
+    state = %{state | subscription_mode: :custom, subscriptions: subscriptions}
+    update_presence_subscriptions(state)
+    {:ok, state}
   end
 
   def handle_info({:unsubscribe_topics, :all}, state) do
-    {:ok, %{state | subscription_mode: :custom, subscriptions: MapSet.new()}}
+    state = %{state | subscription_mode: :custom, subscriptions: MapSet.new()}
+    update_presence_subscriptions(state)
+    {:ok, state}
   end
 
   def handle_info({:unsubscribe_topics, topics}, state) do
@@ -136,7 +140,9 @@ defmodule LemonControlPlane.WS.Connection do
       |> Enum.filter(&is_binary/1)
       |> Enum.reduce(state.subscriptions, &MapSet.delete(&2, &1))
 
-    {:ok, %{state | subscription_mode: :custom, subscriptions: subscriptions}}
+    state = %{state | subscription_mode: :custom, subscriptions: subscriptions}
+    update_presence_subscriptions(state)
+    {:ok, state}
   end
 
   def handle_info(msg, state) do
@@ -323,8 +329,24 @@ defmodule LemonControlPlane.WS.Connection do
         LemonControlPlane.Presence.register(state.conn_id, %{
           role: state.auth.role,
           client_id: state.auth.client_id,
-          pid: self()
+          pid: self(),
+          subscription_mode: state.subscription_mode,
+          subscriptions: state.subscriptions
         })
+    end
+  end
+
+  defp update_presence_subscriptions(state) do
+    case Process.whereis(LemonControlPlane.Presence) do
+      nil ->
+        :ok
+
+      pid when is_pid(pid) ->
+        LemonControlPlane.Presence.update_subscriptions(
+          state.conn_id,
+          state.subscription_mode,
+          state.subscriptions
+        )
     end
   end
 

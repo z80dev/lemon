@@ -210,10 +210,79 @@ defmodule LemonControlPlane.EventBridge do
 
       {event_name, payload} ->
         # Get all connected clients from presence
-        clients = get_connected_clients()
+        clients =
+          get_connected_clients()
+          |> filter_subscribed_clients(event_name, payload)
+
         dispatch_event(clients, event_name, payload, state_version)
     end
   end
+
+  defp filter_subscribed_clients(clients, event_name, payload) do
+    Enum.filter(clients, fn {_conn_id, info} ->
+      subscribed_to_event?(info, event_name, payload)
+    end)
+  end
+
+  defp subscribed_to_event?(%{subscription_mode: :custom, subscriptions: subscriptions}, event_name, payload) do
+    subscriptions = subscriptions || MapSet.new()
+
+    MapSet.member?(subscriptions, "all") ||
+      event_topics(event_name, payload)
+      |> Enum.any?(&MapSet.member?(subscriptions, &1))
+  end
+
+  defp subscribed_to_event?(_info, _event_name, _payload), do: true
+
+  defp event_topics(event_name, payload) do
+    topic_for_event(event_name) ++ run_topics(payload) ++ session_topics(payload)
+  end
+
+  defp topic_for_event(event_name) when event_name in ["cron", "cron.job", "cron.audit"],
+    do: ["cron"]
+
+  defp topic_for_event("goal"), do: ["goals"]
+  defp topic_for_event("tick"), do: ["cron", "system"]
+  defp topic_for_event("presence"), do: ["presence"]
+  defp topic_for_event("health"), do: ["system"]
+  defp topic_for_event("shutdown"), do: ["system"]
+  defp topic_for_event("talk.mode"), do: ["system"]
+  defp topic_for_event("heartbeat"), do: ["system"]
+  defp topic_for_event("metrics"), do: ["system"]
+  defp topic_for_event("log"), do: ["system"]
+  defp topic_for_event("voicewake.changed"), do: ["system"]
+  defp topic_for_event("custom"), do: ["system"]
+
+  defp topic_for_event(event_name) when is_binary(event_name) do
+    cond do
+      String.starts_with?(event_name, "exec.approval.") -> ["exec_approvals"]
+      String.starts_with?(event_name, "node.") -> ["nodes"]
+      String.starts_with?(event_name, "device.") -> ["nodes"]
+      true -> []
+    end
+  end
+
+  defp topic_for_event(_), do: []
+
+  defp run_topics(payload) do
+    case get_event_field(payload, "runId") do
+      run_id when is_binary(run_id) and run_id != "" -> ["run:#{run_id}"]
+      _ -> []
+    end
+  end
+
+  defp session_topics(payload) do
+    case get_event_field(payload, "sessionKey") do
+      session_key when is_binary(session_key) and session_key != "" -> ["session:#{session_key}"]
+      _ -> []
+    end
+  end
+
+  defp get_event_field(payload, key) when is_map(payload) do
+    Map.get(payload, key) || Map.get(payload, Macro.underscore(key))
+  end
+
+  defp get_event_field(_payload, _key), do: nil
 
   defp dispatch_event(clients, event_name, payload, state_version) do
     payload_meta = %{event: event_name, recipients: length(clients)}

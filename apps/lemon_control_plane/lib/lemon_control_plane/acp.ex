@@ -367,7 +367,7 @@ defmodule LemonControlPlane.ACP do
         result,
         session_update_callback,
         client_request_callback,
-        wait_timeout_ms(params)
+        deadline_ms(wait_timeout_ms(params))
       )
     after
       LemonCore.Bus.unsubscribe(topic)
@@ -375,41 +375,57 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms) do
-    receive do
-      %LemonCore.Event{type: :run_completed, payload: payload} ->
-        {:ok, complete_streamed_result(result, payload)}
-
-      %LemonCore.Event{type: :acp_client_request, payload: payload} ->
-        result = perform_client_request(result, payload, client_request_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-
-      %LemonCore.Event{type: :approval_requested, payload: payload} ->
-        result = maybe_perform_approval_request(result, payload, client_request_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-
-      %LemonCore.Event{} = event ->
-        maybe_emit_update(result.session_id, event, session_update_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-
-      %{type: :run_completed, payload: payload} ->
-        {:ok, complete_streamed_result(result, payload)}
-
-      %{type: :acp_client_request, payload: payload} ->
-        result = perform_client_request(result, payload, client_request_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-
-      %{type: :approval_requested, payload: payload} ->
-        result = maybe_perform_approval_request(result, payload, client_request_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-
-      %{type: _type} = event ->
-        maybe_emit_update(result.session_id, event, session_update_callback)
-        update_wait_loop(result, session_update_callback, client_request_callback, timeout_ms)
-    after
-      timeout_ms ->
+  defp update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms) do
+    case remaining_timeout_ms(deadline_ms) do
+      0 ->
         {:error, -32001, "Run did not complete within timeout"}
+
+      timeout_ms ->
+        receive do
+          %LemonCore.Event{type: :run_completed, payload: payload} ->
+            {:ok, complete_streamed_result(result, payload)}
+
+          %LemonCore.Event{type: :acp_client_request, payload: payload} ->
+            result = perform_client_request(result, payload, client_request_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+          %LemonCore.Event{type: :approval_requested, payload: payload} ->
+            result = maybe_perform_approval_request(result, payload, client_request_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+          %LemonCore.Event{} = event ->
+            maybe_emit_update(result.session_id, event, session_update_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+          %{type: :run_completed, payload: payload} ->
+            {:ok, complete_streamed_result(result, payload)}
+
+          %{type: :acp_client_request, payload: payload} ->
+            result = perform_client_request(result, payload, client_request_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+          %{type: :approval_requested, payload: payload} ->
+            result = maybe_perform_approval_request(result, payload, client_request_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+          %{type: _type} = event ->
+            maybe_emit_update(result.session_id, event, session_update_callback)
+            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+        after
+          timeout_ms ->
+            {:error, -32001, "Run did not complete within timeout"}
+        end
     end
+  end
+
+  defp deadline_ms(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
+    System.monotonic_time(:millisecond) + timeout_ms
+  end
+
+  defp deadline_ms(_timeout_ms), do: System.monotonic_time(:millisecond)
+
+  defp remaining_timeout_ms(deadline_ms) do
+    max(deadline_ms - System.monotonic_time(:millisecond), 0)
   end
 
   defp maybe_perform_approval_request(result, payload, callback) do

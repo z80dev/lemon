@@ -455,6 +455,36 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     assert request.meta.streaming_requested == true
   end
 
+  test "chat completion streams use an absolute timeout across deltas" do
+    Application.put_env(:lemon_control_plane, :openai_compat_submitter, fn _request ->
+      spawn(fn ->
+        Process.sleep(10)
+        broadcast_delta("run_chat_stream_timeout_123", "still ")
+        Process.sleep(15)
+        broadcast_delta("run_chat_stream_timeout_123", "working ")
+        Process.sleep(15)
+        broadcast_delta("run_chat_stream_timeout_123", "late")
+      end)
+
+      {:ok, "run_chat_stream_timeout_123"}
+    end)
+
+    response =
+      :post
+      |> json_conn("/v1/chat/completions", %{
+        "model" => "zai:glm-5-turbo",
+        "messages" => [%{"role" => "user", "content" => "hello"}],
+        "stream" => true,
+        "stream_timeout_ms" => 30
+      })
+      |> Router.call([])
+
+    assert response.status == 200
+    assert response.resp_body =~ "still "
+    assert response.resp_body =~ "stream timed out"
+    refute response.resp_body =~ "late"
+  end
+
   test "chat completions can wait for a completed Lemon run" do
     parent = self()
 
