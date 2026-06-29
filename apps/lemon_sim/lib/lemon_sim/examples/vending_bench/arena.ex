@@ -14,6 +14,8 @@ defmodule LemonSim.Examples.VendingBench.Arena do
   alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Events}
   alias LemonSim.Kernel.{Runner, State}
 
+  @deterministic_artifact_timestamp "1970-01-01T00:00:00Z"
+
   @default_agents [
     %{id: "alex", name: "Alex Market"},
     %{id: "blair", name: "Blair Snacks"},
@@ -559,7 +561,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
           paths.arena_actions => jsonl(actions),
           paths.arena_scorecard => scorecard_body,
           paths.scorecard => scorecard_body,
-          paths.arena_report => report(world, paths)
+          paths.arena_report => report(world, paths, opts)
         }
 
         Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
@@ -569,7 +571,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
         AtomicFile.write!(
           paths.manifest,
-          Jason.encode!(manifest_artifact(world, hashes), pretty: true)
+          Jason.encode!(manifest_artifact(world, hashes, opts), pretty: true)
         )
 
         paths
@@ -593,7 +595,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     }
   end
 
-  defp report(world, paths) do
+  defp report(world, paths, opts) do
     standings =
       world.leaderboard
       |> Enum.with_index(1)
@@ -621,12 +623,21 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
     ## Artifacts
 
-    - Final world: #{paths.final_world}
-    - Arena world: #{paths.arena_world}
-    - Arena events: #{paths.arena_events}
-    - Arena actions: #{paths.arena_actions}
-    - Arena scorecard: #{paths.arena_scorecard}
+    - Final world: #{artifact_path(paths.final_world, paths, opts)}
+    - Arena world: #{artifact_path(paths.arena_world, paths, opts)}
+    - Arena events: #{artifact_path(paths.arena_events, paths, opts)}
+    - Arena actions: #{artifact_path(paths.arena_actions, paths, opts)}
+    - Arena scorecard: #{artifact_path(paths.arena_scorecard, paths, opts)}
     """
+  end
+
+  defp artifact_path(path, paths, opts) do
+    if Keyword.get(opts, :deterministic_artifacts?, false) do
+      artifact_dir = Path.dirname(paths.final_world)
+      Path.relative_to(path, artifact_dir)
+    else
+      path
+    end
   end
 
   defp hashes_artifact(artifact_dir, contents) do
@@ -643,8 +654,13 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     }
   end
 
-  defp manifest_artifact(world, hashes) do
-    now = DateTime.utc_now() |> DateTime.to_iso8601()
+  defp manifest_artifact(world, hashes, opts) do
+    now =
+      if Keyword.get(opts, :deterministic_artifacts?, false) do
+        @deterministic_artifact_timestamp
+      else
+        DateTime.utc_now() |> DateTime.to_iso8601()
+      end
 
     %{
       schema_version: "lemon_sim.run.v1",

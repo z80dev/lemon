@@ -23,9 +23,9 @@ defmodule Mix.Tasks.Lemon.Eval do
   def run(args) do
     Mix.Task.run("app.start")
 
-    {opts, _rest, _invalid} =
+    {opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           iterations: :integer,
           json: :boolean,
           cwd: :string,
@@ -35,10 +35,24 @@ defmodule Mix.Tasks.Lemon.Eval do
         aliases: [n: :iterations]
       )
 
+    if invalid != [] do
+      Mix.raise("Invalid eval option(s): #{inspect(invalid)}")
+    end
+
+    if rest != [] do
+      Mix.raise("Unexpected eval argument(s): #{Enum.join(rest, " ")}")
+    end
+
+    iterations = opts[:iterations] || 25
+
+    if iterations <= 0 do
+      Mix.raise("--iterations must be a positive integer")
+    end
+
     report =
       Harness.run(
         cwd: opts[:cwd] || File.cwd!(),
-        iterations: opts[:iterations] || 25,
+        iterations: iterations,
         live_model: opts[:live_model] || false,
         live_timeout_ms: opts[:live_timeout_ms] || 90_000
       )

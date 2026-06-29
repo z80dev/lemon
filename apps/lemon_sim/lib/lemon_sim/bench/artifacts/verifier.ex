@@ -1,6 +1,8 @@
 defmodule LemonSim.Bench.Artifacts.Verifier do
   @moduledoc false
 
+  alias LemonSim.Examples.{TcgShop, VendingBench}
+
   def verify_run(artifact_dir) when is_binary(artifact_dir) do
     with {:ok, manifest} <- read_json(Path.join(artifact_dir, "manifest.json")),
          {:ok, hashes} <- read_json(Path.join(artifact_dir, "hashes.json")),
@@ -9,7 +11,8 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
          :ok <- verify_expected_files(manifest, hashes),
          :ok <- verify_manifest_integrity(manifest, hashes),
          :ok <- verify_hashes(artifact_dir, hashes),
-         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")) do
+         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
+         :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
       {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
     end
   end
@@ -79,13 +82,22 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     ]
   end
 
+  defp required_files(%{"sim" => %{"id" => "vending_bench_arena"}}) do
+    [
+      "final_world.json",
+      "arena_world.json",
+      "arena_events.jsonl",
+      "arena_actions.jsonl",
+      "arena_scorecard.json",
+      "scorecard.json",
+      "arena_report.md"
+    ]
+  end
+
   defp required_files(_manifest), do: []
 
   defp verify_manifest_integrity(%{"integrity" => integrity}, %{"files" => files}) do
-    checks = [
-      {"events_sha256", "events.jsonl"},
-      {"scorecard_sha256", "scorecard.json"}
-    ]
+    checks = integrity_checks(integrity, files)
 
     Enum.reduce_while(checks, :ok, fn {integrity_key, file}, :ok ->
       case {Map.get(integrity, integrity_key), Map.get(files, file)} do
@@ -98,6 +110,20 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
   end
 
   defp verify_manifest_integrity(_manifest, _hashes), do: {:error, :missing_manifest_integrity}
+
+  defp integrity_checks(_integrity, files) do
+    event_file =
+      cond do
+        Map.has_key?(files, "events.jsonl") -> "events.jsonl"
+        Map.has_key?(files, "arena_events.jsonl") -> "arena_events.jsonl"
+        true -> "events.jsonl"
+      end
+
+    [
+      {"events_sha256", event_file},
+      {"scorecard_sha256", "scorecard.json"}
+    ]
+  end
 
   defp verify_hashes(artifact_dir, %{"files" => files}) when is_map(files) do
     Enum.reduce_while(files, :ok, fn {basename, expected_hash}, :ok ->
@@ -129,6 +155,81 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
       {:error, reason} -> {:error, {:read_json_failed, path, reason}}
     end
   end
+
+  defp verify_scorecard(artifact_dir, %{"sim" => %{"id" => sim_id}}, scorecard) do
+    with {:ok, world} <- read_json(Path.join(artifact_dir, "final_world.json")),
+         {:ok, expected} <- expected_scorecard(sim_id, world, scorecard) do
+      case expected do
+        :skip ->
+          :ok
+
+        expected ->
+          if canonical_json(expected) == canonical_json(scorecard) do
+            :ok
+          else
+            {:error, {:scorecard_mismatch, sim_id}}
+          end
+      end
+    end
+  end
+
+  defp verify_scorecard(_artifact_dir, _manifest, _scorecard), do: :ok
+
+  defp expected_scorecard("vending_bench", world, scorecard) do
+    scorecard =
+      world
+      |> VendingBench.Performance.summarize()
+      |> Map.put(:sim_id, get(scorecard, :sim_id))
+      |> Map.put(:status, get(world, :status))
+      |> Map.put(:day_number, get(world, :day_number))
+
+    {:ok, scorecard}
+  end
+
+  defp expected_scorecard("tcg_shop", world, scorecard) do
+    scorecard =
+      world
+      |> TcgShop.Performance.scorecard()
+      |> Map.put(:sim_id, get(scorecard, :sim_id))
+      |> Map.put(:status, get(world, :status))
+      |> Map.put(:day_number, get(world, :day_number))
+
+    {:ok, scorecard}
+  end
+
+  defp expected_scorecard("vending_bench_arena", world, scorecard) do
+    {:ok,
+     %{
+       sim_id: get(scorecard, :sim_id),
+       mode: get(world, :mode),
+       status: get(world, :status),
+       day_number: get(world, :day_number),
+       leaderboard: get(world, :leaderboard),
+       agent_count: length(get(world, :arena_agents, [])),
+       trade_count: length(get(world, :arena_trades, [])),
+       message_count: length(get(world, :arena_messages, [])),
+       payment_count: length(get(world, :arena_payments, [])),
+       supplier_lead_count: length(get(world, :arena_supplier_leads, [])),
+       price_war_count: length(get(world, :arena_price_wars, [])),
+       collusion_signal_count: length(get(world, :arena_collusion_signals, []))
+     }}
+  end
+
+  defp expected_scorecard(_sim_id, _world, _scorecard), do: {:ok, :skip}
+
+  defp canonical_json(value) do
+    value
+    |> Jason.encode!()
+    |> Jason.decode!()
+  end
+
+  defp get(map, key, default \\ nil)
+
+  defp get(map, key, default) when is_map(map) and is_atom(key),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+
+  defp get(map, key, default) when is_map(map), do: Map.get(map, key, default)
+  defp get(_map, _key, default), do: default
 
   defp hashed_file_path(artifact_dir, basename) when is_binary(basename) do
     root = Path.expand(artifact_dir)

@@ -59,6 +59,10 @@ defmodule CodingAgent.Evals.Harness do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     iterations = Keyword.get(opts, :iterations, 25)
 
+    if not is_integer(iterations) or iterations <= 0 do
+      raise ArgumentError, "iterations must be a positive integer"
+    end
+
     results =
       [
         deterministic_contract_eval(cwd),

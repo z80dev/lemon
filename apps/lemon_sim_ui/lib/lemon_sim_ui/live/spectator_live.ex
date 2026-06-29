@@ -653,7 +653,12 @@ defmodule LemonSimUi.SpectatorLive do
   end
 
   defp recent_artifact_events(artifact_dir) do
-    case File.read(Path.join(artifact_dir, "events.jsonl")) do
+    event_path =
+      ["events.jsonl", "arena_events.jsonl"]
+      |> Enum.map(&Path.join(artifact_dir, &1))
+      |> Enum.find(&File.exists?/1)
+
+    case event_path && File.read(event_path) do
       {:ok, body} ->
         body
         |> String.split("\n", trim: true)

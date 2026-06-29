@@ -231,7 +231,7 @@ defmodule LemonSim.Examples.TcgShop.Performance do
       world
       |> get(:inventory, %{})
       |> Enum.reduce(0.0, fn {line_id, item}, acc ->
-        line = Map.get(catalog, line_id, %{})
+        line = get(catalog, line_id, %{})
         acc + get(item, :on_hand, 0) * get(line, :market_price, 0.0)
       end)
 
@@ -286,7 +286,7 @@ defmodule LemonSim.Examples.TcgShop.Performance do
     world
     |> get(:inventory, %{})
     |> Enum.reduce(0, fn {line_id, item}, acc ->
-      line = Map.get(catalog, line_id, %{})
+      line = get(catalog, line_id, %{})
 
       if get(item, :age_days, 0) >= stale_age_threshold(line) do
         acc + get(item, :on_hand, 0)

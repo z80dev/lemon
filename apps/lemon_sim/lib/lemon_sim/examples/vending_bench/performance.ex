@@ -3,6 +3,8 @@ defmodule LemonSim.Examples.VendingBench.Performance do
   Performance metrics summarization for the Vending Bench simulation.
   """
 
+  alias LemonCore.MapHelpers
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     bank_balance = get(world, :bank_balance, 0.0)
@@ -303,7 +305,7 @@ defmodule LemonSim.Examples.VendingBench.Performance do
   defp present?(_value), do: true
 
   defp item_info(catalog, item_id) when is_map(catalog) do
-    Map.get(catalog, item_id, %{})
+    MapHelpers.get_key(catalog, item_id) || %{}
   end
 
   defp item_info(_catalog, _item_id), do: %{}

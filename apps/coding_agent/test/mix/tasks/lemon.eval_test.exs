@@ -98,27 +98,24 @@ defmodule Mix.Tasks.Lemon.EvalTest do
     end
 
     @tag :integration
-    test "handles unknown options gracefully" do
-      # Unknown options should be ignored by OptionParser
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--unknown-flag"])
-        end)
-
-      # Should still run with the known options
-      assert output =~ "Eval summary:"
+    test "rejects unknown options" do
+      assert_raise Mix.Error, ~r/Invalid eval option/, fn ->
+        Eval.run(["--iterations", "2", "--unknown-flag"])
+      end
     end
 
     @tag :integration
-    test "handles invalid iteration count gracefully" do
-      # Non-integer iterations are ignored by OptionParser and defaults are used
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "not_a_number"])
-        end)
+    test "rejects invalid iteration count" do
+      assert_raise Mix.Error, ~r/Invalid eval option/, fn ->
+        Eval.run(["--iterations", "not_a_number"])
+      end
+    end
 
-      # Should still run with default iterations
-      assert output =~ "Eval summary:"
+    @tag :integration
+    test "rejects non-positive iteration count" do
+      assert_raise Mix.Error, ~r/--iterations must be a positive integer/, fn ->
+        Eval.run(["--iterations", "0"])
+      end
     end
   end
 

@@ -1223,6 +1223,25 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert {:ok, %{scorecard: ^scorecard}} =
              LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
 
+    stale_scorecard = Map.put(scorecard, "total_revenue", scorecard["total_revenue"] + 1)
+    File.write!(artifacts.scorecard, Jason.encode!(stale_scorecard))
+
+    scorecard_hash = sha256(File.read!(artifacts.scorecard))
+    manifest = put_in(manifest, ["integrity", "scorecard_sha256"], scorecard_hash)
+    hashes = put_in(hashes, ["files", "scorecard.json"], scorecard_hash)
+    File.write!(artifacts.manifest, Jason.encode!(manifest))
+    File.write!(artifacts.hashes, Jason.encode!(hashes))
+
+    assert {:error, {:scorecard_mismatch, "vending_bench"}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
+
+    File.write!(artifacts.scorecard, Jason.encode!(scorecard))
+    scorecard_hash = sha256(File.read!(artifacts.scorecard))
+    manifest = put_in(manifest, ["integrity", "scorecard_sha256"], scorecard_hash)
+    hashes = put_in(hashes, ["files", "scorecard.json"], scorecard_hash)
+    File.write!(artifacts.manifest, Jason.encode!(manifest))
+    File.write!(artifacts.hashes, Jason.encode!(hashes))
+
     supplier_messages = artifacts.supplier_messages |> File.read!() |> Jason.decode!()
     worker_history = artifacts.worker_history |> File.read!() |> Jason.decode!()
     operator_transcript = artifacts.operator_transcript |> File.read!() |> Jason.decode!()
@@ -1415,6 +1434,9 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert scorecard["supplier_lead_count"] >= 1
     assert scorecard["price_war_count"] == 1
     assert scorecard["collusion_signal_count"] >= 1
+
+    assert {:ok, %{scorecard: ^scorecard}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
 
     File.rm_rf!(artifact_dir)
   end
@@ -2084,5 +2106,9 @@ defmodule LemonSim.Examples.VendingBenchTest do
     end)
 
     stream
+  end
+
+  defp sha256(content) when is_binary(content) do
+    :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
   end
 end
