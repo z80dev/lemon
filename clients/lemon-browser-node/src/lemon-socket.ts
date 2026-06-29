@@ -36,6 +36,7 @@ type RequestFrame = {
 type Pending = {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
+  timer: NodeJS.Timeout;
 };
 
 export class LemonSocket {
@@ -87,14 +88,19 @@ export class LemonSocket {
     }
   }
 
-  async call(method: string, params?: unknown): Promise<unknown> {
+  async call(method: string, params?: unknown, opts: { timeoutMs?: number } = {}): Promise<unknown> {
     const id = crypto.randomUUID();
     const frame: RequestFrame = { type: 'req', id, method, ...(params ? { params } : {}) };
+    const timeoutMs = typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0 ? opts.timeoutMs : 10_000;
 
     const payload = await new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`request timeout after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
+
+      this.pending.set(id, { resolve, reject, timer });
       this.send(frame);
-      // Request-level timeout is caller-controlled via higher-level timeouts.
     });
 
     return payload;
@@ -120,6 +126,7 @@ export class LemonSocket {
           clearTimeout(t);
           reject(e);
         },
+        timer: t,
       });
 
       this.send(frame);
@@ -161,6 +168,7 @@ export class LemonSocket {
       const p = this.pending.get(res.id);
       if (!p) return;
       this.pending.delete(res.id);
+      clearTimeout(p.timer);
 
       if (res.ok) {
         p.resolve(res.payload);
@@ -178,8 +186,8 @@ export class LemonSocket {
 
     for (const [id, p] of this.pending.entries()) {
       this.pending.delete(id);
+      clearTimeout(p.timer);
       p.reject(err);
     }
   }
 }
-

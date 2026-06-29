@@ -12,8 +12,8 @@ export function Composer() {
   const [, setHistoryIndex] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const canSend = Boolean(activeSessionId) && connectionState === 'connected';
   const charCount = text.trim().length;
+  const canSend = Boolean(activeSessionId) && connectionState === 'connected' && charCount > 0;
 
   const sendPrompt = () => {
     if (!text.trim() || !activeSessionId) return;
@@ -94,6 +94,7 @@ export function Composer() {
         <div className="composer__input">
           <textarea
             ref={textareaRef}
+            aria-label="Prompt"
             value={text}
             onChange={(event) => setText(event.target.value)}
             placeholder="Draft a plan, paste logs, or ask for a change..."

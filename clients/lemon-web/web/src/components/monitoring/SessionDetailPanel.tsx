@@ -37,10 +37,11 @@ function runTaskMatch(task: MonitoringTask, runId: string | null): boolean {
 export interface SessionDetailPanelProps {
   sessionKey: string | null;
   loading?: boolean;
+  error?: string | null;
   onSelectRun?: (runId: string) => void;
 }
 
-export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ sessionKey, loading, error, onSelectRun }: SessionDetailPanelProps) {
   const sessionDetails = useMonitoringStore((s) => s.sessionDetails);
   const activeSessions = useMonitoringStore((s) => s.sessions.active);
   const historicalSessions = useMonitoringStore((s) => s.sessions.historical);
@@ -246,7 +247,9 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
           )}
         </div>
 
-        {runs.length === 0 && sessionDetail ? (
+        {error ? (
+          <div style={{ color: '#ff9966', padding: '18px 8px' }}>{error}</div>
+        ) : runs.length === 0 && sessionDetail ? (
           <div style={{ color: '#555', padding: '18px 8px' }}>No run history available.</div>
         ) : (
           runs.map((run, idx) => {

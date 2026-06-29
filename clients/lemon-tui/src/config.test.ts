@@ -332,7 +332,28 @@ describe('loadConfig', () => {
     await cleanupTmpDir(tmpDir);
   });
 
-  it('returns defaults when config file contains invalid TOML', async () => {
+  it('throws when project config contains invalid TOML', async () => {
+    const tmpDir = await createTmpDir();
+    vi.doMock('os', async (importOriginal) => {
+      const actual = await importOriginal<typeof os>();
+      return { ...actual, homedir: () => tmpDir };
+    });
+
+    const projectDir = path.join(tmpDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.lemon');
+    await fs.mkdir(projectConfigDir, { recursive: true });
+    await fs.writeFile(path.join(projectConfigDir, 'config.toml'), 'broken {{{', 'utf-8');
+
+    const { loadConfig } = await import('./config.js');
+
+    await expect(loadConfig(projectDir)).rejects.toThrow(
+      `Failed to load config ${path.join(projectConfigDir, 'config.toml')}`
+    );
+
+    await cleanupTmpDir(tmpDir);
+  });
+
+  it('throws when config file contains invalid TOML', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -344,10 +365,7 @@ describe('loadConfig', () => {
     await fs.writeFile(path.join(configDir, 'config.toml'), 'not valid toml {{{', 'utf-8');
 
     const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    expect(config.agent?.default_provider).toBe('anthropic');
-    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514');
+    await expect(loadConfig()).rejects.toThrow(`Failed to load config ${path.join(configDir, 'config.toml')}`);
 
     await cleanupTmpDir(tmpDir);
   });
@@ -487,7 +505,7 @@ describe('loadConfigSync', () => {
     await cleanupTmpDir(tmpDir);
   });
 
-  it('returns defaults on invalid TOML', async () => {
+  it('throws on invalid TOML', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -499,9 +517,7 @@ describe('loadConfigSync', () => {
     await fs.writeFile(path.join(configDir, 'config.toml'), '{ broken toml', 'utf-8');
 
     const { loadConfigSync } = await import('./config.js');
-    const config = loadConfigSync();
-
-    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(() => loadConfigSync()).toThrow(`Failed to load config ${path.join(configDir, 'config.toml')}`);
 
     await cleanupTmpDir(tmpDir);
   });

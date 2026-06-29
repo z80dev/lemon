@@ -21,6 +21,10 @@ function isHealthyChannelStatus(status: string | null): boolean {
   return normalized === 'connected' || normalized === 'running' || normalized === 'enabled' || normalized === 'active';
 }
 
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ============================================================================
 // OverviewPanel (inline component)
 // ============================================================================
@@ -365,6 +369,8 @@ export function MonitoringApp() {
   const [activeScreen, setActiveScreen] = useState<MonitoringScreen>('overview');
   const prevConnectedRef = useRef(false);
   const [sessionDetailLoading, setSessionDetailLoading] = useState(false);
+  const [sessionDetailErrors, setSessionDetailErrors] = useState<Record<string, string>>({});
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const lastSessionPrefetchRef = useRef(0);
   const activeRunCount = useMonitoringStore((s) => s.instance.activeRuns);
@@ -421,23 +427,32 @@ export function MonitoringApp() {
     try {
       const store = useMonitoringStore.getState();
 
-      const results = await Promise.allSettled([
-        request('status', {}),
-        request('introspection.snapshot', { includeActiveSessions: true, sessionLimit: 250, activeLimit: 250 }),
-        request('agent.directory.list', { includeSessions: true, limit: 250 }),
-        request('sessions.list', { limit: 150 }),
-        request('sessions.active.list', { limit: 250 }),
-        request('runs.active.list', { limit: 200 }),
-        request('runs.recent.list', { limit: 200 }),
-        request('tasks.active.list', { limit: 200, includeEvents: true, includeRecord: true, eventLimit: 200 }),
-        request('tasks.recent.list', { limit: 200, includeEvents: true, includeRecord: true, eventLimit: 200 }),
-        request('agents.list', {}),
-        request('channels.status', {}),
-        request('transports.status', {}),
-        request('skills.status', {}),
-        request('cron.status', {}),
-        request('cron.list', {}),
-      ]);
+      const calls = [
+        ['status', request('status', {})],
+        ['introspection.snapshot', request('introspection.snapshot', { includeActiveSessions: true, sessionLimit: 250, activeLimit: 250 })],
+        ['agent.directory.list', request('agent.directory.list', { includeSessions: true, limit: 250 })],
+        ['sessions.list', request('sessions.list', { limit: 150 })],
+        ['sessions.active.list', request('sessions.active.list', { limit: 250 })],
+        ['runs.active.list', request('runs.active.list', { limit: 200 })],
+        ['runs.recent.list', request('runs.recent.list', { limit: 200 })],
+        ['tasks.active.list', request('tasks.active.list', { limit: 200, includeEvents: true, includeRecord: true, eventLimit: 200 })],
+        ['tasks.recent.list', request('tasks.recent.list', { limit: 200, includeEvents: true, includeRecord: true, eventLimit: 200 })],
+        ['agents.list', request('agents.list', {})],
+        ['channels.status', request('channels.status', {})],
+        ['transports.status', request('transports.status', {})],
+        ['skills.status', request('skills.status', {})],
+        ['cron.status', request('cron.status', {})],
+        ['cron.list', request('cron.list', {})],
+      ] as const;
+
+      const results = await Promise.allSettled(calls.map(([, promise]) => promise));
+      const failedMethods: string[] = [];
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          failedMethods.push(calls[index][0]);
+        }
+      });
+      setLoadErrors(failedMethods);
 
       const [
         statusRes,
@@ -573,6 +588,11 @@ export function MonitoringApp() {
     if (existing) return; // already loaded
 
     setSessionDetailLoading(true);
+    setSessionDetailErrors((errors) => {
+      const next = { ...errors };
+      delete next[selectedSessionKey];
+      return next;
+    });
     request('session.detail', {
       sessionKey: selectedSessionKey,
       limit: 100,
@@ -594,15 +614,11 @@ export function MonitoringApp() {
         };
         useMonitoringStore.getState().applySessionDetail(detail);
       })
-      .catch(() => {
-        // Store empty detail so we don't retry on every render
-        useMonitoringStore.getState().applySessionDetail({
-          sessionKey: selectedSessionKey,
-          session: {},
-          runs: [],
-          runCount: 0,
-          loadedAtMs: Date.now(),
-        });
+      .catch((error) => {
+        setSessionDetailErrors((errors) => ({
+          ...errors,
+          [selectedSessionKey]: `Failed to load session detail: ${formatError(error)}`,
+        }));
       })
       .finally(() => setSessionDetailLoading(false));
   }, [selectedSessionKey, isConnected, request]);
@@ -698,6 +714,22 @@ export function MonitoringApp() {
         </button>
       </div>
 
+      {loadErrors.length > 0 && (
+        <div
+          role="alert"
+          style={{
+            borderBottom: '1px solid #442a12',
+            background: '#1d140b',
+            color: '#ffbb77',
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            padding: '8px 12px',
+          }}
+        >
+          Monitoring data partially failed to load: {loadErrors.join(', ')}
+        </div>
+      )}
+
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <AgentSessionsSidebar
           onSelectSession={handleSelectSession}
@@ -710,6 +742,7 @@ export function MonitoringApp() {
             <SessionDetailPanel
               sessionKey={selectedSessionKey}
               loading={sessionDetailLoading}
+              error={selectedSessionKey ? sessionDetailErrors[selectedSessionKey] ?? null : null}
               onSelectRun={handleSelectRun}
             />
           </div>

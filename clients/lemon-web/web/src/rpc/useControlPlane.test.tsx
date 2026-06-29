@@ -150,8 +150,47 @@ describe('useControlPlane', () => {
       ws.simulateClose(1006);
     });
 
-    expect(result.current.connectionState).toBe('disconnected');
+    expect(result.current.connectionState).toBe('reconnecting');
     expect(result.current.isConnected).toBe(false);
+
+    unmount();
+  });
+
+  it('shows reconnecting state and honors maxReconnectAttempts', async () => {
+    const { result, unmount } = renderHook(() =>
+      useControlPlane(undefined, { maxReconnectAttempts: 1 })
+    );
+
+    const ws1 = MockWebSocket.instances[0];
+
+    await act(async () => {
+      ws1.simulateOpen();
+      ws1.simulateMessage(HELLO_OK_FRAME);
+    });
+
+    await act(async () => {
+      ws1.simulateClose(1006);
+    });
+
+    expect(result.current.connectionState).toBe('reconnecting');
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    await act(async () => {
+      MockWebSocket.instances[1].simulateClose(1006);
+    });
+
+    expect(result.current.connectionState).toBe('disconnected');
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
 
     unmount();
   });

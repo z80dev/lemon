@@ -106,9 +106,12 @@ describe('Composer', () => {
       expect(screen.getByText('chars: 11')).toBeInTheDocument();
     });
 
-    it('displays Ready when can send', () => {
+    it('displays Ready when can send', async () => {
       setupConnectedSession();
+      const user = userEvent.setup();
       render(<Composer />);
+
+      await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'Hello');
 
       expect(screen.getByText('Ready')).toBeInTheDocument();
     });
@@ -590,9 +593,21 @@ describe('Composer', () => {
       expect(sendButton).toBeDisabled();
     });
 
-    it('enables Send button when can send', () => {
+    it('disables Send button for an empty prompt', () => {
       setupConnectedSession();
       render(<Composer />);
+
+      const sendButton = screen.getByRole('button', { name: 'Send' });
+      expect(sendButton).toBeDisabled();
+    });
+
+    it('enables Send button when connected with nonblank text', async () => {
+      const user = userEvent.setup();
+      setupConnectedSession();
+      render(<Composer />);
+
+      const textarea = screen.getByRole('textbox', { name: 'Prompt' });
+      await user.type(textarea, 'Hello');
 
       const sendButton = screen.getByRole('button', { name: 'Send' });
       expect(sendButton).not.toBeDisabled();

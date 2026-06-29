@@ -376,6 +376,35 @@ describe('createControlPlaneTransport', () => {
       expect(MockWebSocket.instances).toHaveLength(3);
     });
 
+    it('reports reconnecting state and stops at max reconnect attempts', () => {
+      const handlers = makeHandlers();
+      const onStateChange = vi.fn();
+      const transport = createControlPlaneTransport(
+        { ...handlers, onStateChange },
+        { maxReconnectAttempts: 1 }
+      );
+      transport.connect('ws://localhost/ws');
+
+      const ws1 = MockWebSocket.instances[0];
+      ws1.simulateOpen();
+      ws1.simulateMessage(HELLO_OK_FRAME);
+      ws1.simulateClose(1006);
+
+      expect(onStateChange).toHaveBeenCalledWith('reconnecting');
+      expect(transport.getConnectionState()).toBe('reconnecting');
+
+      vi.advanceTimersByTime(500);
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      const ws2 = MockWebSocket.instances[1];
+      ws2.simulateClose(1006);
+
+      expect(transport.getConnectionState()).toBe('disconnected');
+      expect(handlers.onDisconnectedMock).toHaveBeenCalledWith('reconnect attempts exhausted');
+      vi.advanceTimersByTime(5000);
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
     it('resets retry count after a successful hello-ok', () => {
       const handlers = makeHandlers();
       const transport = createControlPlaneTransport(handlers);

@@ -47,6 +47,7 @@ export interface ControlPlaneConnectionHandler {
   onConnected: (snapshot: HelloOkSnapshot) => void;
   onDisconnected: (reason: string) => void;
   onEvent: ControlPlaneEventHandler;
+  onStateChange?: (state: ControlPlaneConnectionState) => void;
 }
 
 export type ControlPlaneConnectionState =
@@ -67,6 +68,11 @@ export interface ControlPlaneTransport {
   isConnected(): boolean;
   getConnectionState(): ControlPlaneConnectionState;
   destroy(): void;
+}
+
+export interface ControlPlaneTransportOptions {
+  /** Maximum reconnect attempts (0 = unlimited). Default: 0 */
+  maxReconnectAttempts?: number;
 }
 
 // ============================================================================
@@ -140,7 +146,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * when the connection drops.
  */
 export function createControlPlaneTransport(
-  handlers: ControlPlaneConnectionHandler
+  handlers: ControlPlaneConnectionHandler,
+  options: ControlPlaneTransportOptions = {}
 ): ControlPlaneTransport {
   let socket: WebSocket | null = null;
   let state: ControlPlaneConnectionState = 'disconnected';
@@ -156,6 +163,7 @@ export function createControlPlaneTransport(
 
   function setState(next: ControlPlaneConnectionState): void {
     state = next;
+    handlers.onStateChange?.(next);
   }
 
   function rejectAllPending(reason: string): void {
@@ -176,6 +184,12 @@ export function createControlPlaneTransport(
 
   function scheduleReconnect(): void {
     if (destroyed) return;
+    const maxReconnectAttempts = options.maxReconnectAttempts ?? 0;
+    if (maxReconnectAttempts > 0 && retryCount >= maxReconnectAttempts) {
+      setState('disconnected');
+      handlers.onDisconnected('reconnect attempts exhausted');
+      return;
+    }
     const delay = getReconnectDelayMs(retryCount);
     retryCount += 1;
     setState('reconnecting');

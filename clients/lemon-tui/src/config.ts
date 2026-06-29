@@ -126,8 +126,9 @@ async function loadProjectConfig(cwd: string): Promise<Partial<LemonConfig>> {
   try {
     const content = await fsPromises.readFile(configPath, 'utf-8');
     return toml.parse(content) as LemonConfig;
-  } catch {
-    return {};
+  } catch (err) {
+    if (isMissingFileError(err)) return {};
+    throw configLoadError(configPath, err);
   }
 }
 
@@ -137,8 +138,9 @@ function loadProjectConfigSync(cwd: string): Partial<LemonConfig> {
   try {
     const content = fs.readFileSync(configPath, 'utf-8');
     return toml.parse(content) as LemonConfig;
-  } catch {
-    return {};
+  } catch (err) {
+    if (isMissingFileError(err)) return {};
+    throw configLoadError(configPath, err);
   }
 }
 
@@ -156,9 +158,14 @@ export async function loadConfig(cwd?: string): Promise<LemonConfig> {
       return mergeConfig(merged, await loadProjectConfig(cwd));
     }
     return merged;
-  } catch {
-    // Return defaults if file doesn't exist or is invalid TOML
-    return { ...DEFAULT_CONFIG };
+  } catch (err) {
+    if (isMissingFileError(err)) {
+      if (cwd) {
+        return mergeConfig(DEFAULT_CONFIG, await loadProjectConfig(cwd));
+      }
+      return { ...DEFAULT_CONFIG };
+    }
+    throw configLoadError(configPath, err);
   }
 }
 
@@ -176,10 +183,24 @@ export function loadConfigSync(cwd?: string): LemonConfig {
       return mergeConfig(merged, loadProjectConfigSync(cwd));
     }
     return merged;
-  } catch {
-    // Return defaults if file doesn't exist or is invalid TOML
-    return { ...DEFAULT_CONFIG };
+  } catch (err) {
+    if (isMissingFileError(err)) {
+      if (cwd) {
+        return mergeConfig(DEFAULT_CONFIG, loadProjectConfigSync(cwd));
+      }
+      return { ...DEFAULT_CONFIG };
+    }
+    throw configLoadError(configPath, err);
   }
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+function configLoadError(configPath: string, err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  return new Error(`Failed to load config ${configPath}: ${message}`);
 }
 
 /**

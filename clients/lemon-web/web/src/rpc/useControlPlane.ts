@@ -58,6 +58,7 @@ export function useControlPlane(
     url,
     token,
     autoConnect = true,
+    maxReconnectAttempts = 0,
   } = opts ?? {};
 
   const [connectionState, setConnectionState] =
@@ -86,12 +87,15 @@ export function useControlPlane(
       onDisconnected: () => {
         setConnectionState('disconnected');
       },
+      onStateChange: (state) => {
+        setConnectionState(state);
+      },
       onEvent: (eventName, payload, seq, stateVersion) => {
         setLastEvent({ name: eventName, payload, seq });
         onEventRef.current?.(eventName, payload, seq, stateVersion);
       },
-    });
-  }, []); // intentionally empty — transport is long-lived
+    }, { maxReconnectAttempts });
+  }, [maxReconnectAttempts]);
 
   // Derive the WebSocket URL once.
   const resolvedUrl = useMemo<string>(() => {

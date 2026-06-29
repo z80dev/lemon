@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MonitoringApp } from './MonitoringApp';
 import { useMonitoringStore, INITIAL_INSTANCE, INITIAL_UI } from '../../store/monitoringStore';
+import { useControlPlane } from '../../rpc/useControlPlane';
 
 // Mock useControlPlane to avoid real WebSocket connections
 vi.mock('../../rpc/useControlPlane', () => ({
@@ -26,8 +27,12 @@ function resetStore() {
       selectedSessionKey: null,
       loadedSessionKeys: new Set(),
     },
+    sessionDetails: {},
     runs: { active: {}, recent: [] },
     tasks: { active: {}, recent: [] },
+    cron: { status: null, jobs: [], runsByJob: {}, selectedJobId: null },
+    system: { channels: [], transports: [], skills: { installed: 0, enabled: 0 } },
+    runIntrospection: {},
     eventFeed: [],
     ui: { ...INITIAL_UI, filters: { ...INITIAL_UI.filters, eventTypes: [] } },
   });
@@ -93,5 +98,80 @@ describe('MonitoringApp', () => {
     render(<MonitoringApp />);
     expect(screen.getByTestId('monitoring-app')).toBeInTheDocument();
     expect(screen.getByText('LEMON MONITOR')).toBeInTheDocument();
+  });
+
+  it('surfaces partial monitoring load failures', async () => {
+    const request = vi.fn((method: string) => {
+      if (method === 'sessions.list') {
+        return Promise.reject(new Error('backend down'));
+      }
+      return Promise.resolve({});
+    });
+
+    vi.mocked(useControlPlane).mockReturnValue({
+      connectionState: 'connected',
+      isConnected: true,
+      snapshot: null,
+      lastEvent: null,
+      request,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    });
+
+    render(<MonitoringApp />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Monitoring data partially failed to load: sessions.list'
+      );
+    });
+  });
+
+  it('shows session detail load failure without caching an empty detail', async () => {
+    const request = vi.fn((method: string) => {
+      if (method === 'session.detail') {
+        return Promise.reject(new Error('detail unavailable'));
+      }
+      return Promise.resolve({});
+    });
+
+    vi.mocked(useControlPlane).mockReturnValue({
+      connectionState: 'connected',
+      isConnected: true,
+      snapshot: null,
+      lastEvent: null,
+      request,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    });
+
+    useMonitoringStore.setState({
+      sessions: {
+        active: {},
+        historical: [
+          {
+            sessionKey: 'agent:test:session',
+            agentId: 'test',
+            status: 'idle',
+            active: true,
+            createdAtMs: Date.now(),
+            updatedAtMs: Date.now(),
+          },
+        ],
+        selectedSessionKey: 'agent:test:session',
+        loadedSessionKeys: new Set(),
+      },
+    });
+
+    render(<MonitoringApp />);
+    screen.getAllByRole('button', { name: 'Sessions' })[0].click();
+    screen.getByTestId('session-item-agent:test:session').click();
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load session detail: detail unavailable')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('No run history available.')).not.toBeInTheDocument();
+    expect(useMonitoringStore.getState().sessionDetails['agent:test:session']).toBeUndefined();
   });
 });
