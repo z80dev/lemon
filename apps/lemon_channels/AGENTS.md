@@ -159,13 +159,8 @@ Provider availability in the Telegram `/model` picker should match the real prov
 
 | File | What It Does |
 |------|-------------|
-| `adapters/x_api.ex` | Plugin impl. id: `"x_api"`, chunk_limit: 280, rate_limit: 2400/day. Auto-detects OAuth 1.0a vs 2.0. Config from env vars or `LemonCore.Secrets`. |
-| `adapters/x_api/client.ex` | HTTP client for X API v2. Tweet post/delete, chunked media upload, rate limit handling. |
-| `adapters/x_api/oauth1_client.ex` | OAuth 1.0a with HMAC-SHA1 signatures. |
-| `adapters/x_api/oauth.ex` | OAuth 2.0 flow helpers (authorization URL, code exchange, PKCE). |
-| `adapters/x_api/token_manager.ex` | GenServer for OAuth 2.0 auto-refresh. Persists to app config + env + secrets store. |
-| `adapters/x_api/oauth_callback_handler.ex` | HTTP handler for OAuth 2.0 callbacks. |
-| `adapters/x_api/gateway_methods.ex` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` (scoped `:agent`). |
+| `adapters/x_api.ex` | Plugin impl. id: `"x_api"`, chunk_limit: 280, rate_limit: 2400/day. Delegates config, auth, token refresh, and HTTP calls to `XApi`. |
+| `adapters/x_api/gateway_methods.ex` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` (scoped `:agent`) backed by `XApi.Client`. |
 
 ### XMTP Adapter
 
@@ -447,8 +442,8 @@ OAuth 1.0a: `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET`, `X_API_ACCESS_TOKEN`,
 
 Common: `X_DEFAULT_ACCOUNT_ID`, `X_DEFAULT_ACCOUNT_USERNAME`
 
-Auto-detects auth method. `XAPI.configured?/0` checks both. Secrets resolved via `LemonCore.Secrets` by default (configurable via `:x_api_secrets_module` and `:x_api_use_secrets`).
-`XAPI.search_configured?/0` also accepts bearer-token-only credentials for read-only recent public search.
+Auto-detects auth method through `XApi.configured?/0`. Secrets resolve through `XApi` using `LemonCore.Secrets` by default.
+`XApi.search_configured?/0` also accepts bearer-token-only credentials for read-only recent public search.
 
 ### Gateway Methods
 
@@ -456,7 +451,7 @@ Auto-detects auth method. `XAPI.configured?/0` checks both. Secrets resolved via
 
 ### Token Management
 
-Auto-refresh by `XAPI.TokenManager` GenServer. Starts as adapter child process.
+Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the channel adapter starts the same child when registered.
 
 ## XMTP Integration
 
@@ -617,9 +612,7 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.
 | `telegram/transport_topic_test.exs` | `/topic` command |
 | `telegram/file_transfer_test.exs` | File handling |
 | `discord/inbound_test.exs` | Discord inbound normalization |
-| `x_api_test.exs` | X adapter |
-| `x_api_client_test.exs` | X API HTTP client |
-| `x_api_token_manager_test.exs` | OAuth token refresh |
+| `capabilities_test.exs` | Includes X adapter capability lookup |
 | `xmtp/transport_test.exs` | XMTP transport |
 | `gateway_config_test.exs` | Config merging |
 | `application_test.exs` | App startup |

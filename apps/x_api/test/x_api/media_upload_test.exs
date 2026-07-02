@@ -1,13 +1,12 @@
-defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
+defmodule XApi.Client.MediaUploadTest do
   @moduledoc """
   Tests for the X API chunked media upload flow (INIT / APPEND / FINALIZE).
   """
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.XAPI
-  alias LemonChannels.Adapters.XAPI.Client
-  alias LemonChannels.Adapters.XAPI.TokenManager
-  alias LemonChannels.OutboundPayload
+  alias XApi
+  alias XApi.Client
+  alias XApi.TokenManager
 
   @x_api_env_keys [
     "X_API_CLIENT_ID",
@@ -22,8 +21,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
 
   setup do
     previous_req_defaults = Req.default_options()
-    previous_config = Application.get_env(:lemon_channels, XAPI)
-    previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+    previous_config = Application.get_env(:x_api, XApi)
+    previous_use_secrets = Application.get_env(:x_api, :use_secrets)
 
     previous_env =
       Enum.into(@x_api_env_keys, %{}, fn key ->
@@ -32,20 +31,20 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
-    Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+    Application.put_env(:x_api, :use_secrets, false)
     Enum.each(@x_api_env_keys, &System.delete_env/1)
 
     on_exit(fn ->
       if is_nil(previous_config) do
-        Application.delete_env(:lemon_channels, XAPI)
+        Application.delete_env(:x_api, XApi)
       else
-        Application.put_env(:lemon_channels, XAPI, previous_config)
+        Application.put_env(:x_api, XApi, previous_config)
       end
 
       if is_nil(previous_use_secrets) do
-        Application.delete_env(:lemon_channels, :x_api_use_secrets)
+        Application.delete_env(:x_api, :use_secrets)
       else
-        Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
+        Application.put_env(:x_api, :use_secrets, previous_use_secrets)
       end
 
       Enum.each(previous_env, fn
@@ -117,7 +116,7 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
 
   # ── Full upload flow tests ───────────────────────────────────────────
 
-  describe "deliver/1 with :file payload (media upload)" do
+  describe "post_media/4" do
     test "successful upload: INIT -> APPEND -> FINALIZE -> tweet" do
       configure_oauth2()
       start_token_manager!()
@@ -189,18 +188,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         end
       end)
 
-      payload = %OutboundPayload{
-        channel_id: "x-channel",
-        account_id: "x-account",
-        peer: %{kind: :channel, id: "x-peer", thread_id: nil},
-        kind: :file,
-        content: %{data: image_data, mime_type: "image/png", text: "uploaded media"},
-        reply_to: nil,
-        meta: %{}
-      }
-
       assert {:ok, %{tweet_id: "1234567890", media_id: "710511363345354753"}} =
-               Client.deliver(payload)
+               Client.post_media(image_data, "image/png", "uploaded media")
 
       # Verify the sequence of requests
       assert_receive {:req, "/1.1/media/upload.json", init_body, "POST"}
@@ -274,18 +263,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         end
       end)
 
-      payload = %OutboundPayload{
-        channel_id: "x-channel",
-        account_id: "x-account",
-        peer: %{kind: :channel, id: "x-peer", thread_id: nil},
-        kind: :file,
-        content: %{data: image_data, mime_type: "image/jpeg", text: "multi chunk"},
-        reply_to: nil,
-        meta: %{}
-      }
-
       assert {:ok, %{tweet_id: "tweet-multi", media_id: "999888777"}} =
-               Client.deliver(payload)
+               Client.post_media(image_data, "image/jpeg", "multi chunk")
 
       # Collect all step messages and count APPENDs
       steps = receive_all_messages()
@@ -327,17 +306,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         end
       end)
 
-      payload = %OutboundPayload{
-        channel_id: "x-channel",
-        account_id: "x-account",
-        peer: %{kind: :channel, id: "x-peer", thread_id: nil},
-        kind: :file,
-        content: %{data: "fake-image", mime_type: "image/png", text: "test"},
-        reply_to: nil,
-        meta: %{}
-      }
-
-      assert {:error, {:upload_init_failed, 403, _body}} = Client.deliver(payload)
+      assert {:error, {:upload_init_failed, 403, _body}} =
+               Client.post_media("fake-image", "image/png", "test")
     end
 
     test "APPEND failure returns error and halts further chunks" do
@@ -380,17 +350,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         end
       end)
 
-      payload = %OutboundPayload{
-        channel_id: "x-channel",
-        account_id: "x-account",
-        peer: %{kind: :channel, id: "x-peer", thread_id: nil},
-        kind: :file,
-        content: %{data: "small-image-data", mime_type: "image/png", text: "test"},
-        reply_to: nil,
-        meta: %{}
-      }
-
-      assert {:error, {:upload_append_failed, 0, 500, _body}} = Client.deliver(payload)
+      assert {:error, {:upload_append_failed, 0, 500, _body}} =
+               Client.post_media("small-image-data", "image/png", "test")
 
       # Ensure FINALIZE was never called
       messages = receive_all_messages()
@@ -446,17 +407,8 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         end
       end)
 
-      payload = %OutboundPayload{
-        channel_id: "x-channel",
-        account_id: "x-account",
-        peer: %{kind: :channel, id: "x-peer", thread_id: nil},
-        kind: :file,
-        content: %{data: "test-data", mime_type: "image/png", text: "test"},
-        reply_to: nil,
-        meta: %{}
-      }
-
-      assert {:error, {:upload_finalize_failed, 400, _body}} = Client.deliver(payload)
+      assert {:error, {:upload_finalize_failed, 400, _body}} =
+               Client.post_media("test-data", "image/png", "test")
     end
   end
 
@@ -492,19 +444,21 @@ defmodule LemonChannels.Adapters.XAPI.Client.MediaUploadTest do
         Keyword.put(acc, key, value)
       end)
 
-    Application.put_env(:lemon_channels, XAPI, config)
+    Application.put_env(:x_api, XApi, config)
   end
 
   defp start_token_manager! do
     case Process.whereis(TokenManager) do
       pid when is_pid(pid) ->
-        pid
+        GenServer.stop(pid)
 
       _ ->
-        case start_supervised({TokenManager, []}) do
-          {:ok, pid} -> pid
-          {:error, {:already_started, pid}} -> pid
-        end
+        :ok
+    end
+
+    case start_supervised({TokenManager, []}) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
     end
   end
 

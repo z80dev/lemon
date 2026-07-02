@@ -63,7 +63,7 @@ defmodule LemonSkills.Tools.XSearch do
     with {:ok, query} <- normalize_query(Map.get(params, "query")),
          {:ok, opts} <- normalize_opts(params),
          :ok <- ensure_configured(),
-         {:ok, response} <- LemonChannels.Adapters.XAPI.Client.search_recent(query, opts) do
+         {:ok, response} <- XApi.Client.search_recent(query, opts) do
       format_result(query, response)
     else
       {:error, :not_configured} ->
@@ -158,7 +158,7 @@ defmodule LemonSkills.Tools.XSearch do
     do: {:error, {:invalid_input, "Parameter '#{name}' must be a string"}}
 
   defp ensure_configured do
-    if LemonChannels.Adapters.XAPI.search_configured?() do
+    if XApi.search_configured?() do
       :ok
     else
       {:error, :not_configured}

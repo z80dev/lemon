@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.TokenManagerTest.SecretSink do
+defmodule XApi.TokenManagerTest.SecretSink do
   use Agent
 
   def start_link(_opts \\ []) do
@@ -15,46 +15,46 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest.SecretSink do
   end
 end
 
-defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
+defmodule XApi.TokenManagerTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.XAPI
-  alias LemonChannels.Adapters.XAPI.TokenManager
-  alias LemonChannels.Adapters.XAPI.TokenManagerTest.SecretSink
+  alias XApi
+  alias XApi.TokenManager
+  alias XApi.TokenManagerTest.SecretSink
   @x_token_env_vars ~w(X_API_ACCESS_TOKEN X_API_REFRESH_TOKEN X_API_TOKEN_EXPIRES_AT)
 
   setup do
     previous_req_defaults = Req.default_options()
-    previous_config = Application.get_env(:lemon_channels, XAPI)
-    previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
-    previous_secrets_module = Application.get_env(:lemon_channels, :x_api_secrets_module)
+    previous_config = Application.get_env(:x_api, XApi)
+    previous_use_secrets = Application.get_env(:x_api, :use_secrets)
+    previous_secrets_module = Application.get_env(:x_api, :secrets_module)
     previous_env = Map.new(@x_token_env_vars, fn key -> {key, System.get_env(key)} end)
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
-    Application.put_env(:lemon_channels, :x_api_use_secrets, false)
-    Application.delete_env(:lemon_channels, :x_api_secrets_module)
+    Application.put_env(:x_api, :use_secrets, false)
+    Application.delete_env(:x_api, :secrets_module)
     Enum.each(@x_token_env_vars, &System.delete_env/1)
 
     start_supervised!(SecretSink)
 
     on_exit(fn ->
       if is_nil(previous_config) do
-        Application.delete_env(:lemon_channels, XAPI)
+        Application.delete_env(:x_api, XApi)
       else
-        Application.put_env(:lemon_channels, XAPI, previous_config)
+        Application.put_env(:x_api, XApi, previous_config)
       end
 
       if is_nil(previous_use_secrets) do
-        Application.delete_env(:lemon_channels, :x_api_use_secrets)
+        Application.delete_env(:x_api, :use_secrets)
       else
-        Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
+        Application.put_env(:x_api, :use_secrets, previous_use_secrets)
       end
 
       if is_nil(previous_secrets_module) do
-        Application.delete_env(:lemon_channels, :x_api_secrets_module)
+        Application.delete_env(:x_api, :secrets_module)
       else
-        Application.put_env(:lemon_channels, :x_api_secrets_module, previous_secrets_module)
+        Application.put_env(:x_api, :secrets_module, previous_secrets_module)
       end
 
       Enum.each(previous_env, fn {key, value} ->
@@ -105,7 +105,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
     assert persisted["X_API_REFRESH_TOKEN"] == "new-refresh"
     assert is_binary(persisted["X_API_TOKEN_EXPIRES_AT"])
 
-    app_config = Application.get_env(:lemon_channels, XAPI, [])
+    app_config = Application.get_env(:x_api, XApi, [])
     assert app_config[:access_token] == "new-access"
     assert app_config[:refresh_token] == "new-refresh"
     assert is_binary(app_config[:token_expires_at])
@@ -135,14 +135,14 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
     assert persisted["X_API_REFRESH_TOKEN"] == "direct-refresh"
     assert persisted["X_API_TOKEN_EXPIRES_AT"] == DateTime.to_iso8601(expires_at)
 
-    app_config = Application.get_env(:lemon_channels, XAPI, [])
+    app_config = Application.get_env(:x_api, XApi, [])
     assert app_config[:access_token] == "direct-access"
     assert app_config[:refresh_token] == "direct-refresh"
     assert app_config[:token_expires_at] == DateTime.to_iso8601(expires_at)
   end
 
   test "refresh persists rotated tokens to configured secrets module by default" do
-    Application.put_env(:lemon_channels, :x_api_secrets_module, SecretSink)
+    Application.put_env(:x_api, :secrets_module, SecretSink)
 
     configure_oauth2_tokens(
       access_token: "old-access",
@@ -178,7 +178,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
   end
 
   test "persist_tokens/2 uses configured secrets module when opts are omitted" do
-    Application.put_env(:lemon_channels, :x_api_secrets_module, SecretSink)
+    Application.put_env(:x_api, :secrets_module, SecretSink)
 
     configure_oauth2_tokens(
       access_token: "initial-access",
@@ -207,7 +207,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
       client_secret: "test-client-secret"
     ]
 
-    Application.put_env(:lemon_channels, XAPI, Keyword.merge(base, config))
+    Application.put_env(:x_api, XApi, Keyword.merge(base, config))
   end
 
   defp token_manager_name do

@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
+defmodule XApi.OAuth1Client do
   @moduledoc """
   OAuth 1.0a client for X API v2.
 
@@ -17,7 +17,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
 
   ## Configuration
 
-      config :lemon_channels, LemonChannels.Adapters.XAPI,
+      config :x_api, XApi,
         consumer_key: System.get_env("X_API_CONSUMER_KEY"),
         consumer_secret: System.get_env("X_API_CONSUMER_SECRET"),
         access_token: System.get_env("X_API_ACCESS_TOKEN"),
@@ -31,8 +31,6 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
 
   require Logger
 
-  alias LemonChannels.OutboundPayload
-
   @api_base "https://api.x.com/2"
   # @upload_base "https://upload.x.com/1.1"
 
@@ -45,29 +43,6 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
 
   @type tweet_result :: %{tweet_id: String.t(), text: String.t()}
   @type api_error :: {:api_error, integer(), map()} | atom()
-
-  @doc """
-  Deliver an outbound payload to X using OAuth 1.0a.
-  """
-  @spec deliver(OutboundPayload.t()) :: {:ok, tweet_result() | map()} | {:error, api_error()}
-  def deliver(%OutboundPayload{kind: :text} = payload) do
-    with_credentials(fn credentials ->
-      with {:ok, tweet} <- build_tweet(payload),
-           {:ok, result} <- post_tweet(tweet, credentials) do
-        {:ok, %{tweet_id: result["data"]["id"], text: result["data"]["text"]}}
-      end
-    end)
-  end
-
-  def deliver(%OutboundPayload{kind: :delete} = payload) do
-    with_credentials(fn credentials ->
-      tweet_id = get_tweet_id_from_meta(payload)
-
-      with {:ok, _result} <- delete_tweet(tweet_id, credentials) do
-        {:ok, %{deleted: true, tweet_id: tweet_id}}
-      end
-    end)
-  end
 
   @doc """
   Post a simple text tweet.
@@ -140,7 +115,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
   @spec delete_tweet(String.t()) :: {:ok, map()} | {:error, api_error()}
   def delete_tweet(tweet_id) do
     with_credentials(fn credentials ->
-      request(:delete, "#{@api_base}/tweets/#{tweet_id}", credentials)
+      delete_tweet(tweet_id, credentials)
     end)
   end
 
@@ -166,7 +141,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
 
   @spec get_credentials() :: {:ok, credentials()} | {:error, atom()}
   defp get_credentials do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     %{
       consumer_key: config[:consumer_key],
@@ -211,17 +186,6 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
        do: {:error, :missing_access_token_secret}
 
   defp validate_credentials(credentials), do: {:ok, credentials}
-
-  @spec build_tweet(OutboundPayload.t()) :: {:ok, map()}
-  defp build_tweet(%OutboundPayload{content: text} = payload) do
-    tweet =
-      %{
-        "text" => truncate_text(text)
-      }
-      |> maybe_add_reply(payload.reply_to)
-
-    {:ok, tweet}
-  end
 
   @spec post_tweet(map(), credentials()) :: {:ok, map()} | {:error, api_error()}
   defp post_tweet(tweet, credentials) do
@@ -334,7 +298,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
 
   @spec configured_default_account() :: String.t() | nil
   defp configured_default_account do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
     config[:default_account_id] || config[:default_account_username]
   end
 
@@ -525,9 +489,4 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
   defp truncate_text(text) do
     String.slice(text, 0, 277) <> "..."
   end
-
-  @spec get_tweet_id_from_meta(OutboundPayload.t()) :: String.t() | nil
-  defp get_tweet_id_from_meta(%OutboundPayload{meta: %{tweet_id: id}}), do: id
-  defp get_tweet_id_from_meta(%OutboundPayload{meta: %{"tweet_id" => id}}), do: id
-  defp get_tweet_id_from_meta(_), do: nil
 end

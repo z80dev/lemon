@@ -28,6 +28,7 @@ defmodule Lemon.MixProject do
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,
+          x_api: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent
         ],
@@ -40,6 +41,7 @@ defmodule Lemon.MixProject do
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,
+          x_api: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent,
           lemon_automation: :permanent,

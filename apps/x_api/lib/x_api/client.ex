@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.Client do
+defmodule XApi.Client do
   @moduledoc """
   HTTP client for X API v2.
 
@@ -15,8 +15,6 @@ defmodule LemonChannels.Adapters.XAPI.Client do
 
   require Logger
 
-  alias LemonChannels.OutboundPayload
-
   @api_base "https://api.x.com/2"
   @max_retries 3
   @base_backoff_ms 1000
@@ -26,64 +24,12 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   @chunk_size 5 * 1024 * 1024
 
   @doc """
-  Deliver an outbound payload to X.
-  """
-  def deliver(%OutboundPayload{kind: :text} = payload) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
-      :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.deliver(payload)
-
-      :oauth2 ->
-        with {:ok, token} <- get_access_token(),
-             {:ok, tweet} <- build_tweet(payload),
-             {:ok, result} <- post_tweet(tweet, token) do
-          {:ok, %{tweet_id: result["data"]["id"], text: result["data"]["text"]}}
-        end
-    end
-  end
-
-  def deliver(%OutboundPayload{kind: :edit} = _payload) do
-    # X API v2 doesn't support editing tweets via API
-    {:error, :edit_not_supported}
-  end
-
-  def deliver(%OutboundPayload{kind: :delete} = payload) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
-      :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.deliver(payload)
-
-      :oauth2 ->
-        with {:ok, token} <- get_access_token(),
-             tweet_id <- get_tweet_id_from_meta(payload),
-             {:ok, _result} <- do_delete_tweet(tweet_id, token) do
-          {:ok, %{deleted: true, tweet_id: tweet_id}}
-        end
-    end
-  end
-
-  def deliver(%OutboundPayload{kind: :file} = payload) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
-      :oauth1 ->
-        # OAuth 1.0a handles media differently
-        {:error, :media_upload_not_implemented}
-
-      :oauth2 ->
-        with {:ok, token} <- get_access_token(),
-             {:ok, media_id} <- upload_media(payload.content, token),
-             {:ok, tweet} <- build_tweet_with_media(payload, media_id),
-             {:ok, result} <- post_tweet(tweet, token) do
-          {:ok, %{tweet_id: result["data"]["id"], media_id: media_id}}
-        end
-    end
-  end
-
-  @doc """
   Post a simple text tweet.
   """
   def post_text(text, opts \\ []) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
+    case XApi.auth_method() do
       :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.post_text(text, opts)
+        XApi.OAuth1Client.post_text(text, opts)
 
       :oauth2 ->
         with {:ok, token} <- get_access_token() do
@@ -103,9 +49,9 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   Reply to a specific tweet.
   """
   def reply(tweet_id, text) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
+    case XApi.auth_method() do
       :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.reply(tweet_id, text)
+        XApi.OAuth1Client.reply(tweet_id, text)
 
       :oauth2 ->
         with {:ok, token} <- get_access_token() do
@@ -125,9 +71,9 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   Get recent mentions for the authenticated user.
   """
   def get_mentions(opts \\ []) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
+    case XApi.auth_method() do
       :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.get_mentions(opts)
+        XApi.OAuth1Client.get_mentions(opts)
 
       :oauth2 ->
         with {:ok, token} <- get_access_token(),
@@ -152,7 +98,7 @@ defmodule LemonChannels.Adapters.XAPI.Client do
         end
 
       :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.search_recent(query, opts)
+        XApi.OAuth1Client.search_recent(query, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -163,9 +109,9 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   Delete a tweet.
   """
   def delete_tweet(tweet_id) do
-    case LemonChannels.Adapters.XAPI.auth_method() do
+    case XApi.auth_method() do
       :oauth1 ->
-        LemonChannels.Adapters.XAPI.OAuth1Client.delete_tweet(tweet_id)
+        XApi.OAuth1Client.delete_tweet(tweet_id)
 
       :oauth2 ->
         with {:ok, token} <- get_access_token() do
@@ -174,52 +120,54 @@ defmodule LemonChannels.Adapters.XAPI.Client do
     end
   end
 
+  @doc """
+  Upload media and post a tweet that references it.
+  """
+  def post_media(data, mime_type, text, opts \\ []) do
+    case XApi.auth_method() do
+      :oauth1 ->
+        {:error, :media_upload_not_implemented}
+
+      :oauth2 ->
+        with {:ok, token} <- get_access_token(),
+             {:ok, media_id} <- upload_media(%{data: data, mime_type: mime_type}, token),
+             tweet <-
+               %{
+                 "text" => truncate_text(text || ""),
+                 "media" => %{
+                   "media_ids" => [media_id]
+                 }
+               }
+               |> maybe_add_reply(opts[:reply_to]),
+             {:ok, result} <- post_tweet(tweet, token) do
+          {:ok, %{tweet_id: result["data"]["id"], media_id: media_id}}
+        end
+    end
+  end
+
   ## Private Functions
 
   defp get_access_token do
-    LemonChannels.Adapters.XAPI.TokenManager.get_access_token()
+    XApi.TokenManager.get_access_token()
   end
 
   defp search_auth_method do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     cond do
       present?(config[:bearer_token]) ->
         {:bearer, config[:bearer_token]}
 
-      LemonChannels.Adapters.XAPI.configured?() and
-          LemonChannels.Adapters.XAPI.auth_method() == :oauth2 ->
+      XApi.configured?() and
+          XApi.auth_method() == :oauth2 ->
         :oauth2
 
-      LemonChannels.Adapters.XAPI.configured?() ->
+      XApi.configured?() ->
         :oauth1
 
       true ->
         {:error, :not_configured}
     end
-  end
-
-  defp build_tweet(%OutboundPayload{content: text} = payload) do
-    tweet =
-      %{
-        "text" => truncate_text(text)
-      }
-      |> maybe_add_reply(payload.reply_to)
-
-    {:ok, tweet}
-  end
-
-  defp build_tweet_with_media(%OutboundPayload{} = payload, media_id) do
-    tweet =
-      %{
-        "text" => truncate_text(payload.content[:text] || ""),
-        "media" => %{
-          "media_ids" => [media_id]
-        }
-      }
-      |> maybe_add_reply(payload.reply_to)
-
-    {:ok, tweet}
   end
 
   defp post_tweet(tweet, token, attempt \\ 1) do
@@ -529,7 +477,7 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   defp configured_default_account do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
     config[:default_account_id] || config[:default_account_username]
   end
 
@@ -632,10 +580,6 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   defp truncate_text(text) do
     String.slice(text, 0, 277) <> "..."
   end
-
-  defp get_tweet_id_from_meta(%OutboundPayload{meta: %{tweet_id: id}}), do: id
-  defp get_tweet_id_from_meta(%OutboundPayload{meta: %{"tweet_id" => id}}), do: id
-  defp get_tweet_id_from_meta(_), do: nil
 
   defp get_retry_after(headers) do
     case List.keyfind(headers, "x-rate-limit-reset", 0) do

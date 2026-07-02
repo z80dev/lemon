@@ -1,9 +1,9 @@
-defmodule LemonChannels.Adapters.XAPI.ClientTest do
+defmodule XApi.ClientTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.XAPI
-  alias LemonChannels.Adapters.XAPI.Client
-  alias LemonChannels.Adapters.XAPI.TokenManager
+  alias XApi
+  alias XApi.Client
+  alias XApi.TokenManager
 
   @x_api_env_keys [
     "X_API_CLIENT_ID",
@@ -18,8 +18,8 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
 
   setup do
     previous_req_defaults = Req.default_options()
-    previous_config = Application.get_env(:lemon_channels, XAPI)
-    previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+    previous_config = Application.get_env(:x_api, XApi)
+    previous_use_secrets = Application.get_env(:x_api, :use_secrets)
 
     previous_env =
       Enum.into(@x_api_env_keys, %{}, fn key ->
@@ -28,20 +28,20 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
-    Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+    Application.put_env(:x_api, :use_secrets, false)
     Enum.each(@x_api_env_keys, &System.delete_env/1)
 
     on_exit(fn ->
       if is_nil(previous_config) do
-        Application.delete_env(:lemon_channels, XAPI)
+        Application.delete_env(:x_api, XApi)
       else
-        Application.put_env(:lemon_channels, XAPI, previous_config)
+        Application.put_env(:x_api, XApi, previous_config)
       end
 
       if is_nil(previous_use_secrets) do
-        Application.delete_env(:lemon_channels, :x_api_use_secrets)
+        Application.delete_env(:x_api, :use_secrets)
       else
-        Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
+        Application.put_env(:x_api, :use_secrets, previous_use_secrets)
       end
 
       Enum.each(previous_env, fn
@@ -88,7 +88,7 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
   end
 
   test "search_recent uses bearer-only credentials without token refresh" do
-    Application.put_env(:lemon_channels, XAPI, bearer_token: "search-bearer-token")
+    Application.put_env(:x_api, XApi, bearer_token: "search-bearer-token")
     test_pid = self()
 
     Req.Test.stub(__MODULE__, fn conn ->
@@ -295,19 +295,21 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
         end
       end)
 
-    Application.put_env(:lemon_channels, XAPI, config)
+    Application.put_env(:x_api, XApi, config)
   end
 
   defp start_token_manager! do
     case Process.whereis(TokenManager) do
       pid when is_pid(pid) ->
-        pid
+        GenServer.stop(pid)
 
       _ ->
-        case start_supervised({TokenManager, []}) do
-          {:ok, pid} -> pid
-          {:error, {:already_started, pid}} -> pid
-        end
+        :ok
+    end
+
+    case start_supervised({TokenManager, []}) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
     end
   end
 end

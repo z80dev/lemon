@@ -1,6 +1,6 @@
-# X API Adapter for Lemon Channels
+# X API Client
 
-Elixir adapter for X (Twitter) API v2 with OAuth 2.0 authentication.
+Reusable Elixir client for X (Twitter) API v2 with OAuth 2.0 and OAuth 1.0a authentication.
 
 ## Features
 
@@ -27,7 +27,7 @@ Run the OAuth flow to get initial tokens:
 
 ```elixir
 # This will print setup instructions and the authorization URL
-LemonChannels.Adapters.XAPI.OAuth.print_setup_instructions()
+XApi.OAuth.print_setup_instructions()
 ```
 
 Or manually:
@@ -59,7 +59,7 @@ export X_DEFAULT_ACCOUNT_USERNAME="your_handle" # Optional explicit account hand
 In `config/runtime.exs`:
 
 ```elixir
-config :lemon_channels, LemonChannels.Adapters.XAPI,
+config :x_api, XApi,
   client_id: System.get_env("X_API_CLIENT_ID"),
   client_secret: System.get_env("X_API_CLIENT_SECRET"),
   access_token: System.get_env("X_API_ACCESS_TOKEN"),
@@ -68,71 +68,33 @@ config :lemon_channels, LemonChannels.Adapters.XAPI,
   default_account_username: System.get_env("X_DEFAULT_ACCOUNT_USERNAME")
 ```
 
-### 5. Register the Adapter
-
-In your application supervisor:
-
-```elixir
-children = [
-  # ... other children
-  LemonChannels.Adapters.XAPI
-]
-```
-
-Or dynamically:
-
-```elixir
-LemonChannels.Registry.register(LemonChannels.Adapters.XAPI)
-```
+Existing `config :lemon_channels, LemonChannels.Adapters.XAPI` settings remain supported as a compatibility fallback.
 
 ## Usage
 
 ### Post a Tweet
 
 ```elixir
-payload = LemonChannels.OutboundPayload.text(
-  "x_api",
-  "your_bot_account",
-  %{kind: :channel, id: "public", thread_id: nil},
-  "Hello from Lemon! 🤖🍋"
-)
-
-LemonChannels.enqueue(payload)
+XApi.Client.post_text("Hello from Lemon!")
 ```
 
 ### Reply to a Tweet
 
 ```elixir
-LemonChannels.Adapters.XAPI.Client.reply("1234567890", "Thanks for reaching out!")
+XApi.Client.reply("1234567890", "Thanks for reaching out!")
 ```
 
 ### Get Mentions
 
 ```elixir
-LemonChannels.Adapters.XAPI.GatewayMethods.get_mentions(%{"limit" => 10})
-```
-
-### Via Gateway (for Agents)
-
-```elixir
-# Post tweet
-LemonControlPlane.call("x_api.post_tweet", %{"text" => "Hello world"})
-
-# Get mentions
-LemonControlPlane.call("x_api.get_mentions", %{"limit" => 5})
-
-# Reply
-LemonControlPlane.call("x_api.reply_to_tweet", %{
-  "tweet_id" => "1234567890",
-  "text" => "My reply"
-})
+XApi.Client.get_mentions(limit: 10)
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
-│   Outbox        │────▶│   XAPI Adapter   │────▶│   X API     │
+│   Callers       │────▶│   XApi.Client    │────▶│   X API     │
 │                 │     │                  │     │   (Twitter) │
 └─────────────────┘     ├──────────────────┤     └─────────────┘
                         │  TokenManager    │            ▲
@@ -198,7 +160,6 @@ linked to a GitHub issue when work begins.
 
 | Item | Owner | Target Phase | Status | Notes |
 |------|-------|-------------|--------|-------|
-| Media upload (images) support | @platform-team | Phase 13 | Planned | Requires X API v2 media upload endpoint; upload -> attach to tweet flow |
 | Poll creation | @platform-team | Phase 15 | Planned | Low priority; X API v2 polls require elevated access |
 | Thread posting helper | @platform-team | Phase 12 | Planned | Build on existing `Client.reply/2`; auto-split long text into threads |
 | Webhook handling for mentions/DMs | @platform-team | Phase 12 | Planned | Needed for real-time inbound; currently relies on polling via `get_mentions` |

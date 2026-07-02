@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.TokenManager do
+defmodule XApi.TokenManager do
   @moduledoc """
   Manages OAuth 2.0 tokens for X API.
 
@@ -20,7 +20,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   @default_expires_in 7200
   @default_refresh_retry_ms 60_000
   @invalid_refresh_retry_ms 15 * 60_000
-  @x_api_app LemonChannels.Adapters.XAPI
+  @x_api_app XApi
   @name __MODULE__
   @x_api_token_keys [
     access_token: "X_API_ACCESS_TOKEN",
@@ -119,7 +119,9 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     state = build_state_from_attrs(attrs, opts)
 
     case persist_runtime_tokens(state) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, :secrets_persist_failed} ->
         Logger.warning("[XAPI] persist_tokens secrets persist failed (no retry available)")
         :ok
@@ -131,7 +133,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   @impl true
   def init(opts) do
     # Load tokens from config/env
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     state = %__MODULE__{
       access_token: config[:access_token],
@@ -170,7 +172,9 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     new_state = schedule_refresh(new_state)
 
     case persist_runtime_tokens(new_state) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, :secrets_persist_failed} ->
         Logger.warning("[XAPI] update_tokens secrets persist failed; scheduling retry")
         Process.send_after(self(), :retry_persist_secrets, 30_000)
@@ -271,7 +275,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   end
 
   defp do_refresh(%__MODULE__{} = state) do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     with {:ok, client_id, _client_secret} <- refresh_credentials(config) do
       body =
@@ -418,7 +422,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
 
   defp persist_app_config(%__MODULE__{} = state) do
     current =
-      :lemon_channels
+      :x_api
       |> Application.get_env(@x_api_app, [])
       |> normalize_app_config()
 
@@ -428,7 +432,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
       |> put_optional(:refresh_token, normalize_optional_string(state.refresh_token))
       |> put_optional(:token_expires_at, format_expires_at(state.expires_at))
 
-    Application.put_env(:lemon_channels, @x_api_app, updated)
+    Application.put_env(:x_api, @x_api_app, updated)
   end
 
   defp persist_process_env(%__MODULE__{} = state) do
@@ -451,8 +455,10 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     module = state.secrets_module
 
     if is_atom(module) and Code.ensure_loaded?(module) do
-      with :ok <- persist_secret_value(module, @x_api_token_keys[:access_token], state.access_token),
-           :ok <- persist_secret_value(module, @x_api_token_keys[:refresh_token], state.refresh_token),
+      with :ok <-
+             persist_secret_value(module, @x_api_token_keys[:access_token], state.access_token),
+           :ok <-
+             persist_secret_value(module, @x_api_token_keys[:refresh_token], state.refresh_token),
            :ok <-
              persist_secret_value(
                module,
@@ -583,7 +589,11 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   defp parse_expires_at(%DateTime{} = dt), do: dt
 
   defp default_secrets_module do
-    Application.get_env(:lemon_channels, :x_api_secrets_module, LemonCore.Secrets)
+    Application.get_env(
+      :x_api,
+      :secrets_module,
+      Application.get_env(:lemon_channels, :x_api_secrets_module, LemonCore.Secrets)
+    )
   end
 
   defp normalize_optional_string(value) when is_binary(value) do

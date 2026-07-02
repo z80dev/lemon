@@ -288,7 +288,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer, configured stdio MCP sampling review, and configured HTTP MCP OAuth authorization requests; `LemonCore.Secrets` for GitHub token resolution in Discovery and HTTP MCP OAuth client/token secret storage; `LemonCore.Onboarding.LocalCallbackListener` for configured HTTP MCP PKCE callback capture; `LemonCore.Telemetry` for skill load/write events |
 | `agent_core` | `AgentCore.Types.AgentTool` and `AgentCore.Types.AgentToolResult` structs for tool definitions |
 | `ai` | `Ai.Types.TextContent` struct for tool result content |
-| `lemon_channels` | `LemonChannels.Adapters.XAPI` for X API integration (x_search, post_to_x, get_x_mentions tools) |
+| `x_api` | `XApi` for X API integration (x_search, post_to_x, get_x_mentions tools) |
 
 ### Consumers (other apps use this)
 

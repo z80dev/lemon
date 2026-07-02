@@ -16,7 +16,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     coding_agent: [:agent_core, :ai, :lemon_core, :lemon_skills],
     coding_agent_ui: [:coding_agent],
     lemon_automation: [:lemon_core, :lemon_router, :lemon_skills],
-    lemon_channels: [:agent_core, :lemon_core],
+    lemon_channels: [:agent_core, :lemon_core, :x_api],
     lemon_control_plane: [
       :ai,
       :coding_agent,
@@ -39,8 +39,9 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_router: [:agent_core, :ai, :lemon_channels, :lemon_core],
     lemon_sim: [:agent_core, :ai, :lemon_core],
     lemon_sim_ui: [:ai, :lemon_core, :lemon_sim],
-    lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    lemon_web: [:lemon_core, :lemon_router]
+    lemon_skills: [:agent_core, :ai, :lemon_core, :x_api],
+    lemon_web: [:lemon_core, :lemon_router],
+    x_api: [:lemon_core]
   }
 
   @target_allowed_direct_deps @current_allowed_direct_deps

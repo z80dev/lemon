@@ -502,7 +502,7 @@ Project configuration is deep-merged on top of global configuration.
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
 | `agent_core` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
 | `ai` | umbrella | AI types (`TextContent`) used in tool results |
-| `lemon_channels` | umbrella | X (Twitter) API integration (`LemonChannels.Adapters.XAPI`) used by x_search, post_to_x, and get_x_mentions tools |
+| `x_api` | umbrella | X API integration (`XApi`) used by x_search, post_to_x, and get_x_mentions tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
 
 ## Installation Flow Detail

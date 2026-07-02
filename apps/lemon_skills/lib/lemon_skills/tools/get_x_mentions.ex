@@ -62,7 +62,7 @@ defmodule LemonSkills.Tools.GetXMentions do
   def execute(_tool_call_id, params, _signal, _on_update) do
     with {:ok, limit} <- normalize_limit(Map.get(params, "limit", 10)),
          :ok <- ensure_configured(),
-         {:ok, mentions_response} <- LemonChannels.Adapters.XAPI.Client.get_mentions(limit: limit) do
+         {:ok, mentions_response} <- XApi.Client.get_mentions(limit: limit) do
       format_mentions_result(mentions_response)
     else
       {:error, :not_configured} ->
@@ -135,7 +135,7 @@ defmodule LemonSkills.Tools.GetXMentions do
   end
 
   defp ensure_configured do
-    if LemonChannels.Adapters.XAPI.configured?() do
+    if XApi.configured?() do
       :ok
     else
       {:error, :not_configured}
@@ -229,7 +229,7 @@ defmodule LemonSkills.Tools.GetXMentions do
   end
 
   defp x_account_username do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
     candidate = config[:default_account_username] || config[:default_account_id]
 
     case candidate do

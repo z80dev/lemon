@@ -7,7 +7,7 @@ defmodule LemonChannels.Adapters.XAPI.GatewayMethods do
 
   require Logger
 
-  alias LemonChannels.Adapters.XAPI.Client
+  alias XApi.Client
 
   @doc """
   Post a tweet.
@@ -171,7 +171,7 @@ defmodule LemonChannels.Adapters.XAPI.GatewayMethods do
   Get the current token status (for debugging).
   """
   def token_status(_) do
-    case LemonChannels.Adapters.XAPI.TokenManager.get_state() do
+    case XApi.TokenManager.get_state() do
       {:ok, state} ->
         {:ok,
          %{

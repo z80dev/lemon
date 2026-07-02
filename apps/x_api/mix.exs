@@ -1,9 +1,9 @@
-defmodule LemonSkills.MixProject do
+defmodule XApi.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :lemon_skills,
+      app: :x_api,
       version: "0.1.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
@@ -12,7 +12,7 @@ defmodule LemonSkills.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 64]],
+      test_coverage: [summary: [threshold: 35]],
       deps: deps()
     ]
   end
@@ -20,17 +20,15 @@ defmodule LemonSkills.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {LemonSkills.Application, []}
+      mod: {XApi.Application, []}
     ]
   end
 
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
-      {:x_api, in_umbrella: true},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:req, "~> 0.5.0"}
     ]
   end
 end

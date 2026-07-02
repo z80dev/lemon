@@ -121,7 +121,7 @@ defmodule LemonSkills.Tools.PostToX do
   end
 
   defp ensure_configured do
-    if LemonChannels.Adapters.XAPI.configured?() do
+    if XApi.configured?() do
       :ok
     else
       {:error, :not_configured}
@@ -152,8 +152,8 @@ defmodule LemonSkills.Tools.PostToX do
   defp normalize_reply_to(_),
     do: {:error, {:invalid_input, "Parameter 'reply_to' must be a string"}}
 
-  defp post_tweet(text, nil), do: LemonChannels.Adapters.XAPI.Client.post_text(text)
-  defp post_tweet(text, reply_to), do: LemonChannels.Adapters.XAPI.Client.reply(reply_to, text)
+  defp post_tweet(text, nil), do: XApi.Client.post_text(text)
+  defp post_tweet(text, reply_to), do: XApi.Client.reply(reply_to, text)
 
   defp build_success_result(%{"data" => %{"id" => tweet_id, "text" => tweet_text}}, reply_to) do
     success_result(tweet_id, tweet_text, reply_to)
@@ -203,7 +203,7 @@ defmodule LemonSkills.Tools.PostToX do
   end
 
   defp x_account_username do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
     candidate = config[:default_account_username] || config[:default_account_id]
 
     case candidate do

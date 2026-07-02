@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.OAuth do
+defmodule XApi.OAuth do
   @moduledoc """
   OAuth 2.0 helper for X API authentication.
 
@@ -54,7 +54,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
       "https://twitter.com/i/oauth2/authorize?response_type=code&..."
   """
   def authorization_url(opts \\ []) do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
     client_id = config[:client_id]
 
     unless client_id do
@@ -75,11 +75,12 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
     }
 
     # Add PKCE if provided
-    params = if code_challenge do
-      Map.put(params, "code_challenge", code_challenge)
-    else
-      params
-    end
+    params =
+      if code_challenge do
+        Map.put(params, "code_challenge", code_challenge)
+      else
+        params
+      end
 
     query = URI.encode_query(params)
     "#{@oauth_authorize_url}?#{query}"
@@ -98,7 +99,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
     - {:error, reason}
   """
   def exchange_code(code, redirect_uri, code_verifier \\ nil) do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     body = %{
       "grant_type" => "authorization_code",
@@ -107,11 +108,12 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
       "client_id" => config[:client_id]
     }
 
-    body = if code_verifier do
-      Map.put(body, "code_verifier", code_verifier)
-    else
-      body
-    end
+    body =
+      if code_verifier do
+        Map.put(body, "code_verifier", code_verifier)
+      else
+        body
+      end
 
     headers = [
       {"Content-Type", "application/x-www-form-urlencoded"},
@@ -123,14 +125,15 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
         expires_in = response["expires_in"] || 7200
         expires_at = DateTime.add(DateTime.utc_now(), expires_in, :second)
 
-        {:ok, %{
-          access_token: response["access_token"],
-          refresh_token: response["refresh_token"],
-          expires_in: expires_in,
-          expires_at: expires_at,
-          token_type: response["token_type"] || "Bearer",
-          scope: response["scope"]
-        }}
+        {:ok,
+         %{
+           access_token: response["access_token"],
+           refresh_token: response["refresh_token"],
+           expires_in: expires_in,
+           expires_at: expires_at,
+           token_type: response["token_type"] || "Bearer",
+           scope: response["scope"]
+         }}
 
       {:ok, %{status: status, body: body}} ->
         Logger.error("[XAPI OAuth] Token exchange failed: HTTP #{status} - #{inspect(body)}")
@@ -164,31 +167,32 @@ defmodule LemonChannels.Adapters.XAPI.OAuth do
   Print setup instructions for manual OAuth flow.
   """
   def print_setup_instructions do
-    config = LemonChannels.Adapters.XAPI.config()
+    config = XApi.config()
 
     unless config[:client_id] do
-    IO.puts("""
-    ❌ X API Not Configured
+      IO.puts("""
+      ❌ X API Not Configured
 
-    Please set the following environment variables:
+      Please set the following environment variables:
 
-      export X_API_CLIENT_ID="your-client-id"
-      export X_API_CLIENT_SECRET="your-client-secret"
+        export X_API_CLIENT_ID="your-client-id"
+        export X_API_CLIENT_SECRET="your-client-secret"
 
-    Get these from https://developer.x.com → Projects → Your App → Keys and Tokens
-    """)
+      Get these from https://developer.x.com → Projects → Your App → Keys and Tokens
+      """)
 
-    :error
+      :error
     end
 
     pkce = generate_pkce()
     redirect_uri = "http://localhost:4000/auth/x/callback"
 
-    auth_url = authorization_url(
-      redirect_uri: redirect_uri,
-      state: generate_state(),
-      code_challenge: pkce.challenge
-    )
+    auth_url =
+      authorization_url(
+        redirect_uri: redirect_uri,
+        state: generate_state(),
+        code_challenge: pkce.challenge
+      )
 
     IO.puts("""
     🐦 X API OAuth Setup

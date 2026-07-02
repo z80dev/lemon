@@ -151,7 +151,8 @@ apps/
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_skills/        # Skill registry, discovery, installation
-└── lemon_web/           # Phoenix LiveView web interface
+├── lemon_web/           # Phoenix LiveView web interface
+└── x_api/               # Reusable X API client, OAuth helpers, and token manager
 
 clients/
 ├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
@@ -278,15 +279,16 @@ lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_sk
 lemon_router ─────────→ lemon_core, lemon_channels, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
-lemon_channels ───────→ lemon_core, agent_core
+lemon_channels ───────→ lemon_core, agent_core, x_api
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
 lemon_mcp ────────────→ coding_agent, agent_core
 lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
-lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
+lemon_skills ─────────→ lemon_core, agent_core, ai, x_api
 lemon_web ────────────→ lemon_core, lemon_router
 coding_agent_ui ──────→ coding_agent
+x_api ────────────────→ lemon_core
 ai ───────────────────→ (no umbrella deps - standalone LLM client library)
 ```
 
@@ -469,6 +471,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
+| x_api | `apps/x_api/README.md` *(no AGENTS.md yet)* |
 | lemon_mcp | `apps/lemon_mcp/README.md` *(no AGENTS.md yet)* |
 | coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
 

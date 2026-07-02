@@ -28,6 +28,7 @@ defmodule LemonChannels.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},
+      {:x_api, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:earmark_parser, "~> 1.4"},
       {:req, "~> 0.5.0"},

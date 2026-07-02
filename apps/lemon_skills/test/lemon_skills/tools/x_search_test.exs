@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.XSearchTest do
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.TextContent
-  alias LemonChannels.Adapters.XAPI
+  alias XApi
   alias LemonSkills.Tools.XSearch
 
   @x_env_vars [
@@ -22,21 +22,21 @@ defmodule LemonSkills.Tools.XSearchTest do
 
   setup do
     previous_req_defaults = Req.default_options()
-    previous = Application.get_env(:lemon_channels, XAPI)
-    previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+    previous = Application.get_env(:x_api, XApi)
+    previous_use_secrets = Application.get_env(:x_api, :use_secrets)
     previous_env = Map.new(@x_env_vars, fn key -> {key, System.get_env(key)} end)
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
-    Application.delete_env(:lemon_channels, XAPI)
-    Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+    Application.delete_env(:x_api, XApi)
+    Application.put_env(:x_api, :use_secrets, false)
     Enum.each(@x_env_vars, &System.delete_env/1)
 
     on_exit(fn ->
       if is_nil(previous) do
-        Application.delete_env(:lemon_channels, XAPI)
+        Application.delete_env(:x_api, XApi)
       else
-        Application.put_env(:lemon_channels, XAPI, previous)
+        Application.put_env(:x_api, XApi, previous)
       end
 
       Enum.each(previous_env, fn {key, value} ->
@@ -48,9 +48,9 @@ defmodule LemonSkills.Tools.XSearchTest do
       end)
 
       if is_nil(previous_use_secrets) do
-        Application.delete_env(:lemon_channels, :x_api_use_secrets)
+        Application.delete_env(:x_api, :use_secrets)
       else
-        Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
+        Application.put_env(:x_api, :use_secrets, previous_use_secrets)
       end
 
       Req.default_options(previous_req_defaults)
@@ -110,7 +110,7 @@ defmodule LemonSkills.Tools.XSearchTest do
   end
 
   test "searches X with bearer token and formats posts" do
-    Application.put_env(:lemon_channels, XAPI, bearer_token: "search-bearer-token")
+    Application.put_env(:x_api, XApi, bearer_token: "search-bearer-token")
     test_pid = self()
 
     Req.Test.stub(__MODULE__, fn conn ->
