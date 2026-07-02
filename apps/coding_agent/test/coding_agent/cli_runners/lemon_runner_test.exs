@@ -4,6 +4,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias CodingAgent.CliRunners.LemonRunner
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
+  alias CodingAgent.Session.Presentation
 
   alias AgentCore.Test.Mocks
   alias AgentCore.Types.AgentToolResult
@@ -732,7 +733,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "uses explicit text_delta tuple when present" do
       msg = %AssistantMessage{content: [%TextContent{text: "hello"}]}
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:text_delta, 0, "hello", msg},
                ""
@@ -747,7 +748,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         ]
       }
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:tool_call_start, 1, msg},
                ""
@@ -759,7 +760,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         content: [%ThinkingContent{thinking: "I should inspect the provider first."}]
       }
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:tool_call_start, 0, msg},
                ""
@@ -771,7 +772,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         content: [%ThinkingContent{thinking: "I should inspect the provider first."}]
       }
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:thinking_delta, 0, "I should inspect the provider first.", msg},
                ""
@@ -786,7 +787,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         ]
       }
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:tool_call_start, 1, msg},
                ""
@@ -796,7 +797,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "emits only the unseen suffix when message already contains prior streamed text" do
       msg = %AssistantMessage{content: [%TextContent{text: "Hello world"}]}
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:tool_call_delta, 1, "", msg},
                "Hello "
@@ -806,7 +807,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "does not emit duplicate text when visible text has not grown" do
       msg = %AssistantMessage{content: [%TextContent{text: "Hello"}]}
 
-      assert LemonRunner.text_delta_from_message_update(
+      assert Presentation.text_delta_from_message_update(
                msg,
                {:tool_call_start, 1, msg},
                "Hello"
@@ -823,60 +824,44 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     # as documented in the LemonRunner module
 
     test "Bash maps to :command" do
-      assert tool_kind("Bash") == :command
+      assert Presentation.tool_kind("Bash") == :command
     end
 
     test "Read maps to :tool" do
-      assert tool_kind("Read") == :tool
+      assert Presentation.tool_kind("Read") == :tool
     end
 
     test "Write maps to :file_change" do
-      assert tool_kind("Write") == :file_change
+      assert Presentation.tool_kind("Write") == :file_change
     end
 
     test "Edit maps to :file_change" do
-      assert tool_kind("Edit") == :file_change
+      assert Presentation.tool_kind("Edit") == :file_change
     end
 
     test "Glob maps to :tool" do
-      assert tool_kind("Glob") == :tool
+      assert Presentation.tool_kind("Glob") == :tool
     end
 
     test "Grep maps to :tool" do
-      assert tool_kind("Grep") == :tool
+      assert Presentation.tool_kind("Grep") == :tool
     end
 
     test "WebSearch maps to :web_search" do
-      assert tool_kind("WebSearch") == :web_search
+      assert Presentation.tool_kind("WebSearch") == :web_search
     end
 
     test "WebFetch maps to :web_search" do
-      assert tool_kind("WebFetch") == :web_search
+      assert Presentation.tool_kind("WebFetch") == :web_search
     end
 
     test "Task maps to :subagent" do
-      assert tool_kind("Task") == :subagent
+      assert Presentation.tool_kind("Task") == :subagent
     end
 
     test "Unknown tool maps to :tool" do
-      assert tool_kind("CustomTool") == :tool
-      assert tool_kind("Anything") == :tool
-    end
-
-    # Helper to mirror the private function logic
-    defp tool_kind(name) do
-      case name do
-        "Bash" -> :command
-        "Read" -> :tool
-        "Write" -> :file_change
-        "Edit" -> :file_change
-        "Glob" -> :tool
-        "Grep" -> :tool
-        "WebSearch" -> :web_search
-        "WebFetch" -> :web_search
-        "Task" -> :subagent
-        _ -> :tool
-      end
+      assert Presentation.tool_kind("CustomTool") == :tool
+      assert Presentation.tool_kind("Anything") == :tool
     end
   end
 
@@ -886,112 +871,77 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
   describe "tool title generation" do
     test "Bash with command shows preview" do
-      title = tool_title("Bash", %{"command" => "ls -la"})
-      assert title == "$ ls -la"
+      title = Presentation.tool_title("Bash", %{"command" => "ls -la"})
+      assert title == "`ls -la`"
     end
 
     test "Bash truncates long commands" do
       long_cmd = String.duplicate("a", 100)
-      title = tool_title("Bash", %{"command" => long_cmd})
-      assert String.starts_with?(title, "$ ")
-      # "$ " + 60 chars
+      title = Presentation.tool_title("Bash", %{"command" => long_cmd})
+      assert String.starts_with?(title, "`")
+      assert String.ends_with?(title, "`")
       assert String.length(title) <= 62
     end
 
     test "Bash takes first line of multiline command" do
-      title = tool_title("Bash", %{"command" => "echo line1\necho line2"})
-      assert title == "$ echo line1"
+      title = Presentation.tool_title("Bash", %{"command" => "echo line1\necho line2"})
+      assert title == "`echo line1`"
     end
 
     test "Read shows file basename" do
-      title = tool_title("Read", %{"file_path" => "/path/to/file.ex"})
-      assert title == "Read file.ex"
+      title = Presentation.tool_title("Read", %{"file_path" => "/path/to/file.ex"})
+      assert title == "read: `to/file.ex`"
     end
 
     test "Write shows file basename" do
-      title = tool_title("Write", %{"file_path" => "/path/to/new_file.ex"})
-      assert title == "Write new_file.ex"
+      title = Presentation.tool_title("Write", %{"file_path" => "/path/to/new_file.ex"})
+      assert title == "write: `to/new_file.ex`"
     end
 
     test "Edit shows file basename" do
-      title = tool_title("Edit", %{"file_path" => "/path/to/edit.ex"})
-      assert title == "Edit edit.ex"
+      title = Presentation.tool_title("Edit", %{"file_path" => "/path/to/edit.ex"})
+      assert title == "edit: `to/edit.ex`"
     end
 
     test "Glob shows pattern" do
-      title = tool_title("Glob", %{"pattern" => "**/*.ex"})
-      assert title == "Glob **/*.ex"
+      title = Presentation.tool_title("Glob", %{"pattern" => "**/*.ex"})
+      assert title == "glob: `**/*.ex`"
     end
 
     test "Grep shows pattern" do
-      title = tool_title("Grep", %{"pattern" => "defmodule"})
-      assert title == "Grep defmodule"
+      title = Presentation.tool_title("Grep", %{"pattern" => "defmodule"})
+      assert title == "grep: `defmodule`"
     end
 
     test "WebSearch shows truncated query" do
-      title = tool_title("WebSearch", %{"query" => "how to write Elixir tests"})
-      assert title == "Search: how to write Elixir tests"
+      title = Presentation.tool_title("WebSearch", %{"query" => "how to write Elixir tests"})
+      assert title == "search: how to write Elixir tests"
     end
 
     test "WebSearch truncates long query" do
       long_query = String.duplicate("word ", 20)
-      title = tool_title("WebSearch", %{"query" => long_query})
-      # "Search: " + 40 chars
-      assert String.length(title) <= 48
+      title = Presentation.tool_title("WebSearch", %{"query" => long_query})
+      assert String.length(title) <= 58
     end
 
     test "Task shows truncated description" do
-      title = tool_title("Task", %{"description" => "Review the pull request"})
-      assert title == "Task: Review the pull request"
+      title = Presentation.tool_title("Task", %{"description" => "Review the pull request"})
+      assert title == "task: Review the pull request"
     end
 
     test "Task shows engine suffix for external engines" do
       title =
-        tool_title("Task", %{"description" => "Review the pull request", "engine" => "claude"})
+        Presentation.tool_title("Task", %{
+          "description" => "Review the pull request",
+          "engine" => "claude"
+        })
 
-      assert title == "Task(claude): Review the pull request"
+      assert title == "task(claude): Review the pull request"
     end
 
     test "Unknown tool shows just the name" do
-      title = tool_title("CustomTool", %{})
-      assert title == "CustomTool"
-    end
-
-    # Helper to mirror the private function logic
-    defp tool_title(name, args) do
-      case {name, args} do
-        {"Bash", %{"command" => cmd}} ->
-          cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-          "$ #{cmd_preview}"
-
-        {"Read", %{"file_path" => path}} ->
-          "Read #{Path.basename(path)}"
-
-        {"Write", %{"file_path" => path}} ->
-          "Write #{Path.basename(path)}"
-
-        {"Edit", %{"file_path" => path}} ->
-          "Edit #{Path.basename(path)}"
-
-        {"Glob", %{"pattern" => pattern}} ->
-          "Glob #{pattern}"
-
-        {"Grep", %{"pattern" => pattern}} ->
-          "Grep #{pattern}"
-
-        {"WebSearch", %{"query" => query}} ->
-          "Search: #{String.slice(query, 0, 40)}"
-
-        {"Task", %{"description" => desc, "engine" => engine}}
-        when engine not in [nil, "", "internal"] ->
-          "Task(#{engine}): #{String.slice(desc, 0, 40)}"
-
-        {"Task", %{"description" => desc}} ->
-          "Task: #{String.slice(desc, 0, 40)}"
-
-        {name, _} ->
-          name
-      end
+      title = Presentation.tool_title("CustomTool", %{})
+      assert title == "customtool"
     end
   end
 
@@ -1002,7 +952,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   describe "result truncation" do
     test "short results are not truncated" do
       result = "short result"
-      assert truncate_result(result) == "short result"
+      assert Presentation.truncate_result(result) == "short result"
     end
 
     test "AgentToolResult results are rendered as plain text" do
@@ -1011,12 +961,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         details: nil
       }
 
-      assert truncate_result(result) == "ok"
+      assert Presentation.truncate_result(result) == "ok"
     end
 
     test "long results are truncated at 500 chars" do
       result = String.duplicate("a", 600)
-      truncated = truncate_result(result)
+      truncated = Presentation.truncate_result(result)
 
       # 500 + "..."
       assert String.length(truncated) == 503
@@ -1025,50 +975,16 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
     test "exactly 500 char result is not truncated" do
       result = String.duplicate("a", 500)
-      assert truncate_result(result) == result
+      assert Presentation.truncate_result(result) == result
     end
 
     test "non-string results are inspected" do
       result = %{key: "value", count: 42}
-      truncated = truncate_result(result)
+      truncated = Presentation.truncate_result(result)
 
       assert is_binary(truncated)
       assert String.contains?(truncated, "key")
     end
-
-    # Helper to mirror the private function logic
-    defp truncate_result(result) when is_binary(result) do
-      if String.length(result) > 500 do
-        String.slice(result, 0, 500) <> "..."
-      else
-        result
-      end
-    end
-
-    defp truncate_result(%AgentCore.Types.AgentToolResult{} = result) do
-      result
-      |> AgentCore.get_text()
-      |> truncate_result()
-    end
-
-    defp truncate_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
-      do: truncate_result(text)
-
-    defp truncate_result(content) when is_list(content) do
-      content
-      |> Enum.map(fn
-        %Ai.Types.TextContent{text: text} when is_binary(text) -> text
-        %{type: :text, text: text} when is_binary(text) -> text
-        %{"type" => "text", "text" => text} when is_binary(text) -> text
-        item when is_binary(item) -> item
-        _ -> ""
-      end)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n")
-      |> truncate_result()
-    end
-
-    defp truncate_result(result), do: inspect(result, limit: 500)
   end
 
   # ============================================================================
@@ -1077,58 +993,36 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
   describe "error formatting" do
     test "binary errors pass through" do
-      assert format_error("Connection failed") == "Connection failed"
+      assert Presentation.format_error("Connection failed", %{}) == "Connection failed"
     end
 
     test "known atom errors use AI formatting" do
-      assert format_error(:timeout) == "Request timed out. Please try again."
-      assert format_error(:econnreset) == "Connection reset. Please try again."
+      assert Presentation.format_error(:timeout, %{}) == "Request timed out. Please try again."
+      assert Presentation.format_error(:econnreset, %{}) == "Connection reset. Please try again."
     end
 
     test "unknown atom errors are converted to string" do
-      assert format_error(:connection_refused) == "connection_refused"
+      assert Presentation.format_error(:connection_refused, %{}) == "connection_refused"
     end
 
     test "tuple errors are unwrapped" do
-      assert format_error({:error, "inner error"}) == "inner error"
-      assert format_error({:error, :inner_atom}) == "inner_atom"
+      assert Presentation.format_error({:error, "inner error"}, %{}) == "inner error"
+      assert Presentation.format_error({:error, :inner_atom}, %{}) == "inner_atom"
     end
 
     test "assistant_error tuples surface the underlying message" do
-      assert format_error({:assistant_error, "breaker open"}) == "breaker open"
+      assert Presentation.format_error({:assistant_error, "breaker open"}, %{}) == "breaker open"
     end
 
     test "http errors use AI formatting" do
-      assert format_error({:http_error, 503, "overloaded"}) ==
+      assert Presentation.format_error({:http_error, 503, "overloaded"}, %{}) ==
                "Service temporarily unavailable (HTTP 503): overloaded"
     end
 
     test "complex terms are inspected" do
-      assert format_error({:failed, %{reason: :unknown}}) == "{:failed, %{reason: :unknown}}"
+      assert Presentation.format_error({:failed, %{reason: :unknown}}, %{}) ==
+               "{:failed, %{reason: :unknown}}"
     end
-
-    # Helper to mirror the private function logic
-    defp format_error({:assistant_error, msg}) when is_binary(msg), do: msg
-    defp format_error({:assistant_error, reason}), do: "assistant error: #{format_error(reason)}"
-    defp format_error(reason) when is_binary(reason), do: reason
-
-    defp format_error(reason)
-         when reason in [
-                :rate_limited,
-                :max_concurrency,
-                :timeout,
-                :closed,
-                :econnrefused,
-                :econnreset,
-                :nxdomain
-              ] do
-      Ai.Error.format_error(reason)
-    end
-
-    defp format_error({:http_error, _status, _body} = reason), do: Ai.Error.format_error(reason)
-    defp format_error({:error, reason}), do: format_error(reason)
-    defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-    defp format_error(reason), do: inspect(reason)
   end
 
   # ============================================================================
@@ -1142,7 +1036,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Here is my answer"}
       ]
 
-      assert extract_answer(messages, "") == "Here is my answer"
+      assert Presentation.extract_answer(messages, "") == "Here is my answer"
     end
 
     test "extracts text from list content" do
@@ -1157,7 +1051,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         }
       ]
 
-      assert extract_answer(messages, "") == "First part. \nSecond part."
+      assert Presentation.extract_answer(messages, "") == "First part. \nSecond part."
     end
 
     test "falls back to accumulated text when no assistant message" do
@@ -1165,7 +1059,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :user, content: "Hello"}
       ]
 
-      assert extract_answer(messages, "accumulated text") == "accumulated text"
+      assert Presentation.extract_answer(messages, "accumulated text") == "accumulated text"
     end
 
     test "falls back to accumulated text when content is nil" do
@@ -1174,7 +1068,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: nil}
       ]
 
-      assert extract_answer(messages, "fallback") == "fallback"
+      assert Presentation.extract_answer(messages, "fallback") == "fallback"
     end
 
     test "finds last assistant message when multiple exist" do
@@ -1184,36 +1078,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Latest response"}
       ]
 
-      assert extract_answer(messages, "") == "Latest response"
-    end
-
-    # Helper to mirror the private function logic
-    defp extract_answer(messages, accumulated_text) do
-      last_assistant =
-        messages
-        |> Enum.reverse()
-        |> Enum.find(fn msg ->
-          case msg do
-            %{role: :assistant} -> true
-            _ -> false
-          end
-        end)
-
-      case last_assistant do
-        %{content: content} when is_binary(content) -> content
-        %{content: content} when is_list(content) -> extract_text_content(content)
-        _ -> accumulated_text
-      end
-    end
-
-    defp extract_text_content(content) do
-      content
-      |> Enum.filter(fn
-        %{type: :text} -> true
-        _ -> false
-      end)
-      |> Enum.map(fn %{text: text} -> text end)
-      |> Enum.join("\n")
+      assert Presentation.extract_answer(messages, "") == "Latest response"
     end
   end
 
@@ -1228,7 +1093,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Hi"}
       ]
 
-      assert build_usage(messages) == nil
+      assert Presentation.build_usage(messages) == nil
     end
 
     test "aggregates usage from single message" do
@@ -1236,7 +1101,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Hi", usage: %{input_tokens: 10, output_tokens: 5}}
       ]
 
-      usage = build_usage(messages)
+      usage = Presentation.build_usage(messages)
       assert usage.input_tokens == 10
       assert usage.output_tokens == 5
     end
@@ -1247,7 +1112,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Second", usage: %{input_tokens: 15, output_tokens: 8}}
       ]
 
-      usage = build_usage(messages)
+      usage = Presentation.build_usage(messages)
       assert usage.input_tokens == 25
       assert usage.output_tokens == 13
     end
@@ -1260,30 +1125,9 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
         %{role: :assistant, content: "Second", usage: %{input_tokens: 20, output_tokens: 10}}
       ]
 
-      usage = build_usage(messages)
+      usage = Presentation.build_usage(messages)
       assert usage.input_tokens == 30
       assert usage.output_tokens == 15
-    end
-
-    # Helper to mirror the private function logic
-    defp build_usage(messages) do
-      messages
-      |> Enum.reduce(%{}, fn msg, acc ->
-        case Map.get(msg, :usage) do
-          nil -> acc
-          usage -> merge_usage(acc, usage)
-        end
-      end)
-      |> case do
-        empty when map_size(empty) == 0 -> nil
-        usage -> usage
-      end
-    end
-
-    defp merge_usage(acc, usage) do
-      Map.merge(acc, usage, fn _k, v1, v2 ->
-        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
-      end)
     end
   end
 
@@ -1387,8 +1231,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       session_id = "abc12345"
       cwd = "/home/user/project"
 
-      expected = "/home/user/project/.lemon/sessions/abc12345.jsonl"
-      assert session_file_path(session_id, cwd) == expected
+      expected = Path.join(CodingAgent.Config.sessions_dir(cwd), "abc12345.jsonl")
+      assert Presentation.session_file_path(session_id, cwd) == expected
     end
 
     test "handles cwd with trailing slash" do
@@ -1396,13 +1240,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       cwd = "/tmp/"
 
       # Path.join handles trailing slashes correctly
-      expected = "/tmp/.lemon/sessions/xyz789.jsonl"
-      assert session_file_path(session_id, cwd) == expected
-    end
-
-    # Helper to mirror the private function logic
-    defp session_file_path(session_id, cwd) do
-      Path.join([cwd, ".lemon", "sessions", "#{session_id}.jsonl"])
+      expected = Path.join(CodingAgent.Config.sessions_dir(cwd), "xyz789.jsonl")
+      assert Presentation.session_file_path(session_id, cwd) == expected
     end
   end
 

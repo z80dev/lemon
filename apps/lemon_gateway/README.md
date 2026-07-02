@@ -79,7 +79,7 @@ Part of the `lemon` Elixir umbrella project.
 
 | Engine ID | Module | Runner | Steering | Description |
 |-----------|--------|--------|----------|-------------|
-| `lemon` | `Engines.Lemon` | `CodingAgent.CliRunners.LemonRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering |
+| `lemon` | `Engines.Lemon` | `CodingAgent.Session` via `Engines.Lemon.SessionRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering |
 | `claude` | `Engines.Claude` | `AgentCore.CliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
 | `codex` | `Engines.Codex` | `AgentCore.CliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
 | `droid` | `Engines.Droid` | `AgentCore.CliRunners.DroidRunner` | No | Factory Droid CLI wrapper via CliAdapter |
@@ -98,7 +98,7 @@ All engines implement the `LemonGateway.Engine` behaviour:
 - `steer/2` -- inject text into an active run (optional callback)
 - `format_resume/1`, `extract_resume/1`, `is_resume_line/1` -- resume token serialization
 
-CLI-based engines (Claude, Codex, Opencode, Pi) delegate to `Engines.CliAdapter`, which provides shared logic for subprocess management, event stream consumption, resume token formatting, and cancellation.
+CLI-based engines (Claude, Codex, Droid, Opencode, Pi) delegate to `Engines.CliAdapter`, which provides shared logic for subprocess management, event stream consumption, resume token formatting, and cancellation. Lemon drives `CodingAgent.Session` directly through `Engines.Lemon.SessionRunner`.
 
 ### Engine Selection Priority
 
@@ -174,6 +174,7 @@ failures without parsing rendered command output.
 | `LemonGateway.EngineDirective` | `engine_directive.ex` | Parses `/engine` prefix directives from user input |
 | `LemonGateway.Engines.CliAdapter` | `engines/cli_adapter.ex` | Shared CLI subprocess runner for all CLI engines |
 | `LemonGateway.Engines.Lemon` | `engines/lemon.ex` | Native CodingAgent engine with steering |
+| `LemonGateway.Engines.Lemon.SessionRunner` | `engines/lemon/session_runner.ex` | Private native Lemon session runner and event translator |
 | `LemonGateway.Engines.Claude` | `engines/claude.ex` | Claude Code CLI adapter |
 | `LemonGateway.Engines.Codex` | `engines/codex.ex` | OpenAI Codex CLI adapter |
 | `LemonGateway.Engines.Droid` | `engines/droid.ex` | Factory Droid CLI adapter |
@@ -262,7 +263,7 @@ failures without parsing rendered command output.
 
 1. `Run.init/1` acquires the `EngineLock` for the session's thread key (or fails fast with `:lock_timeout`).
 2. `Run.handle_continue(:start_run)` resolves the engine from `EngineRegistry`, resolves the working directory, and calls `engine.start_run(job, opts, self())`.
-3. The engine returns `{:ok, run_ref, cancel_ctx}`. For CLI engines, `CliAdapter` starts a runner subprocess and spawns a linked `Task` that consumes the runner's event stream.
+3. The engine returns `{:ok, run_ref, cancel_ctx}`. For CLI engines, `CliAdapter` starts a runner subprocess and spawns a linked `Task` that consumes the runner's event stream. Lemon starts a private `SessionRunner` GenServer that subscribes to `CodingAgent.Session` events.
 
 ### Streaming
 
@@ -468,7 +469,7 @@ Custom health checks can be registered via the `:health_checks` application envi
 | App | Purpose |
 |-----|---------|
 | `agent_core` | CLI runner infrastructure, tool types (`AgentTool`, `AgentToolResult`), event stream |
-| `coding_agent` | Native Lemon AI engine (`CodingAgent.CliRunners.LemonRunner`, `CodingAgent.Session`) |
+| `coding_agent` | Native Lemon AI engine (`CodingAgent.Session`, `CodingAgent.Session.Presentation`) |
 | `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
 
 ### External Libraries
