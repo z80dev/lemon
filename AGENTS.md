@@ -21,7 +21,8 @@
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
-| Create or modify skills | `apps/lemon_skills/` |
+| Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
+| Work on deterministic eval harnesses | `apps/lemon_evals/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
 | Work on the web UI | `apps/lemon_web/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
@@ -141,18 +142,19 @@ Future agents (and humans) depend on accurate documentation to be effective. Don
 apps/
 ├── agent_core/          # Core agent runtime, CLI runners (claude, codex, pi, kimi, opencode), subagent management
 ├── ai/                  # AI provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock)
-├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
+├── coding_agent/        # Coding agent runtime, coding tools, session management, budget enforcement
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 112+ JSON-RPC methods
 ├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
+├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
-├── lemon_skills/        # Skill registry, discovery, installation
+├── lemon_skills/        # Skill registry, discovery, installation, assistant-platform tools
 ├── lemon_web/           # Phoenix LiveView web interface
 └── x_api/               # Reusable X API client, OAuth helpers, and token manager
 
@@ -285,7 +287,8 @@ lemon_channels ───────→ lemon_core, agent_core, x_api
 lemon_cli ────────────→ ai, lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
-lemon_mcp ────────────→ coding_agent, agent_core
+lemon_evals ──────────→ lemon_core, agent_core, ai, coding_agent, lemon_skills
+lemon_mcp ────────────→ coding_agent, agent_core, lemon_skills
 lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, x_api
@@ -328,7 +331,7 @@ Key env vars:
 
 ### Adding a New Tool
 
-1. Create module in `apps/coding_agent/lib/coding_agent/tools/`
+1. Create coding-agent-specific modules in `apps/coding_agent/lib/coding_agent/tools/`; create assistant-platform tools such as media/social/PKM surfaces in `apps/lemon_skills/lib/lemon_skills/tools/`.
 2. Implement the tool pattern (see existing tools in the `CodingAgent.Tools.*` namespace)
 3. Add to `CodingAgent.Tools` registry
 4. Update tool policy if needed
@@ -471,6 +474,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_router | `apps/lemon_router/AGENTS.md` |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
 | lemon_cli | `apps/lemon_cli/README.md` *(no AGENTS.md yet)* |
+| lemon_evals | `apps/lemon_evals/README.md` *(no AGENTS.md yet)* |
 | lemon_sim | `apps/lemon_sim/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |

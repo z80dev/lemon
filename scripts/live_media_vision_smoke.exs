@@ -137,7 +137,7 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
     File.write!(image_path, red_png())
 
     tool =
-      CodingAgent.Tools.MediaAnalyzeImage.tool(project_dir,
+      LemonSkills.Tools.MediaAnalyzeImage.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -224,7 +224,7 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
     File.write!(image_path, red_png())
 
     tool =
-      CodingAgent.Tools.MediaAnalyzeImage.tool(config.project_dir,
+      LemonSkills.Tools.MediaAnalyzeImage.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_vision_api_key: config.api_key,

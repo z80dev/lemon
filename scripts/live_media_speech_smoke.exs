@@ -143,7 +143,7 @@ defmodule LemonScripts.LiveMediaSpeechSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateSpeech.tool(project_dir,
+      LemonSkills.Tools.MediaGenerateSpeech.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -213,7 +213,7 @@ defmodule LemonScripts.LiveMediaSpeechSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateSpeech.tool(config.project_dir,
+      LemonSkills.Tools.MediaGenerateSpeech.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_tts_api_key: if(config.provider == @provider, do: config.api_key),

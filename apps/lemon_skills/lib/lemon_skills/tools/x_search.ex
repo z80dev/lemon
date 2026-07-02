@@ -54,6 +54,9 @@ defmodule LemonSkills.Tools.XSearch do
     }
   end
 
+  @spec tool(String.t(), keyword()) :: AgentTool.t()
+  def tool(_cwd, opts), do: tool(opts)
+
   @doc """
   Execute the x_search tool.
   """

@@ -186,7 +186,7 @@ run_quality() {
   bash scripts/test_contract.sh
   mix lemon.skill.lint
   mix lemon.quality
-  mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
+  mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs
 }
 
 run_npm_ci_if_needed() {

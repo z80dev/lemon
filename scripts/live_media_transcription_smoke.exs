@@ -146,7 +146,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
     File.write!(audio_path, wav_silence())
 
     tool =
-      CodingAgent.Tools.MediaTranscribeAudio.tool(project_dir,
+      LemonSkills.Tools.MediaTranscribeAudio.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -232,7 +232,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
     File.write!(audio_path, wav_silence())
 
     tool =
-      CodingAgent.Tools.MediaTranscribeAudio.tool(config.project_dir,
+      LemonSkills.Tools.MediaTranscribeAudio.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_transcription_api_key: if(config.provider == @provider, do: config.api_key),

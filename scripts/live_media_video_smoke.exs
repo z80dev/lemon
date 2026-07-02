@@ -138,7 +138,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateVideo.tool(project_dir,
+      LemonSkills.Tools.MediaGenerateVideo.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -208,7 +208,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateVideo.tool(config.project_dir,
+      LemonSkills.Tools.MediaGenerateVideo.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_video_api_key: if(config.provider == @provider, do: config.api_key),

@@ -37,6 +37,16 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 |------|-----------|---------|
 | `lib/lemon_skills/tools/read_skill.ex` | `read_skill` | Fetches skill content/metadata by key |
 | `lib/lemon_skills/tools/skill_manage.ex` | `skill_manage` | Creates, edits, patches, deletes, and audits local skills |
+| `lib/lemon_skills/tools/memory.ex` | `memory` | Reads and updates compact assistant-home USER.md/MEMORY.md notes |
+| `lib/lemon_skills/tools/memory_topic.ex` | `memory_topic` | Scaffolds durable topic memory files |
+| `lib/lemon_skills/tools/search_memory.ex` | `search_memory` | Searches prior run memory by scope |
+| `lib/lemon_skills/tools/media_status.ex` | `media_status` | Reports redacted media job status |
+| `lib/lemon_skills/tools/media_generate_image.ex` | `media_generate_image` | Generates managed image artifacts |
+| `lib/lemon_skills/tools/media_generate_speech.ex` | `media_generate_speech` | Generates managed speech artifacts |
+| `lib/lemon_skills/tools/media_transcribe_audio.ex` | `media_transcribe_audio` | Transcribes audio into managed transcript artifacts |
+| `lib/lemon_skills/tools/media_analyze_image.ex` | `media_analyze_image` | Analyzes images and stores managed artifacts |
+| `lib/lemon_skills/tools/media_generate_video.ex` | `media_generate_video` | Generates managed video artifacts |
+| `lib/lemon_skills/tools/kanban.ex` | `kanban` | Manages durable Lemon kanban boards and tasks |
 | `lib/lemon_skills/tools/x_search.ex` | `x_search` | Searches recent public X posts through X API |
 | `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
 | `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |

@@ -102,7 +102,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (55 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (55 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3`; assistant-platform tools are implemented in `LemonSkills.Tools` and exposed here by name |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
@@ -129,7 +129,8 @@ should be attached to the final Telegram/Discord answer through redacted
 `auto_send_files` metadata. Screenshot writes prune the browser artifact
 directory to 14 days or the newest 100 files.
 
-`browser_analyze` composes screenshot capture with `media_analyze_image` so the
+`browser_analyze` composes screenshot capture with the LemonSkills-owned
+`media_analyze_image` tool so the
 model can capture and analyze the current page through one supervised BEAM
 operation. It writes managed screenshot and analysis artifacts, keeps raw
 base64 out of details, and can optionally return a model-visible image block.
@@ -146,7 +147,7 @@ default unless `includeValues: true` is explicit. `browser_clear_state` clears
 browser-context cookies, current-page local/session storage, and buffered events
 by default; pass `clearCookies`, `clearStorage`, or `clearEvents` to narrow it.
 
-`memory` provides the compact prompt-injected memory surface for assistant-home
+`memory` is implemented in `LemonSkills.Tools` and provides the compact prompt-injected memory surface for assistant-home
 `USER.md` and `MEMORY.md`. It supports read/add/replace/remove, rejects
 duplicates, requires unique text for replace/remove, enforces bounded file
 limits, and screens writes for common secrets, prompt-injection phrases, NUL
@@ -160,7 +161,8 @@ scroll a bounded window in run history, or pass no args to browse recent runs in
 the current session. `search_memory` remains Lemon's native scoped memory-recall
 tool.
 
-`media_status` returns redacted media job summaries, recent jobs, cleanup
+The media tools are implemented in `LemonSkills.Tools` and registered by
+`CodingAgent.ToolRegistry` under their existing names. `media_status` returns redacted media job summaries, recent jobs, cleanup
 policy, and worker supervisor state to the model. `media_generate_image`,
 `media_generate_speech`, and `media_transcribe_audio` are BEAM-supervised media
 previews. They run deterministic local previews, provider-backed OpenAI
@@ -203,7 +205,7 @@ through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
 `lsp.document.change`, `lsp.document.close`, `lsp.server.request`, and
 `lsp.server.stop`.
 
-`kanban` exposes durable board and task operations backed by
+`kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
 `LemonCore.KanbanStore`. It is the model-facing surface for multi-agent work
 that should outlive one session. Kanban-dispatched worker runs block the
 `kanban` tool so a leased task cannot recursively manage its own board.
@@ -221,7 +223,7 @@ that should outlive one session. Kanban-dispatched worker runs block the
 | `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
 | `todoread` / `todowrite` | `Tools.TodoRead` / `Tools.TodoWrite` | Low-level todo primitives |
 | `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
-| `memory_topic` | `Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
+| `memory_topic` | `LemonSkills.Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
 | `glob` | `Tools.Glob` | File pattern matching |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
@@ -339,7 +341,7 @@ writes a redacted proof without raw commands, logs, or process ids.
 |--------|-------------|
 | `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo/requirement resume state |
 | `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
-| `CodingAgent.Evals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
+| `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
 
 The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, `search_memory` current-scope resolution, `memory_topic` scaffold behavior, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
 
@@ -347,7 +349,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Security.ExternalContent` | External content sanitization |
+| `AgentCore.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
 ### Utilities

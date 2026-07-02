@@ -81,8 +81,8 @@ attached to the final Telegram/Discord answer through redacted `auto_send_files`
 metadata. Screenshot writes prune the browser artifact directory to 14 days or
 the newest 100 files.
 
-`browser_analyze` composes the supervised browser screenshot path with
-`media_analyze_image` so models can capture and analyze the current page in one
+`browser_analyze` composes the supervised browser screenshot path with the
+LemonSkills-owned `media_analyze_image` tool so models can capture and analyze the current page in one
 BEAM-owned operation. It stores the screenshot and analysis as managed artifacts,
 keeps raw base64 out of details, and can optionally return the screenshot as
 model-visible image content.
@@ -99,7 +99,7 @@ redacted by default unless `includeValues: true` is explicit. `browser_clear_sta
 clears browser-context cookies, current-page local/session storage, and buffered
 events by default; pass the specific `clear*` flags to narrow the reset.
 
-`memory` is the compact prompt-injected memory surface. It reads, adds,
+`memory` is implemented in `LemonSkills.Tools` and is the compact prompt-injected memory surface. It reads, adds,
 replaces, and removes bounded assistant-home `USER.md` profile notes and
 `MEMORY.md` quick facts without relying on project-local file paths. It rejects
 duplicates, requires unique text for replace/remove, enforces compact file
@@ -112,7 +112,8 @@ discovery, scroll, or browse mode from the argument shape and reads from Lemon's
 durable memory/run-history stores; `search_memory` remains the native scoped
 memory tool.
 
-`media_status` gives the model a read-only view of redacted media job summaries,
+The media tools are implemented in `LemonSkills.Tools` and registered by
+`CodingAgent.ToolRegistry` under their existing names. `media_status` gives the model a read-only view of redacted media job summaries,
 recent jobs, cleanup policy, and worker supervisor state. `media_generate_image`,
 `media_generate_speech`, and `media_transcribe_audio` are model-facing media
 previews. They run deterministic local preview jobs, provider-backed OpenAI
@@ -148,7 +149,7 @@ language-server registry, stdio session lifecycle status, initialize
 orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.
 
-`kanban` is the model-facing durable board tool. It creates/lists boards,
+`kanban` is implemented in `LemonSkills.Tools` and is the model-facing durable board tool. It creates/lists boards,
 creates/lists/updates/comments tasks, and reads from `LemonCore.KanbanStore` so
 multi-agent work can outlive one session. Kanban-dispatched worker runs block
 the `kanban` tool through tool policy to avoid recursive board management.
@@ -836,7 +837,6 @@ apps/coding_agent/
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
 |   |   +-- cli_runners/                      # CLI runner integrations
-|   |   +-- evals/harness.ex                  # Eval harness
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/

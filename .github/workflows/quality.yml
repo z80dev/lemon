@@ -92,7 +92,7 @@ jobs:
         run: mix lemon.eval --iterations 20
 
       - name: Run quality test suite
-        run: mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
+        run: mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs
 
   elixir-test-suite:
     runs-on: ubuntu-latest

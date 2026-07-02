@@ -138,7 +138,7 @@ defmodule LemonScripts.LiveMediaImageSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateImage.tool(project_dir,
+      LemonSkills.Tools.MediaGenerateImage.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -208,7 +208,7 @@ defmodule LemonScripts.LiveMediaImageSmoke do
       ])
 
     tool =
-      CodingAgent.Tools.MediaGenerateImage.tool(config.project_dir,
+      LemonSkills.Tools.MediaGenerateImage.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_image_api_key: if(config.provider == @provider, do: config.api_key),

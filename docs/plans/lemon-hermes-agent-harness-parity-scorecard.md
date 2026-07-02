@@ -308,7 +308,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 - Current modules/docs:
   - `apps/lemon_control_plane/**`
   - `clients/lemon-web/web/README.md`
-  - `apps/coding_agent/lib/coding_agent/evals/harness.ex`
+  - `apps/lemon_evals/lib/lemon_evals/harness.ex`
 - Strengths:
   - Control plane exposes many RPCs.
   - Web UI has sessions/runs/tasks/events visibility.
@@ -335,7 +335,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 1. Added eval checks for default `search_memory` current-scope resolution.
 2. Added eval checks for `memory_topic` scaffold behavior.
 3. Added eval checks for relevant-skill prompt progressive disclosure and `read_skill` guidance.
-4. Added tests that require those checks to appear in `CodingAgent.Evals.Harness.run/1` and `mix lemon.eval` JSON output.
+4. Added tests that require those checks to appear in `LemonEvals.Harness.run/1` and `mix lemon.eval` JSON output.
 
 ### Slice 3: Native relevant-skill preselection
 
@@ -390,7 +390,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 11: Scripted curator behavior eval
 
-1. Added `skill_curator_behavior_contract` to `CodingAgent.Evals.Harness.run/1`.
+1. Added `skill_curator_behavior_contract` to `LemonEvals.Harness.run/1`.
 2. The eval seeds two narrow project skills through real `skill_manage create` calls, runs `LemonSkills.Curator`, verifies the review prompt requires `read_skill` and `skill_manage`, then calls real `read_skill` and `skill_manage` operations to create an umbrella skill and archive the absorbed siblings.
 3. Added harness contract tests so `mix lemon.eval` keeps this procedural-memory behavior in the eval suite.
 
@@ -416,7 +416,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 15: Scripted learning trace eval
 
-1. Added `learning_tool_trace_contract` to `CodingAgent.Evals.Harness.run/1`.
+1. Added `learning_tool_trace_contract` to `LemonEvals.Harness.run/1`.
 2. The eval checks learning prompt triggers, calls real `search_memory` for prior work, creates a durable topic with `memory_topic`, creates a reusable project skill with `skill_manage`, and verifies the skill appears in `skill_manage report`.
 3. Added a harness contract test so `mix lemon.eval` keeps the end-to-end learning artifact path in the eval suite.
 
@@ -6028,13 +6028,13 @@ introspection, schema, and atom-safety lanes: `591 tests, 0 failures`.
    OAuth1 support over X API v2 `/tweets/search/recent`, including bounded
    `max_results`, author expansion, tweet/user fields, optional `sort_order`,
    `since_id`, `until_id`, and `next_token`.
-4. Registered `CodingAgent.Tools.XSearch` in the coding-agent default tool set,
+4. Registered `LemonSkills.Tools.XSearch` in the coding-agent default tool set,
    built-in registry, minimal-core policy, and no-external policy boundary.
 5. Updated coding-agent, LemonSkills, LemonChannels, feature-matrix, and
    simplified user-facing docs so the social tool surface is now
    `x_search`, `post_to_x`, and `get_x_mentions`.
 6. Focused validation passed with
-   `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/x_api_test.exs apps/lemon_channels/test/lemon_channels/adapters/x_api_client_test.exs apps/lemon_skills/test/lemon_skills/tools/x_search_test.exs apps/coding_agent/test/coding_agent/tools/x_search_test.exs apps/coding_agent/test/coding_agent/tools_test.exs apps/coding_agent/test/coding_agent/tool_registry_test.exs apps/coding_agent/test/coding_agent/tool_policy_test.exs apps/coding_agent/test/coding_agent/evals/harness_contract_test.exs apps/coding_agent/test/coding_agent_test.exs --seed 1`
+   `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/x_api_test.exs apps/lemon_channels/test/lemon_channels/adapters/x_api_client_test.exs apps/lemon_skills/test/lemon_skills/tools/x_search_test.exs apps/lemon_skills/test/lemon_skills/tools/x_search_test.exs apps/coding_agent/test/coding_agent/tools_test.exs apps/coding_agent/test/coding_agent/tool_registry_test.exs apps/coding_agent/test/coding_agent/tool_policy_test.exs apps/lemon_evals/test/lemon_evals/harness_contract_test.exs apps/coding_agent/test/coding_agent_test.exs --seed 1`
    at `151 tests, 0 failures`, plus warning-free compile, docs lint, HTML
    lint, and targeted diff hygiene.
 
@@ -6053,7 +6053,7 @@ introspection, schema, and atom-safety lanes: `591 tests, 0 failures`.
    tests so referenced tool names, read-only tool counts, and coding-tool counts
    stay aligned with the new compatibility surface.
 5. Focused validation passed with
-   `MIX_ENV=test mix test apps/coding_agent/test/coding_agent/system_prompt_test.exs apps/coding_agent/test/coding_agent/prompt_builder_test.exs apps/coding_agent/test/coding_agent/evals/harness_contract_test.exs apps/coding_agent/test/coding_agent_test.exs --seed 1`
+   `MIX_ENV=test mix test apps/coding_agent/test/coding_agent/system_prompt_test.exs apps/coding_agent/test/coding_agent/prompt_builder_test.exs apps/lemon_evals/test/lemon_evals/harness_contract_test.exs apps/coding_agent/test/coding_agent_test.exs --seed 1`
    at `93 tests, 0 failures`, plus warning-free compile, docs lint, HTML
    lint, and targeted diff hygiene.
 

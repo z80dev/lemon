@@ -53,6 +53,9 @@ defmodule LemonSkills.Tools.PostToX do
     }
   end
 
+  @spec tool(String.t(), keyword()) :: AgentTool.t()
+  def tool(_cwd, opts), do: tool(opts)
+
   @doc """
   Execute the post_to_x tool.
 

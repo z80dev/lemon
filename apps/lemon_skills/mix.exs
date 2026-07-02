@@ -30,7 +30,9 @@ defmodule LemonSkills.MixProject do
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
       {:x_api, in_umbrella: true},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:req, "~> 0.5"}
     ]
   end
 end

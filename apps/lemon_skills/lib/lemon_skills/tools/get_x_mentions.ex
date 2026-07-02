@@ -50,6 +50,9 @@ defmodule LemonSkills.Tools.GetXMentions do
     }
   end
 
+  @spec tool(String.t(), keyword()) :: AgentTool.t()
+  def tool(_cwd, opts), do: tool(opts)
+
   @doc """
   Execute the get_x_mentions tool.
   """
