@@ -68,7 +68,6 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
 | `LemonCore.ProviderPoolRotator` | Supervised in-memory round-robin state for provider credential pools |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
-| `LemonCore.HermesMigration` | Preview/apply migration helper for Hermes memories, skills, compatible config, allowlisted secrets, and session recall |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
@@ -409,11 +408,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 
 ### Adding a New Onboarding Provider
 
-1. Add a provider spec to `lib/lemon_core/onboarding/providers.ex`
-2. Reuse `LemonCore.Onboarding.Runner` for auth flow, secrets persistence, and config updates
-3. If you want a dedicated alias task, create `lib/mix/tasks/lemon.onboard.<provider>.ex` that delegates to the shared runner
-4. Update config via `LemonCore.Config.TomlPatch`
-5. Add focused tests in `test/mix/tasks/` and `test/lemon_core/onboarding/`
+Onboarding providers live in `apps/lemon_cli`; see `apps/lemon_cli/README.md`.
 
 ### Adding a New Quality Check
 
@@ -522,46 +517,8 @@ mix lemon.secrets.delete API_KEY
 
 ### Onboarding Tasks
 
-```bash
-# Guided provider setup:
-# - pick a provider from a menu, or pass one directly
-# - runs provider OAuth flow when supported, or prompts for an API key/token otherwise
-# - uses a TermUI-based arrow-key selector in real terminals for provider/auth/model/default prompts
-# - the onboarding selector uses `LemonCore.Onboarding.TerminalUI`'s custom renderer rather than `TermUI.Widget.PickList`
-#   because the stock pick-list widget can emit range warnings that corrupt the TUI display
-# - captures localhost OAuth callbacks automatically when supported, with manual paste fallback
-# - stores credentials in encrypted secrets
-# - writes the relevant providers.<provider> config keys
-# - optionally updates defaults.provider/defaults.model
-mix lemon.onboard
-mix lemon.onboard anthropic
-mix lemon.onboard codex
-mix lemon.onboard gemini
-mix lemon.onboard zai
-mix lemon.onboard minimax
-mix lemon.onboard.antigravity
-mix lemon.onboard.gemini
-mix lemon.onboard.codex
-mix lemon.onboard.copilot
-
-# Non-interactive examples
-mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
-mix lemon.onboard zai --token <token> --set-default --model glm-5
-mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
-
-# Copilot-specific options
-mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token>  # bypass OAuth and store raw token
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
-```
-
-Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API keys now live in `llm_anthropic_api_key_raw` and should be referenced by `providers.anthropic.api_key_secret`. OAuth-backed Claude Max usage keeps using `llm_anthropic_api_key` plus `providers.anthropic.auth_source = "oauth"` / `providers.anthropic.oauth_secret`, and Lemon prefers refreshable Claude Code credentials from `~/.claude/.credentials.json` over a stale static `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
+Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
+`apps/lemon_cli/README.md`.
 
 ### Quality Tasks
 

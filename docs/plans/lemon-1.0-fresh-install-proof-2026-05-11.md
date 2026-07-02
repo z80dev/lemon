@@ -100,7 +100,7 @@ mix lemon.setup runtime \
 This initially exposed a launch-doc bug: the summary told users to run
 `MIX_ENV=prod mix release runtime_min`, but the actual release profile is
 `lemon_runtime_min`. The setup output was fixed and covered by
-`apps/lemon_core/test/lemon_core/setup/setup_task_test.exs`; the verified output
+`apps/lemon_cli/test/lemon_cli/setup/setup_task_test.exs`; the verified output
 now says:
 
 ```bash

@@ -27,6 +27,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_router,
       :lemon_skills
     ],
+    lemon_cli: [:ai, :lemon_core],
     lemon_core: [],
     lemon_gateway: [
       :agent_core,

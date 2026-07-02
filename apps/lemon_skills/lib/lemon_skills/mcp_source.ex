@@ -12,7 +12,7 @@ defmodule LemonSkills.McpSource do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.Onboarding.LocalCallbackListener
+  alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCore.Secrets
 
   @default_cache_ttl_ms :timer.minutes(5)

@@ -1,9 +1,9 @@
-defmodule LemonCore.MixProject do
+defmodule LemonCli.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :lemon_core,
+      app: :lemon_cli,
       version: "0.1.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
@@ -12,15 +12,14 @@ defmodule LemonCore.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 69]],
+      test_coverage: [summary: [threshold: 44]],
       deps: deps()
     ]
   end
 
   def application do
     [
-      extra_applications: [:logger, :public_key],
-      mod: {LemonCore.Application, []}
+      extra_applications: [:logger]
     ]
   end
 
@@ -28,11 +27,11 @@ defmodule LemonCore.MixProject do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
-      {:uuid, "~> 1.1"},
-      {:phoenix_pubsub, "~> 2.1"},
-      {:telemetry, "~> 1.0"},
+      {:term_ui, "~> 0.2.0"},
       {:exqlite, "~> 0.34.0"},
-      {:file_system, "~> 1.0", optional: true}
+      {:yaml_elixir, "~> 2.9"},
+      {:lemon_core, in_umbrella: true},
+      {:ai, in_umbrella: true}
     ]
   end
 end

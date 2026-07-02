@@ -15,6 +15,7 @@
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
+| Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
@@ -145,6 +146,7 @@ apps/
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 112+ JSON-RPC methods
+├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
@@ -280,6 +282,7 @@ lemon_router ─────────→ lemon_core, lemon_channels, agent_co
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, agent_core, x_api
+lemon_cli ────────────→ ai, lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
 lemon_mcp ────────────→ coding_agent, agent_core
@@ -467,6 +470,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
+| lemon_cli | `apps/lemon_cli/README.md` *(no AGENTS.md yet)* |
 | lemon_sim | `apps/lemon_sim/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |

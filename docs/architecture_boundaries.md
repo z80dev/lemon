@@ -14,6 +14,7 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | `coding_agent_ui` | `coding_agent` |
 | `lemon_automation` | `lemon_core`, `lemon_router`, `lemon_skills` |
 | `lemon_channels` | `agent_core`, `lemon_core`, `x_api` |
+| `lemon_cli` | `ai`, `lemon_core` |
 | `lemon_control_plane` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_router`, `lemon_skills` |
 | `lemon_core` | *(none)* |
 | `lemon_gateway` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_core` |

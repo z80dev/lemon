@@ -94,8 +94,8 @@ These rules should be treated as the target architecture.
 ### The core rule
 
 **`apps/ai` must not import or call any `LemonCore.*` module.** No
-`LemonCore.Secrets`, no `LemonCore.ProviderConfigResolver`, no
-`LemonCore.Onboarding`, no `LemonCore.Introspection`. If `Ai` needs
+`LemonCore.Secrets`, no `LemonCore.ProviderConfigResolver`, no Lemon-specific
+onboarding modules, no `LemonCore.Introspection`. If `Ai` needs
 something Lemon-specific, the caller must resolve it first and pass it in.
 
 OAuth refresh protocol logic (HTTP calls, PKCE helpers) can stay in
@@ -120,8 +120,8 @@ No Lemon secret names, no config refs, and no storage handles should cross into
 ## Current Coupling Inventory
 
 As of 2026-04-24, `apps/ai/lib` has no `LemonCore.*`,
-`LemonCore.Secrets`, `LemonCore.ProviderConfigResolver`, or
-`LemonCore.Onboarding` references. The old violation inventory below is kept as
+`LemonCore.Secrets`, `LemonCore.ProviderConfigResolver`, or Lemon-specific
+onboarding references. The old violation inventory below is kept as
 historical context for the migration.
 
 The main categories of current coupling are:
@@ -294,7 +294,7 @@ This was the core remaining work. Historical violations (as of 2025-07-14):
 - `Ai.Providers.Bedrock`
 - `Ai.Providers.GoogleVertex`
 
-**`LemonCore.Onboarding.LocalCallbackListener`** (3 auth modules):
+**`LemonCore.OAuth.LocalCallbackListener`** (3 auth modules):
 - `Ai.Auth.GoogleAntigravityOAuth`
 - `Ai.Auth.GoogleGeminiCliOAuth`
 - `Ai.Auth.OpenAICodexOAuth`

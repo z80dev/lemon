@@ -1497,7 +1497,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 132: MCP HTTP loopback OAuth callback capture
 
 1. Wired configured Streamable HTTP MCP sources through Lemon's existing
-   `LemonCore.Onboarding.LocalCallbackListener` when OAuth is configured as
+   `LemonCore.OAuth.LocalCallbackListener` when OAuth is configured as
    `authorization_code_pkce` and the `redirect_uri` points at localhost.
 2. Kept the low-level `LemonMCP.Client.HTTP` boundary storage- and UI-agnostic:
    it still receives an `authorization_code_provider`, while `LemonSkills`
