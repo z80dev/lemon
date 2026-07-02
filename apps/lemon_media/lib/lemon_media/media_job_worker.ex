@@ -1,11 +1,11 @@
-defmodule LemonCore.MediaJobWorker do
+defmodule LemonMedia.MediaJobWorker do
   @moduledoc """
   Runs one media job and records redacted lifecycle metadata.
   """
 
   use GenServer
 
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @topic "media_jobs"
 

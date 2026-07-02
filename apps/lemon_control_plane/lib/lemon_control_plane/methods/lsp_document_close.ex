@@ -17,7 +17,7 @@ defmodule LemonControlPlane.Methods.LspDocumentClose do
 
     with {:ok, session_id} <- required(params, "sessionId", :missing_session_id),
          {:ok, uri} <- required(params, "uri", :missing_uri),
-         {:ok, document} <- LemonCore.LspServerManager.close_document(session_id, uri) do
+         {:ok, document} <- LemonLsp.ServerManager.close_document(session_id, uri) do
       {:ok, document |> Map.put(:summary, summary(document)) |> stringify_keys()}
     else
       {:error, :missing_session_id} ->

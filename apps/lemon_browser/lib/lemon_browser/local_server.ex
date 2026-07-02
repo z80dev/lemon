@@ -1,4 +1,4 @@
-defmodule LemonCore.Browser.LocalServer do
+defmodule LemonBrowser.LocalServer do
   @moduledoc """
   Local browser driver backed by a Node + Playwright helper process.
 

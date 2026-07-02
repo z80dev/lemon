@@ -1,7 +1,7 @@
-defmodule LemonCore.LspServerManagerTest do
+defmodule LemonLsp.ServerManagerTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.LspServerManager
+  alias LemonLsp.ServerManager, as: LspServerManager
 
   setup do
     tmp_dir =

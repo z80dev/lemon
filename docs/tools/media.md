@@ -6,15 +6,15 @@ redacted metadata, and managed local artifacts.
 - `media_status`: model-facing read-only status for generated-media jobs,
   recent artifacts, cleanup policy, and worker supervisor state.
 - `media_generate_image`: model-facing image generation through
-  `LemonCore.MediaJobSupervisor`.
+  `LemonMedia.MediaJobSupervisor`.
 - `media_generate_speech`: model-facing speech generation through
-  `LemonCore.MediaJobSupervisor`.
+  `LemonMedia.MediaJobSupervisor`.
 - `media_transcribe_audio`: model-facing local audio transcription through
-  `LemonCore.MediaJobSupervisor`.
+  `LemonMedia.MediaJobSupervisor`.
 - `media_analyze_image`: model-facing local image analysis through
-  `LemonCore.MediaJobSupervisor`.
+  `LemonMedia.MediaJobSupervisor`.
 - `media_generate_video`: model-facing video generation through
-  `LemonCore.MediaJobSupervisor`.
+  `LemonMedia.MediaJobSupervisor`.
 
 ## Image Generation
 

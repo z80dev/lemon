@@ -17,7 +17,7 @@ defmodule LemonControlPlane.Methods.LspServerStart do
 
     with {:ok, server_id} <- required(params, "serverId"),
          opts <- opts(params),
-         {:ok, session} <- LemonCore.LspServerManager.start_session(server_id, opts) do
+         {:ok, session} <- LemonLsp.ServerManager.start_session(server_id, opts) do
       {:ok, session |> Map.put(:summary, summary(session)) |> stringify_keys()}
     else
       {:error, :missing_server_id} ->

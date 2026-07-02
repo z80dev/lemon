@@ -1,4 +1,4 @@
-defmodule LemonCore.LspServerManager do
+defmodule LemonLsp.ServerManager do
   @moduledoc """
   Supervised status manager for Lemon language-server capability metadata.
   """
@@ -395,7 +395,7 @@ defmodule LemonCore.LspServerManager do
   end
 
   defp refresh_state(state) do
-    registry = LemonCore.LspServers.diagnostics()
+    registry = LemonLsp.Servers.diagnostics()
 
     state
     |> Map.put(:registry, registry)
@@ -454,7 +454,7 @@ defmodule LemonCore.LspServerManager do
       started_at: nil,
       refreshed_at: nil,
       refresh_count: 0,
-      registry: LemonCore.LspServers.diagnostics(),
+      registry: LemonLsp.Servers.diagnostics(),
       active_servers: [],
       active_count: 0,
       pending_request_count: 0,
@@ -477,7 +477,7 @@ defmodule LemonCore.LspServerManager do
   end
 
   defp start_port(server_id, opts) do
-    with {:ok, command} <- LemonCore.LspServers.resolve_command(server_id),
+    with {:ok, command} <- LemonLsp.Servers.resolve_command(server_id),
          {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)) do
       port_opts =
         [:binary, :exit_status, :stderr_to_stdout, {:args, command.args}]

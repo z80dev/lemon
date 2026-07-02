@@ -3,7 +3,7 @@ defmodule LemonChannels.MediaStatusMessageTest do
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.MediaStatusMessage
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   test "renders redacted media status text" do
     tmp_dir = tmp_dir()

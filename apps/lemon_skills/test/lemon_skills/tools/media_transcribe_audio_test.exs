@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
 
   alias AgentCore.Types.AgentToolResult
   alias LemonSkills.Tools.MediaTranscribeAudio
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @moduletag :tmp_dir
 

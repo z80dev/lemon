@@ -1,6 +1,6 @@
 defmodule LemonSkills.Tools.MediaGenerateVideo do
   @moduledoc """
-  Supervised video-generation preview tool backed by LemonCore.MediaJobSupervisor.
+  Supervised video-generation preview tool backed by LemonMedia.MediaJobSupervisor.
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
@@ -8,8 +8,8 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   alias AgentCore.Tools.AbortHelpers
   alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.Config
-  alias LemonCore.MediaJobSupervisor
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobSupervisor
+  alias LemonMedia.MediaJobs
   alias LemonCore.ProviderConfigResolver
 
   @topic "media_jobs"

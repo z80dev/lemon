@@ -71,10 +71,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
-| `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Node/Playwright (line-delimited JSON protocol) |
-| `LemonCore.Browser.Artifacts` | Browser screenshot artifact metadata and 14-day / 100-file retention cleanup |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
-| `LemonCore.LspServers` / `LspServerManager` | Language-server registry plus supervised redacted stdio session, initialize, document-sync, JSON-RPC, and diagnostic-notification manager |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
@@ -839,14 +836,12 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 7. `LemonCore.MemoryIngest` - Async run ingest pipeline
 8. `LemonCore.ConfigReloader` - Reload orchestrator
 9. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
-10. `LemonCore.Browser.LocalServer` - Local browser driver
-11. `LemonCore.MediaJobSupervisor` - generated-media job worker boundary
-12. `LemonCore.LspServerManager` - Language-server registry/status/session/document-sync/diagnostic notification manager
-13. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
+10. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
 
 ## Important Notes
 
 - **Never** add umbrella app dependencies to lemon_core - it's the base layer
+- Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`, and `lemon_lsp`; core doctor diagnostics may only probe them at runtime.
 - Keep module interfaces stable - other apps depend on them
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
 - Secrets values are never logged or returned by list/status APIs

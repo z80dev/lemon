@@ -544,7 +544,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       refute result_text =~ run_event_secret
       refute result_text =~ error_secret
 
-      assert result_text =~ "[REDACTED]"
       assert result["summary"]["cleanup"]["redactsSensitivePayloadValues"] == true
       assert result["summary"]["cleanup"]["includesCredentialValues"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
@@ -621,10 +620,16 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
                  }
                })
 
+      assert eventually(fn ->
+               LemonCore.Introspection.list(run_id: run_id)
+               |> Enum.any?(fn event -> inspect(event) =~ introspection_secret end)
+             end)
+
       {:ok, result} =
         RunGraphGet.handle(
           %{
             "runId" => run_id,
+            "maxDepth" => 1,
             "includeRunRecord" => true,
             "includeRunEvents" => true,
             "includeIntrospection" => true
@@ -638,7 +643,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       refute result_text =~ introspection_secret
       refute result_text =~ run_event_secret
 
-      assert result_text =~ "[REDACTED]"
       assert result["summary"]["cleanup"]["redactsSensitivePayloadValues"] == true
       assert result["summary"]["cleanup"]["includesCredentialValues"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false

@@ -32,6 +32,7 @@ defmodule CodingAgent.MixProject do
       {:ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      {:lemon_browser, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},

@@ -27,6 +27,7 @@ defmodule LemonRouter.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:bandit, "~> 1.5"},

@@ -119,8 +119,8 @@ recent jobs, cleanup policy, and worker supervisor state. `media_generate_image`
 previews. They run deterministic local preview jobs, provider-backed OpenAI
 image/TTS/STT jobs, Vertex Imagen image jobs, ElevenLabs TTS, Google TTS, and
 Deepgram STT, plus provider-backed OpenAI video and Vertex Veo jobs through
-`LemonCore.MediaJobSupervisor`, store redacted
-`LemonCore.MediaJobs` metadata with prompt/input hash/chars and artifact
+`LemonMedia.MediaJobSupervisor`, store redacted
+`LemonMedia.MediaJobs` metadata with prompt/input hash/chars and artifact
 metadata, and can opt into final Telegram/Discord generated-file delivery with
 `sendToChannel: true`. Provider media jobs retry bounded transient provider
 failures with `maxRetries`; failed provider jobs record only a safe error kind
@@ -144,7 +144,7 @@ file diagnostics with graceful fallback when a checker is unavailable, and
 `write`, `edit`, and `patch` can opt into post-edit baseline/delta diagnostics.
 Operator status is exposed without paths, file contents, workspace roots, or
 diagnostic output through `lsp.diagnostics.status` and support bundle
-`lsp_diagnostics.json`. `LemonCore.LspServerManager` owns redacted
+`lsp_diagnostics.json`. `LemonLsp.ServerManager` owns redacted
 language-server registry, stdio session lifecycle status, initialize
 orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.

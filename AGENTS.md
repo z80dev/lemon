@@ -19,6 +19,9 @@
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Work on browser capability driver | `apps/lemon_browser/` |
+| Work on media job capability driver | `apps/lemon_media/` |
+| Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
@@ -148,9 +151,12 @@ apps/
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 112+ JSON-RPC methods
 ├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
+├── lemon_browser/       # Browser capability driver and artifact store
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
+├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
+├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
@@ -279,19 +285,22 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, agent_core, coding_agent*
-lemon_router ─────────→ lemon_core, lemon_channels, agent_core
+lemon_control_plane ──→ lemon_core, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, agent_core, coding_agent*
+lemon_router ─────────→ lemon_core, lemon_media, lemon_channels, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
-lemon_channels ───────→ lemon_core, agent_core, x_api
+lemon_channels ───────→ lemon_core, lemon_media, agent_core, x_api
 lemon_cli ────────────→ ai, lemon_core
-coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
+coding_agent ─────────→ lemon_core, lemon_browser, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
 lemon_evals ──────────→ lemon_core, agent_core, ai, coding_agent, lemon_skills
+lemon_browser ────────→ lemon_core
+lemon_lsp ────────────→ lemon_core
+lemon_media ──────────→ lemon_core
 lemon_mcp ────────────→ coding_agent, agent_core, lemon_skills
 lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
-lemon_skills ─────────→ lemon_core, agent_core, ai, x_api
+lemon_skills ─────────→ lemon_core, lemon_media, agent_core, ai, x_api
 lemon_web ────────────→ lemon_core, lemon_router
 coding_agent_ui ──────→ coding_agent
 x_api ────────────────→ lemon_core
@@ -468,8 +477,11 @@ Each app has its own `AGENTS.md` with detailed context:
 | agent_core | `apps/agent_core/AGENTS.md` |
 | ai | `apps/ai/AGENTS.md` |
 | coding_agent | `apps/coding_agent/AGENTS.md` |
+| lemon_browser | `apps/lemon_browser/README.md` *(no AGENTS.md yet)* |
 | lemon_core | `apps/lemon_core/AGENTS.md` |
 | lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
+| lemon_lsp | `apps/lemon_lsp/README.md` *(no AGENTS.md yet)* |
+| lemon_media | `apps/lemon_media/README.md` *(no AGENTS.md yet)* |
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
@@ -485,4 +497,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-07-02* (removed lemon_services; corrected ai and lemon_gateway dependency rows against mix.exs)
+*Last updated: 2026-07-02* (moved browser, media jobs, and LSP drivers out of lemon_core)

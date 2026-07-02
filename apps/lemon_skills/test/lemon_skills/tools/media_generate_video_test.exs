@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
   alias AgentCore.Types.AgentToolResult
   alias LemonSkills.Tools.MediaGenerateVideo
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @moduletag :tmp_dir
 

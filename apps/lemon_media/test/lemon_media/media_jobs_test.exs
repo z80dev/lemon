@@ -1,7 +1,7 @@
-defmodule LemonCore.MediaJobsTest do
+defmodule LemonMedia.MediaJobsTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   test "records media job metadata without storing prompts or raw artifact paths" do
     tmp_dir = tmp_dir()

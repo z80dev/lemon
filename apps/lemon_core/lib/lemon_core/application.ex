@@ -13,9 +13,6 @@ defmodule LemonCore.Application do
   - LemonCore.MemoryIngest - Async run ingest pipeline for memory documents
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
-  - LemonCore.Browser.LocalServer - Local browser automation server
-  - LemonCore.MediaJobSupervisor - Dynamic supervisor for media job workers
-  - LemonCore.LspServerManager - Language-server registry/status manager
   - LemonCore.ProviderPoolRotator - In-memory provider pool rotation state
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
@@ -57,9 +54,6 @@ defmodule LemonCore.Application do
       LemonCore.MemoryIngest,
       LemonCore.ConfigReloader,
       LemonCore.ConfigReloader.Watcher,
-      LemonCore.Browser.LocalServer,
-      LemonCore.MediaJobSupervisor,
-      LemonCore.LspServerManager,
       LemonCore.ProviderPoolRotator
     ]
 

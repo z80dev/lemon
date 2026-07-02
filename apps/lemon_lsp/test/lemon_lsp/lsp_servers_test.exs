@@ -1,7 +1,7 @@
-defmodule LemonCore.LspServersTest do
+defmodule LemonLsp.ServersTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.LspServers
+  alias LemonLsp.Servers, as: LspServers
 
   describe "list/0" do
     test "exposes redacted language server metadata" do

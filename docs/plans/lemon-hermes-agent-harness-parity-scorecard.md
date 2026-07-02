@@ -945,7 +945,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 103: LSP timeout cleanup contract
 
-1. Hardened `LemonCore.LspServerManager` so a timed-out JSON-RPC request marks
+1. Hardened `LemonLsp.ServerManager` so a timed-out JSON-RPC request marks
    the session `:request_timeout`, replies to pending callers, terminates the
    launcher PID, and sweeps launcher descendants.
 2. Added a regression with a stuck fake LSP wrapper that spawns a child process
@@ -2927,7 +2927,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 213: Multi-provider voice media proof
 
 1. `media_generate_speech` now supports `elevenlabs_tts` on the same
-   BEAM-supervised `LemonCore.MediaJobSupervisor` path as local WAV and OpenAI
+   BEAM-supervised `LemonMedia.MediaJobSupervisor` path as local WAV and OpenAI
    TTS, resolving credentials from env, gateway voice config/secrets, or Lemon
    secret names without returning raw text or keys.
 2. `media_transcribe_audio` now supports `deepgram_transcribe`, posts project-local
@@ -2947,7 +2947,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 214: Provider media subreason diagnostics
 
-1. `LemonCore.MediaJobWorker` now preserves bounded provider status/type labels
+1. `LemonMedia.MediaJobWorker` now preserves bounded provider status/type labels
    in `error_kind` when any image, TTS, STT, vision, or video media tool has
    already reduced the provider response to a safe `{:safe_error_kind, label}`
    tuple.
@@ -2970,7 +2970,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 215: Vertex Imagen image-provider lane
 
 1. `media_generate_image` now supports `vertex_imagen` on the same
-   `LemonCore.MediaJobSupervisor` path as `local_svg` and `openai_image`.
+   `LemonMedia.MediaJobSupervisor` path as `local_svg` and `openai_image`.
    It resolves `providers.google_vertex` project, location, and service-account
    JSON through Lemon runtime config/secrets, exchanges the service-account JWT
    for an access token, calls Vertex AI Imagen `:predict`, writes managed
@@ -2988,7 +2988,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 216: Google Cloud Text-to-Speech provider lane
 
 1. `media_generate_speech` now supports `google_tts` on the same
-   `LemonCore.MediaJobSupervisor` path as `local_wav`, `openai_tts`, and
+   `LemonMedia.MediaJobSupervisor` path as `local_wav`, `openai_tts`, and
    `elevenlabs_tts`. It resolves the same `providers.google_vertex`
    service-account JSON, exchanges a JWT for a Google access token, calls Cloud
    Text-to-Speech `text:synthesize`, writes managed MP3 artifacts, and keeps raw
@@ -3019,7 +3019,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 218: Vertex Veo video-provider lane
 
 1. `media_generate_video` now supports `vertex_veo` on the same
-   `LemonCore.MediaJobSupervisor` path as `local_mp4` and `openai_video`.
+   `LemonMedia.MediaJobSupervisor` path as `local_mp4` and `openai_video`.
    It resolves `providers.google_vertex` service-account credentials, exchanges
    a JWT for a Google access token, calls Vertex AI Veo `:predictLongRunning`,
    polls with `:fetchPredictOperation`, writes managed MP4 artifacts when inline

@@ -1,12 +1,12 @@
-defmodule LemonCore.MediaJobSupervisor do
+defmodule LemonMedia.MediaJobSupervisor do
   @moduledoc """
   Dynamic supervisor for BEAM-native media job workers.
   """
 
   use DynamicSupervisor
 
-  alias LemonCore.MediaJobWorker
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobWorker
+  alias LemonMedia.MediaJobs
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do

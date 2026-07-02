@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
   alias AgentCore.Types.AgentToolResult
   alias LemonSkills.Tools.MediaGenerateSpeech
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @moduletag :tmp_dir
 

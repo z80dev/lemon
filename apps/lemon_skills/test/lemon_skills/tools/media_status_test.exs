@@ -2,7 +2,7 @@ defmodule LemonSkills.Tools.MediaStatusTest do
   use ExUnit.Case, async: false
 
   alias AgentCore.Types.AgentToolResult
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @moduletag :tmp_dir
 

@@ -40,12 +40,15 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     coding_agent: ["CodingAgent"],
     coding_agent_ui: ["CodingAgent.UI", "CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],
+    lemon_browser: ["LemonBrowser"],
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_cli: ["LemonCli"],
     lemon_core: ["LemonCore"],
     lemon_evals: ["LemonEvals"],
     lemon_gateway: ["LemonGateway"],
+    lemon_lsp: ["LemonLsp"],
+    lemon_media: ["LemonMedia"],
     lemon_mcp: ["LemonMCP"],
     lemon_router: ["LemonRouter"],
     lemon_sim: ["LemonSim"],
@@ -323,7 +326,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
                   ref_acc
 
                 owner ->
-                  if MapSet.member?(allowed_owners, owner) do
+                  if MapSet.member?(allowed_owners, owner) or
+                       runtime_probe_reference_allowed?(app, file, owner) do
                     ref_acc
                   else
                     issue = %{
@@ -359,6 +363,14 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     |> Path.join("apps/#{app}/lib/**/*.ex")
     |> Path.wildcard()
   end
+
+  defp runtime_probe_reference_allowed?(:lemon_core, file, owner)
+       when owner in [:lemon_browser, :lemon_lsp, :lemon_media] do
+    String.ends_with?(file, "apps/lemon_core/lib/lemon_core/doctor/support_bundle.ex") or
+      String.ends_with?(file, "apps/lemon_core/lib/lemon_core/doctor/lsp_diagnostics.ex")
+  end
+
+  defp runtime_probe_reference_allowed?(_app, _file, _owner), do: false
 
   defp parse_module_references(file) do
     with {:ok, source} <- File.read(file),

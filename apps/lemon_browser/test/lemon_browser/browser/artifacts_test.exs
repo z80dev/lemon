@@ -1,7 +1,7 @@
-defmodule LemonCore.Browser.ArtifactsTest do
+defmodule LemonBrowser.ArtifactsTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Browser.Artifacts
+  alias LemonBrowser.Artifacts
 
   test "lists recent browser artifacts by modification time" do
     tmp_dir = tmp_dir()

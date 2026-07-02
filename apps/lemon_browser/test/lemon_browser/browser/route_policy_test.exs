@@ -1,7 +1,7 @@
-defmodule LemonCore.Browser.RoutePolicyTest do
+defmodule LemonBrowser.RoutePolicyTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Browser.RoutePolicy
+  alias LemonBrowser.RoutePolicy
 
   describe "validate_navigation/2" do
     test "classifies public http navigation in auto mode" do

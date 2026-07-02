@@ -53,7 +53,7 @@ defmodule LemonRouter.MediaJobRecorder do
           |> maybe_put(:project_dir, Keyword.get(opts, :project_dir) || request_cwd(state))
           |> maybe_put(:dir, Keyword.get(opts, :dir))
 
-        case LemonCore.MediaJobs.record(attrs, record_opts) do
+        case LemonMedia.MediaJobs.record(attrs, record_opts) do
           {:ok, _job} -> :recorded
           {:error, _reason} -> :failed
         end

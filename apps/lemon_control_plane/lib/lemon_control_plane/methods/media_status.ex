@@ -54,12 +54,12 @@ defmodule LemonControlPlane.Methods.MediaStatus do
     project_dir = params["projectDir"] || params["project_dir"] || File.cwd!()
 
     jobs_dir =
-      params["jobsDir"] || params["jobs_dir"] || LemonCore.MediaJobs.default_dir(project_dir)
+      params["jobsDir"] || params["jobs_dir"] || LemonMedia.MediaJobs.default_dir(project_dir)
 
     artifacts_dir =
       params["artifactsDir"] ||
         params["artifacts_dir"] ||
-        LemonCore.MediaJobs.default_artifacts_dir(project_dir)
+        LemonMedia.MediaJobs.default_artifacts_dir(project_dir)
 
     limit = params["limit"] || 20
 
@@ -67,9 +67,9 @@ defmodule LemonControlPlane.Methods.MediaStatus do
      %{
        "jobsDir" => jobs_dir,
        "artifactsDir" => artifacts_dir,
-       "workerStatus" => LemonCore.MediaJobSupervisor.status() |> stringify_keys(),
+       "workerStatus" => LemonMedia.MediaJobSupervisor.status() |> stringify_keys(),
        "summary" =>
-         LemonCore.MediaJobs.summary(
+         LemonMedia.MediaJobs.summary(
            project_dir: project_dir,
            dir: jobs_dir,
            artifacts_dir: artifacts_dir
@@ -80,7 +80,7 @@ defmodule LemonControlPlane.Methods.MediaStatus do
          |> provider_proofs()
          |> stringify_keys(),
        "recentJobs" =>
-         LemonCore.MediaJobs.recent(project_dir: project_dir, dir: jobs_dir, limit: limit)
+         LemonMedia.MediaJobs.recent(project_dir: project_dir, dir: jobs_dir, limit: limit)
          |> Enum.map(&stringify_keys/1)
      }}
   rescue

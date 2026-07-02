@@ -25,6 +25,9 @@ defmodule Lemon.MixProject do
       lemon_runtime_min: [
         applications: [
           lemon_core: :permanent,
+          lemon_browser: :permanent,
+          lemon_media: :permanent,
+          lemon_lsp: :permanent,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,
@@ -38,6 +41,9 @@ defmodule Lemon.MixProject do
       lemon_runtime_full: [
         applications: [
           lemon_core: :permanent,
+          lemon_browser: :permanent,
+          lemon_media: :permanent,
+          lemon_lsp: :permanent,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,

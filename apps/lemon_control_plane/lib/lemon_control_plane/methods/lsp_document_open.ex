@@ -21,7 +21,7 @@ defmodule LemonControlPlane.Methods.LspDocumentOpen do
          {:ok, text} <- text(params),
          {:ok, version} <- version(params),
          {:ok, document} <-
-           LemonCore.LspServerManager.open_document(session_id, uri, language_id, text,
+           LemonLsp.ServerManager.open_document(session_id, uri, language_id, text,
              version: version
            ) do
       {:ok, document |> Map.put(:summary, summary(document)) |> stringify_keys()}

@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Lemon.MediaTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
   alias Mix.Tasks.Lemon.Media
 
   setup do

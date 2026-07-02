@@ -1,8 +1,8 @@
-defmodule LemonCore.MediaJobSupervisorTest do
+defmodule LemonMedia.MediaJobSupervisorTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.MediaJobSupervisor
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobSupervisor
+  alias LemonMedia.MediaJobs
 
   test "runs a media worker to completion with redacted metadata and events" do
     tmp_dir = tmp_dir()

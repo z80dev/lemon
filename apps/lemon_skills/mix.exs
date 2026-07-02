@@ -27,6 +27,7 @@ defmodule LemonSkills.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
       {:x_api, in_umbrella: true},

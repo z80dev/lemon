@@ -1,4 +1,4 @@
-defmodule LemonCore.Browser.Artifacts do
+defmodule LemonBrowser.Artifacts do
   @moduledoc """
   Metadata helpers for local browser automation artifacts.
   """

@@ -58,10 +58,11 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 7 | `LemonCore.MemoryIngest` | Async run ingest pipeline for memory documents |
 | 8 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
 | 9 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
-| 10 | `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Node/Playwright |
-| 11 | `LemonCore.MediaJobSupervisor` | Supervised generated-media job worker boundary |
-| 12 | `LemonCore.LspServerManager` | Supervised language-server registry/status/session/document-sync/diagnostic notification manager |
-| 13 | `LemonCore.ProviderPoolRotator` | Provider credential-pool round-robin state |
+| 10 | `LemonCore.ProviderPoolRotator` | Provider credential-pool round-robin state |
+
+Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`,
+and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
+`lemon_core` must not depend on those apps.
 
 ## Module Inventory
 
@@ -207,12 +208,7 @@ ids, message bodies, proof details, credentials, or secret names.
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |
 | `LemonCore.Reload` | Runtime BEAM/extension reload orchestration |
 | `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
-| `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Playwright |
-| `LemonCore.Browser.Artifacts` | Browser screenshot artifact metadata and 14-day / 100-file retention cleanup |
-| `LemonCore.MediaJobs` | Redacted generated-media job metadata, artifact summaries, safe provider error-kind labels, and 30-day / 500-job cleanup policy |
-| `LemonCore.MediaJobSupervisor` / `MediaJobWorker` | Dynamic OTP supervision for queued/running/completed/failed media job workers with PubSub lifecycle events and hashed raw error details |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
-| `LemonCore.LspServers` / `LspServerManager` | Language-server registry plus supervised redacted stdio session, initialize, document-sync, JSON-RPC, and diagnostic-notification manager |
 
 ### Quality
 

@@ -17,7 +17,7 @@ defmodule Mix.Tasks.Lemon.Media do
 
   use Mix.Task
 
-  alias LemonCore.{MediaJobs, MediaJobSupervisor}
+  alias LemonMedia.{MediaJobs, MediaJobSupervisor}
   alias LemonCore.Doctor.ProofDiagnostics
 
   @default_limit 20

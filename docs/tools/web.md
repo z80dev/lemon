@@ -24,7 +24,7 @@ external-content tools:
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
 
-Browser tools use `LemonCore.Browser.LocalServer`, an OTP-supervised
+Browser tools use `LemonBrowser.LocalServer`, an OTP-supervised
 Node/Playwright helper. They require the browser node client to be built:
 
 ```bash
@@ -61,7 +61,7 @@ raw screenshot pixels as an image block.
 classifies each target as public, private, or local-document before forwarding
 to the browser worker. `public` rejects local/private/data/file targets, `local`
 rejects public web targets, and cloud metadata endpoints are blocked before the
-supervised worker in every route. The same `LemonCore.Browser.RoutePolicy`
+supervised worker in every route. The same `LemonBrowser.RoutePolicy`
 guard is enforced by the control-plane `browser.request` proxy before it
 dispatches `browser.navigate` to a paired node or local fallback; already
 prefixed methods such as `browser.navigate` are passed through without
@@ -131,7 +131,7 @@ local `data:` page through `browser_navigate`, `browser_snapshot`,
 `browser_type`, `browser_click`,
 `browser_get_content`, `browser_events`, and the cookie/state control wrappers
 using the supervised
-`LemonCore.Browser.LocalServer` boundary, and checks browser progress update
+`LemonBrowser.LocalServer` boundary, and checks browser progress update
 redaction for URL, selector, upload-path, download-path, filename, and failure
 paths.
 

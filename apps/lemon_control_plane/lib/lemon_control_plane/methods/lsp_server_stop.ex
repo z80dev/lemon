@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.LspServerStop do
     params = params || %{}
 
     with {:ok, session_id} <- required(params, "sessionId"),
-         {:ok, session} <- LemonCore.LspServerManager.stop_session(session_id) do
+         {:ok, session} <- LemonLsp.ServerManager.stop_session(session_id) do
       {:ok, session |> Map.put(:summary, summary(session)) |> stringify_keys()}
     else
       {:error, :missing_session_id} ->

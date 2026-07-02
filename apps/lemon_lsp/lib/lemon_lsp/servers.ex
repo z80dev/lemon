@@ -1,4 +1,4 @@
-defmodule LemonCore.LspServers do
+defmodule LemonLsp.Servers do
   @moduledoc """
   Registry for BEAM-owned language-server capability metadata.
   """

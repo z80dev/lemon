@@ -168,8 +168,8 @@ policy, and worker supervisor state to the model. `media_generate_image`,
 previews. They run deterministic local previews, provider-backed OpenAI
 image/TTS/STT jobs, Vertex Imagen image jobs, ElevenLabs TTS, Google TTS, and
 Deepgram STT, plus provider-backed OpenAI video and Vertex Veo jobs through
-`LemonCore.MediaJobSupervisor`, write managed
-artifacts under `.lemon/media-artifacts`, record redacted `LemonCore.MediaJobs`
+`LemonMedia.MediaJobSupervisor`, write managed
+artifacts under `.lemon/media-artifacts`, record redacted `LemonMedia.MediaJobs`
 metadata with prompt/input hash/chars, and can add generated `auto_send_files`
 metadata when `sendToChannel: true` is explicit. Provider media jobs retry
 bounded transient provider failures with `maxRetries`; failed provider jobs

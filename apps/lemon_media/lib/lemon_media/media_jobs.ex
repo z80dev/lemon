@@ -1,4 +1,4 @@
-defmodule LemonCore.MediaJobs do
+defmodule LemonMedia.MediaJobs do
   @moduledoc """
   Redacted metadata store for generated media jobs and artifacts.
   """

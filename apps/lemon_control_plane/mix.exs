@@ -28,6 +28,9 @@ defmodule LemonControlPlane.MixProject do
     [
       # Umbrella dependencies
       {:lemon_core, in_umbrella: true},
+      {:lemon_browser, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
+      {:lemon_lsp, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},

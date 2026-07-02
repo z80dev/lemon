@@ -5,8 +5,8 @@ defmodule LemonSkills.Tools.MediaStatus do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.MediaJobSupervisor
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobSupervisor
+  alias LemonMedia.MediaJobs
 
   @default_limit 10
 

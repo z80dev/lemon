@@ -1,13 +1,13 @@
-defmodule LemonCore.Browser.LocalServerTest do
+defmodule LemonBrowser.LocalServerTest do
   @moduledoc """
-  Tests for LemonCore.Browser.LocalServer.
+  Tests for LemonBrowser.LocalServer.
 
   These tests run LocalServer instances under isolated names so they do not
   interfere with the application-supervised global LocalServer process.
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.Browser.LocalServer
+  alias LemonBrowser.LocalServer
 
   @moduletag :browser_local_server
 

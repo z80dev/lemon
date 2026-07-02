@@ -7,9 +7,9 @@ defmodule CodingAgent.Tools.Browser do
   alias Ai.Types.{ImageContent, TextContent}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
-  alias LemonCore.Browser.Artifacts
-  alias LemonCore.Browser.LocalServer
-  alias LemonCore.Browser.RoutePolicy
+  alias LemonBrowser.Artifacts
+  alias LemonBrowser.LocalServer
+  alias LemonBrowser.RoutePolicy
 
   import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 

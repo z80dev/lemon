@@ -1,4 +1,4 @@
-defmodule LemonCore.Browser.RoutePolicy do
+defmodule LemonBrowser.RoutePolicy do
   @moduledoc """
   Shared browser navigation route classification and guardrails.
   """

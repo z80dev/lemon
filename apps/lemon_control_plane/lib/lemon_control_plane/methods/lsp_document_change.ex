@@ -20,7 +20,7 @@ defmodule LemonControlPlane.Methods.LspDocumentChange do
          {:ok, text} <- text(params),
          {:ok, version} <- version(params),
          {:ok, document} <-
-           LemonCore.LspServerManager.change_document(session_id, uri, text, version: version) do
+           LemonLsp.ServerManager.change_document(session_id, uri, text, version: version) do
       {:ok, document |> Map.put(:summary, summary(document)) |> stringify_keys()}
     else
       {:error, :missing_session_id} ->
