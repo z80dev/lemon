@@ -48,7 +48,7 @@ defmodule Mix.Tasks.Lemon.Providers do
 
         opts
         |> params()
-        |> LemonAiRuntime.ProviderStatus.snapshot()
+        |> AgentCore.ModelRuntime.ProviderStatus.snapshot()
         |> render()
     end
   end

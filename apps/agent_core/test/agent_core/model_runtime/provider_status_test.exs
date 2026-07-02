@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.ProviderStatusTest do
+defmodule AgentCore.ModelRuntime.ProviderStatusTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Secrets
@@ -62,7 +62,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
     System.put_env("ZAI_API_KEY", "zai-secret-value")
 
     status =
-      LemonAiRuntime.ProviderStatus.snapshot(%{
+      AgentCore.ModelRuntime.ProviderStatus.snapshot(%{
         "projectDir" => cwd,
         "provider" => "openai"
       })
@@ -98,7 +98,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
     System.put_env("ZAI_API_KEY", "zai-secret-value")
 
     status =
-      LemonAiRuntime.ProviderStatus.snapshot(%{
+      AgentCore.ModelRuntime.ProviderStatus.snapshot(%{
         "projectDir" => cwd,
         "provider" => "openai"
       })
@@ -138,7 +138,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
 
     System.put_env("ZAI_API_KEY", "zai-secret-value")
 
-    status = LemonAiRuntime.ProviderStatus.snapshot(%{"projectDir" => cwd})
+    status = AgentCore.ModelRuntime.ProviderStatus.snapshot(%{"projectDir" => cwd})
     routing = status["routing"]
 
     assert routing["selectedProfile"] == "ops"
@@ -166,7 +166,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
     System.put_env("OPENAI_CODEX_API_KEY", "codex-raw-token")
 
     status =
-      LemonAiRuntime.ProviderStatus.snapshot(%{
+      AgentCore.ModelRuntime.ProviderStatus.snapshot(%{
         "projectDir" => cwd,
         "provider" => "openai-codex"
       })
@@ -188,7 +188,7 @@ defmodule LemonAiRuntime.ProviderStatusTest do
     """)
 
     status =
-      LemonAiRuntime.ProviderStatus.snapshot(%{
+      AgentCore.ModelRuntime.ProviderStatus.snapshot(%{
         "projectDir" => cwd,
         "provider" => "anthropic"
       })

@@ -12,7 +12,7 @@ for provider_name <- ["kimi", "kimi_coding", "openrouter", "openai-codex"] do
 
   status = cond do
     provider_name == "openai-codex" ->
-      case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token() do
+      case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{"openai-codex" => %{"auth_source" => "oauth"}}) do
         token when is_binary(token) and token != "" -> "OK (OAuth)"
         _ -> "MISSING"
       end

@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.StreamOptionsTest do
+defmodule AgentCore.ModelRuntime.StreamOptionsTest do
   use ExUnit.Case, async: false
 
   alias Ai.Types.{Model, ModelCost}
@@ -34,7 +34,10 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     Enum.each(@env_keys, &System.delete_env/1)
 
     tmp_home =
-      Path.join(System.tmp_dir!(), "lemon_ai_runtime_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "agent_core_model_runtime_#{System.unique_integer([:positive])}"
+      )
 
     File.mkdir_p!(tmp_home)
     System.put_env("HOME", tmp_home)
@@ -56,7 +59,12 @@ defmodule LemonAiRuntime.StreamOptionsTest do
 
   test "default build initializes maps and provider_options", %{cwd: cwd} do
     opts =
-      LemonAiRuntime.build_stream_options(mock_model(:openai, :openai_completions), %{}, nil, cwd)
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
+        mock_model(:openai, :openai_completions),
+        %{},
+        nil,
+        cwd
+      )
 
     assert opts.cwd == cwd
     assert opts.headers == %{}
@@ -75,7 +83,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     }
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:zai, :openai_completions),
         providers,
         %{},
@@ -102,7 +110,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     }
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:google_vertex, :google_vertex),
         providers,
         nil,
@@ -131,7 +139,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     }
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:google_gemini_cli, :google_gemini_cli),
         providers,
         %{project: "opts-project", project_id: "opts-project-id"},
@@ -141,7 +149,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     assert opts.project == "opts-project"
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:google_gemini_cli, :google_gemini_cli),
         providers,
         %{},
@@ -151,7 +159,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     assert opts.project == "provider-project"
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:google_gemini_cli, :google_gemini_cli),
         %{"google_gemini_cli" => %{project_secret: "gemini_project"}},
         %{},
@@ -161,7 +169,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     assert opts.project == "project-from-secret"
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:google_gemini_cli, :google_gemini_cli),
         %{},
         %{},
@@ -187,7 +195,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     }
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:openai, :azure_openai_responses),
         providers,
         %{},
@@ -221,7 +229,7 @@ defmodule LemonAiRuntime.StreamOptionsTest do
     }
 
     opts =
-      LemonAiRuntime.build_stream_options(
+      AgentCore.ModelRuntime.StreamOptions.build_stream_options(
         mock_model(:amazon_bedrock, :bedrock_converse_stream),
         providers,
         %{},

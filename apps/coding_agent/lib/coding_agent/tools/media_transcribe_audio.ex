@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.MediaTranscribeAudio do
   alias Ai.Types.TextContent
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.AbortHelpers
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.Config
   alias LemonCore.MediaJobSupervisor
   alias LemonCore.MediaJobs
@@ -393,7 +393,9 @@ defmodule CodingAgent.Tools.MediaTranscribeAudio do
   defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
 
   defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case LemonAiRuntime.resolve_provider_api_key(:openai, provider_cfg, provider_cfg: true) do
+    case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
+           provider_cfg: true
+         ) do
       key when is_binary(key) and key != "" -> {:ok, key}
       _ -> {:error, :missing_openai_transcription_api_key}
     end
@@ -794,7 +796,7 @@ defmodule CodingAgent.Tools.MediaTranscribeAudio do
   end
 
   defp secret_api_key(secret_name) when is_binary(secret_name) and secret_name != "" do
-    LemonAiRuntime.resolve_secret_api_key(secret_name)
+    AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name)
   end
 
   defp secret_api_key(_), do: nil

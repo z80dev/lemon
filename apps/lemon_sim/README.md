@@ -14,7 +14,7 @@ mission plan and acceptance criteria.
 ## Scope (Phase 0)
 
 LemonSim is intentionally Lemon-native. It may depend on `lemon_core`,
-`agent_core`, `ai`, and `lemon_ai_runtime`, but new work should keep these
+`agent_core`, and `ai`, but new work should keep these
 internal boundaries clear:
 
 - `LemonSim.Kernel` owns state, events, runner flow, updater/action/projector

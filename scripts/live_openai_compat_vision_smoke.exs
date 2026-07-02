@@ -257,7 +257,7 @@ defmodule LemonScripts.LiveOpenAICompatVisionSmoke do
 
       provider ->
         cfg = LemonCore.Config.load(File.cwd!())
-        LemonAiRuntime.provider_has_credentials?(provider, cfg.providers, cwd: File.cwd!())
+        AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, cfg.providers, cwd: File.cwd!())
     end
   end
 

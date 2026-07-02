@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.ProviderNames do
+defmodule AgentCore.ModelRuntime.ProviderNames do
   @moduledoc """
   Canonical provider naming helpers for the Lemon AI runtime boundary.
 

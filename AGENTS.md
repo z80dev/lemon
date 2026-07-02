@@ -10,7 +10,7 @@
 | If you want to... | Look in... |
 |-------------------|------------|
 | Add/modify AI provider support | `apps/ai/` |
-| Work on AI runtime auth facade boundary | `apps/lemon_ai_runtime/` |
+| Work on model runtime credential glue | `apps/agent_core/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
@@ -140,7 +140,6 @@ Future agents (and humans) depend on accurate documentation to be effective. Don
 apps/
 ├── agent_core/          # Core agent runtime, CLI runners (claude, codex, pi, kimi, opencode), subagent management
 ├── ai/                  # AI provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock)
-├── lemon_ai_runtime/     # Thin auth/config facade boundary (OAuth resolver delegating modules)
 ├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
@@ -275,19 +274,18 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, lemon_ai_runtime, coding_agent*
+lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, agent_core, coding_agent*
 lemon_router ─────────→ lemon_core, lemon_channels, coding_agent, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
-lemon_channels ───────→ lemon_core, lemon_ai_runtime
-coding_agent ─────────→ lemon_core, agent_core, ai, lemon_ai_runtime, lemon_skills
+lemon_channels ───────→ lemon_core, agent_core
+coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
-lemon_ai_runtime ─────→ ai, lemon_core
 lemon_mcp ────────────→ coding_agent, agent_core
-lemon_sim ────────────→ lemon_core, agent_core, ai, lemon_ai_runtime
+lemon_sim ────────────→ lemon_core, agent_core, ai
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
-lemon_web ────────────→ lemon_core, lemon_router, lemon_ai_runtime
+lemon_web ────────────→ lemon_core, lemon_router
 coding_agent_ui ──────→ coding_agent
 ai ───────────────────→ (no umbrella deps - standalone LLM client library)
 ```

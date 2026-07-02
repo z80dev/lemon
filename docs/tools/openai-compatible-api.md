@@ -216,7 +216,7 @@ image through `/v1/responses` with `wait: true`, then runs
 same local HTTP boundary. It writes redacted proof JSON to
 `.lemon/proofs/openai-compat-vision-smoke-latest.json` and skips without a
 model, live-credential opt-in, or resolvable provider credential. Credential
-preflight uses `LemonAiRuntime.provider_has_credentials?/3`, the same
+preflight uses `AgentCore.ModelRuntime.Credentials.provider_has_credentials?/3`, the same
 Lemon-owned resolver used by runtime calls, so env keys, encrypted secrets,
 OAuth/default-secret paths, and provider-specific credentials are checked
 consistently. If no model is configured, the script tries credential-ready

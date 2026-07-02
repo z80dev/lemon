@@ -2462,7 +2462,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 1. The five provider media smoke scripts now accept
    `--api-key-secret SECRET_NAME` in addition to `--api-key-env ENV_NAME`.
-2. The override resolves through `LemonAiRuntime.resolve_secret_api_key/1`, so
+2. The override resolves through `AgentCore.ModelRuntime.Credentials.resolve_secret_api_key/1`, so
    release-candidate operators can run one-off provider-media proofs against
    the encrypted Lemon secret store without editing config files or exporting
    raw API keys into the shell environment.

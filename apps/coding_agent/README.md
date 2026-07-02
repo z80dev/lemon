@@ -408,7 +408,7 @@ Each tool module exposes `tool(cwd, opts)` returning an `%AgentCore.Types.AgentT
 3. `providers.<name>.api_key_secret` via `LemonCore.Secrets`
 4. Default secret name `llm_<provider>_api_key`
 
-OAuth payloads are handled by `LemonAiRuntime.Auth.OAuthSecretResolver` with automatic refresh.
+OAuth payloads are handled by `AgentCore.ModelRuntime.Credentials` with automatic refresh persistence.
 
 ### Compaction
 

@@ -1,9 +1,9 @@
-defmodule LemonAiRuntime.ProviderStatus do
+defmodule AgentCore.ModelRuntime.ProviderStatus do
   @moduledoc """
   Redacted provider credential readiness diagnostics.
   """
 
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.Config
 
   @spec snapshot(map() | nil) :: map()
@@ -24,7 +24,7 @@ defmodule LemonAiRuntime.ProviderStatus do
       "readyCount" => Enum.count(statuses, & &1["credentialReady"]),
       "defaultProvider" => default_agent_value(config, :default_provider),
       "defaultModel" => default_agent_value(config, :default_model),
-      "routing" => LemonAiRuntime.ProviderRouting.preview(params, config, statuses),
+      "routing" => AgentCore.ModelRuntime.ProviderRouting.preview(params, config, statuses),
       "liveProofs" => live_proofs(cwd),
       "cleanup" => %{
         "includesRawApiKeys" => false,
@@ -51,7 +51,8 @@ defmodule LemonAiRuntime.ProviderStatus do
 
     cond do
       requested != [] ->
-        (requested ++ LemonAiRuntime.ProviderRouting.candidate_provider_ids(params, config))
+        (requested ++
+           AgentCore.ModelRuntime.ProviderRouting.candidate_provider_ids(params, config))
         |> Enum.uniq_by(&normalize_provider/1)
 
       include_catalog?(params) ->
@@ -62,7 +63,7 @@ defmodule LemonAiRuntime.ProviderStatus do
       true ->
         (config_provider_ids(config) ++
            default_provider_ids(config) ++
-           LemonAiRuntime.ProviderRouting.candidate_provider_ids(params, config))
+           AgentCore.ModelRuntime.ProviderRouting.candidate_provider_ids(params, config))
         |> Enum.uniq_by(&normalize_provider/1)
     end
   end
@@ -251,17 +252,23 @@ defmodule LemonAiRuntime.ProviderStatus do
   end
 
   defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd) do
-    LemonAiRuntime.provider_has_credentials?("openai_codex", providers, cwd: cwd) or
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?("openai_codex", providers,
+      cwd: cwd
+    ) or
       (not present?(provider_config_value(provider_cfg, :auth_source)) && not env_configured? &&
-         LemonAiRuntime.Auth.OpenAICodexOAuth.available?())
+         AgentCore.ModelRuntime.Credentials.provider_has_credentials?(
+           "openai_codex",
+           %{"openai-codex" => %{"auth_source" => "oauth"}},
+           cwd: cwd
+         ))
   end
 
   defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd) do
-    LemonAiRuntime.provider_has_credentials?("anthropic", providers, cwd: cwd)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?("anthropic", providers, cwd: cwd)
   end
 
   defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd) do
-    LemonAiRuntime.provider_has_credentials?(canonical, providers, cwd: cwd)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(canonical, providers, cwd: cwd)
   end
 
   defp env_configured?(provider) do

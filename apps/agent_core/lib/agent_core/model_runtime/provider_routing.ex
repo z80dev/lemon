@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.ProviderRouting do
+defmodule AgentCore.ModelRuntime.ProviderRouting do
   @moduledoc """
   Redacted provider route-plan preview.
 
@@ -7,7 +7,7 @@ defmodule LemonAiRuntime.ProviderRouting do
   fallback execution path is wired.
   """
 
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.Config
 
   @spec preview(map() | nil, Config.t(), [map()]) :: map()

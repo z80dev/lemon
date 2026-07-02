@@ -118,7 +118,7 @@ defmodule LemonScripts.LiveProviderFallbackSmoke do
         model = opts[:model] || "glm-5-turbo"
         config = LemonCore.Config.load(File.cwd!(), cache: false)
 
-        if LemonAiRuntime.provider_has_credentials?(fallback_provider, config.providers,
+        if AgentCore.ModelRuntime.Credentials.provider_has_credentials?(fallback_provider, config.providers,
              cwd: File.cwd!()
            ) do
           {:ok,

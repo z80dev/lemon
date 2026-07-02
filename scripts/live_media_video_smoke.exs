@@ -391,7 +391,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
       opts[:api_key_secret]
       |> case do
         value when is_binary(value) and value != "" ->
-          LemonAiRuntime.resolve_secret_api_key(value)
+          AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(value)
 
         _ ->
           nil
@@ -405,11 +405,11 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
        do: true
 
   defp credential_available?(_api_key, providers, project_dir, @provider) do
-    LemonAiRuntime.provider_has_credentials?(:openai, providers, cwd: project_dir)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:openai, providers, cwd: project_dir)
   end
 
   defp credential_available?(_api_key, providers, project_dir, @vertex_provider) do
-    LemonAiRuntime.provider_has_credentials?(:google_vertex, providers, cwd: project_dir)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:google_vertex, providers, cwd: project_dir)
   end
 
   defp credential_available?(_api_key, _providers, _project_dir, _provider), do: false

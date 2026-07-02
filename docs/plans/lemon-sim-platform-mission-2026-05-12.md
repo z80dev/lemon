@@ -55,7 +55,7 @@ Existing useful foundation:
 ## Internal Boundaries
 
 LemonSim is explicitly Lemon-native, so umbrella app dependencies on
-`lemon_core`, `agent_core`, `ai`, and `lemon_ai_runtime` are acceptable. The
+`lemon_core`, `agent_core`, and `ai` are acceptable. The
 important architecture boundary is internal:
 
 - `LemonSim.Kernel` owns durable simulation contracts and deterministic state

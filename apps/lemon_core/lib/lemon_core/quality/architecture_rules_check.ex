@@ -461,7 +461,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     %{
       code: :forbidden_provider_direct_env,
       message:
-        "Provider modules must receive config-backed provider values through LemonAiRuntime-built StreamOptions",
+        "Provider modules must receive config-backed provider values through AgentCore.ModelRuntime.StreamOptions",
       files: [
         "apps/ai/lib/ai/providers/google_vertex.ex",
         "apps/ai/lib/ai/providers/azure_openai_responses.ex",
@@ -479,23 +479,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ~s|System.get_env("AZURE_OPENAI_RESOURCE_NAME")|,
         ~s|System.get_env("AWS_REGION")|,
         ~s|System.get_env("AWS_DEFAULT_REGION")|
-      ]
-    },
-    %{
-      code: :external_ai_auth_leak,
-      message: "Apps outside ai/lemon_ai_runtime must use LemonAiRuntime.Auth.*, not Ai.Auth.*",
-      files: [
-        "apps/*/lib/**/*.ex",
-        "apps/*/test/**/*.exs",
-        "apps/*/priv/scripts/**/*.exs"
-      ],
-      exclude: [
-        "apps/ai/**",
-        "apps/lemon_ai_runtime/**"
-      ],
-      patterns: [
-        "Ai.Auth.",
-        "Elixir.Ai.Auth"
       ]
     }
   ]

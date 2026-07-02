@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.CredentialsTest do
+defmodule AgentCore.ModelRuntime.CredentialsTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Secrets
@@ -40,7 +40,7 @@ defmodule LemonAiRuntime.CredentialsTest do
     tmp_dir =
       Path.join(
         System.tmp_dir!(),
-        "lemon_ai_runtime_credentials_test_#{System.unique_integer([:positive])}"
+        "agent_core_model_runtime_credentials_test_#{System.unique_integer([:positive])}"
       )
 
     home_dir = Path.join(tmp_dir, "home")
@@ -51,14 +51,14 @@ defmodule LemonAiRuntime.CredentialsTest do
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     System.put_env("HOME", home_dir)
     Enum.each(@env_keys, &System.delete_env/1)
-    Application.delete_env(:lemon_ai_runtime, :oauth_secret_resolver_module)
+    Application.delete_env(:agent_core, :oauth_secret_resolver_module)
 
     on_exit(fn ->
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
       Enum.each(@env_keys, &System.delete_env/1)
-      Application.delete_env(:lemon_ai_runtime, :oauth_secret_resolver_module)
+      Application.delete_env(:agent_core, :oauth_secret_resolver_module)
       File.rm_rf!(tmp_dir)
     end)
 
@@ -70,7 +70,7 @@ defmodule LemonAiRuntime.CredentialsTest do
     System.put_env("OPENAI_API_KEY", "from-env")
 
     providers = %{"openai" => %{api_key: "from-plain", api_key_secret: "llm_openai_api_key"}}
-    get_api_key = LemonAiRuntime.build_get_api_key(providers)
+    get_api_key = AgentCore.ModelRuntime.Credentials.build_get_api_key(providers)
 
     assert get_api_key.(:openai) == "from-env"
 
@@ -78,10 +78,14 @@ defmodule LemonAiRuntime.CredentialsTest do
     assert get_api_key.(:openai) == "from-plain"
 
     providers = %{"openai" => %{api_key_secret: "llm_openai_api_key"}}
-    assert LemonAiRuntime.resolve_provider_api_key(:openai, providers) == "from-secret"
+
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, providers) ==
+             "from-secret"
 
     providers = %{"openai" => %{}}
-    assert LemonAiRuntime.resolve_provider_api_key(:openai, providers) == "from-secret"
+
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, providers) ==
+             "from-secret"
   end
 
   test "openai codex oauth auth_source prefers oauth_secret payload and ignores env/plain key path" do
@@ -104,7 +108,7 @@ defmodule LemonAiRuntime.CredentialsTest do
       }
     }
 
-    assert LemonAiRuntime.resolve_provider_api_key(:"openai-codex", providers) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:"openai-codex", providers) ==
              "codex-access-token"
   end
 
@@ -125,15 +129,17 @@ defmodule LemonAiRuntime.CredentialsTest do
       "openai_codex" => %{auth_source: "api_key", api_key_secret: "llm_openai_codex_api_key"}
     }
 
-    assert LemonAiRuntime.resolve_provider_api_key(:"openai-codex", providers) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:"openai-codex", providers) ==
              "codex-from-env"
   end
 
   test "openai codex missing or invalid auth_source returns empty string sentinel" do
-    assert LemonAiRuntime.resolve_provider_api_key(:"openai-codex", %{"openai-codex" => %{}}) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:"openai-codex", %{
+             "openai-codex" => %{}
+           }) ==
              ""
 
-    assert LemonAiRuntime.resolve_provider_api_key(
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(
              :"openai-codex",
              %{"openai-codex" => %{auth_source: "wrong"}}
            ) == ""
@@ -152,7 +158,7 @@ defmodule LemonAiRuntime.CredentialsTest do
 
     providers = %{"anthropic" => %{auth_source: "oauth", oauth_secret: "llm_anthropic_api_key"}}
 
-    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, providers) ==
              "anthropic-oauth-token"
   end
 
@@ -161,7 +167,7 @@ defmodule LemonAiRuntime.CredentialsTest do
 
     providers = %{"anthropic" => %{auth_source: "oauth"}}
 
-    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, providers) ==
              "sk-ant-oat01-env-token"
   end
 
@@ -169,7 +175,7 @@ defmodule LemonAiRuntime.CredentialsTest do
     tmp_dir =
       Path.join(
         System.tmp_dir!(),
-        "lemon_ai_runtime_anthropic_oauth_#{System.unique_integer([:positive])}"
+        "agent_core_model_runtime_anthropic_oauth_#{System.unique_integer([:positive])}"
       )
 
     home_dir = Path.join(tmp_dir, "home")
@@ -199,7 +205,7 @@ defmodule LemonAiRuntime.CredentialsTest do
 
     providers = %{"anthropic" => %{auth_source: "oauth"}}
 
-    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) ==
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, providers) ==
              "sk-ant-oat01-refreshable-token"
   end
 
@@ -216,7 +222,8 @@ defmodule LemonAiRuntime.CredentialsTest do
 
     providers = %{"anthropic" => %{api_key_secret: "llm_anthropic_api_key"}}
 
-    assert LemonAiRuntime.resolve_provider_api_key(:anthropic, providers) == ""
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, providers) ==
+             ""
   end
 
   test "github copilot oauth payload resolves to access token" do
@@ -233,7 +240,8 @@ defmodule LemonAiRuntime.CredentialsTest do
                })
              )
 
-    assert LemonAiRuntime.resolve_secret_api_key(secret_name) == "copilot-access-token"
+    assert AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name) ==
+             "copilot-access-token"
   end
 
   test "google antigravity oauth payload resolves to provider json" do
@@ -251,7 +259,7 @@ defmodule LemonAiRuntime.CredentialsTest do
                })
              )
 
-    resolved = LemonAiRuntime.resolve_secret_api_key(secret_name)
+    resolved = AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name)
     assert {:ok, decoded} = Jason.decode(resolved)
     assert decoded["token"] == "google-access-token"
     assert decoded["projectId"] == "proj-123"
@@ -274,7 +282,7 @@ defmodule LemonAiRuntime.CredentialsTest do
                })
              )
 
-    resolved = LemonAiRuntime.resolve_secret_api_key(secret_name)
+    resolved = AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name)
     assert {:ok, decoded} = Jason.decode(resolved)
     assert decoded["token"] == "gemini-access-token"
     assert decoded["projectId"] == "managed-proj-123"
@@ -291,16 +299,10 @@ defmodule LemonAiRuntime.CredentialsTest do
       }
     }
 
-    assert LemonAiRuntime.provider_has_credentials?(:google_vertex, providers)
+    assert AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:google_vertex, providers)
   end
 
-  test "oauth secret dispatcher falls back to runtime resolvers when configured module is unavailable" do
-    Application.put_env(
-      :lemon_ai_runtime,
-      :oauth_secret_resolver_module,
-      LemonAiRuntime.Auth.MissingOAuthSecretResolver
-    )
-
+  test "oauth secret dispatcher resolves provider oauth payloads" do
     secret_name = "llm_github_copilot_api_key"
 
     assert {:ok, _} =
@@ -314,17 +316,22 @@ defmodule LemonAiRuntime.CredentialsTest do
                })
              )
 
-    assert LemonAiRuntime.resolve_secret_api_key(secret_name) == "copilot-access-token"
+    assert AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name) ==
+             "copilot-access-token"
   end
 
   test "unknown providers do not raise during credential checks" do
-    assert LemonAiRuntime.ProviderNames.canonical_name("opencode-go") == nil
-    assert LemonAiRuntime.provider_has_credentials?("opencode-go", %{}) == false
-    assert LemonAiRuntime.provider_has_credentials?("vercel-ai-gateway", %{}) == false
+    assert AgentCore.ModelRuntime.ProviderNames.canonical_name("opencode-go") == nil
+
+    assert AgentCore.ModelRuntime.Credentials.provider_has_credentials?("opencode-go", %{}) ==
+             false
+
+    assert AgentCore.ModelRuntime.Credentials.provider_has_credentials?("vercel-ai-gateway", %{}) ==
+             false
   end
 
   test "provider names expose sorted canonical ids for diagnostics" do
-    names = LemonAiRuntime.ProviderNames.all_canonical_names()
+    names = AgentCore.ModelRuntime.ProviderNames.all_canonical_names()
 
     assert names == Enum.sort(names)
     assert "anthropic" in names

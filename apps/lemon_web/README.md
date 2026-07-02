@@ -205,7 +205,6 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 |-----|---------|
 | `lemon_core` | PubSub (`LemonCore.Bus`), session keys (`LemonCore.SessionKey`), events (`LemonCore.Event`), map helpers |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
-| `lemon_ai_runtime` | Redacted provider credential readiness diagnostics |
 
 ### External Dependencies
 

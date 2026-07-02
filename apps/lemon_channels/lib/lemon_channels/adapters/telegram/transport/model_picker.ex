@@ -13,8 +13,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
-  alias LemonAiRuntime
-  alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.Secrets
@@ -1153,8 +1151,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp provider_enabled?(_provider, _configured), do: false
 
   defp provider_has_credentials?(provider, aliases, configured) do
-    LemonAiRuntime.provider_has_credentials?(provider, configured) or
-      Enum.any?(aliases, &LemonAiRuntime.provider_has_credentials?(&1, configured))
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, configured) or
+      Enum.any?(aliases, &AgentCore.ModelRuntime.Credentials.provider_has_credentials?(&1, configured))
   end
 
   defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()
@@ -1202,7 +1200,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_value?(_), do: false
 
-  defp openai_codex_auth_available?, do: OpenAICodexOAuth.available?()
+  defp openai_codex_auth_available? do
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?("openai_codex", %{
+      "openai-codex" => %{"auth_source" => "oauth"}
+    })
+  end
 
   defp session_model_override(session_key),
     do: ModelPolicyAdapter.session_model_override(session_key)

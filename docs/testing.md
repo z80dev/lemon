@@ -830,7 +830,7 @@ identifies the image color, then runs `scripts/live_openai_compat_fetch_client.m
 in vision-only mode against the same local `/v1/responses` boundary. It writes
 redacted proof JSON and skips unless live credentials are explicitly enabled, a
 vision-capable model is configured, and a provider credential resolves.
-Credential preflight uses `LemonAiRuntime.provider_has_credentials?/3`, so it
+Credential preflight uses `AgentCore.ModelRuntime.Credentials.provider_has_credentials?/3`, so it
 matches runtime credential resolution for env keys, encrypted secrets,
 OAuth/default-secret paths, and provider-specific credential shapes. If no model
 is provided, the script tries credential-ready defaults in this order: OpenRouter

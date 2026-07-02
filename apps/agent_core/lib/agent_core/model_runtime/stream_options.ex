@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.StreamOptions do
+defmodule AgentCore.ModelRuntime.StreamOptions do
   @moduledoc """
   Lemon-owned `Ai.Types.StreamOptions` builder.
 
@@ -7,8 +7,8 @@ defmodule LemonAiRuntime.StreamOptions do
   """
 
   alias Ai.Types.StreamOptions
-  alias LemonAiRuntime.Credentials
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.Credentials
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.ProviderConfigResolver
 
   @spec build_stream_options(

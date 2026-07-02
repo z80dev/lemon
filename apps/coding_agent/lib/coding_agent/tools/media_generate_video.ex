@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.MediaGenerateVideo do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
   alias CodingAgent.Tools.AbortHelpers
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.Config
   alias LemonCore.MediaJobSupervisor
   alias LemonCore.MediaJobs
@@ -345,7 +345,9 @@ defmodule CodingAgent.Tools.MediaGenerateVideo do
   defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
 
   defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case LemonAiRuntime.resolve_provider_api_key(:openai, provider_cfg, provider_cfg: true) do
+    case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
+           provider_cfg: true
+         ) do
       key when is_binary(key) and key != "" -> {:ok, key}
       _ -> {:error, :missing_openai_video_api_key}
     end

@@ -204,7 +204,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec build_get_api_key(CodingAgent.SettingsManager.t()) :: (atom() -> String.t() | nil)
   def build_get_api_key(%CodingAgent.SettingsManager{providers: providers}) do
-    LemonAiRuntime.build_get_api_key(providers)
+    AgentCore.ModelRuntime.Credentials.build_get_api_key(providers)
   end
 
   @spec build_stream_options(
@@ -219,7 +219,12 @@ defmodule CodingAgent.Session.ModelResolver do
         existing_opts,
         cwd
       ) do
-    LemonAiRuntime.build_stream_options(model, providers, existing_opts, cwd)
+    AgentCore.ModelRuntime.StreamOptions.build_stream_options(
+      model,
+      providers,
+      existing_opts,
+      cwd
+    )
   end
 
   # ============================================================================
@@ -327,7 +332,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_credentials_ready?(_provider, _settings, %{require_credentials: false}), do: true
 
   defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, _routing) do
-    LemonAiRuntime.provider_has_credentials?(provider, settings.providers)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers)
   end
 
   defp fallback_model_available?(provider, model_id) do

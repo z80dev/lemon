@@ -28,7 +28,6 @@ defmodule LemonWeb.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
-      {:lemon_ai_runtime, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},

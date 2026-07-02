@@ -1,4 +1,4 @@
-defmodule LemonAiRuntime.Credentials do
+defmodule AgentCore.ModelRuntime.Credentials do
   @moduledoc """
   Lemon-owned provider credential resolution.
 
@@ -9,8 +9,8 @@ defmodule LemonAiRuntime.Credentials do
 
   require Logger
 
-  alias LemonAiRuntime.Auth.OAuthSecretResolver
-  alias LemonAiRuntime.ProviderNames
+  alias Ai.Auth.OAuthSecretResolver
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.ProviderConfigResolver
   alias LemonCore.Secrets
 
@@ -41,7 +41,9 @@ defmodule LemonAiRuntime.Credentials do
 
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: env_fallback) do
       {:ok, value, _source} ->
-        case OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value) do
+        case OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value,
+               persist_secret: &persist_oauth_secret/2
+             ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
@@ -154,7 +156,9 @@ defmodule LemonAiRuntime.Credentials do
   defp resolve_openai_codex_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
+        case Ai.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value,
+               persist_secret: &persist_openai_codex_secret/2
+             ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
@@ -242,18 +246,20 @@ defmodule LemonAiRuntime.Credentials do
             value
 
           _ ->
-            LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+            resolve_anthropic_access_token()
         end
 
       true ->
-        LemonAiRuntime.Auth.AnthropicOAuth.resolve_access_token()
+        resolve_anthropic_access_token()
     end
   end
 
   defp resolve_anthropic_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAiRuntime.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value) do
+        case Ai.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value,
+               persist_secret: &persist_anthropic_secret/2
+             ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
@@ -351,7 +357,7 @@ defmodule LemonAiRuntime.Credentials do
   end
 
   defp openai_codex_ambient_oauth_available? do
-    case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token() do
+    case resolve_openai_codex_access_token() do
       value when is_binary(value) -> String.trim(value) != ""
       _ -> false
     end
@@ -518,4 +524,35 @@ defmodule LemonAiRuntime.Credentials do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp resolve_openai_codex_access_token do
+    resolve_secret_api_key("OPENAI_CODEX_API_KEY", env_fallback: true) ||
+      resolve_secret_api_key("CHATGPT_TOKEN", env_fallback: true) ||
+      resolve_secret_api_key(ProviderNames.default_secret_name("openai_codex"),
+        env_fallback: false
+      ) ||
+      Ai.Auth.OpenAICodexOAuth.resolve_access_token()
+  end
+
+  defp resolve_anthropic_access_token do
+    Ai.Auth.AnthropicOAuth.resolve_access_token() ||
+      resolve_secret_api_key(ProviderNames.oauth_default_secret_name("anthropic"),
+        env_fallback: false
+      )
+  end
+
+  defp persist_oauth_secret(secret_name, encoded_secret) do
+    Secrets.set(secret_name, encoded_secret, provider: "ai_oauth")
+    :ok
+  end
+
+  defp persist_openai_codex_secret(secret_name, encoded_secret) do
+    Secrets.set(secret_name, encoded_secret, provider: "openai_codex_oauth")
+    :ok
+  end
+
+  defp persist_anthropic_secret(secret_name, encoded_secret) do
+    Secrets.set(secret_name, encoded_secret, provider: "anthropic_oauth")
+    :ok
+  end
 end

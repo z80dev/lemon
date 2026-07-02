@@ -3,7 +3,7 @@ defmodule LemonControlPlane.OpenAICompat do
 
   alias LemonControlPlane.Methods.AgentWait
   alias LemonControlPlane.Methods.ModelsList
-  alias LemonAiRuntime.ProviderNames
+  alias AgentCore.ModelRuntime.ProviderNames
   alias LemonCore.RunRequest
 
   @default_agent_id "default"
