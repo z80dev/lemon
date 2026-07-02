@@ -1397,60 +1397,26 @@ defmodule LemonMCP.ClientTest do
   end
 
   defp start_sse_transport do
-    port = free_port()
     {:ok, store} = start_supervised({Agent, fn -> %{} end})
-
-    start_supervised!(
-      {Bandit,
-       plug: {LemonMCP.ClientTest.SSEFixture, store: store},
-       scheme: :http,
-       ip: {127, 0, 0, 1},
-       port: port}
-    )
+    port = start_bandit({LemonMCP.ClientTest.SSEFixture, store: store})
 
     {port, store}
   end
 
   defp start_streamable_http_transport do
-    port = free_port()
     {:ok, store} = start_supervised({Agent, fn -> [] end})
-
-    start_supervised!(
-      {Bandit,
-       plug: {LemonMCP.ClientTest.StreamableHTTPFixture, store: store},
-       scheme: :http,
-       ip: {127, 0, 0, 1},
-       port: port}
-    )
+    port = start_bandit({LemonMCP.ClientTest.StreamableHTTPFixture, store: store})
 
     {port, store}
   end
 
   defp start_oauth_metadata_transport do
-    port = free_port()
-
-    start_supervised!(
-      {Bandit,
-       plug: LemonMCP.ClientTest.OAuthMetadataFixture,
-       scheme: :http,
-       ip: {127, 0, 0, 1},
-       port: port}
-    )
-
-    port
+    start_bandit(LemonMCP.ClientTest.OAuthMetadataFixture)
   end
 
   defp start_oauth_token_transport do
-    port = free_port()
     {:ok, store} = start_supervised({Agent, fn -> [] end})
-
-    start_supervised!(
-      {Bandit,
-       plug: {LemonMCP.ClientTest.OAuthTokenFixture, store: store},
-       scheme: :http,
-       ip: {127, 0, 0, 1},
-       port: port}
-    )
+    port = start_bandit({LemonMCP.ClientTest.OAuthTokenFixture, store: store})
 
     {port, store}
   end
@@ -1465,6 +1431,14 @@ defmodule LemonMCP.ClientTest do
     {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
     {:ok, port} = :inet.port(socket)
     :gen_tcp.close(socket)
+    port
+  end
+
+  defp start_bandit(plug) do
+    pid =
+      start_supervised!({Bandit, plug: plug, scheme: :http, ip: {127, 0, 0, 1}, port: 0})
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
     port
   end
 end
