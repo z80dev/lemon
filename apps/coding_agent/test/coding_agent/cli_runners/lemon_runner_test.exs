@@ -19,7 +19,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   }
 
   alias AgentCore.EventStream
-  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
+  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ThinkingContent, Usage}
 
   defp mock_model do
     %Model{
@@ -259,6 +259,83 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
       assert result_meta.error_type == :unknown_tool
       assert result_meta.tool_name == "missing_tool_for_runner"
+    end
+
+    @tag :tmp_dir
+    test "emits reasoning action events from thinking stream", %{tmp_dir: tmp_dir} do
+      response =
+        %AssistantMessage{
+          role: :assistant,
+          content: [
+            %ThinkingContent{type: :thinking, thinking: "checking the subagent path"},
+            %TextContent{type: :text, text: "subagent answer"}
+          ],
+          api: :mock,
+          provider: :mock_provider,
+          model: "mock-model-1",
+          usage: %Usage{
+            input: 1,
+            output: 1,
+            cache_read: 0,
+            cache_write: 0,
+            total_tokens: 2,
+            cost: %Cost{input: 0.0, output: 0.0, total: 0.0}
+          },
+          stop_reason: :stop,
+          timestamp: System.system_time(:millisecond)
+        }
+
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "think then answer",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: Mocks.mock_stream_fn([response])
+        )
+
+      events =
+        runner
+        |> LemonRunner.stream()
+        |> EventStream.events()
+        |> Enum.to_list()
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :started,
+                action: %Action{
+                  id: action_id,
+                  kind: :reasoning,
+                  detail: %{reasoning: %{text: "checking the subagent path"}}
+                }
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :started, action: %Action{kind: :reasoning}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :completed,
+                ok: true,
+                action: %Action{
+                  id: ^action_id,
+                  kind: :reasoning,
+                  detail: %{reasoning: %{text: "checking the subagent path"}}
+                }
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :completed, action: %Action{kind: :reasoning}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+      assert {:cli_event, %CompletedEvent{ok: true, answer: "subagent answer"}} =
+               Enum.find(events, &match?({:cli_event, %CompletedEvent{}}, &1))
     end
 
     @tag :tmp_dir

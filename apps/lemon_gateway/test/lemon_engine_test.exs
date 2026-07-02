@@ -1,7 +1,17 @@
 defmodule LemonGateway.LemonEngineTest do
   use ExUnit.Case
 
-  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ToolCall, Usage}
+  alias Ai.Types.{
+    AssistantMessage,
+    Cost,
+    Model,
+    ModelCost,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    Usage
+  }
+
   alias LemonGateway.Engines.Lemon
   alias LemonGateway.Types.Job
   alias LemonCore.ResumeToken
@@ -166,6 +176,126 @@ defmodule LemonGateway.LemonEngineTest do
     end
 
     @tag :tmp_dir
+    test "emits reasoning action events without leaking thinking into answer deltas", %{
+      tmp_dir: tmp_dir
+    } do
+      response =
+        assistant_message([
+          %ThinkingContent{type: :thinking, thinking: "checking the native path"},
+          %TextContent{type: :text, text: "answer only"}
+        ])
+
+      job =
+        job(tmp_dir,
+          prompt: "think then answer",
+          run_id: "run-native-reasoning",
+          stream_fn: mock_stream_fn([response])
+        )
+
+      {:ok, run_ref, _ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+
+      messages = collect_until_completed(run_ref)
+
+      deltas =
+        for {:engine_delta, ^run_ref, text} <- messages do
+          text
+        end
+
+      assert deltas != []
+      assert Enum.all?(deltas, &(&1 == "answer only"))
+      refute Enum.any?(deltas, &String.contains?(&1, "checking the native path"))
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :action_event,
+                phase: :started,
+                action: %{
+                  id: action_id,
+                  kind: "reasoning",
+                  detail: %{reasoning: %{text: "checking the native path"}}
+                }
+              }} =
+               Enum.find(messages, fn
+                 {:engine_event, ^run_ref,
+                  %{__event__: :action_event, phase: :started, action: %{kind: "reasoning"}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :action_event,
+                phase: :completed,
+                ok: true,
+                action: %{
+                  id: ^action_id,
+                  kind: "reasoning",
+                  detail: %{reasoning: %{text: "checking the native path"}}
+                }
+              }} =
+               Enum.find(messages, fn
+                 {:engine_event, ^run_ref,
+                  %{__event__: :action_event, phase: :completed, action: %{kind: "reasoning"}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :completed,
+                engine: "lemon",
+                ok: true,
+                answer: "answer only"
+              }} = List.last(messages)
+    end
+
+    @tag :tmp_dir
+    test "cancel completion carries usage from messages already seen", %{tmp_dir: tmp_dir} do
+      tool_response =
+        assistant_message_with_tool_calls([
+          tool_call("missing_tool_for_cancel_usage", %{}, id: "call_cancel_usage")
+        ])
+
+      job =
+        job(tmp_dir,
+          prompt: "start then cancel",
+          run_id: "run-native-cancel-usage",
+          stream_fn: mock_stream_fn([tool_response, :slow])
+        )
+
+      {:ok, run_ref, ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+
+      assert_receive {:engine_event, ^run_ref, %{__event__: :started}}, 2_000
+
+      assert_receive {:engine_event, ^run_ref,
+                      %{
+                        __event__: :action_event,
+                        phase: :completed,
+                        action: %{id: "tool_call_cancel_usage"}
+                      }},
+                     2_000
+
+      assert Lemon.cancel(ctx) == :ok
+
+      assert_receive {:engine_event, ^run_ref,
+                      %{
+                        __event__: :completed,
+                        ok: false,
+                        error: "Cancelled by user",
+                        usage: usage
+                      }},
+                     2_000
+
+      assert usage.input == 1
+      assert usage.output == 1
+      assert usage.total_tokens == 2
+    end
+
+    @tag :tmp_dir
     test "supports steer and cancel on direct session runner", %{tmp_dir: tmp_dir} do
       job =
         job(tmp_dir,
@@ -236,10 +366,14 @@ defmodule LemonGateway.LemonEngineTest do
     }
   end
 
-  defp assistant_message(text) do
+  defp assistant_message(text) when is_binary(text) do
+    assistant_message([%TextContent{type: :text, text: text}])
+  end
+
+  defp assistant_message(content) when is_list(content) do
     %AssistantMessage{
       role: :assistant,
-      content: [%TextContent{type: :text, text: text}],
+      content: content,
       api: :mock,
       provider: :mock_provider,
       model: "mock-model-1",
@@ -318,26 +452,40 @@ defmodule LemonGateway.LemonEngineTest do
     {:ok, stream} = Ai.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
+      case response do
+        :slow ->
+          Process.sleep(10_000)
+          response = assistant_message("too late")
+          Ai.EventStream.push(stream, {:done, response.stop_reason, response})
+          Ai.EventStream.complete(stream, response)
 
-      response.content
-      |> Enum.with_index()
-      |> Enum.each(fn
-        {%TextContent{text: text}, idx} ->
-          Ai.EventStream.push(stream, {:text_start, idx, response})
-          Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-          Ai.EventStream.push(stream, {:text_end, idx, response})
+        %AssistantMessage{} ->
+          Ai.EventStream.push(stream, {:start, response})
 
-        {%ToolCall{} = tool_call, idx} ->
-          Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-          Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+          response.content
+          |> Enum.with_index()
+          |> Enum.each(fn
+            {%TextContent{text: text}, idx} ->
+              Ai.EventStream.push(stream, {:text_start, idx, response})
+              Ai.EventStream.push(stream, {:text_delta, idx, text, response})
+              Ai.EventStream.push(stream, {:text_end, idx, response})
 
-        {_content, _idx} ->
-          :ok
-      end)
+            {%ThinkingContent{thinking: thinking}, idx} ->
+              Ai.EventStream.push(stream, {:thinking_start, idx, response})
+              Ai.EventStream.push(stream, {:thinking_delta, idx, thinking, response})
+              Ai.EventStream.push(stream, {:thinking_end, idx, thinking, response})
 
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+            {%ToolCall{} = tool_call, idx} ->
+              Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+              Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+
+            {_content, _idx} ->
+              :ok
+          end)
+
+          Ai.EventStream.push(stream, {:done, response.stop_reason, response})
+          Ai.EventStream.complete(stream, response)
+      end
     end)
 
     stream

@@ -7,6 +7,13 @@ defmodule CodingAgent.Session.Presentation do
   require Logger
 
   @engine "lemon"
+  @reasoning_update_threshold 700
+
+  defmodule ReasoningAccumulator do
+    @moduledoc false
+
+    defstruct blocks: %{}, seq: 0, threshold: 700
+  end
 
   def build_session_opts(opts, cwd, run_id, session_key, agent_id) do
     tool_policy = Keyword.get(opts, :tool_policy)
@@ -163,6 +170,57 @@ defmodule CodingAgent.Session.Presentation do
   def extract_delta_text({:text_delta, _idx, text, _partial}) when is_binary(text), do: text
   def extract_delta_text({:text_delta, _idx, text}) when is_binary(text), do: text
   def extract_delta_text(_), do: nil
+
+  def new_reasoning_accumulator do
+    %ReasoningAccumulator{threshold: @reasoning_update_threshold}
+  end
+
+  def reasoning_action({:thinking_start, idx, partial}, %ReasoningAccumulator{} = acc) do
+    {block, acc} = new_reasoning_block(idx, partial, acc)
+    {:emit, reasoning_action(block, :started, nil), acc}
+  end
+
+  def reasoning_action(
+        {:thinking_delta, idx, text, _partial},
+        %ReasoningAccumulator{} = acc
+      )
+      when is_binary(text) do
+    {block, acc} = get_or_new_reasoning_block(idx, acc)
+    block = %{block | text: block.text <> text}
+
+    if byte_size(block.text) - block.emitted_bytes >= acc.threshold do
+      block = %{block | emitted_bytes: byte_size(block.text)}
+      acc = put_reasoning_block(acc, idx, block)
+      {:emit, reasoning_action(block, :updated, nil), acc}
+    else
+      {:skip, put_reasoning_block(acc, idx, block)}
+    end
+  end
+
+  def reasoning_action(
+        {:thinking_end, idx, text, partial},
+        %ReasoningAccumulator{} = acc
+      ) do
+    {block, acc} = get_or_new_reasoning_block(idx, acc)
+    text = reasoning_end_text(text, partial, idx, block.text)
+    block = %{block | text: text, emitted_bytes: byte_size(text)}
+    acc = delete_reasoning_block(acc, idx)
+    {:emit, reasoning_action(block, :completed, true), acc}
+  end
+
+  def reasoning_action({:thinking_end, idx, partial}, %ReasoningAccumulator{} = acc) do
+    reasoning_action({:thinking_end, idx, nil, partial}, acc)
+  end
+
+  def reasoning_action(_event, %ReasoningAccumulator{} = acc), do: {:skip, acc}
+
+  def build_failure_usage(state, partial_state \\ nil) do
+    [
+      messages_from_partial_state(partial_state),
+      messages_from_session(Map.get(state, :session))
+    ]
+    |> Enum.find_value(&build_usage/1)
+  end
 
   def visible_text_delta(msg, accumulated_text) do
     text =
@@ -562,6 +620,101 @@ defmodule CodingAgent.Session.Presentation do
       if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
     end)
   end
+
+  defp new_reasoning_block(idx, partial, %ReasoningAccumulator{} = acc) do
+    seq = acc.seq + 1
+
+    block = %{
+      id: "lemon.reasoning.#{idx}.#{seq}",
+      text: thinking_text_from_partial(partial, idx),
+      emitted_bytes: 0
+    }
+
+    {block, put_reasoning_block(%{acc | seq: seq}, idx, block)}
+  end
+
+  defp get_or_new_reasoning_block(idx, %ReasoningAccumulator{} = acc) do
+    case Map.get(acc.blocks, idx) do
+      nil -> new_reasoning_block(idx, nil, acc)
+      block -> {block, acc}
+    end
+  end
+
+  defp put_reasoning_block(%ReasoningAccumulator{} = acc, idx, block) do
+    %{acc | blocks: Map.put(acc.blocks, idx, block)}
+  end
+
+  defp delete_reasoning_block(%ReasoningAccumulator{} = acc, idx) do
+    %{acc | blocks: Map.delete(acc.blocks, idx)}
+  end
+
+  defp reasoning_action(block, phase, ok) do
+    text = block.text || ""
+
+    %{
+      id: block.id,
+      kind: :reasoning,
+      title: reasoning_title(text),
+      phase: phase,
+      ok: ok,
+      detail: %{reasoning: %{text: truncate_result(text), source: "lemon_reasoning"}}
+    }
+  end
+
+  defp reasoning_title(text) when is_binary(text) do
+    case String.slice(text, 0, 100) do
+      "" -> "reasoning"
+      title -> title
+    end
+  end
+
+  defp reasoning_title(_), do: "reasoning"
+
+  defp reasoning_end_text(text, _partial, _idx, _fallback) when is_binary(text), do: text
+
+  defp reasoning_end_text(_text, partial, idx, fallback) do
+    case thinking_text_from_partial(partial, idx) do
+      "" -> fallback || ""
+      text -> text
+    end
+  end
+
+  defp thinking_text_from_partial(%{content: content}, idx) when is_list(content) do
+    case Enum.at(content, idx) do
+      %{thinking: thinking} when is_binary(thinking) -> thinking
+      _ -> ""
+    end
+  end
+
+  defp thinking_text_from_partial(_partial, _idx), do: ""
+
+  defp messages_from_partial_state(%{agent_state: agent_state}) do
+    messages_from_partial_state(agent_state)
+  end
+
+  defp messages_from_partial_state(%{messages: messages} = state) when is_list(messages) do
+    case Map.get(state, :stream_message) do
+      nil -> messages
+      stream_message -> messages ++ [stream_message]
+    end
+  end
+
+  defp messages_from_partial_state(messages) when is_list(messages), do: messages
+  defp messages_from_partial_state(_), do: []
+
+  defp messages_from_session(session) when is_pid(session) do
+    if Process.alive?(session) do
+      CodingAgent.Session.get_messages(session)
+    else
+      []
+    end
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp messages_from_session(_), do: []
 
   def format_error({:assistant_error, msg}, _state) when is_binary(msg), do: msg
 

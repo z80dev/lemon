@@ -200,6 +200,49 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert text =~ "reasoning: checking router fallback"
   end
 
+  test "renders native reasoning action events for operator surfaces" do
+    previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)
+    :persistent_term.put({ToolStatusIntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({ToolStatusIntentDispatcherStub, :test_pid})
+
+      if is_nil(previous_dispatcher) do
+        Application.delete_env(:lemon_router, :dispatcher)
+      else
+        Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+      end
+    end)
+
+    session_key = "agent:test:web:default:dm:native-reasoning"
+    channel_id = "web"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    ev = %{
+      engine: "lemon",
+      action: %{
+        id: "lemon.reasoning.0.1",
+        kind: "reasoning",
+        title: "checking native reasoning",
+        detail: %{reasoning: %{text: "checking native reasoning", source: "lemon_reasoning"}}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{kind: :tool_status_snapshot, body: %{text: text}}},
+                   1_000
+
+    assert text =~ "reasoning: checking native reasoning"
+  end
+
   test "includes structured tool failure metadata in status intents" do
     previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
     Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)

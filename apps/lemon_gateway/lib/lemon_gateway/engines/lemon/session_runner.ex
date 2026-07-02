@@ -26,6 +26,7 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
     :agent_id,
     :accumulated_text,
     :pending_actions,
+    :reasoning_accumulator,
     :resume_token,
     :started_emitted,
     :completed_emitted,
@@ -84,6 +85,7 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
       agent_id: agent_id,
       accumulated_text: "",
       pending_actions: %{},
+      reasoning_accumulator: Presentation.new_reasoning_accumulator(),
       started_emitted: false,
       completed_emitted: false,
       delta_seq: 0,
@@ -275,13 +277,19 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
   end
 
   defp translate_and_emit({:message_update, msg, event}, state) when is_tuple(event) do
-    case Presentation.text_delta_from_message_update(msg, event, state.accumulated_text) do
-      text when is_binary(text) and text != "" ->
-        state = emit_delta(state, text)
-        %{state | accumulated_text: state.accumulated_text <> text}
-
-      _ ->
+    case emit_reasoning_action(event, state) do
+      {true, state} ->
         state
+
+      {false, state} ->
+        case Presentation.text_delta_from_message_update(msg, event, state.accumulated_text) do
+          text when is_binary(text) and text != "" ->
+            state = emit_delta(state, text)
+            %{state | accumulated_text: state.accumulated_text <> text}
+
+          _ ->
+            state
+        end
     end
   end
 
@@ -294,7 +302,7 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
     emit_completed_ok(state, answer, usage)
   end
 
-  defp translate_and_emit({:error, reason, _partial_state}, state) do
+  defp translate_and_emit({:error, reason, partial_state}, state) do
     error_msg = Presentation.format_error(reason, state)
 
     Logger.error(
@@ -307,7 +315,7 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
         "pending_actions=#{map_size(state.pending_actions || %{})}"
     )
 
-    emit_completed_error(state, error_msg)
+    emit_completed_error(state, error_msg, partial_state)
   end
 
   defp translate_and_emit({:turn_start}, state), do: state
@@ -352,6 +360,25 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
 
   defp emit_delta(state, _text), do: state
 
+  defp emit_reasoning_action(event, state) do
+    case Presentation.reasoning_action(event, state.reasoning_accumulator) do
+      {:emit, action, accumulator} ->
+        emit_action_event(state, action.id, action.kind, action.title, action.phase,
+          ok: action.ok,
+          detail: action.detail
+        )
+
+        {true, %{state | reasoning_accumulator: accumulator}}
+
+      {:skip, %Presentation.ReasoningAccumulator{} = accumulator} ->
+        handled? =
+          match?({kind, _, _} when kind in [:thinking_start, :thinking_end], event) or
+            match?({:thinking_delta, _, _, _}, event)
+
+        {handled?, %{state | reasoning_accumulator: accumulator}}
+    end
+  end
+
   defp emit_completed_ok(state, answer, usage) do
     if state.completed_emitted do
       state
@@ -371,17 +398,20 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
     end
   end
 
-  defp emit_completed_error(state, error_msg) do
+  defp emit_completed_error(state, error_msg, partial_state \\ nil) do
     if state.completed_emitted do
       state
     else
+      usage = Presentation.build_failure_usage(state, partial_state)
+
       event =
         Event.completed(%{
           engine: @engine,
           ok: false,
           error: error_msg,
           answer: state.accumulated_text,
-          resume: state.resume_token
+          resume: state.resume_token,
+          usage: usage
         })
 
       emit_event(state, event)
