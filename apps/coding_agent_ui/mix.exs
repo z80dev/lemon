@@ -12,7 +12,7 @@ defmodule CodingAgentUi.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 69]],
       deps: deps()
     ]
   end

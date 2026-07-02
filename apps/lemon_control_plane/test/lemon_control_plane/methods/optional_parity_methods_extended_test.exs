@@ -691,6 +691,21 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
         })
       )
 
+      # latest_checks orders proof files by mtime with second granularity; pin
+      # distinct mtimes so the ordering (and the take(limit) cut) is stable
+      # regardless of how fast the writes above complete.
+      [
+        "discord-media-directive-latest.json",
+        "private-proof.json",
+        "telegram-voice-local-latest.json",
+        "terminal-backend-latest.json",
+        "wasm-lifecycle-latest.json"
+      ]
+      |> Enum.with_index()
+      |> Enum.each(fn {name, idx} ->
+        File.touch!(Path.join(proof_dir, name), {{2026, 5, 20}, {12, 0, 59 - idx}})
+      end)
+
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
       assert {:ok, result} =

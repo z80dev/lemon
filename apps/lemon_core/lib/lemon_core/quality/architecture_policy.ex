@@ -40,7 +40,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core],
     lemon_sim: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core],
     lemon_sim_ui: [:ai, :lemon_core, :lemon_sim],
-    lemon_services: [],
     lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
     lemon_web: [:lemon_ai_runtime, :lemon_core, :lemon_router]
   }

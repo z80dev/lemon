@@ -89,7 +89,6 @@ Lemon source evidence used for this pass:
 - `apps/lemon_control_plane/`
 - `apps/lemon_core/`
 - `apps/lemon_mcp/`
-- `apps/lemon_services/`
 - `apps/lemon_sim/`
 - `apps/lemon_skills/`
 - `clients/lemon-browser-node/`

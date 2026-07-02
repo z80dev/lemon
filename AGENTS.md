@@ -22,7 +22,6 @@
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills | `apps/lemon_skills/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
-| Manage long-running external processes | `apps/lemon_services/` |
 | Work on the web UI | `apps/lemon_web/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
@@ -151,7 +150,6 @@ apps/
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
 ├── lemon_router/        # Message routing, agent directory, run orchestration
-├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
 ├── lemon_skills/        # Skill registry, discovery, installation
 └── lemon_web/           # Phoenix LiveView web interface
@@ -279,7 +277,7 @@ Derived from mix.exs files and enforced by `mix lemon.quality` (architecture bou
 ```
 lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, lemon_ai_runtime, coding_agent*
 lemon_router ─────────→ lemon_core, lemon_channels, coding_agent, agent_core
-lemon_gateway ────────→ lemon_core, agent_core, coding_agent, lemon_channels*
+lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, lemon_ai_runtime
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_ai_runtime, lemon_skills
@@ -290,9 +288,8 @@ lemon_sim ────────────→ lemon_core, agent_core, ai, le
 lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
 lemon_web ────────────→ lemon_core, lemon_router, lemon_ai_runtime
-lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
 coding_agent_ui ──────→ coding_agent
-ai ───────────────────→ lemon_core
+ai ───────────────────→ (no umbrella deps - standalone LLM client library)
 ```
 
 `*` = runtime: false (compile-time only dependency)
@@ -473,11 +470,10 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_sim | `apps/lemon_sim/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_automation | `apps/lemon_automation/AGENTS.md` |
-| lemon_services | `apps/lemon_services/AGENTS.md` |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
 | lemon_mcp | `apps/lemon_mcp/README.md` *(no AGENTS.md yet)* |
 | coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
 
 ---
 
-*Last updated: 2026-04-27* (updated router/gateway architecture flow and dependency map)
+*Last updated: 2026-07-02* (removed lemon_services; corrected ai and lemon_gateway dependency rows against mix.exs)

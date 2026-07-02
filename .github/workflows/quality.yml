@@ -126,8 +126,8 @@ jobs:
       - name: Compile
         run: mix compile --warnings-as-errors
 
-      - name: Run umbrella tests
-        run: mix test --exclude integration
+      - name: Run umbrella tests with coverage gate
+        run: mix test --exclude integration --cover
 
   clients:
     runs-on: ubuntu-latest

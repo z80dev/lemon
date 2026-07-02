@@ -1,8 +1,8 @@
 # AI Boundary Extraction Plan
 
-Status: boundary extraction complete; repo extraction still optional/future
+Status: boundary extraction complete; repo extraction still optional/future. 2026-07-02 review: `apps/ai` confirmed dependency-free (mix.exs); `lemon_ai_runtime` completion/removal is an open decision in the current direction plan.
 
-Last reviewed: 2026-04-24
+Last reviewed: 2026-07-02
 
 ## Summary
 

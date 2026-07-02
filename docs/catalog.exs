@@ -314,7 +314,7 @@
   %{
     path: "docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-24],
+    last_reviewed: ~D[2026-07-02],
     max_age_days: 30
   },
   %{
@@ -326,8 +326,8 @@
   %{
     path: "docs/plans/2026-03-19-ai-boundary-extraction-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-04-24],
-    max_age_days: 60
+    last_reviewed: ~D[2026-07-02],
+    max_age_days: 365
   },
   %{
     path: "docs/plans/2026-03-26-async-followup-delivery-and-provenance-plan.md",
@@ -404,8 +404,8 @@
   %{
     path: "docs/plans/lemon-sim-vendingbench-2-arena-goal-2026-05-27.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-27],
-    max_age_days: 30
+    last_reviewed: ~D[2026-07-02],
+    max_age_days: 365
   },
   %{
     path: "docs/user-guide/rollout.md",

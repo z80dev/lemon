@@ -101,7 +101,6 @@ The project is an Elixir umbrella with 18+ applications:
 | `lemon_sim` | Simulation harness for development/testing |
 | `lemon_sim_ui` | Phoenix LiveView UI for simulation spectator/admin |
 | `lemon_web` | React web frontend bridge |
-| `lemon_services` | Shared service infrastructure |
 
 ---
 

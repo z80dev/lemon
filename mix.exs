@@ -6,7 +6,7 @@ defmodule Lemon.MixProject do
       apps_path: "apps",
       version: "2026.05.0",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
       releases: releases()
     ]
