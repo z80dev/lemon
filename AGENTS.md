@@ -1,7 +1,7 @@
 # Lemon Agent Guide
 
-> **Effective agent context for the Lemon AI assistant platform.**  
-> Lemon is a local-first assistant and coding agent system with a multi-engine architecture supporting Claude, Codex, OpenCode, Pi, and native Lemon engines.
+> **Effective agent context for the Lemon LLM interaction stack.**
+> Lemon is a BEAM-native stack of Elixir/OTP libraries for LLM interactions, with two flagship products on top: a multi-channel personal assistant and LemonSim, a deterministic model-vs-model simulation arena. The assistant uses the stack for local-first agent work across channels; LemonSim uses it for event-sourced, replay-verified benchmark worlds.
 
 ---
 
