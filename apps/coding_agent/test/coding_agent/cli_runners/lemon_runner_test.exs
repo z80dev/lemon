@@ -339,6 +339,58 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     @tag :tmp_dir
+    test "emits reasoning updates with the accumulated tail window", %{tmp_dir: tmp_dir} do
+      thinking = "start-" <> String.duplicate("middle-", 120) <> "live-tail"
+      accumulated = thinking <> thinking
+      expected_tail = "..." <> String.slice(accumulated, -500, 500)
+
+      response =
+        %AssistantMessage{
+          role: :assistant,
+          content: [
+            %ThinkingContent{type: :thinking, thinking: thinking},
+            %TextContent{type: :text, text: "done"}
+          ],
+          api: :mock,
+          provider: :mock_provider,
+          model: "mock-model-1",
+          usage: %Usage{input: 1, output: 1, total_tokens: 2},
+          stop_reason: :stop,
+          timestamp: System.system_time(:millisecond)
+        }
+
+      {:ok, runner} =
+        LemonRunner.start_link(
+          prompt: "think then answer",
+          cwd: tmp_dir,
+          model: mock_model(),
+          stream_fn: Mocks.mock_stream_fn([response])
+        )
+
+      events =
+        runner
+        |> LemonRunner.stream()
+        |> EventStream.events()
+        |> Enum.to_list()
+
+      assert {:cli_event,
+              %ActionEvent{
+                phase: :updated,
+                action: %Action{
+                  kind: :reasoning,
+                  detail: %{reasoning: %{text: ^expected_tail}}
+                }
+              }} =
+               Enum.find(events, fn
+                 {:cli_event, %ActionEvent{phase: :updated, action: %Action{kind: :reasoning}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+    end
+
+    @tag :tmp_dir
     test "marks bash actions failed when command exits nonzero", %{tmp_dir: tmp_dir} do
       tool_response =
         Mocks.assistant_message_with_tool_calls([
@@ -879,6 +931,16 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
                {:tool_call_delta, 1, "", msg},
                "Hello "
              ) == "world"
+    end
+
+    test "emits only the unseen suffix after a multibyte prefix" do
+      msg = %AssistantMessage{content: [%TextContent{text: "héllo é world"}]}
+
+      assert Presentation.text_delta_from_message_update(
+               msg,
+               {:tool_call_delta, 1, "", msg},
+               "héllo é"
+             ) == " world"
     end
 
     test "does not emit duplicate text when visible text has not grown" do

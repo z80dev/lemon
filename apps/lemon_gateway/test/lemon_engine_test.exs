@@ -254,6 +254,48 @@ defmodule LemonGateway.LemonEngineTest do
     end
 
     @tag :tmp_dir
+    test "emits reasoning updates with the accumulated tail window", %{tmp_dir: tmp_dir} do
+      thinking = "start-" <> String.duplicate("middle-", 120) <> "live-tail"
+      accumulated = thinking <> thinking
+      expected_tail = "..." <> String.slice(accumulated, -500, 500)
+
+      response =
+        assistant_message([
+          %ThinkingContent{type: :thinking, thinking: thinking},
+          %TextContent{type: :text, text: "done"}
+        ])
+
+      job =
+        job(tmp_dir,
+          prompt: "think then answer",
+          run_id: "run-native-reasoning-update",
+          stream_fn: mock_stream_fn([response])
+        )
+
+      {:ok, run_ref, _ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+
+      messages = collect_until_completed(run_ref)
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :action_event,
+                phase: :updated,
+                action: %{
+                  kind: "reasoning",
+                  detail: %{reasoning: %{text: ^expected_tail}}
+                }
+              }} =
+               Enum.find(messages, fn
+                 {:engine_event, ^run_ref,
+                  %{__event__: :action_event, phase: :updated, action: %{kind: "reasoning"}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+    end
+
+    @tag :tmp_dir
     test "cancel completion carries usage from messages already seen", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([

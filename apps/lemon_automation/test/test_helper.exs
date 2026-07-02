@@ -15,4 +15,7 @@ ExUnit.start()
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
   _ = Application.stop(:lemon_gateway)
+
+  {:ok, _} = Application.ensure_all_started(:lemon_channels)
+  {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 end)

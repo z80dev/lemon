@@ -29,7 +29,7 @@ client_secret = XAuthHelper.load_credential("X_API_CLIENT_SECRET")
 redirect_uri = System.get_env("X_API_REDIRECT_URI", "http://localhost:4000/auth/x/callback")
 state_prefix = System.get_env("X_API_STATE_PREFIX", "lemon")
 state = "#{state_prefix}_#{:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)}"
-pkce = LemonChannels.Adapters.XAPI.OAuth.generate_pkce()
+pkce = XApi.OAuth.generate_pkce()
 
 if is_nil(client_id) or is_nil(client_secret) do
   IO.puts("""

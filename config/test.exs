@@ -25,6 +25,9 @@ config :lemon_core, config_test_mode: true
 # Tests opt into channel adapters explicitly.
 config :lemon_channels, adapters: []
 
+# Tests start X API token managers explicitly when required.
+config :x_api, start_token_manager: false
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 

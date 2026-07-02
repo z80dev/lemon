@@ -17,6 +17,7 @@ _ = Application.stop(:coding_agent)
 _ = Application.stop(:lemon_router)
 
 {:ok, _} = Application.ensure_all_started(:lemon_router)
+{:ok, _} = Application.ensure_all_started(:coding_agent)
 
 ExUnit.start()
 
@@ -26,4 +27,7 @@ ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_router)
 
   Application.delete_env(:lemon_channels, :telegram)
+
+  {:ok, _} = Application.ensure_all_started(:lemon_channels)
+  {:ok, _} = Application.ensure_all_started(:coding_agent)
 end)

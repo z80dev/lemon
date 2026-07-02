@@ -206,15 +206,8 @@ defmodule CodingAgent.TaskProgressBindingServer do
 
   defp expired?(binding, now_ms, ttl_seconds) do
     ttl_ms = ttl_seconds * 1_000
-
-    case Map.get(binding, :status) do
-      :completed ->
-        completed_at_ms = Map.get(binding, :completed_at_ms)
-        is_integer(completed_at_ms) and now_ms - completed_at_ms >= ttl_ms
-
-      _running_or_unknown ->
-        false
-    end
+    inserted_at_ms = Map.get(binding, :inserted_at_ms)
+    is_integer(inserted_at_ms) and now_ms - inserted_at_ms >= ttl_ms
   end
 
   defp upsert_binding(%{child_run_id: child_run_id, task_id: task_id} = binding) do

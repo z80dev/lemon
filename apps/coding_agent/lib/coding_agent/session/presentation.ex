@@ -212,7 +212,7 @@ defmodule CodingAgent.Session.Presentation do
     reasoning_action({:thinking_end, idx, nil, partial}, acc)
   end
 
-  def reasoning_action(_event, %ReasoningAccumulator{} = acc), do: {:skip, acc}
+  def reasoning_action(_event, %ReasoningAccumulator{} = acc), do: {:ignore, acc}
 
   def build_failure_usage(state, partial_state \\ nil) do
     [
@@ -237,7 +237,11 @@ defmodule CodingAgent.Session.Presentation do
         text
 
       String.starts_with?(text, accumulated_text) ->
-        case String.slice(text, byte_size(accumulated_text)..-1//1) do
+        case binary_part(
+               text,
+               byte_size(accumulated_text),
+               byte_size(text) - byte_size(accumulated_text)
+             ) do
           "" -> nil
           suffix -> suffix
         end
@@ -423,10 +427,15 @@ defmodule CodingAgent.Session.Presentation do
   def stringify_keys(_), do: %{}
 
   def truncate_result(result) when is_binary(result) do
-    if String.length(result) > 500 do
-      String.slice(result, 0, 500) <> "..."
-    else
-      result
+    cond do
+      byte_size(result) <= 500 ->
+        result
+
+      String.length(result) > 500 ->
+        String.slice(result, 0, 500) <> "..."
+
+      true ->
+        result
     end
   end
 
@@ -657,9 +666,15 @@ defmodule CodingAgent.Session.Presentation do
       title: reasoning_title(text),
       phase: phase,
       ok: ok,
-      detail: %{reasoning: %{text: truncate_result(text), source: "lemon_reasoning"}}
+      detail: %{
+        reasoning: %{text: reasoning_payload_text(text, phase), source: "lemon_reasoning"}
+      }
     }
   end
+
+  defp reasoning_payload_text(text, :updated) when byte_size(text) <= 500, do: text
+  defp reasoning_payload_text(text, :updated), do: "..." <> String.slice(text, -500, 500)
+  defp reasoning_payload_text(text, _phase), do: truncate_result(text)
 
   defp reasoning_title(text) when is_binary(text) do
     case String.slice(text, 0, 100) do

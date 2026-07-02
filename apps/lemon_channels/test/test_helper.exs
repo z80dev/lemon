@@ -60,4 +60,6 @@ ExUnit.after_suite(fn _ ->
   Application.delete_env(:lemon_channels, :engines)
   Application.delete_env(:lemon_channels, :adapters)
   Application.delete_env(:lemon_channels, :x_api_use_secrets)
+
+  {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 end)

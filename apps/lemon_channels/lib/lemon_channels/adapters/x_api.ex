@@ -34,9 +34,15 @@ defmodule LemonChannels.Adapters.XAPI do
   end
 
   @impl true
-  def child_spec(opts) do
-    Supervisor.child_spec({XApi.TokenManager, opts}, id: XApi.TokenManager)
+  def child_spec(_opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [[]]},
+      type: :worker
+    }
   end
+
+  def start_link(_opts), do: :ignore
 
   @impl true
   def normalize_inbound(_raw) do

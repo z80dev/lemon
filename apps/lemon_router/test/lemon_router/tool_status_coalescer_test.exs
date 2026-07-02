@@ -182,7 +182,9 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         id: "codex.reasoning.1",
         kind: "note",
         title: "checking router fallback",
-        detail: %{reasoning: %{text: "checking router fallback", source: "codex_reasoning"}}
+        detail: %{
+          reasoning: %{text: "...checking router fallback tail", source: "codex_reasoning"}
+        }
       },
       phase: :updated,
       ok: nil,
@@ -197,7 +199,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                     %DeliveryIntent{kind: :tool_status_snapshot, body: %{text: text}}},
                    1_000
 
-    assert text =~ "reasoning: checking router fallback"
+    assert text =~ "reasoning: ...checking router fallback tail"
   end
 
   test "renders native reasoning action events for operator surfaces" do

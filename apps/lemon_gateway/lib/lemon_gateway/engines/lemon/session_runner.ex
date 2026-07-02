@@ -371,11 +371,10 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
         {true, %{state | reasoning_accumulator: accumulator}}
 
       {:skip, %Presentation.ReasoningAccumulator{} = accumulator} ->
-        handled? =
-          match?({kind, _, _} when kind in [:thinking_start, :thinking_end], event) or
-            match?({:thinking_delta, _, _, _}, event)
+        {true, %{state | reasoning_accumulator: accumulator}}
 
-        {handled?, %{state | reasoning_accumulator: accumulator}}
+      {:ignore, %Presentation.ReasoningAccumulator{} = accumulator} ->
+        {false, %{state | reasoning_accumulator: accumulator}}
     end
   end
 
