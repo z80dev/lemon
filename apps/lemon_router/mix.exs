@@ -28,7 +28,6 @@ defmodule LemonRouter.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
-      {:coding_agent, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},

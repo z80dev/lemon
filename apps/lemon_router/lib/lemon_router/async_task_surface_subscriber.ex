@@ -12,9 +12,8 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
 
   require Logger
 
-  alias CodingAgent.TaskProgressBindingStore
-  alias CodingAgent.Tools.Task.Projection
   alias LemonCore.{Bus, Event}
+  alias LemonCore.TaskSurface.Projection
   alias LemonRouter.{ChannelContext, ToolStatusCoalescer}
 
   @terminal_event_types [
@@ -52,11 +51,7 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
   for the given child run.
   """
   def start_for_child_run(child_run_id, opts \\ []) when is_binary(child_run_id) do
-    binding =
-      case TaskProgressBindingStore.get_by_child_run_id(child_run_id) do
-        {:ok, binding} -> Map.merge(opts[:fallback_binding] || %{}, binding)
-        {:error, :not_found} -> opts[:fallback_binding] || %{}
-      end
+    binding = opts[:fallback_binding] || %{}
 
     cond do
       not is_map(binding) ->
@@ -131,11 +126,9 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
       )
     end
 
-    _ = safe_delete_binding(state.binding.child_run_id)
     {:stop, :normal, state}
   rescue
     _ ->
-      _ = safe_delete_binding(state.binding.child_run_id)
       {:stop, :normal, state}
   end
 
@@ -158,6 +151,7 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
   defp valid_binding?(_), do: false
 
   defp terminal_ok?(%Event{type: :task_completed}), do: true
+
   defp terminal_ok?(%Event{type: :run_completed, payload: payload}) when is_map(payload) do
     case payload do
       %{completed: %{ok: true}} -> true
@@ -165,11 +159,6 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
       _ -> false
     end
   end
-  defp terminal_ok?(_), do: false
 
-  defp safe_delete_binding(child_run_id) do
-    TaskProgressBindingStore.delete_by_child_run_id(child_run_id)
-  rescue
-    _ -> :ok
-  end
+  defp terminal_ok?(_), do: false
 end
