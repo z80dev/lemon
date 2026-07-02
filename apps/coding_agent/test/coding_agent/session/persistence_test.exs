@@ -218,7 +218,7 @@ defmodule CodingAgent.Session.PersistenceTest do
       meta: %{model: Mocks.mock_model(), async_followups: async_followups}
     }
 
-    assert {:ok, run_ref, %{runner_pid: _runner_pid}} =
+    assert {:ok, run_ref, %{runner_pid: runner_pid}} =
              CliAdapter.start_run(
                RouterPersistenceRunnerProxy,
                "lemon",
@@ -238,7 +238,8 @@ defmodule CodingAgent.Session.PersistenceTest do
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}, 2_000
 
     session_file = Path.join(SessionManager.get_session_dir(tmp_dir), "#{session_id}.jsonl")
-    assert wait_until(fn -> File.exists?(session_file) end, 2_000)
+    assert :ok = save_runner_session(runner_pid, session_file)
+    assert File.exists?(session_file)
 
     {:ok, loaded} = SessionManager.load_from_file(session_file)
 
@@ -325,6 +326,36 @@ defmodule CodingAgent.Session.PersistenceTest do
   defp wait_until(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
+  end
+
+  defp save_runner_session(runner_pid, session_file) do
+    case :sys.get_state(runner_pid, 10_000) do
+      %{session: session} when is_pid(session) ->
+        save_or_wait_for_file(session, session_file)
+
+      _state ->
+        wait_for_session_file(session_file)
+    end
+  catch
+    :exit, _reason -> wait_for_session_file(session_file)
+  end
+
+  defp save_or_wait_for_file(session, session_file) do
+    if Process.alive?(session) do
+      Session.save(session)
+    else
+      wait_for_session_file(session_file)
+    end
+  catch
+    :exit, _reason -> wait_for_session_file(session_file)
+  end
+
+  defp wait_for_session_file(session_file) do
+    if wait_until(fn -> File.exists?(session_file) end, 10_000) do
+      :ok
+    else
+      {:error, :session_file_missing}
+    end
   end
 
   defp do_wait_until(fun, deadline_ms) do

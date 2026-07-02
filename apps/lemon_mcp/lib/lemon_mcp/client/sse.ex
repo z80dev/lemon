@@ -16,7 +16,7 @@ defmodule LemonMCP.Client.SSE do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    gen_opts = Keyword.take(opts, [:name])
+    gen_opts = Keyword.take(opts, [:name, :timeout])
     GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 

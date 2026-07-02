@@ -489,6 +489,7 @@ Project configuration takes precedence over global configuration.
 | `type` | string | Yes | Must be `"stdio"` |
 | `command` | string | Yes | The command to execute |
 | `args` | array | No | Command arguments (default: `[]`) |
+| `ready_timeout_ms` | integer | No | Client readiness wait in milliseconds (default: `5000`) |
 | `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
 | `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs or names to allow or block |
 | `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
@@ -532,6 +533,7 @@ params and must return either `{:ok, result_map}` or `{:error, reason}`.
 | `url` | string | Yes | The MCP server URL |
 | `headers` | object | No | Additional HTTP headers |
 | `oauth` | object | No | OAuth settings: client-credentials `client_id` / `client_secret`, `client_secret_secret`, optional `token_secret`, or `flow: "authorization_code_pkce"` with public `client_id`, local `redirect_uri`, optional `scope` / `scopes`, `token_secret`, `authorization_timeout_ms`, `authorization_approval` (defaults true for local PKCE), and an optional runtime callback provider |
+| `ready_timeout_ms` | integer | No | Client startup/readiness wait in milliseconds (default: `5000`; PKCE authorization can extend this through `oauth.authorization_timeout_ms`) |
 | `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
 | `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs to allow or block |
 | `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
@@ -545,6 +547,8 @@ Streamable HTTP entries use supervised `LemonMCP.Client.HTTP` startup, perform t
 | `type` | string | Yes | Must be `"sse"` |
 | `url` | string | Yes | The MCP SSE endpoint URL |
 | `headers` | object | No | Additional HTTP headers |
+| `ready_timeout_ms` | integer | No | Client startup/readiness wait in milliseconds (default: `5000`) |
+| `timeout_ms` | integer | No | SSE stream and POST request timeout in milliseconds (default: `10000` when configured through `LemonSkills.McpSource`) |
 | `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
 | `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs to allow or block |
 | `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
