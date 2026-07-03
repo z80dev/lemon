@@ -1,4 +1,4 @@
-defmodule LemonCore.ModelPolicy.Migration do
+defmodule LemonChannels.ModelPolicy.Migration do
   @moduledoc """
   Migration utilities for transitioning from legacy policy storage to ModelPolicy.
 
@@ -9,17 +9,17 @@ defmodule LemonCore.ModelPolicy.Migration do
   ## Usage
 
       # Migrate all Telegram policies
-      LemonCore.ModelPolicy.Migration.migrate_telegram()
+      LemonChannels.ModelPolicy.Migration.migrate_telegram()
 
       # Dry run to see what would be migrated
-      LemonCore.ModelPolicy.Migration.migrate_telegram(dry_run: true)
+      LemonChannels.ModelPolicy.Migration.migrate_telegram(dry_run: true)
 
       # Check migration status
-      LemonCore.ModelPolicy.Migration.status()
+      LemonChannels.ModelPolicy.Migration.status()
   """
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Route
 
   require Logger
 

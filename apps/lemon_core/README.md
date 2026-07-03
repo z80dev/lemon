@@ -421,7 +421,6 @@ Shared-domain callers should prefer typed wrappers:
 - **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
-- **Model policies**: `LemonCore.ModelPolicyStore.put/2`, `get/1`, `list/0`, `delete/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
 - **Progress mapping**: `LemonCore.ProgressStore.put_run/3`, `get_run/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`

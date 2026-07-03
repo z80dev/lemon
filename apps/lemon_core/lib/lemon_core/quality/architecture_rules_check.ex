@@ -189,7 +189,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_core/lib/lemon_core/policy_store.ex",
         "apps/lemon_core/lib/lemon_core/introspection_store.ex",
         "apps/lemon_core/lib/lemon_core/project_binding_store.ex",
-        "apps/lemon_core/lib/lemon_core/model_policy_store.ex",
         "apps/lemon_core/lib/lemon_core/idempotency_store.ex"
       ],
       patterns: [
@@ -211,6 +210,20 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.put(:projects_dynamic",
         "LemonCore.Store.delete(:projects_dynamic",
         "LemonCore.Store.list(:projects_dynamic"
+      ]
+    },
+    %{
+      code: :model_policy_store_wrapper_bypass,
+      message: "Model-policy storage must go through LemonChannels.ModelPolicyStore",
+      files: ["apps/lemon_channels/lib/lemon_channels/**/*.ex"],
+      exclude: [
+        "apps/lemon_channels/lib/lemon_channels/model_policy_store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:model_policies",
+        "LemonCore.Store.put(:model_policies",
+        "LemonCore.Store.delete(:model_policies",
+        "LemonCore.Store.list(:model_policies"
       ]
     },
     %{

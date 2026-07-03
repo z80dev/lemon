@@ -1,4 +1,4 @@
-defmodule LemonCore.ModelPolicyStore do
+defmodule LemonChannels.ModelPolicyStore do
   @moduledoc """
   Typed wrapper for persisted model-policy records.
   """

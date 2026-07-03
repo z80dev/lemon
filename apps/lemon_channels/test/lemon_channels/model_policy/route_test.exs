@@ -1,8 +1,8 @@
-defmodule LemonCore.ModelPolicy.RouteTest do
+defmodule LemonChannels.ModelPolicy.RouteTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy.Route
 
   describe "new/4" do
     test "creates a route with all fields" do

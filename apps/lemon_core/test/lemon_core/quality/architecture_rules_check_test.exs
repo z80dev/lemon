@@ -304,11 +304,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
         """
       )
 
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_model_policy_store.ex",
+        """
+        defmodule LemonChannels.BadModelPolicyStore do
+          def bad(route_key), do: LemonCore.Store.get(:model_policies, route_key)
+        end
+        """
+      )
+
       assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
 
       assert Enum.any?(report.issues, fn issue ->
                issue.code == :shared_domain_store_wrapper_bypass and
                  issue.path == "apps/lemon_core/lib/lemon_core/bad_core_store.ex"
+             end)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :model_policy_store_wrapper_bypass and
+                 issue.path ==
+                   "apps/lemon_channels/lib/lemon_channels/bad_model_policy_store.ex"
              end)
     after
       File.rm_rf!(tmp_dir)
@@ -342,9 +358,9 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     try do
       write_file!(
         tmp_dir,
-        "apps/lemon_core/lib/lemon_core/model_policy_store.ex",
+        "apps/lemon_channels/lib/lemon_channels/model_policy_store.ex",
         """
-        defmodule LemonCore.ModelPolicyStore do
+        defmodule LemonChannels.ModelPolicyStore do
           def get(route_key), do: LemonCore.Store.get(:model_policies, route_key)
         end
         """

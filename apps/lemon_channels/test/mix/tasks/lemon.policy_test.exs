@@ -4,8 +4,8 @@ defmodule Mix.Tasks.Lemon.PolicyTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Route
   alias Mix.Tasks.Lemon.Policy
 
   setup do

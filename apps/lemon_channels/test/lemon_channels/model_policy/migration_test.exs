@@ -1,10 +1,10 @@
-defmodule LemonCore.ModelPolicy.MigrationTest do
+defmodule LemonChannels.ModelPolicy.MigrationTest do
   @moduledoc false
   use ExUnit.Case
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Migration
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Migration
+  alias LemonChannels.ModelPolicy.Route
 
   setup do
     # Clean up before each test

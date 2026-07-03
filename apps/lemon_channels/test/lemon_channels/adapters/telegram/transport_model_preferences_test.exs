@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.StateStore
-  alias LemonCore.ModelPolicy
+  alias LemonChannels.ModelPolicy
 
   setup do
     ModelPolicy.list()

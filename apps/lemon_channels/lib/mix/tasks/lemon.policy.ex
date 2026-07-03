@@ -41,8 +41,8 @@ defmodule Mix.Tasks.Lemon.Policy do
 
   use Mix.Task
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Route
 
   @placeholder_model_id "_thinking_only"
   @thinking_levels ~w(off minimal low medium high xhigh)

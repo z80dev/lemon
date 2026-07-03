@@ -1,7 +1,7 @@
-defmodule LemonCore.ModelPolicyStoreTest do
+defmodule LemonChannels.ModelPolicyStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.ModelPolicyStore
+  alias LemonChannels.ModelPolicyStore
 
   test "stores and lists model policies through the typed wrapper" do
     route_key = "telegram:default:peer:#{System.unique_integer([:positive])}"

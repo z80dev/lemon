@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
-  alias LemonCore.ModelPolicy
+  alias LemonChannels.ModelPolicy
 
   @provider_env_vars [
     "ANTHROPIC_API_KEY",

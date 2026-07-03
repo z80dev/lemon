@@ -1,4 +1,4 @@
-defmodule LemonCore.ModelPolicy.Route do
+defmodule LemonChannels.ModelPolicy.Route do
   @moduledoc """
   Route key handling for model policies.
 

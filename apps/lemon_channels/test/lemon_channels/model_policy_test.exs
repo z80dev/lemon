@@ -1,9 +1,9 @@
-defmodule LemonCore.ModelPolicyTest do
+defmodule LemonChannels.ModelPolicyTest do
   @moduledoc false
   use ExUnit.Case
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Route
 
   # Each test gets a clean store via the Test isolation
   setup do

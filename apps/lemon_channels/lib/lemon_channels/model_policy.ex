@@ -1,4 +1,4 @@
-defmodule LemonCore.ModelPolicy do
+defmodule LemonChannels.ModelPolicy do
   @moduledoc """
   Route-based model policy management for Lemon.
 
@@ -40,8 +40,8 @@ defmodule LemonCore.ModelPolicy do
       policies = ModelPolicy.list("telegram")
   """
 
-  alias LemonCore.ModelPolicy.Route
-  alias LemonCore.ModelPolicyStore
+  alias LemonChannels.ModelPolicy.Route
+  alias LemonChannels.ModelPolicyStore
 
   require Logger
 

@@ -70,7 +70,6 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
-| `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
@@ -287,7 +286,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
 ### Specialized APIs
 
