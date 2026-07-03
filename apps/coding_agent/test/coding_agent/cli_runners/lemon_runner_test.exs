@@ -5,6 +5,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.Session.Presentation
+  alias CodingAgent.Session.RunTranslator
 
   alias AgentCore.Test.Mocks
   alias AgentCore.Types.AgentToolResult
@@ -1496,29 +1497,33 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
   describe "LemonRunner state structure" do
     test "state struct has all expected fields" do
-      # Verify the struct can be created with all fields
+      translator =
+        RunTranslator.new(
+          emitter: LemonRunner.Emitter,
+          emitter_state: %LemonRunner.Emitter{stream: nil, factory: EventFactory.new("lemon")},
+          engine: "lemon",
+          label: "LemonRunner",
+          cwd: "/tmp"
+        )
+
       state = %LemonRunner{
         session: nil,
         session_ref: nil,
         session_id: "test_123",
         stream: nil,
-        factory: EventFactory.new("lemon"),
         prompt: "test prompt",
         cwd: "/tmp",
         resume: nil,
-        accumulated_text: "",
-        pending_actions: %{},
-        started_emitted: false,
-        completed_emitted: false
+        translator: translator
       }
 
       assert state.session_id == "test_123"
       assert state.prompt == "test prompt"
       assert state.cwd == "/tmp"
-      assert state.accumulated_text == ""
-      assert state.pending_actions == %{}
-      assert state.started_emitted == false
-      assert state.completed_emitted == false
+      assert state.translator.accumulated_text == ""
+      assert state.translator.pending_actions == %{}
+      assert state.translator.started_emitted == false
+      assert state.translator.completed_emitted == false
     end
   end
 end

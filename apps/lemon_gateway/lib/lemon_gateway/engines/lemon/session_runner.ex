@@ -4,8 +4,8 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
   use GenServer
 
   alias CodingAgent.Session.Presentation
+  alias CodingAgent.Session.RunTranslator
   alias LemonCore.ResumeToken
-  alias LemonGateway.Event
   alias LemonGateway.Types.Job
 
   require Logger
@@ -24,16 +24,74 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
     :run_id,
     :session_key,
     :agent_id,
-    :accumulated_text,
-    :pending_actions,
-    :reasoning_accumulator,
-    :resume_token,
-    :started_emitted,
-    :completed_emitted,
-    :delta_seq,
-    :first_token_emitted,
-    :delta_callback
+    :translator
   ]
+
+  defmodule Emitter do
+    @moduledoc false
+
+    @behaviour CodingAgent.Session.RunTranslator.Emitter
+
+    alias CodingAgent.Session.Presentation
+    alias LemonGateway.Event
+
+    defstruct [:sink_pid, :run_ref, :session]
+
+    @impl true
+    def emit_started(state, fields) do
+      event =
+        Event.started(%{
+          engine: fields.engine,
+          resume: fields.resume,
+          meta: fields.meta
+        })
+
+      emit_event(state, event)
+      state
+    end
+
+    @impl true
+    def emit_action_event(state, fields) do
+      action =
+        Event.action(%{
+          id: fields.id,
+          kind: to_string(fields.kind),
+          title: fields.title,
+          detail: fields.detail
+        })
+
+      event =
+        Event.action_event(%{
+          engine: fields.engine,
+          action: action,
+          phase: fields.phase,
+          ok: fields.ok,
+          message: fields.message,
+          level: fields.level
+        })
+
+      emit_event(state, event)
+      state
+    end
+
+    @impl true
+    def emit_delta(state, text, _meta) do
+      send(state.sink_pid, {:engine_delta, state.run_ref, text})
+      state
+    end
+
+    @impl true
+    def emit_completed(state, fields) do
+      event = Event.completed(fields)
+
+      emit_event(state, event)
+      Presentation.finalize_session(state)
+    end
+
+    defp emit_event(state, event) do
+      send(state.sink_pid, {:engine_event, state.run_ref, event})
+    end
+  end
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -74,6 +132,19 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
     extra_tools = gateway_extra_tools(job, run_opts)
     stream_fn = get_opt(run_opts, :stream_fn)
 
+    emitter_state = %Emitter{sink_pid: sink_pid, run_ref: run_ref}
+
+    translator =
+      RunTranslator.new(
+        emitter: Emitter,
+        emitter_state: emitter_state,
+        engine: @engine,
+        label: "Lemon SessionRunner",
+        cwd: cwd,
+        run_id: run_id,
+        delta_callback: get_opt(run_opts, :delta_callback)
+      )
+
     state = %__MODULE__{
       sink_pid: sink_pid,
       run_ref: run_ref,
@@ -83,14 +154,7 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
       run_id: run_id,
       session_key: session_key,
       agent_id: agent_id,
-      accumulated_text: "",
-      pending_actions: %{},
-      reasoning_accumulator: Presentation.new_reasoning_accumulator(),
-      started_emitted: false,
-      completed_emitted: false,
-      delta_seq: 0,
-      first_token_emitted: false,
-      delta_callback: get_opt(run_opts, :delta_callback)
+      translator: translator
     }
 
     session_opts =
@@ -128,12 +192,19 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
 
         session_ref = Process.monitor(session)
 
+        translator = %{
+          state.translator
+          | session_id: session_id,
+            emitter_state: %{state.translator.emitter_state | session: session}
+        }
+
         {:ok,
          %{
            state
            | session: session,
              session_ref: session_ref,
-             session_id: session_id
+             session_id: session_id,
+             translator: translator
          }}
 
       {:error, reason} ->
@@ -155,295 +226,26 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    state = handle_cancel(reason, state)
-    {:noreply, state}
+    if state.session do
+      CodingAgent.Session.abort(state.session)
+    end
+
+    {:noreply, %{state | translator: RunTranslator.handle_cancel(state.translator, reason)}}
   end
 
   @impl true
   def handle_info({:session_event, _session_id, event}, state) do
-    state = translate_and_emit(event, state)
-    {:noreply, state}
+    {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.debug("Lemon SessionRunner: Session process down: #{inspect(reason)}")
 
-    state =
-      if state.started_emitted and not state.completed_emitted do
-        emit_completed_error(state, "Session terminated: #{inspect(reason)}")
-      else
-        state
-      end
-
-    {:stop, :normal, state}
+    {:stop, :normal,
+     %{state | translator: RunTranslator.handle_session_down(state.translator, reason)}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
-
-  defp handle_cancel(reason, state) do
-    if state.session do
-      CodingAgent.Session.abort(state.session)
-    end
-
-    if state.started_emitted and not state.completed_emitted do
-      emit_completed_error(state, Presentation.cancel_error_message(reason))
-    else
-      state
-    end
-  end
-
-  defp translate_and_emit({:agent_start}, state) do
-    token = ResumeToken.new(@engine, state.session_id)
-    event = Event.started(%{engine: @engine, resume: token, meta: %{cwd: state.cwd}})
-
-    emit_event(state, event)
-    %{state | resume_token: token, started_emitted: true}
-  end
-
-  defp translate_and_emit({:tool_execution_start, id, name, args}, state) do
-    action_id = "tool_#{id}"
-    kind = Presentation.tool_kind(name)
-    title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args}
-
-    action = %{id: action_id, kind: kind, title: title, detail: detail}
-
-    emit_action_event(state, action_id, kind, title, :started, detail: detail)
-
-    pending = Map.put(state.pending_actions, action_id, action)
-    %{state | pending_actions: pending}
-  end
-
-  defp translate_and_emit({:tool_execution_update, id, _name, _args, partial_result}, state) do
-    action_id = "tool_#{id}"
-
-    case Map.get(state.pending_actions, action_id) do
-      nil ->
-        state
-
-      action ->
-        detail = Map.merge(action.detail, %{partial_result: partial_result})
-
-        emit_action_event(state, action_id, action.kind, action.title, :updated, detail: detail)
-
-        updated_action = %{action | detail: detail}
-        pending = Map.put(state.pending_actions, action_id, updated_action)
-        %{state | pending_actions: pending}
-    end
-  end
-
-  defp translate_and_emit({:tool_execution_end, id, name, result, is_error}, state) do
-    action_id = "tool_#{id}"
-
-    case Map.get(state.pending_actions, action_id) do
-      nil ->
-        kind = Presentation.tool_kind(name)
-        title = Presentation.tool_title(name, %{})
-
-        detail =
-          %{name: name, result: Presentation.truncate_result(result)}
-          |> Presentation.maybe_put_result_meta(result, name)
-
-        ok? = Presentation.action_ok?(name, result, is_error)
-
-        emit_action_event(state, action_id, kind, title, :completed,
-          ok: ok?,
-          detail: detail
-        )
-
-        state
-
-      action ->
-        detail =
-          action.detail
-          |> Map.merge(%{result: Presentation.truncate_result(result)})
-          |> Presentation.maybe_put_result_meta(result, name)
-
-        ok? = Presentation.action_ok?(name, result, is_error)
-
-        emit_action_event(state, action_id, action.kind, action.title, :completed,
-          ok: ok?,
-          detail: detail
-        )
-
-        pending = Map.delete(state.pending_actions, action_id)
-        %{state | pending_actions: pending}
-    end
-  end
-
-  defp translate_and_emit({:message_update, _msg, delta}, state) when is_binary(delta) do
-    state = emit_delta(state, delta)
-    %{state | accumulated_text: state.accumulated_text <> delta}
-  end
-
-  defp translate_and_emit({:message_update, msg, event}, state) when is_tuple(event) do
-    case emit_reasoning_action(event, state) do
-      {true, state} ->
-        state
-
-      {false, state} ->
-        case Presentation.text_delta_from_message_update(msg, event, state.accumulated_text) do
-          text when is_binary(text) and text != "" ->
-            state = emit_delta(state, text)
-            %{state | accumulated_text: state.accumulated_text <> text}
-
-          _ ->
-            state
-        end
-    end
-  end
-
-  defp translate_and_emit({:message_update, _msg, _delta}, state), do: state
-
-  defp translate_and_emit({:agent_end, messages}, state) do
-    answer = Presentation.extract_answer(messages, state.accumulated_text)
-    usage = Presentation.build_usage(messages)
-
-    emit_completed_ok(state, answer, usage)
-  end
-
-  defp translate_and_emit({:error, reason, partial_state}, state) do
-    error_msg = Presentation.format_error(reason, state)
-
-    Logger.error(
-      "Lemon SessionRunner stream error " <>
-        "run_id=#{inspect(state.run_id)} " <>
-        "session_id=#{inspect(state.session_id)} " <>
-        "error=#{error_msg} " <>
-        "reason=#{inspect(reason, limit: 80, printable_limit: 8_000)} " <>
-        "answer_bytes=#{byte_size(state.accumulated_text || "")} " <>
-        "pending_actions=#{map_size(state.pending_actions || %{})}"
-    )
-
-    emit_completed_error(state, error_msg, partial_state)
-  end
-
-  defp translate_and_emit({:turn_start}, state), do: state
-  defp translate_and_emit({:turn_end, _msg, _results}, state), do: state
-  defp translate_and_emit({:message_start, _msg}, state), do: state
-  defp translate_and_emit({:message_end, _msg}, state), do: state
-  defp translate_and_emit({:extension_status_report, _report}, state), do: state
-  defp translate_and_emit({:compaction_complete, _info}, state), do: state
-  defp translate_and_emit({:branch_summarized, _info}, state), do: state
-  defp translate_and_emit(_event, state), do: state
-
-  defp emit_delta(state, text) when is_binary(text) and byte_size(text) > 0 do
-    new_seq = state.delta_seq + 1
-
-    state =
-      if not state.first_token_emitted do
-        if state.delta_callback do
-          state.delta_callback.(:first_token, %{run_id: state.run_id, seq: new_seq})
-        end
-
-        %{state | first_token_emitted: true}
-      else
-        state
-      end
-
-    delta_event = %{
-      type: :delta,
-      run_id: state.run_id,
-      ts_ms: System.system_time(:millisecond),
-      seq: new_seq,
-      text: text
-    }
-
-    send(state.sink_pid, {:engine_delta, state.run_ref, text})
-
-    if state.delta_callback do
-      state.delta_callback.(:delta, delta_event)
-    end
-
-    %{state | delta_seq: new_seq}
-  end
-
-  defp emit_delta(state, _text), do: state
-
-  defp emit_reasoning_action(event, state) do
-    case Presentation.reasoning_action(event, state.reasoning_accumulator) do
-      {:emit, action, accumulator} ->
-        emit_action_event(state, action.id, action.kind, action.title, action.phase,
-          ok: action.ok,
-          detail: action.detail
-        )
-
-        {true, %{state | reasoning_accumulator: accumulator}}
-
-      {:skip, %Presentation.ReasoningAccumulator{} = accumulator} ->
-        {true, %{state | reasoning_accumulator: accumulator}}
-
-      {:ignore, %Presentation.ReasoningAccumulator{} = accumulator} ->
-        {false, %{state | reasoning_accumulator: accumulator}}
-    end
-  end
-
-  defp emit_completed_ok(state, answer, usage) do
-    if state.completed_emitted do
-      state
-    else
-      event =
-        Event.completed(%{
-          engine: @engine,
-          ok: true,
-          answer: answer,
-          resume: state.resume_token,
-          usage: usage
-        })
-
-      emit_event(state, event)
-      state = %{state | completed_emitted: true}
-      Presentation.finalize_session(state)
-    end
-  end
-
-  defp emit_completed_error(state, error_msg, partial_state \\ nil) do
-    if state.completed_emitted do
-      state
-    else
-      usage = Presentation.build_failure_usage(state, partial_state)
-
-      event =
-        Event.completed(%{
-          engine: @engine,
-          ok: false,
-          error: error_msg,
-          answer: state.accumulated_text,
-          resume: state.resume_token,
-          usage: usage
-        })
-
-      emit_event(state, event)
-      state = %{state | completed_emitted: true}
-      Presentation.finalize_session(state)
-    end
-  end
-
-  defp emit_action_event(state, action_id, kind, title, phase, opts) do
-    action =
-      Event.action(%{
-        id: action_id,
-        kind: to_string(kind),
-        title: title,
-        detail: Keyword.get(opts, :detail)
-      })
-
-    event =
-      Event.action_event(%{
-        engine: @engine,
-        action: action,
-        phase: phase,
-        ok: Keyword.get(opts, :ok),
-        message: Keyword.get(opts, :message),
-        level: Keyword.get(opts, :level)
-      })
-
-    emit_event(state, event)
-  end
-
-  defp emit_event(state, event) do
-    send(state.sink_pid, {:engine_event, state.run_ref, event})
-  end
 
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
 

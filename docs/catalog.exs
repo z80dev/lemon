@@ -110,7 +110,7 @@
   %{
     path: "docs/config.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-03],
+    last_reviewed: ~D[2026-07-02],
     max_age_days: 60
   },
   %{
@@ -128,7 +128,7 @@
   %{
     path: "docs/extensions.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-03],
+    last_reviewed: ~D[2026-07-02],
     max_age_days: 60
   },
   %{
