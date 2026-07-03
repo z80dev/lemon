@@ -1,7 +1,7 @@
-defmodule LemonCore.RoutingFeedbackStoreTest do
+defmodule LemonRouter.RoutingFeedbackStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.RoutingFeedbackStore
+  alias LemonRouter.RoutingFeedbackStore
 
   # Start a store instance backed by an in-memory (temp dir) database for each test.
   setup do
@@ -274,7 +274,9 @@ defmodule LemonCore.RoutingFeedbackStoreTest do
       assert {:insufficient_data, 0} = best_model(pid, context)
     end
 
-    test "J1: LIKE metachar % in lookup context_key must not cross-match other workspaces", %{pid: pid} do
+    test "J1: LIKE metachar % in lookup context_key must not cross-match other workspaces", %{
+      pid: pid
+    } do
       # Seed data for workspace /project_foo (no metacharacters in path)
       for _ <- 1..5, do: record(pid, "code|-|/project_foo|p|model-a", :success)
 
@@ -283,7 +285,9 @@ defmodule LemonCore.RoutingFeedbackStoreTest do
       assert {:insufficient_data, 0} = best_model(pid, "code|-|/proj%")
     end
 
-    test "J1: LIKE metachar _ in lookup context_key must not cross-match other workspaces", %{pid: pid} do
+    test "J1: LIKE metachar _ in lookup context_key must not cross-match other workspaces", %{
+      pid: pid
+    } do
       # Seed data for workspace /tmp/doneXnow (X is a literal character)
       for _ <- 1..5, do: record(pid, "code|-|/tmp/doneXnow|p|model-b", :success)
 

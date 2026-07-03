@@ -1,7 +1,7 @@
-defmodule LemonCore.RolloutGateStoreTest do
+defmodule LemonRouter.RolloutGateStoreTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.RolloutGate
+  alias LemonRouter.RolloutGate
 
   # ── Eval fixtures ────────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ defmodule LemonCore.RolloutGateStoreTest do
 
   describe "public API" do
     test "does not expose the deprecated plural rollout module" do
-      refute Code.ensure_loaded?(LemonCore.RolloutGates)
+      refute Code.ensure_loaded?(LemonRouter.RolloutGates)
     end
   end
 end

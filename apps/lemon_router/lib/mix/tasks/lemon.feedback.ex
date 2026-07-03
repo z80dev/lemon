@@ -96,9 +96,9 @@ defmodule Mix.Tasks.Lemon.Feedback do
   defp run_stats(_opts) do
     shell = Mix.shell()
 
-    case LemonCore.RoutingFeedbackStore.store_stats() do
+    case LemonRouter.RoutingFeedbackStore.store_stats() do
       {:ok, stats} ->
-        min_n = LemonCore.RoutingFeedbackStore.min_sample_size()
+        min_n = LemonRouter.RoutingFeedbackStore.min_sample_size()
         shell.info("Routing Feedback Store")
         shell.info("  Total records       : #{stats.total_records}")
         shell.info("  Unique fingerprints : #{stats.unique_fingerprints}")
@@ -122,18 +122,18 @@ defmodule Mix.Tasks.Lemon.Feedback do
     result =
       cond do
         ws = opts[:workspace] ->
-          LemonCore.RoutingFeedbackReport.by_workspace(ws, report_opts)
+          LemonRouter.RoutingFeedbackReport.by_workspace(ws, report_opts)
 
         fam = opts[:family] ->
-          LemonCore.RoutingFeedbackReport.by_family(fam, report_opts)
+          LemonRouter.RoutingFeedbackReport.by_family(fam, report_opts)
 
         true ->
-          LemonCore.RoutingFeedbackReport.list_all(report_opts)
+          LemonRouter.RoutingFeedbackReport.list_all(report_opts)
       end
 
     case result do
       {:ok, entries} ->
-        shell.info(LemonCore.RoutingFeedbackReport.format(entries))
+        shell.info(LemonRouter.RoutingFeedbackReport.format(entries))
 
       {:error, reason} ->
         Mix.raise("Failed to list routing feedback: #{inspect(reason)}")
@@ -144,7 +144,7 @@ defmodule Mix.Tasks.Lemon.Feedback do
     shell = Mix.shell()
     verbose? = opts[:verbose] || false
 
-    case LemonCore.RoutingFeedbackStore.aggregate(key) do
+    case LemonRouter.RoutingFeedbackStore.aggregate(key) do
       {:ok, agg} ->
         rate_pct = Float.round(agg.success_rate * 100, 1)
         shell.info("Fingerprint : #{key}")
@@ -162,7 +162,7 @@ defmodule Mix.Tasks.Lemon.Feedback do
         end
 
       {:insufficient_data, n} ->
-        min_n = LemonCore.RoutingFeedbackStore.min_sample_size()
+        min_n = LemonRouter.RoutingFeedbackStore.min_sample_size()
         shell.info("Fingerprint : #{key}")
         shell.info("  Insufficient data: #{n} sample(s) (min_sample_size=#{min_n})")
 

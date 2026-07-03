@@ -304,7 +304,7 @@ jobs:
       - name: Adaptive eval gate check (routing_feedback)
         run: |
           MIX_ENV=test mix run --no-start -e "
-          alias LemonCore.RolloutGate
+          alias LemonRouter.RolloutGate
           # Gate check against empty store — we expect {:fail, [\"sample_size: ...\"]}.
           # This proves the gate module loads and executes without crashing.
           result = RolloutGate.evaluate_routing_from_store(%{total_records: 0, unique_fingerprints: 0}, [])
@@ -321,7 +321,7 @@ jobs:
       - name: Adaptive eval gate check (skill_synthesis_drafts)
         run: |
           MIX_ENV=test mix run --no-start -e "
-          alias LemonCore.RolloutGate
+          alias LemonRouter.RolloutGate
           result = RolloutGate.evaluate_synthesis_from_run(%{total_candidates: 0, generated: [], skipped: []})
           case result do
             {:fail, failures} ->

@@ -1,4 +1,4 @@
-defmodule LemonCore.RoutingFingerprintMismatchTest do
+defmodule LemonRouter.RoutingFingerprintMismatchTest do
   @moduledoc """
   Regression tests for C1: routing fingerprint mismatch between ingest (write)
   and orchestrator lookup (read) paths.
@@ -17,7 +17,8 @@ defmodule LemonCore.RoutingFingerprintMismatchTest do
 
   @moduletag :tmp_dir
 
-  alias LemonCore.{MemoryIngest, MemoryStore, RoutingFeedbackStore, TaskFingerprint}
+  alias LemonCore.{Bus, Event, MemoryIngest, MemoryStore, TaskFingerprint}
+  alias LemonRouter.RoutingFeedbackStore
 
   setup %{tmp_dir: tmp_dir} do
     routing_dir = Path.join(tmp_dir, "rfm_#{System.unique_integer([:positive])}")
@@ -40,8 +41,7 @@ defmodule LemonCore.RoutingFingerprintMismatchTest do
             }
           }
         end,
-        memory_store: memory_pid,
-        routing_feedback_store: feedback_pid
+        memory_store: memory_pid
       )
 
     on_exit(fn ->
@@ -84,10 +84,13 @@ defmodule LemonCore.RoutingFingerprintMismatchTest do
     feedback_pid: feedback_pid,
     ingest_pid: ingest_pid
   } do
+    Bus.subscribe("routing_feedback")
     {record, summary} = sample_inputs()
 
     for idx <- 1..3 do
       MemoryIngest.ingest(ingest_pid, "run_rfm_#{idx}", record, summary)
+      assert_receive %Event{type: :routing_feedback, payload: payload}
+      assert payload.fingerprint_key =~ "code|-|/workspace|anthropic|claude-sonnet"
     end
 
     :sys.get_state(ingest_pid)

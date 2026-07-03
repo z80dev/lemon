@@ -1,4 +1,4 @@
-defmodule LemonCore.RolloutGate do
+defmodule LemonRouter.RolloutGate do
   @routing_min_samples 50
   @routing_min_success_delta 0.05
   @routing_max_retry_delta_abs 0.05
@@ -72,7 +72,7 @@ defmodule LemonCore.RolloutGate do
      stops new data from being written but does not delete existing records.
 
   4. **Re-evaluation**: after rollback, investigate the feedback store via
-     `LemonCore.RoutingFeedbackReport.list_all/1` or the draft store via
+     `LemonRouter.RoutingFeedbackReport.list_all/1` or the draft store via
      `mix lemon.skill draft list`.  Re-run `evaluate_routing_feedback/1` or
      `evaluate_synthesis/1` with fresh metrics before re-enabling.
 
@@ -86,7 +86,7 @@ defmodule LemonCore.RolloutGate do
         baseline_retry_rate: 0.13
       }
 
-      case LemonCore.RolloutGate.evaluate_routing_feedback(metrics) do
+      case LemonRouter.RolloutGate.evaluate_routing_feedback(metrics) do
         {:ready, computed} ->
           IO.puts("Gate passed — promote routing_feedback to default-on")
           IO.inspect(computed)

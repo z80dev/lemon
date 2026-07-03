@@ -78,7 +78,7 @@ If an enabled feature causes problems, disable it immediately:
 ## Routing Feedback Gates
 
 The `routing_feedback` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonCore.RolloutGate.evaluate_routing_from_store/2`.
+Gates are evaluated via `LemonRouter.RolloutGate.evaluate_routing_from_store/2`.
 
 | Gate | Threshold | What it measures |
 |---|---|---|
@@ -89,7 +89,7 @@ Gates are evaluated via `LemonCore.RolloutGate.evaluate_routing_from_store/2`.
 ### How to check
 
 ```elixir
-alias LemonCore.{RoutingFeedbackStore, RolloutGate}
+alias LemonRouter.{RoutingFeedbackStore, RolloutGate}
 
 {:ok, stats} = RoutingFeedbackStore.store_stats()
 {:ok, fingerprints} = RoutingFeedbackStore.list_fingerprints()
@@ -112,7 +112,7 @@ RolloutGate.evaluate_routing_from_store(stats, fingerprints)
 ## Skill Synthesis Gates
 
 The `skill_synthesis_drafts` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonCore.RolloutGate.evaluate_synthesis_from_run/1`.
+Gates are evaluated via `LemonRouter.RolloutGate.evaluate_synthesis_from_run/1`.
 
 | Gate | Threshold | What it measures |
 |---|---|---|
@@ -124,7 +124,7 @@ Gates are evaluated via `LemonCore.RolloutGate.evaluate_synthesis_from_run/1`.
 
 ```elixir
 alias LemonSkills.Synthesis.Pipeline
-alias LemonCore.RolloutGate
+alias LemonRouter.RolloutGate
 
 {:ok, result} = Pipeline.run(:agent, "my-agent-id", max_docs: 50)
 RolloutGate.evaluate_synthesis_from_run(result)
@@ -159,6 +159,6 @@ Before setting a flag to `"default-on"` in the codebase:
 
 - [`docs/user-guide/adaptive.md`](adaptive.md) — using adaptive features day-to-day
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
-- `LemonCore.RolloutGate` — module documentation and gate thresholds
+- `LemonRouter.RolloutGate` — module documentation and gate thresholds
 
 *Last reviewed: 2026-05-16*

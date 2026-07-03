@@ -15,6 +15,7 @@ defmodule LemonCore.Bus do
   - `"cron"` - Cron/automation events
   - `"exec_approvals"` - Execution approval events
   - `"nodes"` - Node pairing/invoke events
+  - `"routing_feedback"` - Finalized run feedback samples for router-owned model selection
   - `"system"` - System-wide events
   - `"logs"` - Log events
 

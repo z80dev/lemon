@@ -1,4 +1,4 @@
-defmodule LemonCore.RolloutGateTest do
+defmodule LemonRouter.RolloutGateTest do
   @moduledoc """
   Eval fixtures for the rollout gate module (M7-03).
 
@@ -33,7 +33,7 @@ defmodule LemonCore.RolloutGateTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonCore.RolloutGate
+  alias LemonRouter.RolloutGate
 
   # ── Threshold constants ────────────────────────────────────────────────────
 

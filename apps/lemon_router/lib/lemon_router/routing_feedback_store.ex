@@ -1,4 +1,4 @@
-defmodule LemonCore.RoutingFeedbackStore do
+defmodule LemonRouter.RoutingFeedbackStore do
   @moduledoc """
   SQLite-backed store for routing feedback samples.
 
@@ -14,12 +14,12 @@ defmodule LemonCore.RoutingFeedbackStore do
     `{:insufficient_data, n}` rather than raising.
   - A `min_sample_size` threshold (default `#{__MODULE__}.min_sample_size/0`)
     guards aggregates so the router never acts on statistically weak data.
-  - Gated behind the `routing_feedback` feature flag.  When the flag is off,
-    `record/3` is a no-op and `aggregate/1` returns `{:insufficient_data, 0}`.
+  - The write path is gated before Bus publication by `LemonCore.MemoryIngest`;
+    router reads are gated by the caller before consulting historical data.
 
   ## Usage
 
-      # Called by MemoryIngest when routing_feedback flag is on
+      # Called by the router-owned Bus subscriber when routing_feedback flag is on
       RoutingFeedbackStore.record(fingerprint_key, outcome, duration_ms)
 
       # Called by router to read aggregate stats
@@ -30,7 +30,7 @@ defmodule LemonCore.RoutingFeedbackStore do
 
   ## Configuration
 
-      config :lemon_core, LemonCore.RoutingFeedbackStore,
+      config :lemon_router, LemonRouter.RoutingFeedbackStore,
         path: "~/.lemon/store",          # directory — routing_feedback.sqlite3 created inside
         min_sample_size: 5,              # minimum samples before returning aggregate
         retention_ms: 30 * 24 * 3600_000 # 30 days (default)
@@ -39,6 +39,7 @@ defmodule LemonCore.RoutingFeedbackStore do
   use GenServer
   require Logger
 
+  alias LemonCore.{Bus, Event}
   alias Exqlite.Sqlite3
 
   @default_min_sample_size 5
@@ -112,7 +113,8 @@ defmodule LemonCore.RoutingFeedbackStore do
   # ── Public API ────────────────────────────────────────────────────────────────
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, Keyword.delete(opts, :name), name: name)
   end
 
   @doc """
@@ -120,7 +122,7 @@ defmodule LemonCore.RoutingFeedbackStore do
   """
   @spec min_sample_size() :: pos_integer()
   def min_sample_size do
-    config = Application.get_env(:lemon_core, __MODULE__, [])
+    config = Application.get_env(:lemon_router, __MODULE__, [])
     Keyword.get(config, :min_sample_size, @default_min_sample_size)
   end
 
@@ -212,34 +214,130 @@ defmodule LemonCore.RoutingFeedbackStore do
 
   @impl true
   def init(opts) do
-    config = Keyword.merge(Application.get_env(:lemon_core, __MODULE__, []), opts)
+    Bus.subscribe("routing_feedback")
+
+    config = Keyword.merge(Application.get_env(:lemon_router, __MODULE__, []), opts)
     path = resolve_path(config)
     retention_ms = Keyword.get(config, :retention_ms, @default_retention_ms)
     min_samples = Keyword.get(config, :min_sample_size, @default_min_sample_size)
 
-    with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, conn} <- Sqlite3.open(path),
-         :ok <- init_db(conn),
-         {:ok, stmts} <- prepare_statements(conn) do
-      schedule_sweep()
-
-      {:ok,
-       %{
-         conn: conn,
-         stmts: stmts,
-         path: path,
-         retention_ms: retention_ms,
-         min_sample_size: min_samples
-       }}
-    else
-      {:error, reason} ->
-        Logger.error("[RoutingFeedbackStore] init failed: #{inspect(reason)}")
-        {:stop, {:init_failed, reason}}
-    end
+    {:ok,
+     %{
+       conn: nil,
+       stmts: nil,
+       path: path,
+       retention_ms: retention_ms,
+       min_sample_size: min_samples,
+       sweep_scheduled?: false
+     }}
   end
 
   @impl true
   def handle_cast({:record, fingerprint_key, outcome_str, duration_ms}, state) do
+    {:noreply, record_sample(state, fingerprint_key, outcome_str, duration_ms)}
+  end
+
+  @impl true
+  def handle_call({:aggregate, fingerprint_key}, _from, state) do
+    case ensure_open(state) do
+      {:ok, state} ->
+        result = do_aggregate(state, fingerprint_key)
+        {:reply, result, state}
+
+      {:error, _reason, state} ->
+        {:reply, {:insufficient_data, 0}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(:list_fingerprints, _from, state) do
+    case ensure_open(state) do
+      {:ok, state} -> {:reply, do_list_fingerprints(state), state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(:store_stats, _from, state) do
+    case ensure_open(state) do
+      {:ok, state} -> {:reply, do_store_stats(state), state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:best_model_for_context, context_key}, _from, state) do
+    case ensure_open(state) do
+      {:ok, state} ->
+        {:reply, do_best_model_for_context(state, context_key), state}
+
+      {:error, _reason, state} ->
+        {:reply, {:insufficient_data, 0}, state}
+    end
+  end
+
+  @impl true
+  def handle_info(
+        %Event{
+          type: :routing_feedback,
+          payload: %{
+            fingerprint_key: fingerprint_key,
+            outcome: outcome,
+            duration_ms: duration_ms
+          }
+        },
+        state
+      )
+      when is_binary(fingerprint_key) and is_atom(outcome) do
+    {:noreply, record_sample(state, fingerprint_key, Atom.to_string(outcome), duration_ms)}
+  end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    case ensure_open(state) do
+      {:ok, state} ->
+        cutoff = System.system_time(:millisecond) - state.retention_ms
+
+        with :ok <- Sqlite3.reset(state.stmts.sweep),
+             :ok <- Sqlite3.bind(state.stmts.sweep, [cutoff]),
+             :done <- Sqlite3.step(state.conn, state.stmts.sweep) do
+          :ok
+        else
+          err -> Logger.warning("[RoutingFeedbackStore] sweep failed: #{inspect(err)}")
+        end
+
+        {:noreply, schedule_sweep(%{state | sweep_scheduled?: false})}
+
+      {:error, _reason, state} ->
+        {:noreply, %{state | sweep_scheduled?: false}}
+    end
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, %{conn: conn}) when not is_nil(conn) do
+    Sqlite3.close(conn)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  # ── Private helpers ────────────────────────────────────────────────────────────
+
+  defp record_sample(state, fingerprint_key, outcome_str, duration_ms) do
+    case ensure_open(state) do
+      {:ok, state} ->
+        do_record_sample(state, fingerprint_key, outcome_str, duration_ms)
+
+      {:error, _reason, state} ->
+        state
+    end
+  end
+
+  defp do_record_sample(state, fingerprint_key, outcome_str, duration_ms) do
     now = System.system_time(:millisecond)
 
     with :ok <- Sqlite3.reset(state.stmts.insert),
@@ -251,57 +349,23 @@ defmodule LemonCore.RoutingFeedbackStore do
         Logger.warning("[RoutingFeedbackStore] record failed: #{inspect(err)}")
     end
 
-    {:noreply, state}
+    state
   end
 
-  @impl true
-  def handle_call({:aggregate, fingerprint_key}, _from, state) do
-    result = do_aggregate(state, fingerprint_key)
-    {:reply, result, state}
-  end
+  defp ensure_open(%{conn: conn} = state) when not is_nil(conn), do: {:ok, state}
 
-  @impl true
-  def handle_call(:list_fingerprints, _from, state) do
-    {:reply, do_list_fingerprints(state), state}
-  end
-
-  @impl true
-  def handle_call(:store_stats, _from, state) do
-    {:reply, do_store_stats(state), state}
-  end
-
-  @impl true
-  def handle_call({:best_model_for_context, context_key}, _from, state) do
-    {:reply, do_best_model_for_context(state, context_key), state}
-  end
-
-  @impl true
-  def handle_info(:sweep, state) do
-    cutoff = System.system_time(:millisecond) - state.retention_ms
-
-    with :ok <- Sqlite3.reset(state.stmts.sweep),
-         :ok <- Sqlite3.bind(state.stmts.sweep, [cutoff]),
-         :done <- Sqlite3.step(state.conn, state.stmts.sweep) do
-      :ok
+  defp ensure_open(state) do
+    with :ok <- File.mkdir_p(Path.dirname(state.path)),
+         {:ok, conn} <- Sqlite3.open(state.path),
+         :ok <- init_db(conn),
+         {:ok, stmts} <- prepare_statements(conn) do
+      {:ok, schedule_sweep(%{state | conn: conn, stmts: stmts})}
     else
-      err -> Logger.warning("[RoutingFeedbackStore] sweep failed: #{inspect(err)}")
+      {:error, reason} ->
+        Logger.error("[RoutingFeedbackStore] open failed: #{inspect(reason)}")
+        {:error, reason, state}
     end
-
-    schedule_sweep()
-    {:noreply, state}
   end
-
-  def handle_info(_msg, state), do: {:noreply, state}
-
-  @impl true
-  def terminate(_reason, state) do
-    Sqlite3.close(state.conn)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  # ── Private helpers ────────────────────────────────────────────────────────────
 
   defp do_aggregate(state, fingerprint_key) do
     total = fetch_count(state, fingerprint_key)
@@ -508,7 +572,10 @@ defmodule LemonCore.RoutingFeedbackStore do
     end
   end
 
-  defp schedule_sweep do
+  defp schedule_sweep(%{sweep_scheduled?: true} = state), do: state
+
+  defp schedule_sweep(state) do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
+    %{state | sweep_scheduled?: true}
   end
 end

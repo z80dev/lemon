@@ -33,13 +33,16 @@ defmodule LemonRouter.Application do
           max_children: run_process_limit()
         },
         # Session coordinator supervisor (router-owned queue semantics)
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
+        {DynamicSupervisor,
+         strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
         # Stream coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor},
         # Tool status coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor},
         # Run count telemetry tracker (must start before orchestrator)
         LemonRouter.RunCountTracker,
+        # Router-owned adaptive routing feedback store; opens SQLite lazily.
+        LemonRouter.RoutingFeedbackStore,
         # Run orchestrator
         LemonRouter.RunOrchestrator
       ] ++ maybe_health_server_child()

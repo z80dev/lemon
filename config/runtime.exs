@@ -58,7 +58,7 @@ if is_binary(store_path) and store_path != "" do
   config :lemon_core, :store_runtime_override, backend_opts: [path: store_path]
   config :lemon_core, LemonCore.RunHistoryStore, path: store_path
   config :lemon_core, LemonCore.MemoryStore, path: store_path
-  config :lemon_core, LemonCore.RoutingFeedbackStore, path: store_path
+  config :lemon_router, LemonRouter.RoutingFeedbackStore, path: store_path
 end
 
 control_plane_port = System.get_env("LEMON_CONTROL_PLANE_PORT")

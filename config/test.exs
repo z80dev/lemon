@@ -39,6 +39,15 @@ config :coding_agent,
          "lemon_agent_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
        )
 
+# Avoid writing routing-feedback sqlite under ~/.lemon/store during tests.
+# (The router test_helper overrides this with a per-run unique path.)
+config :lemon_router, LemonRouter.RoutingFeedbackStore,
+  path:
+    Path.join(
+      System.tmp_dir!(),
+      "lemon_routing_feedback_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+    )
+
 # Avoid copying repo-bundled skills into user config during unrelated test suites.
 config :lemon_skills, seed_builtin_skills: false
 config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock

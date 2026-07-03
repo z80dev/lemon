@@ -15,7 +15,7 @@ defmodule LemonCore.Config.Features do
   ## Adaptive feature rollout
 
   `routing_feedback` and `skill_synthesis_drafts` are gated by measurable
-  criteria defined in `LemonCore.RolloutGate`.  Both flags default to `"opt-in"`
+  criteria defined in `LemonRouter.RolloutGate`.  Both flags default to `"opt-in"`
   (available but inactive) until the quantitative gates pass:
 
   - **routing_feedback**: requires ≥50 recorded samples, ≥+5pp success-rate
@@ -24,15 +24,15 @@ defmodule LemonCore.Config.Features do
     ≥60% generation rate, and ≤10% audit false-positive rate.
 
   To check whether a feature is ready to graduate to `"default-on"`, call
-  `LemonCore.RolloutGate.evaluate_routing_feedback/1` or
-  `LemonCore.RolloutGate.evaluate_synthesis/1` with a current metrics snapshot.
+  `LemonRouter.RolloutGate.evaluate_routing_feedback/1` or
+  `LemonRouter.RolloutGate.evaluate_synthesis/1` with a current metrics snapshot.
 
   To roll back a graduated feature immediately (no restart required for env vars):
 
       export LEMON_FEATURE_ROUTING_FEEDBACK=off
       export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 
-  See `LemonCore.RolloutGate` for full rollback and re-evaluation procedure.
+  See `LemonRouter.RolloutGate` for full rollback and re-evaluation procedure.
 
   ## Rollout states
 
@@ -143,7 +143,9 @@ defmodule LemonCore.Config.Features do
         if valid_state?(value) do
           []
         else
-          ["features.#{flag}: invalid state #{inspect(value)}. Valid: #{Enum.join(@valid_states, ", ")}"]
+          [
+            "features.#{flag}: invalid state #{inspect(value)}. Valid: #{Enum.join(@valid_states, ", ")}"
+          ]
         end
       end)
 

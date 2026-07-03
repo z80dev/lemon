@@ -1,10 +1,10 @@
-defmodule LemonCore.RoutingFeedbackReportTest do
+defmodule LemonRouter.RoutingFeedbackReportTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{RoutingFeedbackReport, RoutingFeedbackStore}
+  alias LemonRouter.{RoutingFeedbackReport, RoutingFeedbackStore}
 
-  # Start a fresh store registered under the canonical module name for each test.
-  # async: false ensures no naming conflicts between tests.
+  # Start a fresh store for each test.
+  # async: false keeps the SQLite-backed cases easy to reason about.
   # Note: min_sample_size/0 reads from Application config (default 5), not GenServer state.
   setup do
     dir = System.tmp_dir!() |> Path.join("rfr_test_#{:erlang.unique_integer([:positive])}")
@@ -12,7 +12,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
 
     {:ok, pid} =
       GenServer.start_link(RoutingFeedbackStore, [path: dir],
-        name: RoutingFeedbackStore
+        name: :"rfr_#{:erlang.unique_integer([:positive])}"
       )
 
     on_exit(fn ->
@@ -63,8 +63,8 @@ defmodule LemonCore.RoutingFeedbackReportTest do
   # ── list_all/1 ────────────────────────────────────────────────────────────────
 
   describe "list_all/1" do
-    test "returns empty list when no data", _ctx do
-      assert {:ok, []} = RoutingFeedbackReport.list_all()
+    test "returns empty list when no data", %{pid: pid} do
+      assert {:ok, []} = RoutingFeedbackReport.list_all(store: pid)
     end
 
     test "annotates confidence as :insufficient below min_sample_size", %{pid: pid} do
@@ -73,7 +73,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       record(pid, key, :success)
       record(pid, key, :success)
 
-      {:ok, [entry]} = RoutingFeedbackReport.list_all()
+      {:ok, [entry]} = RoutingFeedbackReport.list_all(store: pid)
       assert entry.fingerprint_key == key
       assert entry.confidence == :insufficient
     end
@@ -83,7 +83,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       # success_rate = 1.0, total = 5 >= min_sample_size
       for _ <- 1..5, do: record(pid, key, :success)
 
-      {:ok, [entry]} = RoutingFeedbackReport.list_all()
+      {:ok, [entry]} = RoutingFeedbackReport.list_all(store: pid)
       assert entry.confidence == :high
       assert entry.success_rate == 1.0
     end
@@ -97,7 +97,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       record(pid, key, :failure)
       record(pid, key, :failure)
 
-      {:ok, [entry]} = RoutingFeedbackReport.list_all()
+      {:ok, [entry]} = RoutingFeedbackReport.list_all(store: pid)
       assert entry.confidence == :medium
       assert entry.success_rate > 0.5
     end
@@ -107,7 +107,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       # success_rate = 0.0, total = 5 >= min_sample_size
       for _ <- 1..5, do: record(pid, key, :failure)
 
-      {:ok, [entry]} = RoutingFeedbackReport.list_all()
+      {:ok, [entry]} = RoutingFeedbackReport.list_all(store: pid)
       assert entry.confidence == :low
       assert entry.success_rate == 0.0
     end
@@ -118,10 +118,10 @@ defmodule LemonCore.RoutingFeedbackReportTest do
 
       future_ms = System.system_time(:millisecond) + 60_000
 
-      {:ok, entries} = RoutingFeedbackReport.list_all(since_ms: future_ms)
+      {:ok, entries} = RoutingFeedbackReport.list_all(since_ms: future_ms, store: pid)
       assert entries == []
 
-      {:ok, entries} = RoutingFeedbackReport.list_all(since_ms: 0)
+      {:ok, entries} = RoutingFeedbackReport.list_all(since_ms: 0, store: pid)
       assert length(entries) == 1
     end
   end
@@ -133,7 +133,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       for _ <- 1..5, do: record(pid, "code|bash|/proj-a|-|-", :success)
       for _ <- 1..5, do: record(pid, "code|bash|/proj-b|-|-", :success)
 
-      {:ok, entries} = RoutingFeedbackReport.by_workspace("/proj-a")
+      {:ok, entries} = RoutingFeedbackReport.by_workspace("/proj-a", store: pid)
       assert length(entries) == 1
       assert hd(entries).fingerprint_key == "code|bash|/proj-a|-|-"
     end
@@ -141,7 +141,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
     test "returns empty list when workspace not found", %{pid: pid} do
       for _ <- 1..5, do: record(pid, "code|bash|/proj|-|-", :success)
 
-      assert {:ok, []} = RoutingFeedbackReport.by_workspace("/unknown")
+      assert {:ok, []} = RoutingFeedbackReport.by_workspace("/unknown", store: pid)
     end
   end
 
@@ -152,7 +152,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       for _ <- 1..5, do: record(pid, "code|bash|-|-|-", :success)
       for _ <- 1..5, do: record(pid, "query|read|-|-|-", :success)
 
-      {:ok, entries} = RoutingFeedbackReport.by_family(:code)
+      {:ok, entries} = RoutingFeedbackReport.by_family(:code, store: pid)
       assert Enum.all?(entries, fn e -> String.starts_with?(e.fingerprint_key, "code|") end)
       assert length(entries) == 1
     end
@@ -161,7 +161,7 @@ defmodule LemonCore.RoutingFeedbackReportTest do
       for _ <- 1..5, do: record(pid, "chat|-|-|-|-", :success)
       for _ <- 1..5, do: record(pid, "code|bash|-|-|-", :success)
 
-      {:ok, entries} = RoutingFeedbackReport.by_family("chat")
+      {:ok, entries} = RoutingFeedbackReport.by_family("chat", store: pid)
       assert length(entries) == 1
       assert hd(entries).fingerprint_key == "chat|-|-|-|-"
     end

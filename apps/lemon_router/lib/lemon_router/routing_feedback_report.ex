@@ -1,4 +1,4 @@
-defmodule LemonCore.RoutingFeedbackReport do
+defmodule LemonRouter.RoutingFeedbackReport do
   @moduledoc """
   Offline evaluation and reporting layer for routing feedback.
 
@@ -43,7 +43,7 @@ defmodule LemonCore.RoutingFeedbackReport do
       IO.puts(RoutingFeedbackReport.format(entries))
   """
 
-  alias LemonCore.RoutingFeedbackStore
+  alias LemonRouter.RoutingFeedbackStore
 
   # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -57,9 +57,11 @@ defmodule LemonCore.RoutingFeedbackReport do
   """
   @spec list_all(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list_all(opts \\ []) do
-    case RoutingFeedbackStore.list_fingerprints() do
+    store = Keyword.get(opts, :store, RoutingFeedbackStore)
+
+    case list_fingerprints(store) do
       {:ok, rows} ->
-        entries = rows |> filter_since(opts) |> Enum.map(&annotate_confidence/1)
+        entries = rows |> filter_since(opts) |> Enum.map(&annotate_confidence(&1, store))
         {:ok, entries}
 
       err ->
@@ -77,7 +79,8 @@ defmodule LemonCore.RoutingFeedbackReport do
   def by_workspace(workspace, opts \\ []) when is_binary(workspace) do
     case list_all(opts) do
       {:ok, rows} ->
-        {:ok, Enum.filter(rows, fn row -> parse_key(row.fingerprint_key).workspace == workspace end)}
+        {:ok,
+         Enum.filter(rows, fn row -> parse_key(row.fingerprint_key).workspace == workspace end)}
 
       err ->
         err
@@ -96,7 +99,8 @@ defmodule LemonCore.RoutingFeedbackReport do
 
     case list_all(opts) do
       {:ok, rows} ->
-        {:ok, Enum.filter(rows, fn row -> parse_key(row.fingerprint_key).family == family_str end)}
+        {:ok,
+         Enum.filter(rows, fn row -> parse_key(row.fingerprint_key).family == family_str end)}
 
       err ->
         err
@@ -153,8 +157,8 @@ defmodule LemonCore.RoutingFeedbackReport do
 
   # ── Private helpers ────────────────────────────────────────────────────────────
 
-  defp annotate_confidence(%{total: total, success_count: success_count} = row) do
-    min_n = RoutingFeedbackStore.min_sample_size()
+  defp annotate_confidence(%{total: total, success_count: success_count} = row, store) do
+    min_n = min_sample_size(store)
     success_rate = if total > 0, do: success_count / total, else: 0.0
 
     confidence =
@@ -176,6 +180,12 @@ defmodule LemonCore.RoutingFeedbackReport do
       since_ms -> Enum.filter(rows, fn row -> (row.last_seen_ms || 0) >= since_ms end)
     end
   end
+
+  defp list_fingerprints(pid) when is_pid(pid), do: GenServer.call(pid, :list_fingerprints)
+  defp list_fingerprints(store) when is_atom(store), do: store.list_fingerprints()
+
+  defp min_sample_size(pid) when is_pid(pid), do: RoutingFeedbackStore.min_sample_size()
+  defp min_sample_size(store) when is_atom(store), do: store.min_sample_size()
 
   defp format_entry(%{fingerprint_key: key} = entry) do
     parsed = parse_key(key)
