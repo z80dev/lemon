@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
   Runs the LemonSim Tic Tac Toe self-play example from the repo root.
 
       mix lemon.sim.tic_tac_toe
-      mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+      mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
       mix lemon.sim.tic_tac_toe --model anthropic:claude-sonnet-4-20250514
   """
 
@@ -15,6 +15,9 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
     persist: :boolean,
     max_turns: :integer,
     max_driver_turns: :integer,
+    seed: :integer,
+    sim_id: :string,
+    offline_strategy: :string,
     model: :string,
     help: :boolean
   ]
@@ -37,9 +40,19 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
           []
           |> maybe_put(:persist?, opts[:persist])
           |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
-          |> maybe_put(:model, resolve_model(opts[:model]))
+          |> maybe_put(:seed, opts[:seed])
+          |> maybe_put(:sim_id, opts[:sim_id])
 
-        case LemonSim.Examples.TicTacToe.run(run_opts) do
+        result =
+          if opts[:offline_strategy] do
+            LemonSim.Examples.TicTacToe.run_offline_strategy(opts[:offline_strategy], run_opts)
+          else
+            run_opts
+            |> maybe_put(:model, resolve_model(opts[:model]))
+            |> LemonSim.Examples.TicTacToe.run()
+          end
+
+        case result do
           {:ok, _final_state} -> :ok
           {:error, reason} -> Mix.raise("tic tac toe sim failed: #{inspect(reason)}")
         end
@@ -93,6 +106,9 @@ defmodule Mix.Tasks.Lemon.Sim.TicTacToe do
       --persist / --no-persist     Persist the final state (default: true)
       --max-turns N                Maximum turns before the sim stops
       --max-driver-turns N         Deprecated alias for --max-turns
+      --seed N                     Seed for deterministic offline runs
+      --sim-id ID                  Override simulation id
+      --offline-strategy NAME      Run without model credentials (`random`)
       --model PROVIDER:MODEL       Override the configured default model
       --help                       Show this help
     """)

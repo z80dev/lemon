@@ -41,15 +41,18 @@ scorecards.
 Example commands:
 
 ```bash
-mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
+mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
-Werewolf currently runs through scripts and replay tooling rather than a
-`mix lemon.sim.werewolf` task:
+The TicTacToe offline and VendingBench offline commands are keyless
+deterministic runs. Live `tic_tac_toe`, `werewolf`, and the Werewolf
+compatibility scripts require configured model provider credentials. Werewolf
+replay generation is available through:
 
 ```bash
 mix lemon.sim.werewolf_replay apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl

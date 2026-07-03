@@ -9,6 +9,7 @@ defmodule LemonSim.Examples.TicTacToe do
 
   alias LemonSim.Examples.TicTacToe.{
     ActionSpace,
+    OfflineRunner,
     Updater
   }
 
@@ -32,10 +33,10 @@ defmodule LemonSim.Examples.TicTacToe do
     }
   end
 
-  @spec initial_state() :: State.t()
-  def initial_state do
+  @spec initial_state(keyword()) :: State.t()
+  def initial_state(opts \\ []) do
     State.new(
-      sim_id: "tic_tac_toe_1",
+      sim_id: Keyword.get(opts, :sim_id, "tic_tac_toe_1"),
       world: initial_world(),
       intent: %{goal: "Play tic tac toe and win the game"},
       plan_history: []
@@ -142,6 +143,12 @@ defmodule LemonSim.Examples.TicTacToe do
         IO.inspect(reason)
         error
     end
+  end
+
+  @spec run_offline_strategy(String.t() | atom(), keyword()) ::
+          {:ok, State.t()} | {:error, term()}
+  def run_offline_strategy(strategy, opts \\ []) do
+    OfflineRunner.run_strategy(strategy, opts)
   end
 
   defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in ["won", "draw"]

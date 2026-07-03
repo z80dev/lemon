@@ -43,10 +43,10 @@ There are 19 examples in this app:
 Small local smoke run:
 
 ```bash
-mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 ```
 
-Deterministic benchmark run with artifacts:
+Deterministic benchmark run with artifacts, also keyless:
 
 ```bash
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
@@ -62,14 +62,17 @@ mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure --sim-id tcg_ci_p
 mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended --sim-id tcg_stress_bad_operator
 ```
 
-Werewolf multi-model script, with providers and credentials configured:
+Live model runs require configured providers and credentials:
 
 ```bash
+mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
+mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-5.1-codex-mini,kimi:k2p5
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
-Werewolf has replay tooling but no `mix lemon.sim.werewolf` run task in this
-checkout:
+Werewolf replay tooling can render JSONL transcripts from `mix lemon.sim.werewolf
+--models ... --transcript-path path.jsonl` or the compatibility scripts:
 
 ```bash
 mix lemon.sim.werewolf_replay apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
