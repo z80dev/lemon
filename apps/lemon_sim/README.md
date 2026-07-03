@@ -107,6 +107,49 @@ integrity hashes, and hashed file contents. For scenarios registered in
 and `pandemic`. Unregistered scenarios still get manifest/hash verification and
 skip scorecard recompute. `score` verifies first, then prints the scorecard.
 
+## Suites and Leaderboards
+
+Suites run one scenario across competitors and seeds, verify each run bundle,
+aggregate the registered primary metric, and rank competitors with tokens and
+cost alongside score. Keyless deterministic suites use offline strategies:
+
+```bash
+mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vending-suite
+```
+
+That writes `/tmp/vending-suite/suite.json`, one verified bundle per
+competitor/seed under `/tmp/vending-suite/runs/`, and
+`/tmp/vending-suite/leaderboard.md`. The leaderboard shape is:
+
+```markdown
+# LemonSim Suite Leaderboard
+
+Scenario: `vending_bench`
+Preset: `ci`
+Seeds: 3
+Metric: `score_modes.v1_net_worth` (maximize)
+
+All included runs are manifest hash and scorecard verified.
+
+| Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |
+|---:|---|---:|---|---:|---:|
+| 1 | baseline | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+| 2 | pressure | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+```
+
+Live competitors can be added with repeatable `--model MODEL_ID` options when
+provider credentials are configured. Re-render an existing suite without
+rerunning scenarios:
+
+```bash
+mix lemon.sim.leaderboard /tmp/vending-suite
+mix lemon.sim.leaderboard /tmp/vending-suite --recompute
+```
+
+`--recompute` re-verifies the run bundles and rebuilds rankings. Any failed or
+tampered run stays visible in `suite.json` and the failure section of
+`leaderboard.md`, but it is excluded from rankings.
+
 ## Write A Scenario
 
 Start with `LemonSim.Examples.TicTacToe`; it is the smallest complete example.
