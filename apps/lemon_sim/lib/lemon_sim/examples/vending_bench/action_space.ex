@@ -848,6 +848,9 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
               ),
             stream_fn: Keyword.get(opts, :physical_worker_stream_fn),
             sim_id: state.sim_id,
+            usage_collector: Keyword.get(opts, :usage_collector),
+            usage_actor_id: "physical_worker",
+            usage_model: Keyword.get(opts, :physical_worker_model, Keyword.get(opts, :model)),
             worker_timeout_ms: Keyword.get(opts, :physical_worker_timeout_ms, 30_000)
           ]
 

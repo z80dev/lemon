@@ -4,16 +4,42 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
   alias LemonSim.Examples.{TcgShop, VendingBench}
 
   def verify_run(artifact_dir) when is_binary(artifact_dir) do
-    with {:ok, manifest} <- read_json(Path.join(artifact_dir, "manifest.json")),
-         {:ok, hashes} <- read_json(Path.join(artifact_dir, "hashes.json")),
-         :ok <- verify_schema(manifest),
-         :ok <- verify_hashes_schema(hashes),
-         :ok <- verify_expected_files(manifest, hashes),
-         :ok <- verify_manifest_integrity(manifest, hashes),
-         :ok <- verify_hashes(artifact_dir, hashes),
-         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
-         :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
-      {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
+    case {read_json(Path.join(artifact_dir, "manifest.json")),
+          read_json(Path.join(artifact_dir, "hashes.json"))} do
+      {{:ok, manifest}, {:ok, hashes}} ->
+        with :ok <- verify_schema(manifest),
+             :ok <- verify_hashes_schema(hashes),
+             :ok <- verify_expected_files(manifest, hashes),
+             :ok <- verify_manifest_integrity(manifest, hashes),
+             :ok <- verify_hashes(artifact_dir, hashes),
+             {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
+             :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
+          {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
+        end
+
+      {{:error, {:read_json_failed, _path, :enoent}}, _} ->
+        verify_legacy_run(artifact_dir)
+
+      {_, {:error, {:read_json_failed, _path, :enoent}}} ->
+        verify_legacy_run(artifact_dir)
+
+      {{:error, reason}, _} ->
+        {:error, reason}
+
+      {_, {:error, reason}} ->
+        {:error, reason}
+    end
+  end
+
+  defp verify_legacy_run(artifact_dir) do
+    manifest = %{
+      "schema_version" => "lemon_sim.run.legacy",
+      "sim" => %{"id" => "vending_bench"}
+    }
+
+    with {:ok, _world} <- read_json(Path.join(artifact_dir, "final_world.json")),
+         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")) do
+      {:ok, %{manifest: manifest, hashes: %{"files" => %{}}, scorecard: scorecard, legacy: true}}
     end
   end
 
@@ -111,7 +137,7 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
 
   defp verify_manifest_integrity(_manifest, _hashes), do: {:error, :missing_manifest_integrity}
 
-  defp integrity_checks(_integrity, files) do
+  defp integrity_checks(integrity, files) do
     event_file =
       cond do
         Map.has_key?(files, "events.jsonl") -> "events.jsonl"
@@ -119,10 +145,16 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
         true -> "events.jsonl"
       end
 
-    [
+    base_checks = [
       {"events_sha256", event_file},
       {"scorecard_sha256", "scorecard.json"}
     ]
+
+    if Map.has_key?(integrity || %{}, "usage_sha256") or Map.has_key?(files, "usage.json") do
+      base_checks ++ [{"usage_sha256", "usage.json"}]
+    else
+      base_checks
+    end
   end
 
   defp verify_hashes(artifact_dir, %{"files" => files}) when is_map(files) do

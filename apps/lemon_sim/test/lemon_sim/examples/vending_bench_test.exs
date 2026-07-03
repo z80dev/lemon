@@ -1172,6 +1172,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.exists?(artifacts.operator_transcript)
     assert File.exists?(artifacts.reminders)
     assert File.exists?(artifacts.scorecard)
+    assert File.exists?(artifacts.usage)
     assert File.exists?(artifacts.manifest)
     assert File.exists?(artifacts.config)
     assert File.exists?(artifacts.commands)
@@ -1215,10 +1216,27 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert manifest["schema_version"] == "lemon_sim.run.v1"
     assert manifest["sim"]["id"] == "vending_bench"
     assert manifest["integrity"]["events_sha256"] == hashes["files"]["events.jsonl"]
+    assert manifest["integrity"]["usage_sha256"] == hashes["files"]["usage.json"]
     assert hashes["schema_version"] == "lemon_sim.hashes.v1"
+    assert is_binary(hashes["files"]["usage.json"])
     assert is_binary(hashes["files"]["report.md"])
     assert is_binary(hashes["prompt_sha256"])
     assert is_binary(hashes["tool_schema_sha256"])
+
+    usage = artifacts.usage |> File.read!() |> Jason.decode!()
+    assert usage["schema"] == "lemon_sim.usage.v1"
+    assert usage["sim_id"] == "vb_offline_test"
+
+    assert usage["totals"] == %{
+             "input_tokens" => 0,
+             "output_tokens" => 0,
+             "cache_read_tokens" => 0,
+             "cache_write_tokens" => 0,
+             "decisions" => 0,
+             "cost_usd" => 0.0
+           }
+
+    assert usage["actors"] == %{}
 
     assert {:ok, %{scorecard: ^scorecard}} =
              LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
@@ -1241,6 +1259,14 @@ defmodule LemonSim.Examples.VendingBenchTest do
     hashes = put_in(hashes, ["files", "scorecard.json"], scorecard_hash)
     File.write!(artifacts.manifest, Jason.encode!(manifest))
     File.write!(artifacts.hashes, Jason.encode!(hashes))
+
+    usage_body = File.read!(artifacts.usage)
+    File.write!(artifacts.usage, usage_body <> "\ntampered\n")
+
+    assert {:error, {:hash_mismatch, "usage.json"}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
+
+    File.write!(artifacts.usage, usage_body)
 
     supplier_messages = artifacts.supplier_messages |> File.read!() |> Jason.decode!()
     worker_history = artifacts.worker_history |> File.read!() |> Jason.decode!()
@@ -1956,6 +1982,9 @@ defmodule LemonSim.Examples.VendingBenchTest do
   test "checked-in replay fixture loads as a VendingBench replay" do
     fixture_dir = Path.expand("../../../priv/fixtures/vending_bench/ci_replay", __DIR__)
 
+    assert {:ok, %{legacy: true, manifest: %{"schema_version" => "lemon_sim.run.legacy"}}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(fixture_dir)
+
     assert {:ok, replay} = VendingBench.Replay.build(fixture_dir)
 
     assert replay.sim_id == "vb_ci_fixture"
@@ -1968,6 +1997,17 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert is_list(replay.reminders)
     assert is_list(replay.machine_fault_reports)
     assert File.read!(Path.join(fixture_dir, "replay.html")) =~ "VendingBench Replay"
+  end
+
+  test "legacy paper live bundle verifies without usage artifact" do
+    artifact_dir =
+      Path.expand(
+        "../../../priv/game_logs/vending_bench/vb_paper_live_20260527_161814",
+        __DIR__
+      )
+
+    assert {:ok, %{legacy: true, manifest: %{"schema_version" => "lemon_sim.run.legacy"}}} =
+             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
   end
 
   defp fake_model(id) do

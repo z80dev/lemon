@@ -87,8 +87,8 @@ Replay video tasks require `rsvg-convert` and `ffmpeg` on `PATH`.
 Benchmark runs write bundles under `apps/lemon_sim/priv/game_logs/...` unless
 `--artifact-dir` is provided. Vending Bench bundles include `manifest.json`,
 `hashes.json`, `config.json`, `final_world.json`, event/action/command/fact
-JSONL files, transcript files, `scorecard.json`, `replay.json`, `replay.html`,
-prompt snapshots, and `report.md`.
+JSONL files, transcript files, `scorecard.json`, `usage.json`, `replay.json`,
+`replay.html`, prompt snapshots, and `report.md`.
 
 Use:
 

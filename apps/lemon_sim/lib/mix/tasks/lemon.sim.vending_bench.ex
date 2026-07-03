@@ -78,6 +78,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       {:ok, %{artifacts: artifacts, world: %{mode: "vending_bench_arena"}}}
       when is_map(artifacts) ->
         Mix.shell().info("Arena artifacts written to #{Path.dirname(artifacts.final_world)}")
+        print_usage_summary(artifacts)
         :ok
 
       {:ok, %{world: %{mode: "vending_bench_arena"}}} ->
@@ -85,6 +86,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
       {:ok, %{artifacts: artifacts}} ->
         Mix.shell().info("Offline artifacts written to #{Path.dirname(artifacts.final_world)}")
+        print_usage_summary(artifacts)
         :ok
 
       {:ok, _state} ->
@@ -98,6 +100,15 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp print_usage_summary(%{usage: usage_path}) do
+    with {:ok, body} <- File.read(usage_path),
+         {:ok, usage} <- Jason.decode(body) do
+      Mix.shell().info(LemonSim.LLM.Usage.summary_line(usage))
+    end
+  end
+
+  defp print_usage_summary(_artifacts), do: :ok
 
   defp run_mode(opts, run_opts) do
     cond do

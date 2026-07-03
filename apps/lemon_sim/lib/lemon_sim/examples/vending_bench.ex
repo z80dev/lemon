@@ -31,6 +31,7 @@ defmodule LemonSim.Examples.VendingBench do
   alias LemonSim.LLM.Deciders.ToolLoopDecider
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.LLM.Projectors.SectionedProjector
+  alias LemonSim.LLM.Usage
   alias LemonSim.Kernel.{Event, Runner, State, Store}
 
   @default_max_turns 300
@@ -133,6 +134,13 @@ defmodule LemonSim.Examples.VendingBench do
         |> initial_state()
         |> stamp_runtime_models(run_opts)
 
+      {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, run_opts)
+
+      run_opts =
+        run_opts
+        |> Keyword.put(:usage_collector, usage_collector)
+        |> Keyword.put_new(:usage_actor_id, "operator")
+
       world = state.world
 
       IO.puts("Starting Vending Bench Simulation")
@@ -140,7 +148,11 @@ defmodule LemonSim.Examples.VendingBench do
       IO.puts("Max days: #{get(world, :max_days, 30)}")
       IO.puts("Machine: 4x3 grid (12 slots)")
 
-      run_live_state(state, run_opts, [], [], 0)
+      try do
+        run_live_state(state, run_opts, [], [], 0)
+      after
+        stop_usage_collector(usage_collector, owns_usage_collector?)
+      end
     after
       ProviderThrottle.stop(throttle)
     end
@@ -157,6 +169,13 @@ defmodule LemonSim.Examples.VendingBench do
 
       try do
         state = stamp_runtime_models(state, run_opts)
+        {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, run_opts)
+
+        run_opts =
+          run_opts
+          |> Keyword.put(:usage_collector, usage_collector)
+          |> Keyword.put_new(:usage_actor_id, "operator")
+
         world = state.world
 
         IO.puts("Resuming Vending Bench Simulation")
@@ -164,7 +183,11 @@ defmodule LemonSim.Examples.VendingBench do
         IO.puts("Current day: #{get(world, :day_number, 1)}/#{get(world, :max_days, 30)}")
         IO.puts("Completed turns: #{length(actions)}")
 
-        run_live_state(state, run_opts, events, actions, length(actions))
+        try do
+          run_live_state(state, run_opts, events, actions, length(actions))
+        after
+          stop_usage_collector(usage_collector, owns_usage_collector?)
+        end
       after
         ProviderThrottle.stop(throttle)
       end
@@ -192,6 +215,12 @@ defmodule LemonSim.Examples.VendingBench do
 
           IO.puts("Artifacts written to #{Path.dirname(artifacts.final_world)}")
         end
+
+        IO.puts(
+          Usage.summary_line(
+            Usage.artifact(Keyword.get(run_opts, :usage_collector), final_state.sim_id)
+          )
+        )
 
         {:ok, final_state}
 
@@ -638,6 +667,24 @@ defmodule LemonSim.Examples.VendingBench do
     profit = performance.net_worth - starting
     IO.puts("\n  Profit: $#{format_price(profit)} (#{if profit >= 0, do: "PASS", else: "FAIL"})")
   end
+
+  defp usage_collector(sim_id, opts) do
+    case Keyword.get(opts, :usage_collector) do
+      collector when is_pid(collector) ->
+        {collector, false}
+
+      _ ->
+        {:ok, collector} = Usage.start_link(sim_id)
+        {collector, true}
+    end
+  end
+
+  defp stop_usage_collector(collector, true) when is_pid(collector) do
+    if Process.alive?(collector), do: Agent.stop(collector)
+    :ok
+  end
+
+  defp stop_usage_collector(_collector, false), do: :ok
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
