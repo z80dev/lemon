@@ -186,6 +186,17 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(%__MODULE__{} = t, {:message_update, _msg, _delta}), do: t
 
+  def handle_event(%__MODULE__{} = t, {:approval_request, _approval_id, _pending} = event) do
+    emit_approval_action(t, event)
+  end
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:approval_resolved, _approval_id, _decision, _pending} = event
+      ) do
+    emit_approval_action(t, event)
+  end
+
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
     answer = Presentation.extract_answer(messages, t.accumulated_text)
     usage = Presentation.build_usage(messages)
@@ -287,6 +298,24 @@ defmodule CodingAgent.Session.RunTranslator do
 
       {:ignore, %Presentation.ReasoningAccumulator{} = accumulator} ->
         {false, %{t | reasoning_accumulator: accumulator}}
+    end
+  end
+
+  defp emit_approval_action(%__MODULE__{} = t, event) do
+    case Presentation.approval_action(event) do
+      nil ->
+        t
+
+      action ->
+        emit_action_event(t, %{
+          id: action.id,
+          kind: action.kind,
+          title: action.title,
+          phase: action.phase,
+          ok: action.ok,
+          message: action.message,
+          detail: action.detail
+        })
     end
   end
 

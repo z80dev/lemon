@@ -22,6 +22,26 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias AgentCore.EventStream
   alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ThinkingContent, Usage}
 
+  defmodule TranslatorFakeEmitter do
+    @behaviour CodingAgent.Session.RunTranslator.Emitter
+
+    defstruct events: []
+
+    @impl true
+    def emit_started(state, fields), do: emit(state, {:started, fields})
+
+    @impl true
+    def emit_action_event(state, fields), do: emit(state, {:action, fields})
+
+    @impl true
+    def emit_delta(state, text, fields), do: emit(state, {:delta, text, fields})
+
+    @impl true
+    def emit_completed(state, fields), do: emit(state, {:completed, fields})
+
+    defp emit(state, event), do: %{state | events: [event | state.events]}
+  end
+
   defp mock_model do
     %Model{
       id: "mock-model-1",
@@ -116,6 +136,76 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "exports cancel/1 and cancel/2 for adapter compatibility" do
       assert function_exported?(LemonRunner, :cancel, 1)
       assert function_exported?(LemonRunner, :cancel, 2)
+    end
+  end
+
+  describe "run translator" do
+    test "translates approval request and resolution events" do
+      translator =
+        RunTranslator.new(
+          emitter: TranslatorFakeEmitter,
+          emitter_state: %TranslatorFakeEmitter{},
+          engine: "lemon",
+          label: "test",
+          cwd: "/tmp",
+          run_id: "run_approval"
+        )
+
+      pending = %{
+        id: "approval_123",
+        run_id: "run_approval",
+        session_id: "session_123",
+        session_key: "agent:test:approval",
+        tool: "bash",
+        action: %{command: "mix test"}
+      }
+
+      translator =
+        translator
+        |> RunTranslator.handle_event({:approval_request, pending.id, pending})
+        |> RunTranslator.handle_event({:approval_resolved, pending.id, :approve_session, pending})
+        |> RunTranslator.handle_event({:approval_resolved, "approval_denied", :deny, pending})
+
+      events = Enum.reverse(translator.emitter_state.events)
+
+      assert {:action,
+              %{
+                id: "approval:approval_123",
+                kind: :approval,
+                phase: :started,
+                ok: nil,
+                title: "`mix test`",
+                message: "awaiting approval",
+                detail: %{
+                  approval_id: "approval_123",
+                  tool: "bash",
+                  action: %{command: "mix test"},
+                  session_id: "session_123",
+                  session_key: "agent:test:approval",
+                  run_id: "run_approval"
+                },
+                engine: "lemon"
+              }} = Enum.at(events, 0)
+
+      assert {:action,
+              %{
+                id: "approval:approval_123",
+                kind: :approval,
+                phase: :completed,
+                ok: true,
+                message: "approved for session",
+                detail: %{decision: :approve_session}
+              }} = Enum.at(events, 1)
+
+      assert {:action,
+              %{
+                id: "approval:approval_denied",
+                kind: :approval,
+                phase: :completed,
+                ok: false,
+                message: "denied",
+                detail: %{decision: :deny}
+              }} = Enum.at(events, 2)
     end
   end
 

@@ -213,6 +213,98 @@ defmodule CodingAgent.SessionTest do
       assert state.model.id == "mock-model-1"
     end
 
+    test "rebroadcasts matching approval bus events as session events" do
+      unique = System.unique_integer([:positive])
+      session_id = "approval-session-#{unique}"
+      session_key = "agent:test:approval:#{unique}"
+
+      session =
+        start_session(
+          session_id: session_id,
+          session_key: session_key,
+          tool_policy: CodingAgent.ToolPolicy.from_profile(:full_access),
+          approval_context: %{
+            session_id: session_id,
+            session_key: session_key,
+            agent_id: "test",
+            timeout_ms: :infinity
+          }
+        )
+
+      _unsub = Session.subscribe(session)
+
+      pending = %{
+        id: "approval_#{unique}",
+        run_id: "run_#{unique}",
+        session_id: session_id,
+        session_key: session_key,
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "mix test"}
+      }
+
+      LemonCore.Bus.broadcast(
+        "exec_approvals",
+        LemonCore.Event.new(:approval_requested, %{approval_id: pending.id, pending: pending})
+      )
+
+      assert_receive {:session_event, ^session_id, {:approval_request, _, ^pending}}, 1_000
+
+      LemonCore.Bus.broadcast(
+        "exec_approvals",
+        LemonCore.Event.new(:approval_resolved, %{
+          approval_id: pending.id,
+          decision: :approve_session,
+          pending: pending
+        })
+      )
+
+      assert_receive {:session_event, ^session_id,
+                      {:approval_resolved, _, :approve_session, ^pending}},
+                     1_000
+    end
+
+    test "ignores approval bus events for other sessions" do
+      unique = System.unique_integer([:positive])
+      session_id = "approval-session-#{unique}"
+      session_key = "agent:test:approval:#{unique}"
+
+      session =
+        start_session(
+          session_id: session_id,
+          session_key: session_key,
+          tool_policy: CodingAgent.ToolPolicy.from_profile(:full_access),
+          approval_context: %{
+            session_id: session_id,
+            session_key: session_key,
+            agent_id: "test",
+            timeout_ms: :infinity
+          }
+        )
+
+      _unsub = Session.subscribe(session)
+
+      other_pending = %{
+        id: "approval_other_#{unique}",
+        run_id: "run_other_#{unique}",
+        session_id: "other-session",
+        session_key: "agent:test:approval:other",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "mix test"}
+      }
+
+      LemonCore.Bus.broadcast(
+        "exec_approvals",
+        LemonCore.Event.new(:approval_requested, %{
+          approval_id: other_pending.id,
+          pending: other_pending
+        })
+      )
+
+      refute_receive {:session_event, ^session_id, {:approval_request, _, _}}, 100
+    end
+
     test "accepts provider:model string model specs" do
       session = start_session(model: "openai-codex:gpt-5.3-codex")
       state = Session.get_state(session)

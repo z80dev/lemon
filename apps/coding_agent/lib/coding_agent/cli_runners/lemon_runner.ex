@@ -23,6 +23,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   | `{:tool_execution_start, ...}`| `ActionEvent` (phase: :started)     |
   | `{:tool_execution_update,...}`| `ActionEvent` (phase: :updated)     |
   | `{:tool_execution_end, ...}`  | `ActionEvent` (phase: :completed)   |
+  | `{:approval_request, ...}`    | `ActionEvent` (kind: :approval)     |
+  | `{:approval_resolved, ...}`   | `ActionEvent` (kind: :approval)     |
   | `{:message_update, ...}`      | Text accumulation (for answer)      |
   | `{:agent_end, ...}`           | `CompletedEvent`                    |
   | `{:error, ...}`               | `CompletedEvent` (ok: false)        |
@@ -31,6 +33,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   under `action.detail.result_meta`, including `:error_type` for unknown tools,
   invalid arguments, task crashes, timeouts, aborted tool calls, and nonzero
   command exits.
+
+  Pending execution approvals are surfaced as status-only approval action events.
+  They are never emitted as deltas, so approval text cannot accumulate into the
+  assistant answer draft.
 
   ## Example
 

@@ -23,6 +23,7 @@ defmodule CodingAgent.Session.Presentation do
       if tool_policy do
         %{
           session_key: session_key || run_id,
+          session_id: nil,
           agent_id: agent_id || "default",
           run_id: run_id,
           timeout_ms: approval_timeout_ms
@@ -213,6 +214,42 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def reasoning_action(_event, %ReasoningAccumulator{} = acc), do: {:ignore, acc}
+
+  def approval_action({:approval_request, approval_id, pending}) do
+    tool = approval_pending_value(pending, :tool)
+    action = approval_pending_value(pending, :action) || %{}
+    title = approval_title(tool, action)
+
+    %{
+      id: approval_action_id(approval_id),
+      kind: :approval,
+      title: title,
+      phase: :started,
+      ok: nil,
+      message: "awaiting approval",
+      detail: approval_detail(approval_id, pending)
+    }
+  end
+
+  def approval_action({:approval_resolved, approval_id, decision, pending}) do
+    tool = approval_pending_value(pending, :tool)
+    action = approval_pending_value(pending, :action) || %{}
+    title = approval_title(tool, action)
+
+    %{
+      id: approval_action_id(approval_id),
+      kind: :approval,
+      title: title,
+      phase: :completed,
+      ok: approval_decision_ok?(decision),
+      message: approval_decision_message(decision),
+      detail:
+        approval_detail(approval_id, pending)
+        |> Map.put(:decision, decision)
+    }
+  end
+
+  def approval_action(_event), do: nil
 
   def build_failure_usage(state, partial_state \\ nil) do
     [
@@ -425,6 +462,48 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def stringify_keys(_), do: %{}
+
+  defp approval_pending_value(pending, key) when is_map(pending) and is_atom(key) do
+    Map.get(pending, key) || Map.get(pending, Atom.to_string(key))
+  end
+
+  defp approval_pending_value(_pending, _key), do: nil
+
+  defp approval_action_id(approval_id), do: "approval:" <> to_string(approval_id)
+
+  defp approval_title(tool, action) do
+    tool
+    |> to_string()
+    |> tool_title(action)
+  end
+
+  defp approval_detail(approval_id, pending) do
+    %{
+      approval_id: to_string(approval_id),
+      tool: approval_pending_value(pending, :tool),
+      action: approval_pending_value(pending, :action),
+      session_id: approval_pending_value(pending, :session_id),
+      session_key: approval_pending_value(pending, :session_key),
+      run_id: approval_pending_value(pending, :run_id)
+    }
+    |> maybe_put_meta(:rationale, approval_pending_value(pending, :rationale))
+  end
+
+  defp approval_decision_ok?(decision), do: decision not in [:deny, :timeout, "deny", "timeout"]
+
+  defp approval_decision_message(:approve_once), do: "approved once"
+  defp approval_decision_message(:approve_session), do: "approved for session"
+  defp approval_decision_message(:approve_agent), do: "approved for agent"
+  defp approval_decision_message(:approve_global), do: "approved globally"
+  defp approval_decision_message(:deny), do: "denied"
+  defp approval_decision_message(:timeout), do: "timed out"
+  defp approval_decision_message("approve_once"), do: "approved once"
+  defp approval_decision_message("approve_session"), do: "approved for session"
+  defp approval_decision_message("approve_agent"), do: "approved for agent"
+  defp approval_decision_message("approve_global"), do: "approved globally"
+  defp approval_decision_message("deny"), do: "denied"
+  defp approval_decision_message("timeout"), do: "timed out"
+  defp approval_decision_message(other), do: to_string(other)
 
   def truncate_result(result) when is_binary(result) do
     cond do

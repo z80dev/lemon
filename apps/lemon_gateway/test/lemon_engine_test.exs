@@ -176,6 +176,75 @@ defmodule LemonGateway.LemonEngineTest do
     end
 
     @tag :tmp_dir
+    test "emits approval action events while a gated tool waits", %{tmp_dir: tmp_dir} do
+      command = "printf approval-gateway-#{System.unique_integer([:positive])}"
+
+      tool_response =
+        assistant_message_with_tool_calls([
+          tool_call("bash", %{"command" => command}, id: "call_gateway_approval")
+        ])
+
+      final_response = assistant_message("approval timeout handled")
+
+      job =
+        job(tmp_dir,
+          prompt: "run the gated gateway tool",
+          run_id: "run-native-approval",
+          stream_fn: mock_stream_fn([tool_response, final_response])
+        )
+
+      job = %{job | tool_policy: %{approvals: %{"bash" => "always"}}}
+
+      {:ok, run_ref, _ctx} =
+        Lemon.start_run(
+          job,
+          %{stream_fn: job.meta[:stream_fn], approval_timeout_ms: 20},
+          self()
+        )
+
+      messages = collect_until_completed(run_ref)
+      expected_title = "`#{command}`"
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :action_event,
+                phase: :started,
+                action: %{
+                  id: approval_action_id,
+                  kind: "approval",
+                  title: ^expected_title,
+                  detail: %{tool: "bash"}
+                },
+                message: "awaiting approval"
+              }} =
+               Enum.find(messages, fn
+                 {:engine_event, ^run_ref,
+                  %{__event__: :action_event, phase: :started, action: %{kind: "approval"}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :action_event,
+                phase: :completed,
+                ok: false,
+                action: %{id: ^approval_action_id, kind: "approval"},
+                message: "timed out"
+              }} =
+               Enum.find(messages, fn
+                 {:engine_event, ^run_ref,
+                  %{__event__: :action_event, phase: :completed, action: %{kind: "approval"}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+    end
+
+    @tag :tmp_dir
     test "emits reasoning action events without leaking thinking into answer deltas", %{
       tmp_dir: tmp_dir
     } do

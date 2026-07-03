@@ -193,6 +193,16 @@ defmodule LemonRouter.ToolStatusRenderer do
       {kind, _phase} when kind in [:reasoning, "reasoning"] ->
         indent <> "… reasoning: " <> title
 
+      {kind, phase} when kind in [:approval, "approval"] and phase in [:started, :updated] ->
+        indent <> "▸ awaiting approval: " <> title
+
+      {kind, :completed} when kind in [:approval, "approval"] ->
+        ok? = (action[:ok] || action["ok"]) == true
+        symbol = if ok?, do: "✓", else: "✗"
+        message = action[:message] || action["message"]
+        suffix = if is_binary(message) and message != "", do: " (#{message})", else: ""
+        indent <> symbol <> " approval: " <> title <> suffix
+
       {_kind, :started} ->
         indent <> "\u25b8 " <> title <> (extra || "")
 
