@@ -1,6 +1,6 @@
 # Lemon Stack Reshape
 
-Status: active execution plan
+Status: executed (all workstreams landed on `reshape/stack-2026-07`)
 
 Last reviewed: 2026-07-02
 
@@ -62,8 +62,17 @@ Each workstream lands as one verified commit: `mix compile
 3. **W2b — X API client extraction.** Move the X/Twitter HTTP client + OAuth
    token manager below both consumers; `lemon_skills` loses its
    `lemon_channels` dep.
-4. **W3a — routing intelligence to `lemon_router`.** `model_policy*`,
-   `routing_feedback_store`, `rollout_gate` move up; `router_bridge` dies.
+4. **W3a — routing intelligence out of `lemon_core`.** Landed with two
+   corrections to the original premise: `model_policy*` moved to
+   `lemon_channels` (its only runtime consumers are the channel adapters,
+   not the router); `routing_feedback_store` + `rollout_gate` moved to
+   `lemon_router`, with the store now supervised there (it was previously
+   never started — a dormant feature) and fed by a `"routing_feedback"` Bus
+   event from `MemoryIngest` instead of a downward call. `router_bridge`
+   stays: it is the sanctioned dependency inversion for channels/gateway →
+   router upcalls (`lemon_router` already depends on `lemon_channels`, so
+   the reverse edge must be runtime-bound). Mix task names `lemon.policy`
+   and `lemon.feedback` are unchanged.
 5. **W3b — `lemon_cli` app.** Onboarding, setup wizard, doctor, and the Hermes
    importer (a user-facing migration feature, not cruft) move out of
    `lemon_core` into a CLI/ops app at the top of the graph.
@@ -76,6 +85,21 @@ Each workstream lands as one verified commit: `mix compile
    layer; the eval harness to its own app.
 9. **W6 — positioning.** Root README rewritten around the stack thesis with
    the arena as flagship; `lemon_sim` README with the scorecard/replay story.
+10. **W10 — approvals through native gateway events.** Pending tool
+    approvals surface as kind-`approval` action_events (session subscribes
+    to `exec_approvals`, RunTranslator maps request/resolve, coalescer +
+    renderer display them); the approve/deny round-trip stays on the
+    existing `exec_approvals` channel flows.
+
+## Closed decisions
+
+- **Doctor stays in `lemon_core`.** It probes optional capability apps
+  (browser/media/LSP) at runtime with unavailable-fallbacks — the one
+  sanctioned soft-probe site; moving it to `lemon_cli` would drag runtime
+  probing into an ops app for no boundary gain.
+- **`RouterBridge` is a port, not a smell.** It is the single sanctioned
+  upcall seam from channels/gateway into the router and is configured by
+  `LemonRouter.Application` at boot.
 
 ## Rules of engagement
 
