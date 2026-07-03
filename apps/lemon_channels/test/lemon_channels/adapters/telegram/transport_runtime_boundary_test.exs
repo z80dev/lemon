@@ -10,12 +10,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportRuntimeBoundaryTest do
                            __DIR__
                          )
 
-  test "telegram provider availability goes through LemonAiRuntime" do
+  test "telegram provider availability goes through model runtime credentials" do
     model_picker_source = File.read!(@model_picker_file)
     callback_handler_source = File.read!(@callback_handler_file)
 
-    assert model_picker_source =~ "LemonAiRuntime.provider_has_credentials?"
-    assert callback_handler_source =~ "LemonAiRuntime.provider_has_credentials?"
+    assert model_picker_source =~ "AgentCore.ModelRuntime.Credentials.provider_has_credentials?"
+    assert callback_handler_source =~ "AgentCore.ModelRuntime.Credentials.provider_has_credentials?"
     refute model_picker_source =~ "provider_secret_candidates("
     refute callback_handler_source =~ "provider_secret_candidates("
   end

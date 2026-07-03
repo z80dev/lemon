@@ -380,17 +380,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "falls back to provider-specific oauth resolvers when oauth dispatcher module is unavailable" do
-    Application.put_env(
-      :coding_agent,
-      :oauth_secret_resolver_module,
-      LemonAiRuntime.Auth.MissingOAuthSecretResolver
-    )
-
-    on_exit(fn ->
-      Application.delete_env(:coding_agent, :oauth_secret_resolver_module)
-    end)
-
+  test "resolves provider-specific oauth secrets for stream api keys" do
     oauth_secret =
       Jason.encode!(%{
         "type" => "github_copilot_oauth",

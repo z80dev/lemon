@@ -189,7 +189,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_core/lib/lemon_core/policy_store.ex",
         "apps/lemon_core/lib/lemon_core/introspection_store.ex",
         "apps/lemon_core/lib/lemon_core/project_binding_store.ex",
-        "apps/lemon_core/lib/lemon_core/model_policy_store.ex",
         "apps/lemon_core/lib/lemon_core/idempotency_store.ex"
       ],
       patterns: [
@@ -211,6 +210,20 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.put(:projects_dynamic",
         "LemonCore.Store.delete(:projects_dynamic",
         "LemonCore.Store.list(:projects_dynamic"
+      ]
+    },
+    %{
+      code: :model_policy_store_wrapper_bypass,
+      message: "Model-policy storage must go through LemonChannels.ModelPolicyStore",
+      files: ["apps/lemon_channels/lib/lemon_channels/**/*.ex"],
+      exclude: [
+        "apps/lemon_channels/lib/lemon_channels/model_policy_store.ex"
+      ],
+      patterns: [
+        "LemonCore.Store.get(:model_policies",
+        "LemonCore.Store.put(:model_policies",
+        "LemonCore.Store.delete(:model_policies",
+        "LemonCore.Store.list(:model_policies"
       ]
     },
     %{
@@ -461,7 +474,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     %{
       code: :forbidden_provider_direct_env,
       message:
-        "Provider modules must receive config-backed provider values through LemonAiRuntime-built StreamOptions",
+        "Provider modules must receive config-backed provider values through AgentCore.ModelRuntime.StreamOptions",
       files: [
         "apps/ai/lib/ai/providers/google_vertex.ex",
         "apps/ai/lib/ai/providers/azure_openai_responses.ex",
@@ -479,23 +492,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ~s|System.get_env("AZURE_OPENAI_RESOURCE_NAME")|,
         ~s|System.get_env("AWS_REGION")|,
         ~s|System.get_env("AWS_DEFAULT_REGION")|
-      ]
-    },
-    %{
-      code: :external_ai_auth_leak,
-      message: "Apps outside ai/lemon_ai_runtime must use LemonAiRuntime.Auth.*, not Ai.Auth.*",
-      files: [
-        "apps/*/lib/**/*.ex",
-        "apps/*/test/**/*.exs",
-        "apps/*/priv/scripts/**/*.exs"
-      ],
-      exclude: [
-        "apps/ai/**",
-        "apps/lemon_ai_runtime/**"
-      ],
-      patterns: [
-        "Ai.Auth.",
-        "Elixir.Ai.Auth"
       ]
     }
   ]

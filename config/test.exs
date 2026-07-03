@@ -25,6 +25,9 @@ config :lemon_core, config_test_mode: true
 # Tests opt into channel adapters explicitly.
 config :lemon_channels, adapters: []
 
+# Tests start X API token managers explicitly when required.
+config :x_api, start_token_manager: false
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 
@@ -35,6 +38,15 @@ config :coding_agent,
          System.tmp_dir!(),
          "lemon_agent_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
        )
+
+# Avoid writing routing-feedback sqlite under ~/.lemon/store during tests.
+# (The router test_helper overrides this with a per-run unique path.)
+config :lemon_router, LemonRouter.RoutingFeedbackStore,
+  path:
+    Path.join(
+      System.tmp_dir!(),
+      "lemon_routing_feedback_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+    )
 
 # Avoid copying repo-bundled skills into user config during unrelated test suites.
 config :lemon_skills, seed_builtin_skills: false

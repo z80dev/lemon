@@ -12,7 +12,7 @@ defmodule LemonMCP.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 61]],
       deps: deps()
     ]
   end
@@ -32,6 +32,7 @@ defmodule LemonMCP.MixProject do
       {:plug, "~> 1.14"},
       # Umbrella dependencies
       {:coding_agent, in_umbrella: true},
+      {:lemon_skills, in_umbrella: true},
       {:agent_core, in_umbrella: true}
     ]
   end

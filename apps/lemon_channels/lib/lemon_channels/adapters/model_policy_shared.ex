@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   Shared ModelPolicyAdapter logic for all channel transports.
 
   Provides model and thinking-level resolution with session overrides
-  (ephemeral) and persistent policy storage via `LemonCore.ModelPolicy`.
+  (ephemeral) and persistent policy storage via `LemonChannels.ModelPolicy`.
 
   ## Usage
 
@@ -37,8 +37,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   - `chat_id_guard/1` — override the default guard type check
   """
 
-  alias LemonCore.ModelPolicy
-  alias LemonCore.ModelPolicy.Route
+  alias LemonChannels.ModelPolicy
+  alias LemonChannels.ModelPolicy.Route
 
   @thinking_levels ~w(off minimal low medium high xhigh)
   @placeholder_model_id "_thinking_only"
@@ -71,8 +71,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
     quote location: :keep do
       @behaviour LemonChannels.Adapters.ModelPolicyShared
 
-      alias LemonCore.ModelPolicy
-      alias LemonCore.ModelPolicy.Route
+      alias LemonChannels.ModelPolicy
+      alias LemonChannels.ModelPolicy.Route
 
       require Logger
 
@@ -308,7 +308,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
         do: put_default_thinking_preference(account_id, chat_id, thread_id, level)
 
       @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
-      def clear_default_thinking_preference(account_id, chat_id, thread_id) when is_binary(account_id) do
+      def clear_default_thinking_preference(account_id, chat_id, thread_id)
+          when is_binary(account_id) do
         account_id = account_id || "default"
         had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
 

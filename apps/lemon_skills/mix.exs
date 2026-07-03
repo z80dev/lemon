@@ -12,7 +12,7 @@ defmodule LemonSkills.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 64]],
       deps: deps()
     ]
   end
@@ -27,10 +27,13 @@ defmodule LemonSkills.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
-      {:lemon_channels, in_umbrella: true},
-      {:jason, "~> 1.4"}
+      {:x_api, in_umbrella: true},
+      {:jason, "~> 1.4"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:req, "~> 0.5"}
     ]
   end
 end

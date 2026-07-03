@@ -235,8 +235,8 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
                TaskProgressBindingStore.get_by_child_run_id(fresh_binding.child_run_id)
     end
 
-    test "does not remove old running bindings" do
-      running_binding =
+    test "removes stale running bindings and keeps fresh running bindings" do
+      old_running_binding =
         binding_attrs(%{
           task_id: "task-running",
           child_run_id: "child-running",
@@ -244,17 +244,29 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
           status: :running
         })
 
-      :ok = TaskProgressBindingStore.new_binding(running_binding)
+      fresh_running_binding =
+        binding_attrs(%{
+          task_id: "task-running-fresh",
+          child_run_id: "child-running-fresh",
+          inserted_at_ms: System.system_time(:millisecond),
+          status: :running
+        })
 
-      assert {:ok, 0} = TaskProgressBindingStore.cleanup_expired(5)
+      :ok = TaskProgressBindingStore.new_binding(old_running_binding)
+      :ok = TaskProgressBindingStore.new_binding(fresh_running_binding)
+
+      assert {:ok, 1} = TaskProgressBindingStore.cleanup_expired(5)
+
+      assert {:error, :not_found} =
+               TaskProgressBindingStore.get_by_child_run_id(old_running_binding.child_run_id)
 
       assert {:ok, binding} =
-               TaskProgressBindingStore.get_by_child_run_id(running_binding.child_run_id)
+               TaskProgressBindingStore.get_by_child_run_id(fresh_running_binding.child_run_id)
 
       assert binding.status == :running
     end
 
-    test "completed bindings age out from completion time, not insertion time" do
+    test "completed bindings age out from insertion time" do
       binding =
         binding_attrs(%{
           task_id: "task-complete-age",
@@ -265,18 +277,6 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
 
       :ok = TaskProgressBindingStore.new_binding(binding)
       :ok = TaskProgressBindingStore.mark_completed(binding.child_run_id)
-
-      assert {:ok, 0} = TaskProgressBindingStore.cleanup_expired(5)
-
-      assert {:ok, completed_binding} =
-               TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
-
-      assert completed_binding.status == :completed
-
-      old_completed_binding =
-        Map.merge(completed_binding, %{completed_at_ms: System.system_time(:millisecond) - 10_000})
-
-      :ok = TaskProgressBindingStore.new_binding(old_completed_binding)
 
       assert {:ok, 1} = TaskProgressBindingStore.cleanup_expired(5)
 

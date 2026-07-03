@@ -17,7 +17,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     TriggerMode
   }
 
-  alias LemonAiRuntime
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
@@ -2967,7 +2966,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp provider_has_credentials?(provider, configured) do
-    LemonAiRuntime.provider_has_credentials?(provider, configured)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, configured)
   rescue
     _ -> false
   end

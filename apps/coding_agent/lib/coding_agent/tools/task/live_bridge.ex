@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
 
   alias CodingAgent.TaskProgressBindingStore
   alias LemonCore.{Bus, Event}
+  alias LemonCore.TaskSurface.Projection
 
   @terminal_event_types [
     :run_completed,
@@ -55,8 +56,7 @@ defmodule CodingAgent.Tools.Task.LiveBridge do
 
   @impl true
   def handle_info(%Event{type: :engine_action, payload: payload}, state) when is_map(payload) do
-    projected_payload =
-      CodingAgent.Tools.Task.Projection.project_child_payload(payload, state.binding)
+    projected_payload = Projection.project_child_payload(payload, state.binding)
 
     event =
       Event.new(:task_projected_child_action, projected_payload, %{

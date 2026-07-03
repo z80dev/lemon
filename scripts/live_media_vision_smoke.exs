@@ -137,7 +137,7 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
     File.write!(image_path, red_png())
 
     tool =
-      CodingAgent.Tools.MediaAnalyzeImage.tool(project_dir,
+      LemonSkills.Tools.MediaAnalyzeImage.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -224,7 +224,7 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
     File.write!(image_path, red_png())
 
     tool =
-      CodingAgent.Tools.MediaAnalyzeImage.tool(config.project_dir,
+      LemonSkills.Tools.MediaAnalyzeImage.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_vision_api_key: config.api_key,
@@ -395,7 +395,7 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
       opts[:api_key_secret]
       |> case do
         value when is_binary(value) and value != "" ->
-          LemonAiRuntime.resolve_secret_api_key(value)
+          AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(value)
 
         _ ->
           nil
@@ -409,14 +409,14 @@ defmodule LemonScripts.LiveMediaVisionSmoke do
        do: true
 
   defp credential_available?(_api_key, providers, project_dir, model) do
-    LemonAiRuntime.provider_has_credentials?(provider_for_model(model), providers,
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider_for_model(model), providers,
       cwd: project_dir
     )
   end
 
   defp provider_for_model(model) when is_binary(model) do
     case String.split(model, ":", parts: 2) do
-      [provider, _model] -> LemonAiRuntime.ProviderNames.canonical_name(provider) || :openai
+      [provider, _model] -> AgentCore.ModelRuntime.ProviderNames.canonical_name(provider) || :openai
       _ -> :openai
     end
   end

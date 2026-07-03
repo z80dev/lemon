@@ -766,12 +766,14 @@ defmodule LemonRouter.ToolStatusCoalescer do
       "web_search",
       "subagent",
       "reasoning",
+      "approval",
       :tool,
       :command,
       :file_change,
       :web_search,
       :subagent,
-      :reasoning
+      :reasoning,
+      :approval
     ]
 
     cond do

@@ -1,7 +1,7 @@
 defmodule LemonChannels.MediaStatusMessage do
   @moduledoc false
 
-  alias LemonCore.MediaJobs
+  alias LemonMedia.MediaJobs
 
   @spec handle(binary() | nil, keyword()) :: String.t()
   def handle(args, opts \\ [])

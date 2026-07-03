@@ -23,6 +23,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   | `{:tool_execution_start, ...}`| `ActionEvent` (phase: :started)     |
   | `{:tool_execution_update,...}`| `ActionEvent` (phase: :updated)     |
   | `{:tool_execution_end, ...}`  | `ActionEvent` (phase: :completed)   |
+  | `{:approval_request, ...}`    | `ActionEvent` (kind: :approval)     |
+  | `{:approval_resolved, ...}`   | `ActionEvent` (kind: :approval)     |
   | `{:message_update, ...}`      | Text accumulation (for answer)      |
   | `{:agent_end, ...}`           | `CompletedEvent`                    |
   | `{:error, ...}`               | `CompletedEvent` (ok: false)        |
@@ -31,6 +33,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   under `action.detail.result_meta`, including `:error_type` for unknown tools,
   invalid arguments, task crashes, timeouts, aborted tool calls, and nonzero
   command exits.
+
+  Pending execution approvals are surfaced as status-only approval action events.
+  They are never emitted as deltas, so approval text cannot accumulate into the
+  assistant answer draft.
 
   ## Example
 
@@ -58,15 +64,13 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   use GenServer
 
-  alias AgentCore.CliRunners.Types.{
-    Action,
-    EventFactory
-  }
+  alias AgentCore.CliRunners.Types.EventFactory
 
   alias LemonCore.ResumeToken
 
   alias AgentCore.EventStream
-  alias Ai.Types.StreamOptions
+  alias CodingAgent.Session.Presentation
+  alias CodingAgent.Session.RunTranslator
 
   require Logger
 
@@ -94,20 +98,90 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     :session_ref,
     :session_id,
     :stream,
-    :factory,
     :prompt,
     :cwd,
     :resume,
-    :accumulated_text,
-    :pending_actions,
-    :started_emitted,
-    :completed_emitted,
-    # Delta streaming support
     :run_id,
-    :delta_seq,
-    :delta_callback,
-    :first_token_emitted
+    :translator
   ]
+
+  defmodule Emitter do
+    @moduledoc false
+
+    @behaviour CodingAgent.Session.RunTranslator.Emitter
+
+    alias AgentCore.CliRunners.Types.EventFactory
+    alias AgentCore.EventStream
+    alias CodingAgent.Session.Presentation
+
+    defstruct [:stream, :factory, :session]
+
+    @impl true
+    def emit_started(state, fields) do
+      {event, factory} = EventFactory.started(state.factory, fields.resume, meta: fields.meta)
+
+      emit_event(state.stream, event)
+      %{state | factory: factory}
+    end
+
+    @impl true
+    def emit_action_event(state, fields) do
+      {event, factory} =
+        EventFactory.action(state.factory,
+          phase: fields.phase,
+          action_id: fields.id,
+          kind: fields.kind,
+          title: fields.title,
+          ok: fields.ok,
+          detail: fields.detail,
+          message: fields.message,
+          level: fields.level
+        )
+
+      emit_event(state.stream, event)
+      %{state | factory: factory}
+    end
+
+    @impl true
+    def emit_delta(state, _text, delta_event) do
+      emit_event(state.stream, {:delta, delta_event})
+      state
+    end
+
+    @impl true
+    def emit_completed(state, %{ok: true} = fields) do
+      {event, factory} =
+        EventFactory.completed_ok(state.factory, fields.answer,
+          resume: fields.resume,
+          usage: fields.usage
+        )
+
+      emit_event(state.stream, event)
+      EventStream.complete(state.stream, [])
+
+      %{state | factory: factory}
+      |> Presentation.finalize_session()
+    end
+
+    def emit_completed(state, fields) do
+      {event, factory} =
+        EventFactory.completed_error(state.factory, fields.error,
+          resume: fields.resume,
+          answer: fields.answer,
+          usage: fields.usage
+        )
+
+      emit_event(state.stream, event)
+      EventStream.complete(state.stream, [])
+
+      %{state | factory: factory}
+      |> Presentation.finalize_session()
+    end
+
+    defp emit_event(stream, event) do
+      EventStream.push_async(stream, {:cli_event, event})
+    end
+  end
 
   # ============================================================================
   # Public API
@@ -222,77 +296,44 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     run_id = Keyword.get(opts, :run_id)
     delta_callback = Keyword.get(opts, :delta_callback)
 
-    # Initialize state
+    emitter_state = %Emitter{stream: stream, factory: EventFactory.new(@engine)}
+
+    translator =
+      RunTranslator.new(
+        emitter: Emitter,
+        emitter_state: emitter_state,
+        engine: @engine,
+        label: "LemonRunner",
+        cwd: cwd,
+        run_id: run_id,
+        delta_callback: delta_callback
+      )
+
     state = %__MODULE__{
       stream: stream,
-      factory: EventFactory.new(@engine),
       prompt: prompt,
       cwd: cwd,
       resume: resume,
-      accumulated_text: "",
-      pending_actions: %{},
-      started_emitted: false,
-      completed_emitted: false,
-      # Delta streaming
       run_id: run_id,
-      delta_seq: 0,
-      delta_callback: delta_callback,
-      first_token_emitted: false
+      translator: translator
     }
 
-    # Get tool policy and approval context from opts
-    tool_policy = Keyword.get(opts, :tool_policy)
     session_key = Keyword.get(opts, :session_key)
     agent_id = Keyword.get(opts, :agent_id)
 
-    trace_stream_options =
-      build_trace_stream_options(
-        Keyword.get(opts, :stream_options),
-        run_id,
-        session_key,
-        agent_id
-      )
-
-    # Build approval context if policy provided
-    approval_context =
-      if tool_policy do
-        %{
-          session_key: session_key || run_id,
-          agent_id: agent_id || "default",
-          run_id: run_id,
-          # Approval timeouts are separate from stream timeouts. Default: no timeout.
-          timeout_ms: approval_timeout_ms
-        }
-      else
-        nil
-      end
-
-    # Build session options
     session_opts =
-      [cwd: cwd]
-      |> maybe_add_opt(:model, model)
-      |> maybe_add_opt(:thinking_level, thinking_level)
-      |> maybe_add_opt(:system_prompt, system_prompt)
-      |> maybe_add_opt(:stream_fn, stream_fn)
-      |> maybe_add_opt(:tool_policy, tool_policy)
-      |> maybe_add_opt(:approval_context, approval_context)
-      |> maybe_add_opt(:run_id, run_id)
-      |> maybe_add_opt(:session_key, session_key)
-      |> maybe_add_opt(:agent_id, agent_id)
-      |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
-      |> maybe_add_opt(
-        :acp_client_fs_read_text_file,
-        Keyword.get(opts, :acp_client_fs_read_text_file)
-      )
-      |> maybe_add_opt(
-        :acp_client_fs_write_text_file,
-        Keyword.get(opts, :acp_client_fs_write_text_file)
-      )
-      |> maybe_add_opt(:stream_options, trace_stream_options)
-      |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(extra_tools))
+      opts
+      |> Keyword.put(:model, model)
+      |> Keyword.put(:thinking_level, thinking_level)
+      |> Keyword.put(:system_prompt, system_prompt)
+      |> Keyword.put(:stream_fn, stream_fn)
+      |> Keyword.put(:tool_policy, Keyword.get(opts, :tool_policy))
+      |> Keyword.put(:approval_timeout_ms, approval_timeout_ms)
+      |> Keyword.put(:extra_tools, extra_tools)
+      |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
 
     # Start or resume session
-    case start_or_resume_session(resume, session_opts, state) do
+    case Presentation.start_or_resume_session(resume, session_opts, state) do
       {:ok, session, session_id, state} ->
         # Subscribe to session events
         {:ok, _stream} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 10_000)
@@ -314,7 +355,20 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         end
 
         session_ref = Process.monitor(session)
-        state = %{state | session: session, session_ref: session_ref, session_id: session_id}
+
+        translator = %{
+          state.translator
+          | session_id: session_id,
+            emitter_state: %{state.translator.emitter_state | session: session}
+        }
+
+        state = %{
+          state
+          | session: session,
+            session_ref: session_ref,
+            session_id: session_id,
+            translator: translator
+        }
 
         {:ok, state}
 
@@ -352,47 +406,31 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   @impl true
   def handle_cast(:cancel, state) do
-    handle_cancel(:user_requested, state)
+    handle_cancel(state, :user_requested)
   end
 
   def handle_cast({:cancel, reason}, state) do
-    handle_cancel(reason, state)
+    handle_cancel(state, reason)
   end
 
-  defp handle_cancel(reason, state) do
+  defp handle_cancel(state, reason) do
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    # Emit completed event if not already done
-    state =
-      if state.started_emitted and not state.completed_emitted do
-        emit_completed_error(state, cancel_error_message(reason))
-      else
-        state
-      end
-
-    {:noreply, state}
+    {:noreply, %{state | translator: RunTranslator.handle_cancel(state.translator, reason)}}
   end
 
   @impl true
   def handle_info({:session_event, _session_id, event}, state) do
-    state = translate_and_emit(event, state)
-    {:noreply, state}
+    {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
     Logger.debug("LemonRunner: Session process down: #{inspect(reason)}")
 
-    # Emit error completion if not already completed
-    state =
-      if state.started_emitted and not state.completed_emitted do
-        emit_completed_error(state, "Session terminated: #{inspect(reason)}")
-      else
-        state
-      end
-
-    {:stop, :normal, state}
+    {:stop, :normal,
+     %{state | translator: RunTranslator.handle_session_down(state.translator, reason)}}
   end
 
   def handle_info(_msg, state) do
@@ -408,1019 +446,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     :ok
   end
 
-  # ============================================================================
-  # Session Management
-  # ============================================================================
-
-  defp start_or_resume_session(nil, session_opts, state) do
-    # Start new session
-    case CodingAgent.Session.start_link(session_opts) do
-      {:ok, session} ->
-        session_id = get_session_id(session)
-        {:ok, session, session_id, state}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp start_or_resume_session(
-         %ResumeToken{engine: @engine, value: session_id},
-         session_opts,
-         state
-       ) do
-    # Resume existing session
-    # First try to find an existing session, or load from file
-    session_file = session_file_path(session_id, state.cwd)
-
-    session_opts =
-      if File.exists?(session_file) do
-        Keyword.put(session_opts, :session_file, session_file)
-      else
-        # If no file, start fresh with the session_id
-        Keyword.put(session_opts, :session_id, session_id)
-      end
-
-    case CodingAgent.Session.start_link(session_opts) do
-      {:ok, session} ->
-        {:ok, session, session_id, state}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp start_or_resume_session(%ResumeToken{engine: other}, _session_opts, _state) do
-    {:error, {:wrong_engine, other, @engine}}
-  end
-
-  defp get_session_id(session) do
-    state = CodingAgent.Session.get_state(session)
-    state.session_manager.header.id
-  end
-
-  defp session_file_path(session_id, cwd) do
-    dir = CodingAgent.Config.sessions_dir(cwd)
-    Path.join(dir, "#{session_id}.jsonl")
-  end
-
-  # ============================================================================
-  # Event Translation
-  # ============================================================================
-
-  defp translate_and_emit({:agent_start}, state) do
-    # Emit StartedEvent
-    token = ResumeToken.new(@engine, state.session_id)
-    {event, factory} = EventFactory.started(state.factory, token, meta: %{cwd: state.cwd})
-
-    emit_event(state.stream, event)
-    %{state | factory: factory, started_emitted: true}
-  end
-
-  defp translate_and_emit({:tool_execution_start, id, name, args}, state) do
-    action_id = "tool_#{id}"
-    kind = tool_kind(name)
-    title = tool_title(name, args)
-    detail = %{name: name, args: args}
-
-    action = Action.new(action_id, kind, title, detail)
-
-    {event, factory} =
-      EventFactory.action_started(state.factory, action_id, kind, title, detail: detail)
-
-    emit_event(state.stream, event)
-    pending = Map.put(state.pending_actions, action_id, action)
-    %{state | factory: factory, pending_actions: pending}
-  end
-
-  defp translate_and_emit({:tool_execution_update, id, _name, _args, partial_result}, state) do
-    action_id = "tool_#{id}"
-
-    case Map.get(state.pending_actions, action_id) do
-      nil ->
-        state
-
-      action ->
-        detail = Map.merge(action.detail, %{partial_result: partial_result})
-
-        {event, factory} =
-          EventFactory.action_updated(state.factory, action_id, action.kind, action.title,
-            detail: detail
-          )
-
-        emit_event(state.stream, event)
-
-        updated_action = %{action | detail: detail}
-        pending = Map.put(state.pending_actions, action_id, updated_action)
-        %{state | factory: factory, pending_actions: pending}
-    end
-  end
-
-  defp translate_and_emit({:tool_execution_end, id, name, result, is_error}, state) do
-    action_id = "tool_#{id}"
-
-    case Map.get(state.pending_actions, action_id) do
-      nil ->
-        # Tool wasn't tracked, create standalone completed action
-        kind = tool_kind(name)
-        title = tool_title(name, %{})
-
-        detail =
-          %{name: name, result: truncate_result(result)}
-          |> maybe_put_result_meta(result, name)
-
-        ok? = action_ok?(name, result, is_error)
-
-        {event, factory} =
-          EventFactory.action_completed(
-            state.factory,
-            action_id,
-            kind,
-            title,
-            ok?,
-            detail: detail
-          )
-
-        emit_event(state.stream, event)
-        %{state | factory: factory}
-
-      action ->
-        detail =
-          action.detail
-          |> Map.merge(%{result: truncate_result(result)})
-          |> maybe_put_result_meta(result, name)
-
-        ok? = action_ok?(name, result, is_error)
-
-        {event, factory} =
-          EventFactory.action_completed(
-            state.factory,
-            action_id,
-            action.kind,
-            action.title,
-            ok?,
-            detail: detail
-          )
-
-        emit_event(state.stream, event)
-
-        pending = Map.delete(state.pending_actions, action_id)
-        %{state | factory: factory, pending_actions: pending}
-    end
-  end
-
-  defp translate_and_emit({:message_update, _msg, delta}, state) when is_binary(delta) do
-    # Emit delta event for streaming
-    state = emit_delta(state, delta)
-
-    # Accumulate text for final answer
-    %{state | accumulated_text: state.accumulated_text <> delta}
-  end
-
-  defp translate_and_emit({:message_update, msg, event}, state) when is_tuple(event) do
-    # Extract streamed text either from the event tuple itself (preferred) or,
-    # for non-text tuples like tool-call events, from the visible assistant
-    # message if it has grown since the last emitted text.
-    case text_delta_from_message_update(msg, event, state.accumulated_text) do
-      text when is_binary(text) and text != "" ->
-        state = emit_delta(state, text)
-        %{state | accumulated_text: state.accumulated_text <> text}
-
-      _ ->
-        state
-    end
-  end
-
-  defp translate_and_emit({:message_update, _msg, _delta}, state) do
-    state
-  end
-
-  defp translate_and_emit({:agent_end, messages}, state) do
-    # Extract final answer from messages
-    answer = extract_answer(messages, state.accumulated_text)
-
-    # Build usage stats if available
-    usage = build_usage(messages)
-
-    emit_completed_ok(state, answer, usage)
-  end
-
-  defp translate_and_emit({:error, reason, _partial_state}, state) do
-    error_msg = format_error(reason, state)
-
-    Logger.error(
-      "LemonRunner stream error " <>
-        "run_id=#{inspect(state.run_id)} " <>
-        "session_id=#{inspect(state.session_id)} " <>
-        "error=#{error_msg} " <>
-        "reason=#{inspect(reason, limit: 80, printable_limit: 8_000)} " <>
-        "answer_bytes=#{byte_size(state.accumulated_text || "")} " <>
-        "pending_actions=#{map_size(state.pending_actions || %{})}"
-    )
-
-    emit_completed_error(state, error_msg)
-  end
-
-  defp translate_and_emit({:turn_start}, state), do: state
-  defp translate_and_emit({:turn_end, _msg, _results}, state), do: state
-  defp translate_and_emit({:message_start, _msg}, state), do: state
-  defp translate_and_emit({:message_end, _msg}, state), do: state
-  defp translate_and_emit({:extension_status_report, _report}, state), do: state
-  defp translate_and_emit({:compaction_complete, _info}, state), do: state
-  defp translate_and_emit({:branch_summarized, _info}, state), do: state
-  defp translate_and_emit(_event, state), do: state
-
-  # Emit a delta event for streaming output
-  defp emit_delta(state, text) when is_binary(text) and byte_size(text) > 0 do
-    new_seq = state.delta_seq + 1
-
-    # Track first token for telemetry
-    state =
-      if not state.first_token_emitted do
-        # Optionally emit first token telemetry if we have a callback
-        if state.delta_callback do
-          state.delta_callback.(:first_token, %{run_id: state.run_id, seq: new_seq})
-        end
-
-        %{state | first_token_emitted: true}
-      else
-        state
-      end
-
-    # Create delta event
-    delta_event = %{
-      type: :delta,
-      run_id: state.run_id,
-      ts_ms: System.system_time(:millisecond),
-      seq: new_seq,
-      text: text
-    }
-
-    # Emit to stream as a delta event
-    emit_event(state.stream, {:delta, delta_event})
-
-    # Call delta callback if provided (for gateway integration)
-    if state.delta_callback do
-      state.delta_callback.(:delta, delta_event)
-    end
-
-    %{state | delta_seq: new_seq}
-  end
-
-  defp emit_delta(state, _text), do: state
-
   @doc false
   def text_delta_from_message_update(msg, event, accumulated_text \\ "") do
-    case extract_delta_text(event) do
-      text when is_binary(text) and text != "" ->
-        text
-
-      _ ->
-        visible_text_delta(msg, accumulated_text)
-    end
+    Presentation.text_delta_from_message_update(msg, event, accumulated_text)
   end
-
-  # Extract text content from AI stream event tuples.
-  # Events come as {:text_delta, idx, text, partial_msg} or similar shapes.
-  defp extract_delta_text({:text_delta, _idx, text, _partial}) when is_binary(text), do: text
-  defp extract_delta_text({:text_delta, _idx, text}) when is_binary(text), do: text
-  defp extract_delta_text(_), do: nil
-
-  defp visible_text_delta(msg, accumulated_text) do
-    text =
-      case safe_get_visible_text(msg) do
-        visible when is_binary(visible) -> visible
-        _ -> ""
-      end
-
-    cond do
-      text == "" ->
-        nil
-
-      accumulated_text == "" ->
-        text
-
-      String.starts_with?(text, accumulated_text) ->
-        case String.slice(text, byte_size(accumulated_text)..-1//1) do
-          "" -> nil
-          suffix -> suffix
-        end
-
-      true ->
-        nil
-    end
-  end
-
-  defp safe_get_visible_text(msg) do
-    case Ai.get_text(msg) do
-      text when is_binary(text) and text != "" ->
-        text
-
-      _ ->
-        ""
-    end
-  rescue
-    _ -> ""
-  end
-
-  # ============================================================================
-  # Completion Helpers
-  # ============================================================================
-
-  defp emit_completed_ok(state, answer, usage) do
-    if state.completed_emitted do
-      state
-    else
-      token = state.factory.resume
-
-      {event, factory} =
-        EventFactory.completed_ok(state.factory, answer, resume: token, usage: usage)
-
-      emit_event(state.stream, event)
-      EventStream.complete(state.stream, [])
-      state = %{state | factory: factory, completed_emitted: true}
-      finalize_session(state)
-    end
-  end
-
-  defp emit_completed_error(state, error_msg) do
-    if state.completed_emitted do
-      state
-    else
-      token = state.factory.resume
-      answer = state.accumulated_text
-
-      {event, factory} =
-        EventFactory.completed_error(state.factory, error_msg, resume: token, answer: answer)
-
-      emit_event(state.stream, event)
-      EventStream.complete(state.stream, [])
-      state = %{state | factory: factory, completed_emitted: true}
-      finalize_session(state)
-    end
-  end
-
-  defp finalize_session(state) do
-    session = state.session
-
-    if is_pid(session) and Process.alive?(session) do
-      # Best-effort save so resume tokens remain usable across runs.
-      case safe_save_session(session) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("LemonRunner finalize_session save failed: #{inspect(reason)}")
-      end
-
-      # Stop the session to avoid "already_started" conflicts on resume.
-      :ok = safe_stop_session(session)
-    end
-
-    state
-  end
-
-  @spec safe_save_session(pid()) :: :ok | {:error, term()}
-  defp safe_save_session(session) do
-    try do
-      _ = CodingAgent.Session.save(session)
-      :ok
-    rescue
-      exception ->
-        {:error, {:exception, exception}}
-    catch
-      :exit, reason ->
-        {:error, {:exit, reason}}
-    end
-  end
-
-  @spec safe_stop_session(pid()) :: :ok
-  defp safe_stop_session(session) do
-    try do
-      GenServer.stop(session, :normal)
-      :ok
-    rescue
-      _ ->
-        :ok
-    catch
-      :exit, _reason ->
-        :ok
-    end
-  end
-
-  # ============================================================================
-  # Helpers
-  # ============================================================================
-
-  defp emit_event(stream, event) do
-    EventStream.push_async(stream, {:cli_event, event})
-  end
-
-  defp tool_kind(name) do
-    case String.downcase(name || "") do
-      "bash" -> :command
-      "read" -> :tool
-      "write" -> :file_change
-      "edit" -> :file_change
-      "glob" -> :tool
-      "grep" -> :tool
-      "websearch" -> :web_search
-      "webfetch" -> :web_search
-      "browser_" <> _ -> :browser
-      "task" -> :subagent
-      "agent" -> :subagent
-      _ -> :tool
-    end
-  end
-
-  defp tool_title(name, args) do
-    a = stringify_keys(args)
-
-    case String.downcase(name || "") do
-      "bash" ->
-        cmd = a["command"] || ""
-        cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-        "`#{cmd_preview}`"
-
-      "read" ->
-        path = a["path"] || a["file_path"] || ""
-        "read: `#{path_label(path)}`"
-
-      "write" ->
-        path = a["path"] || a["file_path"] || ""
-        "write: `#{path_label(path)}`"
-
-      "edit" ->
-        path = a["path"] || a["file_path"] || ""
-        "edit: `#{path_label(path)}`"
-
-      "glob" ->
-        "glob: `#{a["pattern"] || ""}`"
-
-      "grep" ->
-        pattern = String.slice(a["pattern"] || "", 0, 30)
-        path = a["path"]
-
-        if is_binary(path) and path != "" do
-          "grep: `#{pattern}` in #{path_label(path)}"
-        else
-          "grep: `#{pattern}`"
-        end
-
-      "websearch" ->
-        "search: #{String.slice(a["query"] || "", 0, 50)}"
-
-      "webfetch" ->
-        "fetch: #{String.slice(a["url"] || "", 0, 50)}"
-
-      "browser_navigate" ->
-        "browser: #{String.slice(a["url"] || "", 0, 50)}"
-
-      "browser_click" ->
-        "browser click: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_type" ->
-        "browser type: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_hover" ->
-        "browser hover: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_select_option" ->
-        "browser select option: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_upload_file" ->
-        "browser upload file"
-
-      "browser_download" ->
-        "browser download"
-
-      "browser_press" ->
-        "browser key: #{String.slice(a["key"] || "", 0, 30)}"
-
-      "browser_scroll" ->
-        "browser scroll"
-
-      "browser_back" ->
-        "browser back"
-
-      "browser_events" ->
-        "browser events"
-
-      "browser_get_cookies" ->
-        "browser cookies"
-
-      "browser_set_cookies" ->
-        "browser set cookies"
-
-      "browser_clear_state" ->
-        "browser clear state"
-
-      "browser_snapshot" ->
-        "browser snapshot"
-
-      "browser_get_content" ->
-        "browser content"
-
-      "browser_wait_for_selector" ->
-        "browser wait"
-
-      "browser_evaluate" ->
-        "browser evaluate"
-
-      "browser_screenshot" ->
-        "browser screenshot"
-
-      "task" ->
-        engine_suffix =
-          case a["engine"] do
-            engine when is_binary(engine) and engine not in ["", "internal"] -> "(#{engine})"
-            _ -> ""
-          end
-
-        model_suffix =
-          case a["model"] do
-            model when is_binary(model) and model != "" -> " [#{model}]"
-            _ -> ""
-          end
-
-        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}#{model_suffix}"
-
-      "agent" ->
-        "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
-
-      "cron" ->
-        "cron: #{String.slice(a["prompt"] || "", 0, 50)}"
-
-      "skill" ->
-        "skill: #{a["skill"] || a["name"] || ""}"
-
-      n ->
-        n
-    end
-  end
-
-  defp path_label(path) when is_binary(path) do
-    # Show last 2 path components for context
-    parts = Path.split(path)
-
-    case length(parts) do
-      n when n > 2 -> Path.join(Enum.take(parts, -2))
-      _ -> path
-    end
-  end
-
-  defp path_label(other), do: inspect(other)
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp stringify_keys(_), do: %{}
-
-  defp truncate_result(result) when is_binary(result) do
-    if String.length(result) > 500 do
-      String.slice(result, 0, 500) <> "..."
-    else
-      result
-    end
-  end
-
-  # Most tools return AgentToolResult with structured content blocks.
-  # For user-facing transports (e.g., Telegram status surfaces), extract the plain text
-  # so we don't leak raw Elixir struct inspection output.
-  defp truncate_result(%AgentCore.Types.AgentToolResult{} = result) do
-    result
-    |> AgentCore.get_text()
-    |> truncate_result()
-  end
-
-  defp truncate_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
-    do: truncate_result(text)
-
-  defp truncate_result(content) when is_list(content) do
-    content
-    |> Enum.map(fn
-      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
-      %{type: :text, text: text} when is_binary(text) -> text
-      %{"type" => "text", "text" => text} when is_binary(text) -> text
-      item when is_binary(item) -> item
-      _ -> ""
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-    |> truncate_result()
-  end
-
-  defp truncate_result(result), do: inspect(result, limit: 500)
-
-  defp maybe_put_result_meta(detail, %AgentCore.Types.AgentToolResult{} = result, name)
-       when is_map(detail) do
-    case extract_tool_result_meta(result.details, name) do
-      nil -> detail
-      meta -> Map.put(detail, :result_meta, meta)
-    end
-  end
-
-  defp maybe_put_result_meta(detail, _, _name), do: detail
-
-  defp action_ok?(_name, _result, true), do: false
-
-  defp action_ok?(name, %AgentCore.Types.AgentToolResult{details: details}, false) do
-    not command_exit_failed?(name, details)
-  end
-
-  defp action_ok?(_name, _result, false), do: true
-
-  defp command_exit_failed?(name, details) when is_map(details) do
-    String.downcase(to_string(name || "")) == "bash" and
-      case Map.get(details, :exit_code) || Map.get(details, "exit_code") do
-        exit_code when is_integer(exit_code) -> exit_code != 0
-        _ -> false
-      end
-  end
-
-  defp command_exit_failed?(_name, _details), do: false
-
-  defp extract_tool_result_meta(details, name) when is_map(details) do
-    auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")
-    task_meta = extract_task_tool_result_meta(details)
-    command_meta = extract_command_tool_result_meta(details, name)
-    error_meta = extract_error_tool_result_meta(details)
-
-    meta =
-      case normalize_auto_send_files(auto_send_files) do
-        [] ->
-          (task_meta || %{})
-          |> Map.merge(command_meta || %{})
-          |> Map.merge(error_meta || %{})
-
-        files ->
-          (task_meta || %{})
-          |> Map.merge(command_meta || %{})
-          |> Map.merge(error_meta || %{})
-          |> Map.put(:auto_send_files, files)
-      end
-
-    if map_size(meta) == 0, do: nil, else: meta
-  end
-
-  defp extract_tool_result_meta(_, _name), do: nil
-
-  defp extract_command_tool_result_meta(details, name) when is_map(details) do
-    exit_code = Map.get(details, :exit_code) || Map.get(details, "exit_code")
-
-    if String.downcase(to_string(name || "")) == "bash" and is_integer(exit_code) and
-         exit_code != 0 do
-      %{}
-      |> maybe_put_meta(:error_type, :command_exit)
-      |> maybe_put_meta(:tool_name, to_string(name))
-      |> maybe_put_meta(:exit_code, exit_code)
-      |> maybe_put_meta(:message, "Command exited with code #{exit_code}")
-    else
-      nil
-    end
-  end
-
-  defp extract_command_tool_result_meta(_details, _name), do: nil
-
-  defp extract_error_tool_result_meta(details) when is_map(details) do
-    error_type = Map.get(details, :error_type) || Map.get(details, "error_type")
-
-    if is_nil(error_type) do
-      nil
-    else
-      %{}
-      |> maybe_put_meta(:error_type, error_type)
-      |> maybe_put_meta(:reason, Map.get(details, :reason) || Map.get(details, "reason"))
-      |> maybe_put_meta(:errors, Map.get(details, :errors) || Map.get(details, "errors"))
-      |> maybe_put_meta(:tool_name, Map.get(details, :tool_name) || Map.get(details, "tool_name"))
-      |> maybe_put_meta(
-        :timeout_ms,
-        Map.get(details, :timeout_ms) || Map.get(details, "timeout_ms")
-      )
-      |> maybe_put_meta(:exit_code, Map.get(details, :exit_code) || Map.get(details, "exit_code"))
-      |> maybe_put_meta(:exception, Map.get(details, :exception) || Map.get(details, "exception"))
-      |> maybe_put_meta(:message, Map.get(details, :message) || Map.get(details, "message"))
-      |> maybe_put_meta(:status, Map.get(details, :status) || Map.get(details, "status"))
-    end
-  end
-
-  defp extract_error_tool_result_meta(_), do: nil
-
-  defp extract_task_tool_result_meta(details) when is_map(details) do
-    meta =
-      %{}
-      |> maybe_put_meta(:task_id, Map.get(details, :task_id) || Map.get(details, "task_id"))
-      |> maybe_put_meta(:task_ids, Map.get(details, :task_ids) || Map.get(details, "task_ids"))
-      |> maybe_put_meta(:status, Map.get(details, :status) || Map.get(details, "status"))
-      |> maybe_put_meta(:engine, Map.get(details, :engine) || Map.get(details, "engine"))
-      |> maybe_put_meta(:run_id, Map.get(details, :run_id) || Map.get(details, "run_id"))
-      |> maybe_put_meta(:current_action, latest_task_current_action(details))
-      |> maybe_put_meta(:action_detail, latest_task_action_detail(details))
-
-    if map_size(meta) == 0, do: nil, else: meta
-  end
-
-  defp extract_task_tool_result_meta(_), do: nil
-
-  defp latest_task_current_action(details) when is_map(details) do
-    direct = Map.get(details, :current_action) || Map.get(details, "current_action")
-
-    cond do
-      is_map(direct) ->
-        direct
-
-      true ->
-        details
-        |> task_result_events()
-        |> Enum.reverse()
-        |> Enum.find_value(fn event ->
-          event_details =
-            cond do
-              is_struct(event) -> Map.get(Map.from_struct(event), :details)
-              is_map(event) -> Map.get(event, :details) || Map.get(event, "details")
-              true -> nil
-            end
-
-          if is_map(event_details) do
-            Map.get(event_details, :current_action) || Map.get(event_details, "current_action")
-          end
-        end)
-    end
-  end
-
-  defp latest_task_current_action(_), do: nil
-
-  defp latest_task_action_detail(details) when is_map(details) do
-    details
-    |> task_result_events()
-    |> Enum.reverse()
-    |> Enum.find_value(fn event ->
-      event_details =
-        cond do
-          is_struct(event) -> Map.get(Map.from_struct(event), :details)
-          is_map(event) -> Map.get(event, :details) || Map.get(event, "details")
-          true -> nil
-        end
-
-      if is_map(event_details) do
-        Map.get(event_details, :action_detail) || Map.get(event_details, "action_detail")
-      end
-    end)
-  end
-
-  defp latest_task_action_detail(_), do: nil
-
-  defp task_result_events(details) when is_map(details) do
-    events = Map.get(details, :events) || Map.get(details, "events")
-    if is_list(events), do: events, else: []
-  end
-
-  defp task_result_events(_), do: []
-
-  defp maybe_put_meta(meta, _key, nil), do: meta
-
-  defp maybe_put_meta(meta, key, value) when is_map(meta) do
-    Map.put(meta, key, value)
-  end
-
-  defp normalize_auto_send_files(files) when is_list(files) do
-    files
-    |> Enum.map(&normalize_auto_send_file/1)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp normalize_auto_send_files(_), do: []
-
-  defp normalize_auto_send_file(file) when is_map(file) do
-    path = Map.get(file, :path) || Map.get(file, "path")
-
-    if is_binary(path) and path != "" do
-      %{
-        path: path,
-        filename: Map.get(file, :filename) || Map.get(file, "filename"),
-        caption: Map.get(file, :caption) || Map.get(file, "caption")
-      }
-      |> maybe_put_auto_send_source(Map.get(file, :source) || Map.get(file, "source"))
-    else
-      nil
-    end
-  end
-
-  defp normalize_auto_send_file(_), do: nil
-
-  defp maybe_put_auto_send_source(file, source) when source in [:explicit, "explicit"] do
-    Map.put(file, :source, :explicit)
-  end
-
-  defp maybe_put_auto_send_source(file, source) when source in [:generated, "generated"] do
-    Map.put(file, :source, :generated)
-  end
-
-  defp maybe_put_auto_send_source(file, _source), do: file
-
-  defp extract_answer(messages, accumulated_text) do
-    # Try to get the last assistant message content
-    last_assistant =
-      messages
-      |> Enum.reverse()
-      |> Enum.find(fn msg ->
-        case msg do
-          %{role: :assistant} -> true
-          _ -> false
-        end
-      end)
-
-    case last_assistant do
-      %{content: content} when is_binary(content) -> content
-      %{content: content} when is_list(content) -> extract_text_content(content)
-      _ -> accumulated_text
-    end
-  end
-
-  defp extract_text_content(content) do
-    content
-    |> Enum.filter(fn
-      %{type: :text} -> true
-      _ -> false
-    end)
-    |> Enum.map(fn %{text: text} -> text end)
-    |> Enum.join("\n")
-  end
-
-  defp build_usage(messages) do
-    # Sum up usage from all messages if available
-    messages
-    |> Enum.reduce(%{}, fn msg, acc ->
-      case Map.get(msg, :usage) do
-        nil -> acc
-        usage -> merge_usage(acc, usage)
-      end
-    end)
-    |> case do
-      empty when map_size(empty) == 0 -> nil
-      usage -> usage
-    end
-  end
-
-  defp merge_usage(acc, usage) do
-    Map.merge(acc, usage, fn _k, v1, v2 ->
-      if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
-    end)
-  end
-
-  defp format_error({:assistant_error, msg}, _state) when is_binary(msg), do: msg
-
-  defp format_error({:assistant_error, reason}, state),
-    do: "assistant error: #{format_error(reason, state)}"
-
-  defp format_error(:circuit_open, state), do: format_circuit_open_error(state)
-
-  defp format_error(reason, _state) when is_binary(reason), do: reason
-
-  defp format_error(reason, _state)
-       when reason in [
-              :rate_limited,
-              :max_concurrency,
-              :timeout,
-              :closed,
-              :econnrefused,
-              :econnreset,
-              :nxdomain
-            ] do
-    Ai.Error.format_error(reason)
-  end
-
-  defp format_error({:http_error, _status, _body} = reason, _state),
-    do: Ai.Error.format_error(reason)
-
-  defp format_error({:error, reason}, state), do: format_error(reason, state)
-  defp format_error(reason, _state) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_error(reason, _state), do: inspect(reason)
-
-  defp format_circuit_open_error(state) do
-    base = Ai.Error.format_error(:circuit_open)
-
-    with provider when is_atom(provider) <- current_provider(state),
-         {:ok, breaker_state} <- Ai.CircuitBreaker.get_state(provider) do
-      detail =
-        breaker_state
-        |> Map.get(:last_failure_reason)
-        |> format_circuit_failure_reason()
-
-      retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
-      parts = ["Provider: #{provider}"]
-
-      parts =
-        if is_binary(detail) and detail != "",
-          do: parts ++ ["Last failure: #{detail}"],
-          else: parts
-
-      parts =
-        if retry_after_ms > 0,
-          do: parts ++ ["Retry in ~#{div(retry_after_ms + 999, 1000)}s"],
-          else: parts
-
-      if Enum.empty?(parts) do
-        base
-      else
-        base <> " " <> Enum.join(parts, ". ") <> "."
-      end
-    else
-      _ -> base
-    end
-  end
-
-  defp format_circuit_failure_reason(nil), do: nil
-
-  defp format_circuit_failure_reason({:stream_tracking_start_failed, reason}) do
-    "stream tracking start failed: #{format_circuit_failure_reason(reason) || inspect(reason)}"
-  end
-
-  defp format_circuit_failure_reason({:stream_tracking_exception, message})
-       when is_binary(message),
-       do: message
-
-  defp format_circuit_failure_reason({:stream_tracking_exit, reason}),
-    do: "stream tracking exited: #{inspect(reason)}"
-
-  defp format_circuit_failure_reason({:unexpected_stream_result, result}),
-    do: "unexpected stream result: #{inspect(result)}"
-
-  defp format_circuit_failure_reason({:exception, message}) when is_binary(message), do: message
-
-  defp format_circuit_failure_reason(reason) when is_binary(reason), do: reason
-
-  defp format_circuit_failure_reason(reason)
-       when reason in [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
-    Ai.Error.format_error(reason)
-  end
-
-  defp format_circuit_failure_reason({:http_error, _status, _body} = reason),
-    do: Ai.Error.format_error(reason)
-
-  defp format_circuit_failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_circuit_failure_reason(reason), do: inspect(reason)
-
-  defp current_provider(%{session: session}) when is_pid(session) do
-    case Process.alive?(session) do
-      true ->
-        try do
-          case CodingAgent.Session.get_state(session) do
-            %{model: %{provider: provider}} when is_atom(provider) -> provider
-            _ -> nil
-          end
-        catch
-          :exit, _reason -> nil
-        end
-
-      false ->
-        nil
-    end
-  end
-
-  defp current_provider(_state), do: nil
-
-  defp cancel_error_message(:user_requested), do: "Cancelled by user"
-  defp cancel_error_message(reason), do: "Cancelled: #{format_error(reason, %{})}"
-
-  defp normalize_extra_tools_opt(tools) when is_list(tools) and tools != [], do: tools
-  defp normalize_extra_tools_opt(_), do: nil
-
-  defp maybe_add_opt(opts, _key, nil), do: opts
-  defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp build_trace_stream_options(base, run_id, session_key, agent_id) do
-    base =
-      case base do
-        %StreamOptions{} = opts -> opts
-        _ -> %StreamOptions{}
-      end
-
-    trace_headers =
-      %{}
-      |> maybe_put_trace_header("x-lemon-run-id", run_id)
-      |> maybe_put_trace_header("x-lemon-session-key", session_key)
-      |> maybe_put_trace_header("x-lemon-agent-id", agent_id)
-
-    merged_headers = Map.merge(base.headers || %{}, trace_headers)
-
-    if map_size(merged_headers) == 0 do
-      nil
-    else
-      %StreamOptions{base | headers: merged_headers}
-    end
-  end
-
-  defp maybe_put_trace_header(headers, _key, nil), do: headers
-  defp maybe_put_trace_header(headers, _key, ""), do: headers
-
-  defp maybe_put_trace_header(headers, key, value) when is_binary(value) do
-    Map.put(headers, key, value)
-  end
-
-  defp maybe_put_trace_header(headers, _key, _value), do: headers
 end

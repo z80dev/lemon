@@ -5,7 +5,7 @@
 `lemon_sim_ui` is a Phoenix LiveView dashboard for the `lemon_sim` simulation harness. It does not contain any simulation logic — all game rules, runners, and domain examples live in `lemon_sim`. This app is responsible for:
 
 - launching simulations via `SimManager`
-- driving the runner loop (calling `LemonSim.Runner.step/3` in a supervised task)
+- driving the runner loop (calling `LemonSim.Kernel.Runner.step/3` in a supervised task)
 - rendering live state in the browser via the public `LobbyLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
 - accepting human-player moves for interactive domains
@@ -107,12 +107,12 @@ test/
 ### Adding Interactive Human Play to a Domain
 
 1. Detect whose turn it is in `SimManager.is_human_turn?/2` (pattern on a world key unique to the domain).
-2. Add phx-event handlers in `SimDashboardLive` (e.g., `handle_event("human_action", ...)`) that call `SimManager.submit_human_move/2` with a `LemonSim.Event`.
+2. Add phx-event handlers in `SimDashboardLive` (e.g., `handle_event("human_action", ...)`) that call `SimManager.submit_human_move/2` with a `LemonSim.Kernel.Event`.
 3. Render interactive controls in the board component, gated on the `interactive` attribute (set by the LiveView when `human_player != nil && sim_id in running`).
 
 ### Updating an Existing Board Component
 
-Board components are pure stateless `Phoenix.Component` functions. They receive `:world` (the `LemonSim.State.world` map) and optionally `:interactive`. They do not hold any state — all data is derived from `world` in the function body before the `~H"""` template.
+Board components are pure stateless `Phoenix.Component` functions. They receive `:world` (the `LemonSim.Kernel.State.world` map) and optionally `:interactive`. They do not hold any state — all data is derived from `world` in the function body before the `~H"""` template.
 
 When adding display fields, read them with `LemonCore.MapHelpers.get_key/2` (or the local `get_val/3` helper already defined in most board components) to tolerate both atom and string keys in the world map.
 VendingBench board data may come from JSON checkpoint artifacts, so do not use `String.to_atom/1` for slot, product, supplier, or agent ids while rendering.
@@ -159,7 +159,7 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 mix test apps/lemon_sim_ui
 ```
 
-Tests use `ConnCase` which starts the full endpoint. `LemonSim.Store` is live (not mocked) — tests that create state must clean up with `Store.delete_state/1`.
+Tests use `ConnCase` which starts the full endpoint. `LemonSim.Kernel.Store` is live (not mocked) — tests that create state must clean up with `Store.delete_state/1`.
 
 When writing new board component tests, use `render_component/2` from `Phoenix.LiveViewTest` with a `%{world: ...}` assign. Pass a minimal world map that exercises the branch under test rather than a full sim state.
 

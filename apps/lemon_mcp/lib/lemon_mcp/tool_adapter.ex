@@ -49,8 +49,8 @@ defmodule LemonMCP.ToolAdapter do
     "agent" => CodingAgent.Tools.Agent,
     "tool_auth" => CodingAgent.Tools.ToolAuth,
     "extensions_status" => CodingAgent.Tools.ExtensionsStatus,
-    "post_to_x" => CodingAgent.Tools.PostToX,
-    "get_x_mentions" => CodingAgent.Tools.GetXMentions
+    "post_to_x" => LemonSkills.Tools.PostToX,
+    "get_x_mentions" => LemonSkills.Tools.GetXMentions
   }
 
   @doc """

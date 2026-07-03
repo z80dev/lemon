@@ -208,7 +208,7 @@ defmodule Ai.Auth.OpenAICodexOAuthTest do
              OpenAICodexOAuth.login_device_flow(
                redirect_uri: redirect_uri,
                callback_timeout_ms: 2_000,
-               local_callback_listener: LemonCore.Onboarding.LocalCallbackListener,
+               local_callback_listener: LemonCore.OAuth.LocalCallbackListener,
                on_auth: fn url, _instructions ->
                  state = extract_query_param(url, "state")
 

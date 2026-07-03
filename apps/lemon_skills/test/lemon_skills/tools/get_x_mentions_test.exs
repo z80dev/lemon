@@ -20,19 +20,19 @@ defmodule LemonSkills.Tools.GetXMentionsTest do
   ]
 
   setup do
-    previous = Application.get_env(:lemon_channels, LemonChannels.Adapters.XAPI)
-    previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+    previous = Application.get_env(:x_api, XApi)
+    previous_use_secrets = Application.get_env(:x_api, :use_secrets)
     previous_env = Map.new(@x_env_vars, fn key -> {key, System.get_env(key)} end)
 
-    Application.delete_env(:lemon_channels, LemonChannels.Adapters.XAPI)
-    Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+    Application.delete_env(:x_api, XApi)
+    Application.put_env(:x_api, :use_secrets, false)
     Enum.each(@x_env_vars, &System.delete_env/1)
 
     on_exit(fn ->
       if is_nil(previous) do
-        Application.delete_env(:lemon_channels, LemonChannels.Adapters.XAPI)
+        Application.delete_env(:x_api, XApi)
       else
-        Application.put_env(:lemon_channels, LemonChannels.Adapters.XAPI, previous)
+        Application.put_env(:x_api, XApi, previous)
       end
 
       Enum.each(previous_env, fn {key, value} ->
@@ -44,9 +44,9 @@ defmodule LemonSkills.Tools.GetXMentionsTest do
       end)
 
       if is_nil(previous_use_secrets) do
-        Application.delete_env(:lemon_channels, :x_api_use_secrets)
+        Application.delete_env(:x_api, :use_secrets)
       else
-        Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
+        Application.put_env(:x_api, :use_secrets, previous_use_secrets)
       end
     end)
 

@@ -187,6 +187,9 @@ of creating blank standalone `task:` status entries.
 Structured reasoning from child runs should arrive as `detail.reasoning` and render as a
 `reasoning` tool-status action for Web/TUI/monitoring surfaces. Generic `:note` actions are still
 filtered, but notes carrying reasoning details are preserved instead of being dropped blindly.
+Pending execution approvals arrive as `approval` tool-status actions. Render started/updated
+approval actions as waiting status lines and completed approval actions with the decision message;
+the separate Telegram/Discord/control-plane approval controls still own approve/deny resolution.
 Chat renderers keep the usual line budget for these actions; non-chat/operator renderers can show
 the full structured action stream.
 Generated images and explicit file-send requests are tracked in

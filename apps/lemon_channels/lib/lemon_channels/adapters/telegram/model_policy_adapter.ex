@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   Provides model and thinking-level resolution for the Telegram transport,
   with session overrides (ephemeral) and persistent policy storage via
-  `LemonCore.ModelPolicy`. Falls back to legacy `StateStore` for backward
+  `LemonChannels.ModelPolicy`. Falls back to legacy `StateStore` for backward
   compatibility with data written before the ModelPolicy system existed.
   """
 

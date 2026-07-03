@@ -13,9 +13,6 @@ defmodule CodingAgent.Tools do
     Read,
     ReadSkill,
     SkillManage,
-    MemoryTopic,
-    Memory,
-    SearchMemory,
     SessionSearch,
     Checkpoint,
     Write,
@@ -49,22 +46,28 @@ defmodule CodingAgent.Tools do
     BrowserClearState,
     BrowserScreenshot,
     BrowserAnalyze,
+    Todo,
+    Truncate,
+    Task,
+    ToolAuth,
+    ExtensionsStatus,
+    ParentQuestion
+  }
+
+  alias LemonSkills.Tools.{
+    MemoryTopic,
+    Memory,
+    SearchMemory,
     MediaStatus,
     MediaGenerateImage,
     MediaGenerateSpeech,
     MediaTranscribeAudio,
     MediaAnalyzeImage,
     MediaGenerateVideo,
-    Todo,
     Kanban,
-    Truncate,
-    Task,
-    ToolAuth,
-    ExtensionsStatus,
     XSearch,
     PostToX,
-    GetXMentions,
-    ParentQuestion
+    GetXMentions
   }
 
   @doc """

@@ -514,7 +514,9 @@ defmodule LemonSim.Examples.Courtroom do
 
     cond do
       provider_name == "openai-codex" ->
-        case LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token() do
+        case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
+               "openai-codex" => %{"auth_source" => "oauth"}
+             }) do
           token when is_binary(token) and token != "" ->
             token
 
@@ -574,7 +576,7 @@ defmodule LemonSim.Examples.Courtroom do
 
   defp resolve_secret_api_key(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
-    case LemonAiRuntime.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
+    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
            secret_name,
            secret_value
          ) do

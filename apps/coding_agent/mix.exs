@@ -12,7 +12,7 @@ defmodule CodingAgent.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 67]],
       deps: deps()
     ]
   end
@@ -30,9 +30,9 @@ defmodule CodingAgent.MixProject do
     [
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
-      {:lemon_ai_runtime, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      {:lemon_browser, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},

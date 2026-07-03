@@ -995,13 +995,8 @@ defmodule AgentCore.LoopAbortTest do
 
       get_steering = fn ->
         :counters.add(steering_call_count, 1, 1)
-
-        if AbortSignal.aborted?(abort_signal) do
-          # Even if we return messages after abort, they should be ignored
-          [user_message("This should be ignored")]
-        else
-          []
-        end
+        AbortSignal.abort(abort_signal)
+        [user_message("This should be ignored")]
       end
 
       response = Mocks.assistant_message("First response")
@@ -1012,9 +1007,6 @@ defmodule AgentCore.LoopAbortTest do
           stream_fn: Mocks.mock_stream_fn_single(response)
         )
 
-      # Pre-abort
-      AbortSignal.abort(abort_signal)
-
       stream = Loop.agent_loop([user_message("Test")], context, config, abort_signal, nil)
 
       {events, result} = collect_events_and_result(stream)
@@ -1022,7 +1014,6 @@ defmodule AgentCore.LoopAbortTest do
       refute Enum.any?(events, &match?({:agent_end, _}, &1))
       messages = message_end_messages(events)
 
-      # Assistant emission is race-dependent under pre-abort
       assistant_msg =
         Enum.find(messages, fn msg ->
           Map.get(msg, :role) == :assistant
@@ -1032,9 +1023,11 @@ defmodule AgentCore.LoopAbortTest do
         assert assistant_msg.stop_reason == :aborted
       end
 
-      # Steering was called but since we aborted, the loop didn't continue
-      # with the steering messages (the aborted response ends the loop)
-      assert :counters.get(steering_call_count, 1) >= 1
+      refute Enum.any?(messages, fn msg ->
+               Map.get(msg, :role) == :user and msg.content == "This should be ignored"
+             end)
+
+      assert :counters.get(steering_call_count, 1) == 1
     end
   end
 

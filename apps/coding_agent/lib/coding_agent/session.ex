@@ -570,6 +570,8 @@ defmodule CodingAgent.Session do
     # This allows subscribers to receive the event after they subscribe.
     send(self(), {:publish_extension_status_report, extension_status_report})
 
+    maybe_subscribe_exec_approvals(state)
+
     {:ok, state}
   end
 
@@ -976,6 +978,37 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_info(
+        %LemonCore.Event{type: :approval_requested, payload: payload},
+        state
+      ) do
+    case approval_event_payload(payload, state) do
+      {:ok, approval_id, pending} ->
+        Notifier.broadcast_event(state, {:approval_request, approval_id, pending})
+
+      :skip ->
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        %LemonCore.Event{type: :approval_resolved, payload: payload},
+        state
+      ) do
+    case approval_event_payload(payload, state) do
+      {:ok, approval_id, pending} ->
+        decision = map_value(payload, :decision)
+        Notifier.broadcast_event(state, {:approval_resolved, approval_id, decision, pending})
+
+      :skip ->
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
       :ok = AgentCore.Agent.set_system_prompt(state.agent, system_prompt)
@@ -1098,6 +1131,44 @@ defmodule CodingAgent.Session do
 
   @spec ui_set_working_message(t(), String.t() | nil) :: :ok
   defp ui_set_working_message(state, message), do: Notifier.ui_set_working_message(state, message)
+
+  defp maybe_subscribe_exec_approvals(%{approval_context: approval_context})
+       when is_map(approval_context) do
+    LemonCore.Bus.subscribe("exec_approvals")
+  end
+
+  defp maybe_subscribe_exec_approvals(_state), do: :ok
+
+  defp approval_event_payload(payload, state) when is_map(payload) do
+    pending = map_value(payload, :pending)
+    approval_id = map_value(payload, :approval_id) || map_value(pending, :id)
+
+    if is_binary(approval_id) and matching_approval_pending?(pending, state) do
+      {:ok, approval_id, pending}
+    else
+      :skip
+    end
+  end
+
+  defp approval_event_payload(_payload, _state), do: :skip
+
+  defp matching_approval_pending?(pending, state) when is_map(pending) do
+    pending_session_id = map_value(pending, :session_id)
+    pending_session_key = map_value(pending, :session_key)
+    session_id = state.session_manager.header.id
+    session_key = state.session_key
+
+    (is_binary(pending_session_id) and pending_session_id == session_id) or
+      (is_binary(pending_session_key) and pending_session_key == session_key)
+  end
+
+  defp matching_approval_pending?(_pending, _state), do: false
+
+  defp map_value(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp map_value(_map, _key), do: nil
 
   @spec ui_notify(t(), String.t(), CodingAgent.UI.notify_type()) :: :ok
   defp ui_notify(state, message, type), do: Notifier.ui_notify(state, message, type)

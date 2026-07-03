@@ -1,7 +1,7 @@
 # Werewolf 8-player mixed-model showdown
 # 4x Gemini CLI, 3x Codex, 1x Kimi
 
-alias LemonSim.GameHelpers.Config, as: SimConfig
+alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
 
 config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
 

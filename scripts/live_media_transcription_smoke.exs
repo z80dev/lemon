@@ -146,7 +146,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
     File.write!(audio_path, wav_silence())
 
     tool =
-      CodingAgent.Tools.MediaTranscribeAudio.tool(project_dir,
+      LemonSkills.Tools.MediaTranscribeAudio.tool(project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir
       )
@@ -232,7 +232,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
     File.write!(audio_path, wav_silence())
 
     tool =
-      CodingAgent.Tools.MediaTranscribeAudio.tool(config.project_dir,
+      LemonSkills.Tools.MediaTranscribeAudio.tool(config.project_dir,
         media_jobs_dir: jobs_dir,
         media_artifacts_dir: artifacts_dir,
         openai_transcription_api_key: if(config.provider == @provider, do: config.api_key),
@@ -425,7 +425,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
       opts[:api_key_secret]
       |> case do
         value when is_binary(value) and value != "" ->
-          LemonAiRuntime.resolve_secret_api_key(value)
+          AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(value)
 
         _ ->
           nil
@@ -439,7 +439,7 @@ defmodule LemonScripts.LiveMediaTranscriptionSmoke do
        do: true
 
   defp credential_available?(_api_key, providers, project_dir, @provider) do
-    LemonAiRuntime.provider_has_credentials?(:openai, providers, cwd: project_dir)
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:openai, providers, cwd: project_dir)
   end
 
   defp credential_available?(_api_key, _providers, _project_dir, _provider), do: false

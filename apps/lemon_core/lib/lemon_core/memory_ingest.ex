@@ -25,11 +25,12 @@ defmodule LemonCore.MemoryIngest do
   use GenServer
   require Logger
 
+  alias LemonCore.Bus
+  alias LemonCore.Event
   alias LemonCore.MemoryDocument
   alias LemonCore.MemoryProviders
   alias LemonCore.MemorySafety
   alias LemonCore.MemoryStore
-  alias LemonCore.RoutingFeedbackStore
   alias LemonCore.TaskFingerprint
 
   # ── Public API ────────────────────────────────────────────────────────────────
@@ -65,13 +66,11 @@ defmodule LemonCore.MemoryIngest do
       Keyword.get(opts, :config_loader, fn -> LemonCore.Config.Modular.load() end)
 
     memory_store = Keyword.get(opts, :memory_store, MemoryStore)
-    routing_feedback_store = Keyword.get(opts, :routing_feedback_store, RoutingFeedbackStore)
 
     {:ok,
      %{
        config_loader: config_loader,
-       memory_store: memory_store,
-       routing_feedback_store: routing_feedback_store
+       memory_store: memory_store
      }}
   end
 
@@ -91,7 +90,7 @@ defmodule LemonCore.MemoryIngest do
         end
 
         if LemonCore.Config.Features.enabled?(features, :routing_feedback) do
-          record_routing_feedback(doc, record, state.routing_feedback_store)
+          broadcast_routing_feedback(doc, record)
         end
 
         duration_us = System.monotonic_time(:microsecond) - t0
@@ -151,28 +150,23 @@ defmodule LemonCore.MemoryIngest do
     memory_store.put(doc)
   end
 
-  defp record_routing_feedback(%MemoryDocument{} = doc, record, routing_feedback_store) do
+  defp broadcast_routing_feedback(%MemoryDocument{} = doc, record) do
     fingerprint = TaskFingerprint.from_document(doc)
     # Strip toolset so the stored key matches the empty-toolset lookup used by RunOrchestrator
     fingerprint_key = TaskFingerprint.key(%{fingerprint | toolset: []})
     duration_ms = compute_duration_ms(record, doc)
-    put_routing_feedback(routing_feedback_store, fingerprint_key, doc.outcome, duration_ms)
+
+    Bus.broadcast(
+      "routing_feedback",
+      Event.new(:routing_feedback, %{
+        fingerprint_key: fingerprint_key,
+        outcome: doc.outcome,
+        duration_ms: duration_ms
+      })
+    )
   rescue
     e ->
       Logger.warning("[MemoryIngest] routing feedback record failed: #{Exception.message(e)}")
-  end
-
-  defp put_routing_feedback(routing_feedback_store, fingerprint_key, outcome, duration_ms)
-       when is_pid(routing_feedback_store) do
-    GenServer.cast(
-      routing_feedback_store,
-      {:record, fingerprint_key, Atom.to_string(outcome), duration_ms}
-    )
-  end
-
-  defp put_routing_feedback(routing_feedback_store, fingerprint_key, outcome, duration_ms)
-       when is_atom(routing_feedback_store) do
-    routing_feedback_store.record(fingerprint_key, outcome, duration_ms)
   end
 
   defp compute_duration_ms(record, %MemoryDocument{ingested_at_ms: ingested_at}) do

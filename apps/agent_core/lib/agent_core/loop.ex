@@ -48,7 +48,7 @@ defmodule AgentCore.Loop do
 
   require Logger
 
-  alias AgentCore.EventStream
+  alias AgentCore.{AbortSignal, EventStream}
   alias AgentCore.Loop.{StateMachine, Streaming, ToolCalls}
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, ToolSchemaSnapshot}
 
@@ -377,7 +377,7 @@ defmodule AgentCore.Loop do
 
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
     # Check for steering messages at start (user may have typed while waiting)
-    pending_messages = get_steering_messages(config) || []
+    pending_messages = get_steering_messages(config, signal) || []
 
     Logger.debug("AgentCore.Loop run_loop pending_steering=#{length(pending_messages)}")
 
@@ -598,23 +598,29 @@ defmodule AgentCore.Loop do
                 if steering_after_tools && steering_after_tools != [] do
                   steering_after_tools
                 else
-                  get_steering_messages(config) || []
+                  get_steering_messages(config, signal) || []
                 end
 
-              # Continue inner loop
-              do_inner_loop(
-                context,
-                new_messages,
-                config,
-                signal,
-                stream_fn,
-                stream,
-                pending_messages,
-                false,
-                has_more_tool_calls,
-                nil,
-                tool_turn_count
-              )
+              if aborted?(signal) do
+                transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+                EventStream.cancel(stream, :assistant_aborted)
+                {context, new_messages, [], false}
+              else
+                # Continue inner loop
+                do_inner_loop(
+                  context,
+                  new_messages,
+                  config,
+                  signal,
+                  stream_fn,
+                  stream,
+                  pending_messages,
+                  false,
+                  has_more_tool_calls,
+                  nil,
+                  tool_turn_count
+                )
+              end
             end
         end
 
@@ -758,6 +764,17 @@ defmodule AgentCore.Loop do
   defp get_steering_messages(%AgentLoopConfig{get_steering_messages: get_fn}) do
     get_fn.() || []
   end
+
+  defp get_steering_messages(%AgentLoopConfig{} = config, signal) do
+    if aborted?(signal) do
+      []
+    else
+      messages = get_steering_messages(config)
+      if aborted?(signal), do: [], else: messages
+    end
+  end
+
+  defp aborted?(signal), do: AbortSignal.aborted?(signal)
 
   defp get_follow_up_messages(%AgentLoopConfig{get_follow_up_messages: nil}), do: []
 

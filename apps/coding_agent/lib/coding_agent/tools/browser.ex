@@ -7,9 +7,9 @@ defmodule CodingAgent.Tools.Browser do
   alias Ai.Types.{ImageContent, TextContent}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
-  alias LemonCore.Browser.Artifacts
-  alias LemonCore.Browser.LocalServer
-  alias LemonCore.Browser.RoutePolicy
+  alias LemonBrowser.Artifacts
+  alias LemonBrowser.LocalServer
+  alias LemonBrowser.RoutePolicy
 
   import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
@@ -1038,7 +1038,7 @@ defmodule CodingAgent.Tools.Browser do
       |> Map.put("sendToChannel", request.send_to_channel)
       |> Map.put_new("prompt", "Summarize the current browser screenshot.")
 
-    tool = CodingAgent.Tools.MediaAnalyzeImage.tool(cwd, Map.get(runtime, :tool_opts, []))
+    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(cwd, Map.get(runtime, :tool_opts, []))
 
     case tool.execute.("browser-analyze", media_params, signal, nil) do
       %AgentToolResult{} = result -> {:ok, result.details}

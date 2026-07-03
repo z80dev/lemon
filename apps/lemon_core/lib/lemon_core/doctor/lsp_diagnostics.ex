@@ -74,7 +74,17 @@ defmodule LemonCore.Doctor.LspDiagnostics do
       supported_language_count: length(languages),
       supported_languages: languages,
       executable_summary: executable_status,
-      server_manager: LemonCore.LspServerManager.status(),
+      server_manager:
+        probe(LemonLsp.ServerManager, :status, [], %{
+          supervised: false,
+          running: false,
+          mode: :unavailable,
+          error: "lsp runtime not available",
+          active_servers: [],
+          active_count: 0,
+          pending_request_count: 0,
+          recent_sessions: []
+        }),
       cleanup: %{
         includes_raw_paths: false,
         includes_file_contents: false,
@@ -109,5 +119,13 @@ defmodule LemonCore.Doctor.LspDiagnostics do
       missing_count: Enum.count(statuses, &(not &1.available)),
       executables: statuses
     }
+  end
+
+  defp probe(mod, fun, args, fallback) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
+      apply(mod, fun, args)
+    else
+      fallback
+    end
   end
 end

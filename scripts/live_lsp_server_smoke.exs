@@ -1,8 +1,8 @@
 Application.ensure_all_started(:lemon_core)
 
 defmodule LemonScripts.LiveLspServerSmoke do
-  alias LemonCore.LspServerManager
-  alias LemonCore.LspServers
+  alias LemonLsp.ServerManager
+  alias LemonLsp.Servers
 
   def main(args) do
     {opts, _rest} =

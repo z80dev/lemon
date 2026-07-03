@@ -86,12 +86,11 @@ The project is an Elixir umbrella with 18+ applications:
 | App | Role |
 |---|---|
 | `ai` | Provider abstraction, streaming, cost tracking |
-| `agent_core` | Core agent loop, tool execution, abort/subagent semantics |
+| `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
-| `lemon_ai_runtime` | AI runtime utilities and provider helpers |
-| `lemon_core` | EventBus, MemoryStore, RoutingFeedbackStore, TaskFingerprint, config |
-| `lemon_router` | RunOrchestrator, ModelSelection, lane queues, policy engine |
+| `lemon_core` | EventBus, MemoryStore, TaskFingerprint, config |
+| `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Engine dispatch (native + CLI backends), execution lifecycle |
 | `lemon_channels` | Transport adapters: Telegram, Discord, X/Twitter |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
@@ -101,7 +100,6 @@ The project is an Elixir umbrella with 18+ applications:
 | `lemon_sim` | Simulation harness for development/testing |
 | `lemon_sim_ui` | Phoenix LiveView UI for simulation spectator/admin |
 | `lemon_web` | React web frontend bridge |
-| `lemon_services` | Shared service infrastructure |
 
 ---
 

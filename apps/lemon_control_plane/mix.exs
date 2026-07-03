@@ -12,7 +12,7 @@ defmodule LemonControlPlane.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 67]],
       deps: deps()
     ]
   end
@@ -28,11 +28,14 @@ defmodule LemonControlPlane.MixProject do
     [
       # Umbrella dependencies
       {:lemon_core, in_umbrella: true},
+      {:lemon_browser, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
+      {:lemon_lsp, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_automation, in_umbrella: true},
-      {:lemon_ai_runtime, in_umbrella: true},
+      {:agent_core, in_umbrella: true},
       {:coding_agent, in_umbrella: true, runtime: false},
       {:ai, in_umbrella: true},
       # HTTP server

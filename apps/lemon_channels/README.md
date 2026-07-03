@@ -66,7 +66,7 @@ LemonChannels.Application
     |   +-- Telegram.Transport            (GenServer - long-polling)
     +-- Discord.Supervisor                (if configured)
     |   +-- Discord.Transport             (Nostrum consumer)
-    +-- XAPI.TokenManager                 (if configured, GenServer)
+    +-- XApi.TokenManager                 (if configured, GenServer from apps/x_api)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
 ```
 
@@ -502,13 +502,9 @@ Supports edit, delete, images, threads, mentions, and read-only recent public se
 
 | Module | Purpose |
 |--------|---------|
-| `XAPI` (plugin) | Plugin behaviour, config management, auth method detection |
-| `XAPI.Client` | HTTP client for API v2: tweet posting/deletion, recent public search, chunked media upload, rate limit handling |
-| `XAPI.OAuth1Client` | OAuth 1.0a implementation with HMAC-SHA1 signatures |
-| `XAPI.OAuth` | OAuth 2.0 flow helpers (authorization URL, code exchange, PKCE) |
-| `XAPI.TokenManager` | GenServer for automatic OAuth 2.0 token refresh |
-| `XAPI.OAuthCallbackHandler` | HTTP handler for OAuth 2.0 callbacks |
-| `XAPI.GatewayMethods` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` |
+| `LemonChannels.Adapters.XAPI` | Plugin behaviour and outbound payload delivery |
+| `LemonChannels.Adapters.XAPI.GatewayMethods` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` |
+| `XApi` | Reusable X API config, auth detection, HTTP client, OAuth helpers, and token manager in `apps/x_api` |
 
 #### Authentication
 
@@ -522,7 +518,7 @@ The adapter supports two auth methods and auto-detects which to use:
 
 **Common**: `X_DEFAULT_ACCOUNT_ID`, `X_DEFAULT_ACCOUNT_USERNAME`
 
-Config can also be set via `config :lemon_channels, LemonChannels.Adapters.XAPI`. Secrets are resolved through `LemonCore.Secrets` by default.
+Config can be set via `config :x_api, XApi`. Existing `config :lemon_channels, LemonChannels.Adapters.XAPI` settings remain supported as a compatibility fallback. Secrets are resolved through `LemonCore.Secrets` by default.
 
 ### XMTP
 
@@ -729,13 +725,9 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 
 | Module | Purpose |
 |--------|---------|
-| `Adapters.XAPI` | Plugin behaviour, auth detection |
-| `XAPI.Client` | HTTP client, tweet operations |
-| `XAPI.OAuth1Client` | OAuth 1.0a with HMAC-SHA1 |
-| `XAPI.OAuth` | OAuth 2.0 flows, PKCE |
-| `XAPI.TokenManager` | Automatic token refresh |
-| `XAPI.OAuthCallbackHandler` | OAuth 2.0 callback handler |
-| `XAPI.GatewayMethods` | Control plane methods |
+| `Adapters.XAPI` | Plugin behaviour and outbound payload delivery |
+| `Adapters.XAPI.GatewayMethods` | Control plane methods |
+| `XApi.*` | Reusable X API client, OAuth helpers, and token manager in `apps/x_api` |
 
 ### XMTP
 
@@ -777,9 +769,7 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/transport_topic_test.exs` | `/topic` command behavior |
 | `telegram/file_transfer_test.exs` | File handling |
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
-| `x_api_test.exs` | X adapter |
-| `x_api_client_test.exs` | X API client |
-| `x_api_token_manager_test.exs` | Token refresh |
+| `capabilities_test.exs` | Includes X adapter capability lookup |
 
 ### Mock Adapter Pattern
 

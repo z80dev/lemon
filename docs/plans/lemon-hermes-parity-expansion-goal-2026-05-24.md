@@ -1,8 +1,8 @@
 # Lemon Hermes Parity Expansion Goal
 
-Status: active execution goal
+Status: under re-evaluation — 2026-07-02 direction review reweights broad Hermes parity toward sim-as-flagship positioning; workstreams here are paused pending that plan.
 
-Last reviewed: 2026-05-24
+Last reviewed: 2026-07-02
 
 ## Objective
 

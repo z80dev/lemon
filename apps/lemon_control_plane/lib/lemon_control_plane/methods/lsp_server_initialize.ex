@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.LspServerInitialize do
     with {:ok, session_id} <- required(params, "sessionId"),
          {:ok, timeout_ms} <- timeout_ms(params),
          {:ok, response} <-
-           LemonCore.LspServerManager.initialize_session(
+           LemonLsp.ServerManager.initialize_session(
              session_id,
              get_param(params, "params") || %{},
              timeout_ms: timeout_ms

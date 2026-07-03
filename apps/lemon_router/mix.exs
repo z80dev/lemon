@@ -12,7 +12,7 @@ defmodule LemonRouter.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 69]],
       deps: deps()
     ]
   end
@@ -27,8 +27,8 @@ defmodule LemonRouter.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
-      {:coding_agent, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},

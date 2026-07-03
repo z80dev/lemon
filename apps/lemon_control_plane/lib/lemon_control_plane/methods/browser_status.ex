@@ -23,10 +23,10 @@ defmodule LemonControlPlane.Methods.BrowserStatus do
 
     {:ok,
      %{
-       "local" => LemonCore.Browser.LocalServer.status() |> stringify_keys(),
-       "artifactsDir" => LemonCore.Browser.Artifacts.default_dir(project_dir),
+       "local" => LemonBrowser.LocalServer.status() |> stringify_keys(),
+       "artifactsDir" => LemonBrowser.Artifacts.default_dir(project_dir),
        "recentArtifacts" =>
-         LemonCore.Browser.Artifacts.recent(project_dir: project_dir, limit: limit)
+         LemonBrowser.Artifacts.recent(project_dir: project_dir, limit: limit)
          |> Enum.map(&stringify_keys/1),
        "liveProof" => browser_live_proof(project_dir),
        "nodes" => browser_nodes()

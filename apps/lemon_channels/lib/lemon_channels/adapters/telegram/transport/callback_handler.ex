@@ -7,11 +7,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   """
 
   alias LemonChannels.BindingResolver
-  alias LemonAiRuntime
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
-  alias LemonAiRuntime.Auth.OpenAICodexOAuth
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.SessionKey
@@ -712,8 +710,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp provider_enabled?(_provider, _configured), do: false
 
   defp provider_has_credentials?(provider, aliases, configured) do
-    LemonAiRuntime.provider_has_credentials?(provider, configured) or
-      Enum.any?(aliases, &LemonAiRuntime.provider_has_credentials?(&1, configured))
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, configured) or
+      Enum.any?(aliases, &AgentCore.ModelRuntime.Credentials.provider_has_credentials?(&1, configured))
   end
 
   defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()
@@ -745,7 +743,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
   defp provider_aliases(_provider), do: []
 
-  defp openai_codex_auth_available?, do: OpenAICodexOAuth.available?()
+  defp openai_codex_auth_available? do
+    AgentCore.ModelRuntime.Credentials.provider_has_credentials?("openai_codex", %{
+      "openai-codex" => %{"auth_source" => "oauth"}
+    })
+  end
 
   defp default_model_preference(state, chat_id, thread_id) do
     ModelPolicyAdapter.default_model_preference(state.account_id || "default", chat_id, thread_id)

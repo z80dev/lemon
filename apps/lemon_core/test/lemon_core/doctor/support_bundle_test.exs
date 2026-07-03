@@ -520,7 +520,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     })
 
     assert {:ok, _job} =
-             LemonCore.MediaJobs.record(
+             LemonMedia.MediaJobs.record(
                %{
                  job_id: "support-media",
                  type: :image,

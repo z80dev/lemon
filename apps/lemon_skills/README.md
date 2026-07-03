@@ -80,6 +80,16 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
 | `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
+| `LemonSkills.Tools.Memory` | `lib/lemon_skills/tools/memory.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
+| `LemonSkills.Tools.MemoryTopic` | `lib/lemon_skills/tools/memory_topic.ex` | Agent tool for durable topic memory scaffolding |
+| `LemonSkills.Tools.SearchMemory` | `lib/lemon_skills/tools/search_memory.ex` | Agent tool for scoped prior-run memory search |
+| `LemonSkills.Tools.MediaStatus` | `lib/lemon_skills/tools/media_status.ex` | Agent tool for redacted media job status |
+| `LemonSkills.Tools.MediaGenerateImage` | `lib/lemon_skills/tools/media_generate_image.ex` | Agent tool for managed image generation artifacts |
+| `LemonSkills.Tools.MediaGenerateSpeech` | `lib/lemon_skills/tools/media_generate_speech.ex` | Agent tool for managed speech generation artifacts |
+| `LemonSkills.Tools.MediaTranscribeAudio` | `lib/lemon_skills/tools/media_transcribe_audio.ex` | Agent tool for managed audio transcription artifacts |
+| `LemonSkills.Tools.MediaAnalyzeImage` | `lib/lemon_skills/tools/media_analyze_image.ex` | Agent tool for managed image analysis artifacts |
+| `LemonSkills.Tools.MediaGenerateVideo` | `lib/lemon_skills/tools/media_generate_video.ex` | Agent tool for managed video generation artifacts |
+| `LemonSkills.Tools.Kanban` | `lib/lemon_skills/tools/kanban.ex` | Agent tool for durable Lemon kanban boards and tasks |
 | `LemonSkills.Tools.XSearch` | `lib/lemon_skills/tools/x_search.ex` | Agent tool for read-only recent public X/Twitter search |
 | `LemonSkills.Tools.PostToX` | `lib/lemon_skills/tools/post_to_x.ex` | Agent tool for posting tweets to X (Twitter) |
 | `LemonSkills.Tools.GetXMentions` | `lib/lemon_skills/tools/get_x_mentions.ex` | Agent tool for fetching recent X mentions |
@@ -502,7 +512,7 @@ Project configuration is deep-merged on top of global configuration.
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
 | `agent_core` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
 | `ai` | umbrella | AI types (`TextContent`) used in tool results |
-| `lemon_channels` | umbrella | X (Twitter) API integration (`LemonChannels.Adapters.XAPI`) used by x_search, post_to_x, and get_x_mentions tools |
+| `x_api` | umbrella | X API integration (`XApi`) used by x_search, post_to_x, and get_x_mentions tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
 
 ## Installation Flow Detail

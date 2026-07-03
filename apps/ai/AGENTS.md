@@ -65,8 +65,8 @@ Ai (main API)
 
 `Ai.Auth.*` modules are implemented in this app as provider protocol helpers.
 They must not depend on Lemon config, secrets, or persistence. Lemon-owned apps
-should consume `LemonAiRuntime.Auth.*` facades for stored credential lookup,
-refresh persistence, and local OAuth callback handling.
+should consume `AgentCore.ModelRuntime.Credentials` for stored credential lookup
+and refresh persistence.
 
 - `Ai.Providers.GoogleShared` - Shared request/response logic for all Google providers
   - Includes async HTTP error-body normalization for streaming calls so provider errors
@@ -591,7 +591,7 @@ Run with: `mix test --include integration`
 ## Environment Variables
 
 Lemon callers resolve config, secrets, and OAuth state through
-`LemonAiRuntime` before calling `Ai`. Providers consume concrete values from
+`AgentCore.ModelRuntime` before calling `Ai`. Providers consume concrete values from
 `Ai.Types.StreamOptions`; process env reads are only standalone authentication
 fallback behavior for direct `ai` usage.
 
@@ -610,9 +610,9 @@ fallback behavior for direct `ai` usage.
 | `AWS_REGION` | Bedrock provider | AWS region (default: `us-east-1`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI provider | JSON credential payload (`{"token","projectId"}`) |
-| `GOOGLE_CLOUD_PROJECT` | LemonAiRuntime Vertex option resolver | GCP project ID (also checks `GCLOUD_PROJECT`) |
-| `GOOGLE_CLOUD_LOCATION` | LemonAiRuntime Vertex option resolver | GCP region |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | LemonAiRuntime Vertex option resolver | Inline service account JSON |
+| `GOOGLE_CLOUD_PROJECT` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP project ID (also checks `GCLOUD_PROJECT`) |
+| `GOOGLE_CLOUD_LOCATION` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP region |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | Inline service account JSON |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex provider | ADC service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` / `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | Optional env fallback for Gemini CLI OAuth client credentials |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials |
@@ -671,9 +671,9 @@ Ai.Supervisor (one_for_one)
 
 ### Changing Auth Behaviour
 
-- Lemon API key/config resolution belongs in `LemonAiRuntime`; providers receive concrete values through `Ai.Types.StreamOptions`.
-- Provider OAuth helpers may refresh encoded payloads, but persistence is injected by `LemonAiRuntime.Auth.*`.
-- Adding new Lemon config or secret behavior means updating `apps/lemon_ai_runtime`, not provider modules in this app.
+- Lemon API key/config resolution belongs in `AgentCore.ModelRuntime`; providers receive concrete values through `Ai.Types.StreamOptions`.
+- Provider OAuth helpers may refresh encoded payloads, but persistence is injected by `AgentCore.ModelRuntime.Credentials`.
+- Adding new Lemon config or secret behavior means updating `apps/agent_core`, not provider modules in this app.
 
 ### Modifying the Streaming Pipeline
 

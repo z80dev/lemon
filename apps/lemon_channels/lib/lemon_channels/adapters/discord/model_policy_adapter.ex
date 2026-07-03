@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Discord.ModelPolicyAdapter do
 
   Provides model and thinking-level resolution for the Discord transport,
   with session overrides (ephemeral) and persistent policy storage via
-  `LemonCore.ModelPolicy`.
+  `LemonChannels.ModelPolicy`.
   """
 
   use LemonChannels.Adapters.ModelPolicyShared

@@ -13,7 +13,6 @@ defmodule LemonRouter.SubmissionBuilder do
     Cwd,
     ExecutionCommand,
     MapHelpers,
-    RoutingFeedbackStore,
     RunRequest,
     SessionKey,
     TaskFingerprint
@@ -25,6 +24,7 @@ defmodule LemonRouter.SubmissionBuilder do
     ModelSelection,
     Policy,
     ResumeResolver,
+    RoutingFeedbackStore,
     StickyEngine,
     Submission
   }

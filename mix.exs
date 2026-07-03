@@ -6,7 +6,7 @@ defmodule Lemon.MixProject do
       apps_path: "apps",
       version: "2026.05.0",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
       releases: releases()
     ]
@@ -25,9 +25,13 @@ defmodule Lemon.MixProject do
       lemon_runtime_min: [
         applications: [
           lemon_core: :permanent,
+          lemon_browser: :permanent,
+          lemon_media: :permanent,
+          lemon_lsp: :permanent,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,
+          x_api: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent
         ],
@@ -37,9 +41,13 @@ defmodule Lemon.MixProject do
       lemon_runtime_full: [
         applications: [
           lemon_core: :permanent,
+          lemon_browser: :permanent,
+          lemon_media: :permanent,
+          lemon_lsp: :permanent,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_router: :permanent,
+          x_api: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent,
           lemon_automation: :permanent,

@@ -12,7 +12,7 @@ defmodule LemonSkills.McpSource do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.Onboarding.LocalCallbackListener
+  alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCore.Secrets
 
   @default_cache_ttl_ms :timer.minutes(5)
@@ -627,7 +627,7 @@ defmodule LemonSkills.McpSource do
 
     with {:ok, client_mod} <- stdio_client_module(),
          {:ok, client} <- apply(client_mod, :start_link, [opts]),
-         :ok <- await_ready(client_mod, client) do
+         :ok <- await_ready(client_mod, client, client_ready_timeout_ms(source_opts)) do
       {:ok, client}
     else
       {:error, reason} -> {:error, reason}
@@ -644,13 +644,13 @@ defmodule LemonSkills.McpSource do
         url: url,
         headers: Keyword.get(opts, :headers, []),
         oauth: oauth,
-        timeout: client_start_timeout(oauth),
+        timeout: client_start_timeout(oauth, opts),
         timeout_ms: @client_request_timeout_ms
       ] ++ oauth_token_cache_opts(url, opts)
 
     with {:ok, client_mod} <- http_client_module(),
          {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
-         :ok <- await_ready(client_mod, client) do
+         :ok <- await_ready(client_mod, client, client_ready_timeout_ms(opts)) do
       {:ok, client}
     else
       {:error, reason} -> {:error, reason}
@@ -660,16 +660,18 @@ defmodule LemonSkills.McpSource do
 
   defp ensure_client(%{config: config}, :sse) do
     {url, opts} = http_parts(config)
+    ready_timeout_ms = client_ready_timeout_ms(opts)
 
     client_opts = [
       url: url,
       headers: Keyword.get(opts, :headers, []),
-      timeout_ms: @client_request_timeout_ms
+      timeout: ready_timeout_ms,
+      timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
     ]
 
     with {:ok, client_mod} <- sse_client_module(),
          {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
-         :ok <- await_ready(client_mod, client) do
+         :ok <- await_ready(client_mod, client, ready_timeout_ms) do
       {:ok, client}
     else
       {:error, reason} -> {:error, reason}
@@ -709,17 +711,18 @@ defmodule LemonSkills.McpSource do
 
   defp resolved_http_oauth(oauth), do: oauth
 
-  defp client_start_timeout(oauth) when is_list(oauth) do
+  defp client_start_timeout(oauth, opts) when is_list(oauth) do
     timeout = Keyword.get(oauth, :authorization_timeout_ms)
+    ready_timeout = client_ready_timeout_ms(opts)
 
     if authorization_code_provider?(oauth) and is_integer(timeout) and timeout > 0 do
-      authorization_attempt_count(oauth) * timeout + 5_000
+      max(authorization_attempt_count(oauth) * timeout + 5_000, ready_timeout)
     else
-      5_000
+      ready_timeout
     end
   end
 
-  defp client_start_timeout(_oauth), do: 5_000
+  defp client_start_timeout(_oauth, opts), do: client_ready_timeout_ms(opts)
 
   defp authorization_attempt_count(oauth) do
     if authorization_approval_enabled?(oauth), do: 2, else: 1
@@ -1063,11 +1066,11 @@ defmodule LemonSkills.McpSource do
   defp server_client_module(:http), do: elem(http_client_module(), 1)
   defp server_client_module(:sse), do: elem(sse_client_module(), 1)
 
-  defp await_ready(
-         client_mod,
-         client,
-         deadline \\ System.monotonic_time(:millisecond) + @client_ready_timeout_ms
-       ) do
+  defp await_ready(client_mod, client, timeout_ms) do
+    await_ready_until(client_mod, client, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp await_ready_until(client_mod, client, deadline) do
     cond do
       apply(client_mod, :state, [client]) == :ready ->
         :ok
@@ -1077,7 +1080,7 @@ defmodule LemonSkills.McpSource do
 
       true ->
         Process.sleep(50)
-        await_ready(client_mod, client, deadline)
+        await_ready_until(client_mod, client, deadline)
     end
   end
 
@@ -1219,6 +1222,10 @@ defmodule LemonSkills.McpSource do
   defp http_parts({:http, url, opts}), do: {url, opts}
   defp http_parts({:sse, url}), do: {url, []}
   defp http_parts({:sse, url, opts}), do: {url, opts}
+
+  defp client_ready_timeout_ms(opts) do
+    Keyword.get(opts, :ready_timeout_ms, @client_ready_timeout_ms)
+  end
 
   defp filter_config(opts) do
     %{
@@ -1420,9 +1427,23 @@ defmodule LemonSkills.McpSource do
     ]
 
     case Enum.find(opts, fn {key, value} -> key in allowed_keys and not string_list?(value) end) do
-      nil -> validate_sampling_policy(Keyword.get(opts, :sampling_policy))
-      {key, _value} -> {:error, "#{key} must be a list of strings"}
+      nil ->
+        with :ok <-
+               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms"),
+             :ok <- validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms") do
+          validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+        end
+
+      {key, _value} ->
+        {:error, "#{key} must be a list of strings"}
     end
+  end
+
+  defp validate_positive_timeout(nil, _name), do: :ok
+  defp validate_positive_timeout(value, _name) when is_integer(value) and value > 0, do: :ok
+
+  defp validate_positive_timeout(_value, name) do
+    {:error, "#{name} must be a positive integer"}
   end
 
   defp validate_sampling_policy(nil), do: :ok

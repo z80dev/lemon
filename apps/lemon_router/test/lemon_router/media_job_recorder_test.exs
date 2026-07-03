@@ -40,7 +40,7 @@ defmodule LemonRouter.MediaJobRecorderTest do
 
     assert result == %{recorded_count: 1, skipped_count: 1, failed_count: 0}
 
-    assert [job] = LemonCore.MediaJobs.recent(project_dir: tmp_dir)
+    assert [job] = LemonMedia.MediaJobs.recent(project_dir: tmp_dir)
     assert job.type == :image
     assert job.status == :completed
     assert job.channel == "telegram"
@@ -72,7 +72,7 @@ defmodule LemonRouter.MediaJobRecorderTest do
       )
 
     assert result == %{recorded_count: 0, skipped_count: 4, failed_count: 0}
-    assert [] = LemonCore.MediaJobs.recent(project_dir: tmp_dir)
+    assert [] = LemonMedia.MediaJobs.recent(project_dir: tmp_dir)
   end
 
   defp tmp_dir do

@@ -68,14 +68,9 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
 | `LemonCore.ProviderPoolRotator` | Supervised in-memory round-robin state for provider credential pools |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
-| `LemonCore.HermesMigration` | Preview/apply migration helper for Hermes memories, skills, compatible config, allowlisted secrets, and session recall |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
-| `LemonCore.ModelPolicyStore` | Typed wrapper for persisted route-based model policies |
-| `LemonCore.Browser.LocalServer` | Local/remote-CDP browser automation via Node/Playwright (line-delimited JSON protocol) |
-| `LemonCore.Browser.Artifacts` | Browser screenshot artifact metadata and 14-day / 100-file retention cleanup |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
-| `LemonCore.LspServers` / `LspServerManager` | Language-server registry plus supervised redacted stdio session, initialize, document-sync, JSON-RPC, and diagnostic-notification manager |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
@@ -291,7 +286,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.ModelPolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
 ### Specialized APIs
 
@@ -409,11 +404,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 
 ### Adding a New Onboarding Provider
 
-1. Add a provider spec to `lib/lemon_core/onboarding/providers.ex`
-2. Reuse `LemonCore.Onboarding.Runner` for auth flow, secrets persistence, and config updates
-3. If you want a dedicated alias task, create `lib/mix/tasks/lemon.onboard.<provider>.ex` that delegates to the shared runner
-4. Update config via `LemonCore.Config.TomlPatch`
-5. Add focused tests in `test/mix/tasks/` and `test/lemon_core/onboarding/`
+Onboarding providers live in `apps/lemon_cli`; see `apps/lemon_cli/README.md`.
 
 ### Adding a New Quality Check
 
@@ -522,46 +513,8 @@ mix lemon.secrets.delete API_KEY
 
 ### Onboarding Tasks
 
-```bash
-# Guided provider setup:
-# - pick a provider from a menu, or pass one directly
-# - runs provider OAuth flow when supported, or prompts for an API key/token otherwise
-# - uses a TermUI-based arrow-key selector in real terminals for provider/auth/model/default prompts
-# - the onboarding selector uses `LemonCore.Onboarding.TerminalUI`'s custom renderer rather than `TermUI.Widget.PickList`
-#   because the stock pick-list widget can emit range warnings that corrupt the TUI display
-# - captures localhost OAuth callbacks automatically when supported, with manual paste fallback
-# - stores credentials in encrypted secrets
-# - writes the relevant providers.<provider> config keys
-# - optionally updates defaults.provider/defaults.model
-mix lemon.onboard
-mix lemon.onboard anthropic
-mix lemon.onboard codex
-mix lemon.onboard gemini
-mix lemon.onboard zai
-mix lemon.onboard minimax
-mix lemon.onboard.antigravity
-mix lemon.onboard.gemini
-mix lemon.onboard.codex
-mix lemon.onboard.copilot
-
-# Non-interactive examples
-mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
-mix lemon.onboard zai --token <token> --set-default --model glm-5
-mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
-
-# Copilot-specific options
-mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token>  # bypass OAuth and store raw token
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
-```
-
-Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API keys now live in `llm_anthropic_api_key_raw` and should be referenced by `providers.anthropic.api_key_secret`. OAuth-backed Claude Max usage keeps using `llm_anthropic_api_key` plus `providers.anthropic.auth_source = "oauth"` / `providers.anthropic.oauth_secret`, and Lemon prefers refreshable Claude Code credentials from `~/.claude/.credentials.json` over a stale static `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
+Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
+`apps/lemon_cli/README.md`.
 
 ### Quality Tasks
 
@@ -882,14 +835,12 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 7. `LemonCore.MemoryIngest` - Async run ingest pipeline
 8. `LemonCore.ConfigReloader` - Reload orchestrator
 9. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
-10. `LemonCore.Browser.LocalServer` - Local browser driver
-11. `LemonCore.MediaJobSupervisor` - generated-media job worker boundary
-12. `LemonCore.LspServerManager` - Language-server registry/status/session/document-sync/diagnostic notification manager
-13. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
+10. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
 
 ## Important Notes
 
 - **Never** add umbrella app dependencies to lemon_core - it's the base layer
+- Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`, and `lemon_lsp`; core doctor diagnostics may only probe them at runtime.
 - Keep module interfaces stable - other apps depend on them
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
 - Secrets values are never logged or returned by list/status APIs

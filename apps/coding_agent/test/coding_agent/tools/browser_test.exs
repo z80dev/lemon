@@ -4,7 +4,7 @@ defmodule CodingAgent.Tools.BrowserTest do
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.ImageContent
   alias CodingAgent.Tools
-  alias LemonCore.Browser.LocalServer
+  alias LemonBrowser.LocalServer
 
   setup do
     tmp_dir =

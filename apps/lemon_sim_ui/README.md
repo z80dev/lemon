@@ -19,14 +19,14 @@ lemon_sim_ui
   |-- LemonSimUi.Endpoint           Bandit-backed Phoenix endpoint
 ```
 
-`SimManager` owns the runner lifecycle for active sims. It spawns linked runner processes, traps exit signals so child exits do not crash the manager, writes state to `LemonSim.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling. For Werewolf specifically, those push updates now carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
+`SimManager` owns the runner lifecycle for active sims. It spawns linked runner processes, traps exit signals so child exits do not crash the manager, writes state to `LemonSim.Kernel.Store` after each step, and publishes `LemonCore.Bus` events so the LiveView receives push updates without polling. For Werewolf specifically, those push updates now carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
 
 The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/live/longpoll` transport, and the browser client connects without enabling a long-poll fallback.
 
 `SimDashboardLive` subscribes to two topics:
 
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
-- `LemonSim.Bus` topic for the currently viewed sim — for per-step world updates
+- `LemonSim.Kernel.Bus` topic for the currently viewed sim — for per-step world updates
 
 Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
 
@@ -101,7 +101,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 
 | Dependency | Source | Purpose |
 |---|---|---|
-| `lemon_core` | Umbrella | `LemonCore.Bus` for pubsub, `LemonCore.Store` via `LemonSim.Store`, config helpers |
+| `lemon_core` | Umbrella | `LemonCore.Bus` for pubsub, `LemonCore.Store` via `LemonSim.Kernel.Store`, config helpers |
 | `lemon_sim` | Umbrella | `Runner`, `Store`, `Bus`, all domain examples and `GameHelpers` |
 | `phoenix` | Hex (~> 1.7) | HTTP and LiveView framework |
 | `phoenix_html` | Hex (~> 4.1) | HTML helpers |
@@ -258,14 +258,14 @@ running = LemonSimUi.SimManager.list_running()
 
 ### Watching a Sim Without the Browser
 
-The `LemonSim.Store` and `LemonSim.Bus` are accessible directly from IEx:
+The `LemonSim.Kernel.Store` and `LemonSim.Kernel.Bus` are accessible directly from IEx:
 
 ```elixir
 # Read current state
-state = LemonSim.Store.get_state(sim_id)
+state = LemonSim.Kernel.Store.get_state(sim_id)
 
 # Subscribe to updates
-LemonSim.Bus.subscribe(sim_id)
+LemonSim.Kernel.Bus.subscribe(sim_id)
 # => receives %LemonCore.Event{type: :sim_world_updated, ...}
 ```
 

@@ -96,8 +96,8 @@ Ai.Supervisor (one_for_one)
 
 The `Ai.Auth.*` modules remain in `apps/ai` as provider protocol helpers only.
 They do not read or write Lemon secrets/config. External Lemon apps should call
-the `LemonAiRuntime.Auth.*` façade modules for stored credentials, refresh
-persistence, and local OAuth callback handling.
+`AgentCore.ModelRuntime.Credentials` for stored credentials and refresh
+persistence.
 
 | Module | Purpose |
 |--------|---------|
@@ -417,7 +417,7 @@ Events emitted by `Ai.EventStream`:
 ## Environment Variables
 
 Lemon callers resolve config, secrets, and OAuth state through
-`LemonAiRuntime` before invoking `Ai`. Providers consume concrete values from
+`AgentCore.ModelRuntime` before invoking `Ai`. Providers consume concrete values from
 `Ai.Types.StreamOptions` (`api_key`, `headers`, `project`, `location`,
 `service_account_json`, and `provider_options`) and only use process env vars as
 standalone authentication fallback behavior.
@@ -437,9 +437,9 @@ standalone authentication fallback behavior.
 | `AWS_REGION` | Bedrock | AWS region (default: `us-east-1`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI | JSON credential payload (`{"token","projectId"}`) |
-| `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | LemonAiRuntime Vertex option resolver | GCP project ID |
-| `GOOGLE_CLOUD_LOCATION` | LemonAiRuntime Vertex option resolver | GCP region |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | LemonAiRuntime Vertex option resolver | Inline service account JSON |
+| `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP project ID |
+| `GOOGLE_CLOUD_LOCATION` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP region |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | Inline service account JSON |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex | ADC service account JSON file path |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client ID fallback |
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client secret fallback |

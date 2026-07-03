@@ -40,6 +40,11 @@ CodingAgent.Config.ensure_dirs!()
 # Skills are now managed by lemon_skills (registry + installer).
 Application.ensure_all_started(:lemon_skills)
 
+# Earlier app suites in the same umbrella run may have stopped :coding_agent
+# (e.g. lemon_router's baseline reset); suite order no longer guarantees a
+# restart, so establish our own baseline.
+{:ok, _} = Application.ensure_all_started(:coding_agent)
+
 # Compile test support files
 Code.require_file("support/mock_ui.ex", __DIR__)
 Code.require_file("support/permission_helpers.ex", __DIR__)

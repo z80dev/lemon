@@ -791,7 +791,7 @@ defmodule LemonSkills.McpSourceTest do
       url = "http://127.0.0.1:#{port}/sse"
 
       Application.put_env(:lemon_skills, :mcp_servers, [
-        {:sse, url, allow_tools: ["echo"]}
+        {:sse, url, allow_tools: ["echo"], ready_timeout_ms: 30_000, timeout_ms: 30_000}
       ])
 
       assert :ok = McpSource.refresh()
@@ -1157,7 +1157,6 @@ defmodule LemonSkills.McpSourceTest do
   end
 
   defp start_sse_transport do
-    port = free_port()
     {:ok, store} = start_supervised({Agent, fn -> %{} end})
 
     {:ok, server} =
@@ -1214,13 +1213,16 @@ defmodule LemonSkills.McpSourceTest do
          ]}
       )
 
-    start_supervised!(
-      {Bandit,
-       plug: {LemonSkills.McpSourceTest.SSEFixture, store: store, mcp_server: server},
-       scheme: :http,
-       ip: {127, 0, 0, 1},
-       port: port}
-    )
+    pid =
+      start_supervised!(
+        {Bandit,
+         plug: {LemonSkills.McpSourceTest.SSEFixture, store: store, mcp_server: server},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: 0}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
 
     {port, store}
   end

@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter do
 
   Provides model and thinking-level resolution for the WhatsApp transport.
   Uses session overrides (ephemeral, stored in ETS) and persistent policy
-  storage via `LemonCore.ModelPolicy`. No legacy fallback needed — WhatsApp
+  storage via `LemonChannels.ModelPolicy`. No legacy fallback needed — WhatsApp
   is a new channel with no pre-ModelPolicy data to migrate.
   """
 

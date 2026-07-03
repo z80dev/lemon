@@ -237,8 +237,8 @@ end
 - `emit_tool_result/7` normalizes trust before emitting messages and telemetry:
   `:untrusted` stays `:untrusted`; every other value becomes `:trusted`.
 - Emitted tool result telemetry (`[:agent_core, :tool_result, :emit]`) includes `tool_name`, `tool_call_id`, `is_error`, and normalized `trust`.
-- External-content tools use `CodingAgent.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
-- `CodingAgent.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
+- External-content tools use `AgentCore.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
+- `AgentCore.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
   `untrusted`, `source`, `source_label`/`sourceLabel`, `wrapping_applied`/`wrappingApplied`,
   `wrapped_fields`/`wrappedFields`, and optional `warning_included`/`warningIncluded`.
 - Current tool payload conventions:

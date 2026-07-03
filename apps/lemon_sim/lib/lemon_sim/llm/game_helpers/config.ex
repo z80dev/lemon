@@ -151,7 +151,7 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
   defp resolve_secret_api_key(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
-    case LemonAiRuntime.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
+    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
            secret_name,
            secret_value
          ) do
@@ -205,7 +205,11 @@ defmodule LemonSim.LLM.GameHelpers.Config do
               nil
           end
         end)
-        |> Kernel.||(LemonAiRuntime.Auth.OpenAICodexOAuth.resolve_access_token())
+        |> Kernel.||(
+          AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
+            "openai-codex" => %{"auth_source" => "oauth"}
+          })
+        )
     end
   end
 end

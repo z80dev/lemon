@@ -27,7 +27,7 @@ when adding new files.
 /config/**                                  runtime
 /apps/lemon_core/lib/lemon_core/runtime/**  runtime
 /apps/lemon_core/lib/lemon_core/config/**   runtime
-/apps/lemon_core/lib/lemon_core/onboarding/**  runtime
+/apps/lemon_cli/lib/lemon_cli/onboarding/**  runtime
 /apps/lemon_core/lib/lemon_core/doctor/**   runtime
 /apps/lemon_core/lib/lemon_core/update/**   runtime
 /apps/lemon_gateway/**                      runtime

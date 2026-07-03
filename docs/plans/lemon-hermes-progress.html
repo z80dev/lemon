@@ -726,7 +726,7 @@
           </div>
           <div class="event">
             <time>Slice 397</time>
-            <div><strong>Source wrapper media diagnostics command</strong><p><code>mix lemon.media</code> and <code>./bin/lemon media</code> now expose redacted media job, artifact, worker, and provider-proof diagnostics from <code>LemonCore.MediaJobs</code>, <code>LemonCore.MediaJobSupervisor</code>, and proof diagnostics. The source verifier exercises <code>./bin/lemon media --project-dir --limit 1</code> and checks prompt and provider-response cleanup.</p></div>
+            <div><strong>Source wrapper media diagnostics command</strong><p><code>mix lemon.media</code> and <code>./bin/lemon media</code> now expose redacted media job, artifact, worker, and provider-proof diagnostics from <code>LemonMedia.MediaJobs</code>, <code>LemonMedia.MediaJobSupervisor</code>, and proof diagnostics. The source verifier exercises <code>./bin/lemon media --project-dir --limit 1</code> and checks prompt and provider-response cleanup.</p></div>
           </div>
           <div class="event">
             <time>Slice 396</time>
@@ -750,7 +750,7 @@
           </div>
           <div class="event">
             <time>Slice 391</time>
-            <div><strong>Source wrapper provider readiness command</strong><p><code>mix lemon.providers</code> and <code>./bin/lemon providers</code> now show redacted provider readiness, routing decision, fallback proof status, and cleanup flags from <code>LemonAiRuntime.ProviderStatus</code>. The source verifier exercises <code>./bin/lemon providers --provider anthropic --project-dir</code>.</p></div>
+            <div><strong>Source wrapper provider readiness command</strong><p><code>mix lemon.providers</code> and <code>./bin/lemon providers</code> now show redacted provider readiness, routing decision, fallback proof status, and cleanup flags from <code>AgentCore.ModelRuntime.ProviderStatus</code>. The source verifier exercises <code>./bin/lemon providers --provider anthropic --project-dir</code>.</p></div>
           </div>
           <div class="event">
             <time>Slice 390</time>
@@ -866,7 +866,7 @@
           </div>
           <div class="event">
             <time>Slice 362</time>
-            <div><strong>First-party x_search tool</strong><p><code>LemonSkills.Tools.XSearch</code> and <code>CodingAgent.Tools.XSearch</code> now expose read-only recent public X/Twitter search with query, limit, sort order, id-boundary, and pagination parameters. The X API adapter supports bearer-token-only search credentials through <code>X_API_BEARER_TOKEN</code> and keeps <code>x_search</code> inside the no-external policy boundary. Focused validation passed with <code>151 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and diff hygiene.</p></div>
+            <div><strong>First-party x_search tool</strong><p><code>LemonSkills.Tools.XSearch</code> and <code>LemonSkills.Tools.XSearch</code> now expose read-only recent public X/Twitter search with query, limit, sort order, id-boundary, and pagination parameters. The X API adapter supports bearer-token-only search credentials through <code>X_API_BEARER_TOKEN</code> and keeps <code>x_search</code> inside the no-external policy boundary. Focused validation passed with <code>151 tests, 0 failures</code>, warning-free compile, docs lint, HTML lint, and diff hygiene.</p></div>
           </div>
           <div class="event">
             <time>Slice 361</time>
@@ -1458,7 +1458,7 @@
           </div>
           <div class="event">
             <time>Slice 214</time>
-            <div><strong>Provider media subreason diagnostics</strong><p><code>LemonCore.MediaJobWorker</code> now keeps bounded provider status/type labels such as <code>openai_image_http_error:billing_limit_user_error</code>, <code>openai_tts_http_error:invalid_request_error</code>, and <code>elevenlabs_tts_http_error:payment_required</code> in redacted media job metadata. Raw provider messages stay hashed only, while doctor, proof JSON, Web <code>/ops</code>, and final audit output get enough signal to distinguish auth, quota, and API-shape blockers.</p></div>
+            <div><strong>Provider media subreason diagnostics</strong><p><code>LemonMedia.MediaJobWorker</code> now keeps bounded provider status/type labels such as <code>openai_image_http_error:billing_limit_user_error</code>, <code>openai_tts_http_error:invalid_request_error</code>, and <code>elevenlabs_tts_http_error:payment_required</code> in redacted media job metadata. Raw provider messages stay hashed only, while doctor, proof JSON, Web <code>/ops</code>, and final audit output get enough signal to distinguish auth, quota, and API-shape blockers.</p></div>
           </div>
           <div class="event">
             <time>Slice 213</time>

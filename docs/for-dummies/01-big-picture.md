@@ -156,7 +156,6 @@ The Lemon umbrella has several other apps that we won't cover in depth:
 | lemon_skills | Skill system (injectable domain knowledge) |
 | lemon_web | Phoenix web interface |
 | lemon_mcp | Model Context Protocol bridge |
-| lemon_services | Long-running external process management |
 | lemon_sim | Simulation harness for testing agents |
 
 These are all real parts of Lemon, but they're adjacent to the core

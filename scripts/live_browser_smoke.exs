@@ -1,7 +1,7 @@
 defmodule LemonScripts.LiveBrowserSmoke do
   alias Ai.Types.ImageContent
   alias CodingAgent.Tools
-  alias LemonCore.Browser.LocalServer
+  alias LemonBrowser.LocalServer
 
   @default_timeout_ms 20_000
 

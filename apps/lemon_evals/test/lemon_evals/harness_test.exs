@@ -1,0 +1,34 @@
+defmodule LemonEvals.HarnessTest do
+  use ExUnit.Case, async: false
+
+  alias LemonEvals.Harness
+
+  test "eval harness passes all baseline checks" do
+    report = Harness.run(cwd: File.cwd!(), iterations: 10)
+
+    assert report.summary.failed == 0
+
+    assert Enum.map(report.results, & &1.name) == [
+             "deterministic_contract",
+             "statistical_stability",
+             "read_edit_workflow",
+             "memory_scope_contract",
+             "memory_topic_contract",
+             "auto_skill_prompt_contract",
+             "dedicated_tool_preference_contract",
+             "skill_curator_behavior_contract",
+             "learning_tool_trace_contract",
+             "tool_use_claim_contract",
+             "untrusted_prompt_injection_contract",
+             "agent_loop_learning_trace_contract",
+             "agent_loop_skill_refinement_trace_contract",
+             "agent_loop_memory_trace_contract",
+             "agent_loop_workspace_memory_file_contract",
+             "agent_loop_workspace_memory_update_contract",
+             "agent_loop_async_join_trace_contract",
+             "agent_loop_parallel_join_trace_contract",
+             "agent_loop_delegation_artifact_trace_contract",
+             "delegation_toolset_contract"
+           ]
+  end
+end

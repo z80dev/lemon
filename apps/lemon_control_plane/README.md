@@ -691,7 +691,7 @@ In test mode, the port defaults to `0` (OS-assigned) to avoid conflicts.
 | `lemon_skills` | Skill management |
 | `lemon_automation` | Cron manager, heartbeat features |
 | `coding_agent` | Compile-time only (not started at runtime) |
-| `lemon_ai_runtime` | Provider credential readiness checks through the runtime facade |
+| `agent_core` | Provider credential readiness checks through the model runtime |
 | `ai` | AI/model integration |
 
 ### External Dependencies

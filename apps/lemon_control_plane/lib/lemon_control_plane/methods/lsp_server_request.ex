@@ -19,7 +19,7 @@ defmodule LemonControlPlane.Methods.LspServerRequest do
          {:ok, method} <- required(params, "method", :missing_method),
          {:ok, timeout_ms} <- timeout_ms(params),
          {:ok, response} <-
-           LemonCore.LspServerManager.request_session(
+           LemonLsp.ServerManager.request_session(
              session_id,
              method,
              get_param(params, "params") || %{},

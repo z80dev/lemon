@@ -3294,9 +3294,9 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
-      assert eventually(fn -> length(LemonCore.MediaJobs.recent(project_dir: cwd)) == 1 end)
+      assert eventually(fn -> length(LemonMedia.MediaJobs.recent(project_dir: cwd)) == 1 end)
 
-      [job] = LemonCore.MediaJobs.recent(project_dir: cwd)
+      [job] = LemonMedia.MediaJobs.recent(project_dir: cwd)
       assert job.type == :image
       assert job.status == :completed
       assert job.artifact.name == "chart.png"

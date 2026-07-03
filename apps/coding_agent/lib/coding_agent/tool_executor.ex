@@ -18,6 +18,7 @@ defmodule CodingAgent.ToolExecutor do
 
   The context map should include:
   - `:run_id` - The current run ID
+  - `:session_id` - The native CodingAgent session ID
   - `:session_key` - The session key for routing
   - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
   """
@@ -74,12 +75,14 @@ defmodule CodingAgent.ToolExecutor do
         ) :: AgentToolResult.t() | {:error, term()}
   def execute_with_approval(tool_name, args, execute_fn, context) do
     run_id = context[:run_id]
+    session_id = context[:session_id]
     session_key = context[:session_key]
     timeout_ms = context[:timeout_ms] || @default_timeout_ms
     approval_request_fun = context[:approval_request_fun] || (&LemonCore.ExecApprovals.request/1)
 
     case request_approval(
            run_id,
+           session_id,
            session_key,
            tool_name,
            args,
@@ -125,9 +128,10 @@ defmodule CodingAgent.ToolExecutor do
     %{tool | execute: wrapped_execute}
   end
 
-  defp request_approval(run_id, session_key, tool_name, args, timeout_ms, request_fun) do
+  defp request_approval(run_id, session_id, session_key, tool_name, args, timeout_ms, request_fun) do
     request_fun.(%{
       run_id: run_id,
+      session_id: session_id,
       session_key: session_key,
       tool: tool_name,
       action: args,

@@ -376,11 +376,18 @@ defmodule CodingAgent.Session.Lifecycle do
     if tool_policy && is_nil(approval_context) do
       %{
         session_key: Keyword.get(opts, :session_key, session_id),
+        session_id: session_id,
         agent_id: Keyword.get(opts, :agent_id, "default"),
         timeout_ms: Keyword.get(opts, :approval_timeout_ms, :infinity)
       }
     else
-      approval_context
+      maybe_put_session_id(approval_context, session_id)
     end
   end
+
+  defp maybe_put_session_id(approval_context, session_id) when is_map(approval_context) do
+    Map.put(approval_context, :session_id, approval_context[:session_id] || session_id)
+  end
+
+  defp maybe_put_session_id(approval_context, _session_id), do: approval_context
 end

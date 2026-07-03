@@ -81,8 +81,8 @@ attached to the final Telegram/Discord answer through redacted `auto_send_files`
 metadata. Screenshot writes prune the browser artifact directory to 14 days or
 the newest 100 files.
 
-`browser_analyze` composes the supervised browser screenshot path with
-`media_analyze_image` so models can capture and analyze the current page in one
+`browser_analyze` composes the supervised browser screenshot path with the
+LemonSkills-owned `media_analyze_image` tool so models can capture and analyze the current page in one
 BEAM-owned operation. It stores the screenshot and analysis as managed artifacts,
 keeps raw base64 out of details, and can optionally return the screenshot as
 model-visible image content.
@@ -99,7 +99,7 @@ redacted by default unless `includeValues: true` is explicit. `browser_clear_sta
 clears browser-context cookies, current-page local/session storage, and buffered
 events by default; pass the specific `clear*` flags to narrow the reset.
 
-`memory` is the compact prompt-injected memory surface. It reads, adds,
+`memory` is implemented in `LemonSkills.Tools` and is the compact prompt-injected memory surface. It reads, adds,
 replaces, and removes bounded assistant-home `USER.md` profile notes and
 `MEMORY.md` quick facts without relying on project-local file paths. It rejects
 duplicates, requires unique text for replace/remove, enforces compact file
@@ -112,14 +112,15 @@ discovery, scroll, or browse mode from the argument shape and reads from Lemon's
 durable memory/run-history stores; `search_memory` remains the native scoped
 memory tool.
 
-`media_status` gives the model a read-only view of redacted media job summaries,
+The media tools are implemented in `LemonSkills.Tools` and registered by
+`CodingAgent.ToolRegistry` under their existing names. `media_status` gives the model a read-only view of redacted media job summaries,
 recent jobs, cleanup policy, and worker supervisor state. `media_generate_image`,
 `media_generate_speech`, and `media_transcribe_audio` are model-facing media
 previews. They run deterministic local preview jobs, provider-backed OpenAI
 image/TTS/STT jobs, Vertex Imagen image jobs, ElevenLabs TTS, Google TTS, and
 Deepgram STT, plus provider-backed OpenAI video and Vertex Veo jobs through
-`LemonCore.MediaJobSupervisor`, store redacted
-`LemonCore.MediaJobs` metadata with prompt/input hash/chars and artifact
+`LemonMedia.MediaJobSupervisor`, store redacted
+`LemonMedia.MediaJobs` metadata with prompt/input hash/chars and artifact
 metadata, and can opt into final Telegram/Discord generated-file delivery with
 `sendToChannel: true`. Provider media jobs retry bounded transient provider
 failures with `maxRetries`; failed provider jobs record only a safe error kind
@@ -143,12 +144,12 @@ file diagnostics with graceful fallback when a checker is unavailable, and
 `write`, `edit`, and `patch` can opt into post-edit baseline/delta diagnostics.
 Operator status is exposed without paths, file contents, workspace roots, or
 diagnostic output through `lsp.diagnostics.status` and support bundle
-`lsp_diagnostics.json`. `LemonCore.LspServerManager` owns redacted
+`lsp_diagnostics.json`. `LemonLsp.ServerManager` owns redacted
 language-server registry, stdio session lifecycle status, initialize
 orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.
 
-`kanban` is the model-facing durable board tool. It creates/lists boards,
+`kanban` is implemented in `LemonSkills.Tools` and is the model-facing durable board tool. It creates/lists boards,
 creates/lists/updates/comments tasks, and reads from `LemonCore.KanbanStore` so
 multi-agent work can outlive one session. Kanban-dispatched worker runs block
 the `kanban` tool through tool policy to avoid recursive board management.
@@ -254,6 +255,7 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 When an internal task omits `model`, `Task.Params` resolves the inherited model from the live parent session before falling back to captured tool opts, so Telegram/session-scoped `/model` overrides still propagate into async child sessions.
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
 Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup now forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router-delivered task followups use the `echo` engine so the raw completion text reaches the user without going back through the parent model. Any transport-specific chunking happens later at the channel layer.
+Sessions with an approval context subscribe to the shared `exec_approvals` topic and rebroadcast matching request/resolution records as status-only approval action events. These events use the same RunTranslator path as tool and reasoning events for native gateway and LemonRunner parity, and they must not enter the delta channel.
 
 `exec` and `process` now carry terminal backend metadata through
 `LemonCore.TerminalBackends`. Registered backends are `:local`, implemented by
@@ -836,7 +838,6 @@ apps/coding_agent/
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
 |   |   +-- cli_runners/                      # CLI runner integrations
-|   |   +-- evals/harness.ex                  # Eval harness
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/
@@ -933,8 +934,7 @@ Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` wi
 3. `providers.<name>.api_key_secret` from `LemonCore.Secrets`
 4. Default secret name `llm_<provider>_api_key` (Anthropic raw API keys use `llm_anthropic_api_key_raw`; Claude OAuth uses `llm_anthropic_api_key`)
 
-When a secret value is an OAuth payload, `LemonAiRuntime.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Anthropic, Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
-If the central resolver module is unavailable at runtime (mixed-version or partial deploy), `ModelResolver` falls back to calling provider-specific resolver modules directly so secret resolution does not crash.
+When a secret value is an OAuth payload, `AgentCore.ModelRuntime.Credentials` dispatches to provider-specific OAuth decoders (Anthropic, Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
 
 ## Testing Guidelines
 

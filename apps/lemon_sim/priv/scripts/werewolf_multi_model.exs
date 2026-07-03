@@ -1,7 +1,7 @@
 # Werewolf 8-player multi-model game
 # Mixed Gemini CLI, Codex, and Kimi seats with independent role shuffling
 
-alias LemonSim.GameHelpers.Config, as: SimConfig
+alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
 
 config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
 

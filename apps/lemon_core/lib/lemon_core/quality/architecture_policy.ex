@@ -13,22 +13,27 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     agent_core: [:ai, :lemon_core],
     ai: [],
-    coding_agent: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core, :lemon_skills],
+    coding_agent: [:agent_core, :ai, :lemon_browser, :lemon_core, :lemon_skills],
     coding_agent_ui: [:coding_agent],
     lemon_automation: [:lemon_core, :lemon_router, :lemon_skills],
-    lemon_channels: [:lemon_ai_runtime, :lemon_core],
-    lemon_ai_runtime: [:ai, :lemon_core],
+    lemon_channels: [:agent_core, :lemon_core, :lemon_media, :x_api],
     lemon_control_plane: [
       :ai,
       :coding_agent,
-      :lemon_ai_runtime,
+      :agent_core,
       :lemon_automation,
+      :lemon_browser,
       :lemon_channels,
       :lemon_core,
+      :lemon_lsp,
+      :lemon_media,
       :lemon_router,
       :lemon_skills
     ],
+    lemon_cli: [:ai, :lemon_core],
+    lemon_browser: [:lemon_core],
     lemon_core: [],
+    lemon_evals: [:agent_core, :ai, :coding_agent, :lemon_core, :lemon_skills],
     lemon_gateway: [
       :agent_core,
       :ai,
@@ -36,13 +41,15 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_automation,
       :lemon_core
     ],
-    lemon_mcp: [:agent_core, :coding_agent],
-    lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core],
-    lemon_sim: [:agent_core, :ai, :lemon_ai_runtime, :lemon_core],
+    lemon_lsp: [:lemon_core],
+    lemon_media: [:lemon_core],
+    lemon_mcp: [:agent_core, :coding_agent, :lemon_skills],
+    lemon_router: [:agent_core, :ai, :lemon_channels, :lemon_core, :lemon_media],
+    lemon_sim: [:agent_core, :ai, :lemon_core],
     lemon_sim_ui: [:ai, :lemon_core, :lemon_sim],
-    lemon_services: [],
-    lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    lemon_web: [:lemon_ai_runtime, :lemon_core, :lemon_router]
+    lemon_skills: [:agent_core, :ai, :lemon_core, :lemon_media, :x_api],
+    lemon_web: [:lemon_core, :lemon_router],
+    x_api: [:lemon_core]
   }
 
   @target_allowed_direct_deps @current_allowed_direct_deps

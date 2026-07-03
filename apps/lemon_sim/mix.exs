@@ -12,7 +12,7 @@ defmodule LemonSim.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 33]],
       deps: deps()
     ]
   end
@@ -28,8 +28,7 @@ defmodule LemonSim.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
-      {:lemon_ai_runtime, in_umbrella: true}
+      {:ai, in_umbrella: true}
     ]
   end
 end

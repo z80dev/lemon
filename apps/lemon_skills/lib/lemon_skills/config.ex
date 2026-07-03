@@ -770,7 +770,9 @@ defmodule LemonSkills.Config do
   defp parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
        when is_binary(command) do
     args = Map.get(config, "args", [])
-    opts = mcp_filter_opts(config) ++ sampling_config_opts(config)
+
+    opts =
+      mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config) ++ sampling_config_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -792,7 +794,7 @@ defmodule LemonSkills.Config do
 
   defp parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
        when is_binary(url) do
-    opts = http_config_opts(config)
+    opts = sse_config_opts(config)
 
     if opts == [] do
       [{:sse, url}]
@@ -823,7 +825,18 @@ defmodule LemonSkills.Config do
         _ -> []
       end
 
-    header_opts ++ oauth_config_opts(config) ++ mcp_filter_opts(config)
+    header_opts ++
+      oauth_config_opts(config) ++ mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config)
+  end
+
+  defp sse_config_opts(config) do
+    header_opts =
+      case Map.get(config, "headers") do
+        headers when is_map(headers) -> [headers: Map.to_list(headers)]
+        _ -> []
+      end
+
+    header_opts ++ mcp_timeout_opts(config) ++ mcp_filter_opts(config)
   end
 
   defp oauth_config_opts(%{"oauth" => oauth}) when is_map(oauth) do
@@ -901,6 +914,22 @@ defmodule LemonSkills.Config do
     |> Enum.reject(fn {_key, value} -> value == [] end)
   end
 
+  defp mcp_timeout_opts(config) do
+    [
+      ready_timeout_ms:
+        Map.get(config, "ready_timeout_ms") || Map.get(config, "ready-timeout-ms"),
+      timeout_ms: Map.get(config, "timeout_ms") || Map.get(config, "timeout-ms")
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp mcp_ready_timeout_opts(config) do
+    [
+      ready_timeout_ms: Map.get(config, "ready_timeout_ms") || Map.get(config, "ready-timeout-ms")
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
   defp string_list(config, key) do
     case Map.get(config, key) do
       values when is_list(values) -> Enum.filter(values, &is_binary/1)
@@ -921,9 +950,23 @@ defmodule LemonSkills.Config do
     case Enum.find(opts, fn {key, value} ->
            key in allowed_keys and not string_list?(value)
          end) do
-      nil -> validate_sampling_policy(Keyword.get(opts, :sampling_policy))
-      {key, _value} -> {:error, "#{key} must be a list of strings"}
+      nil ->
+        with :ok <-
+               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms"),
+             :ok <- validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms") do
+          validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+        end
+
+      {key, _value} ->
+        {:error, "#{key} must be a list of strings"}
     end
+  end
+
+  defp validate_positive_timeout(nil, _name), do: :ok
+  defp validate_positive_timeout(value, _name) when is_integer(value) and value > 0, do: :ok
+
+  defp validate_positive_timeout(_value, name) do
+    {:error, "#{name} must be a positive integer"}
   end
 
   defp validate_sampling_policy(nil), do: :ok

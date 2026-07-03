@@ -373,7 +373,7 @@ All onboarding flows:
 
 Provider readiness is visible through the read-only control-plane
 `providers.status` method. It uses the same
-`LemonAiRuntime` credential resolver as model execution, so env keys, encrypted
+`AgentCore.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
 booleans such as `credentialReady`, `apiKeyConfigured`,

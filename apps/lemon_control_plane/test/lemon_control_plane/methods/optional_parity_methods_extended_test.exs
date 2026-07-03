@@ -369,7 +369,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
-      artifact_dir = LemonCore.MediaJobs.default_artifacts_dir(tmp_dir)
+      artifact_dir = LemonMedia.MediaJobs.default_artifacts_dir(tmp_dir)
       File.mkdir_p!(artifact_dir)
       artifact_path = Path.join(artifact_dir, "generated.png")
       File.write!(artifact_path, "png")
@@ -420,7 +420,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       )
 
       assert {:ok, _job} =
-               LemonCore.MediaJobs.record(
+               LemonMedia.MediaJobs.record(
                  %{
                    job_id: "control-plane-media",
                    type: :image,
@@ -436,7 +436,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
       assert {:ok, result} = MediaStatus.handle(%{"projectDir" => tmp_dir, "limit" => 5}, @ctx)
 
-      assert result["jobsDir"] == LemonCore.MediaJobs.default_dir(tmp_dir)
+      assert result["jobsDir"] == LemonMedia.MediaJobs.default_dir(tmp_dir)
       assert result["artifactsDir"] == artifact_dir
       assert result["workerStatus"]["supervised"] == true
       assert result["workerStatus"]["running"] == true
@@ -690,6 +690,21 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
           }
         })
       )
+
+      # latest_checks orders proof files by mtime with second granularity; pin
+      # distinct mtimes so the ordering (and the take(limit) cut) is stable
+      # regardless of how fast the writes above complete.
+      [
+        "discord-media-directive-latest.json",
+        "private-proof.json",
+        "telegram-voice-local-latest.json",
+        "terminal-backend-latest.json",
+        "wasm-lifecycle-latest.json"
+      ]
+      |> Enum.with_index()
+      |> Enum.each(fn {name, idx} ->
+        File.touch!(Path.join(proof_dir, name), {{2026, 5, 20}, {12, 0, 59 - idx}})
+      end)
 
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
@@ -2072,7 +2087,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
         session_id = "control-plane-lsp-#{System.unique_integer([:positive])}"
 
         on_exit(fn ->
-          _ = LemonCore.LspServerManager.stop_session(session_id)
+          _ = LemonLsp.ServerManager.stop_session(session_id)
 
           if previous do
             System.put_env("LEMON_LSP_ELIXIR_LS_COMMAND", previous)
@@ -2133,7 +2148,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       session_id = "control-plane-lsp-rpc-#{System.unique_integer([:positive])}"
 
       on_exit(fn ->
-        _ = LemonCore.LspServerManager.stop_session(session_id)
+        _ = LemonLsp.ServerManager.stop_session(session_id)
         File.rm_rf!(tmp_dir)
 
         if previous do
@@ -2197,7 +2212,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       session_id = "control-plane-lsp-init-#{System.unique_integer([:positive])}"
 
       on_exit(fn ->
-        _ = LemonCore.LspServerManager.stop_session(session_id)
+        _ = LemonLsp.ServerManager.stop_session(session_id)
         File.rm_rf!(tmp_dir)
 
         if previous do
@@ -2236,7 +2251,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
       active =
         wait_until(fn ->
-          status = LemonCore.LspServerManager.status()
+          status = LemonLsp.ServerManager.status()
 
           active =
             Enum.find(status.active_servers, fn active ->
@@ -2284,7 +2299,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       changed_text = "defmodule Secret do\n  def hidden, do: :ok\nend\n"
 
       on_exit(fn ->
-        _ = LemonCore.LspServerManager.stop_session(session_id)
+        _ = LemonLsp.ServerManager.stop_session(session_id)
         File.rm_rf!(tmp_dir)
 
         if previous do
@@ -2367,7 +2382,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
                end
              end)
 
-      status = LemonCore.LspServerManager.status()
+      status = LemonLsp.ServerManager.status()
 
       active =
         Enum.find(status.active_servers, fn active ->

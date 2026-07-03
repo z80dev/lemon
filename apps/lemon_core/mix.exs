@@ -12,7 +12,7 @@ defmodule LemonCore.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 5]],
+      test_coverage: [summary: [threshold: 69]],
       deps: deps()
     ]
   end
@@ -28,12 +28,10 @@ defmodule LemonCore.MixProject do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
-      {:term_ui, "~> 0.2.0"},
       {:uuid, "~> 1.1"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"},
       {:exqlite, "~> 0.34.0"},
-      {:yaml_elixir, "~> 2.9"},
       {:file_system, "~> 1.0", optional: true}
     ]
   end
