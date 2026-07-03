@@ -10,6 +10,14 @@ defmodule LemonSim.Examples.StockMarket.Performance do
 
   alias LemonSim.Examples.StockMarket.Market
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world), do: summarize(world)
+
+  @impl true
+  def primary_metric, do: %{key: "best_final_value", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -23,11 +31,11 @@ defmodule LemonSim.Examples.StockMarket.Performance do
 
         {player_id,
          %{
-           name: Map.get(info, :name, player_id),
-           model: Map.get(info, :model),
+           name: get(info, :name, player_id),
+           model: get(info, :model),
            won: winner == player_id,
            final_value: final_value,
-           final_reputation: Map.get(info, :reputation, Market.initial_reputation()),
+           final_reputation: get(info, :reputation, Market.initial_reputation()),
            return_pct:
              Float.round((final_value - Market.initial_cash()) / Market.initial_cash() * 100, 2),
            trades_executed: 0,
@@ -47,9 +55,17 @@ defmodule LemonSim.Examples.StockMarket.Performance do
 
     %{
       benchmark_focus: "private-information trading, public signaling, and directional accuracy",
+      best_final_value: best_final_value(player_metrics),
       players: player_metrics,
       models: summarize_models(player_metrics)
     }
+  end
+
+  defp best_final_value(player_metrics) do
+    player_metrics
+    |> Map.values()
+    |> Enum.map(&Map.get(&1, :final_value, 0))
+    |> Enum.max(fn -> 0 end)
   end
 
   defp apply_trade_history(metrics, players, stocks) do
@@ -59,12 +75,14 @@ defmodule LemonSim.Examples.StockMarket.Performance do
       end)
 
     Enum.reduce(players, metrics, fn {player_id, info}, acc ->
-      trades = Map.get(info, :trade_history, [])
+      trades = get(info, :trade_history, [])
 
       Enum.reduce(trades, acc, fn trade, trade_acc ->
+        action = get(trade, :action)
+
         trade_acc
         |> update_player(player_id, &Map.update!(&1, :trades_executed, fn count -> count + 1 end))
-        |> maybe_increment(player_id, trade.action in ["short", "cover"], :short_trades)
+        |> maybe_increment(player_id, action in ["short", "cover"], :short_trades)
         |> maybe_mark_profitable_trade(player_id, trade, final_prices)
       end)
     end)
@@ -73,14 +91,14 @@ defmodule LemonSim.Examples.StockMarket.Performance do
   defp apply_market_call_history(metrics, history, round_summaries) do
     round_changes =
       Enum.into(round_summaries, %{}, fn summary ->
-        {summary.round, Map.get(summary, :price_changes, %{})}
+        {get(summary, :round), get(summary, :price_changes, %{})}
       end)
 
     Enum.reduce(history, metrics, fn call, acc ->
-      player_id = call.player
-      round = call.round
-      stock = call.stock
-      stance = call.stance
+      player_id = get(call, :player)
+      round = get(call, :round)
+      stock = get(call, :stock)
+      stance = get(call, :stance)
 
       stock_change =
         round_changes
@@ -105,19 +123,19 @@ defmodule LemonSim.Examples.StockMarket.Performance do
     Enum.reduce(whisper_history, metrics, fn whisper, acc ->
       update_player(
         acc,
-        whisper.from,
+        get(whisper, :from),
         &Map.update!(&1, :whispers_sent, fn count -> count + 1 end)
       )
     end)
   end
 
   defp maybe_mark_profitable_trade(metrics, player_id, trade, final_prices) do
-    stock = trade.stock
-    final_price = Map.get(final_prices, stock, trade.price)
-    trade_price = trade.price
+    stock = get(trade, :stock)
+    trade_price = get(trade, :price)
+    final_price = Map.get(final_prices, stock, trade_price)
 
     profitable? =
-      case trade.action do
+      case get(trade, :action) do
         "buy" -> final_price > trade_price
         "sell" -> final_price < trade_price
         "short" -> final_price < trade_price
@@ -136,7 +154,7 @@ defmodule LemonSim.Examples.StockMarket.Performance do
 
   defp summarize_models(player_metrics) do
     player_metrics
-    |> Enum.group_by(fn {_player_id, metrics} -> Map.get(metrics, :model, "unknown") end)
+    |> Enum.group_by(fn {_player_id, metrics} -> Map.get(metrics, :model) || "unknown" end)
     |> Enum.into(%{}, fn {model, entries} ->
       metrics = Enum.map(entries, fn {_player_id, item} -> item end)
 

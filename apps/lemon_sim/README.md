@@ -11,8 +11,9 @@ artifacts that can be replayed, scored, and verified.
   pubsub helpers.
 - `LemonSim.LLM` owns model-facing execution: `ToolLoopDecider`, tool policies,
   provider/model setup, throttling, live-run helpers, and transcripts.
-- `LemonSim.Bench` owns benchmark artifacts: manifests, scorecards, hash
-  verification, replay bundles, suite runners, and leaderboard export.
+- `LemonSim.Bench` owns benchmark artifacts: manifests, scorecard behaviours,
+  registry-driven scorecard recompute verification, hash verification, and
+  shared run-bundle helpers.
 - `LemonSim.Examples.*` owns the worlds. The examples are 92.3% of the current
   Elixir source under `apps/lemon_sim/lib`, because the interesting work is in
   scenario rules, tools, projections, and scoring.
@@ -85,10 +86,11 @@ Replay video tasks require `rsvg-convert` and `ffmpeg` on `PATH`.
 ## Artifacts
 
 Benchmark runs write bundles under `apps/lemon_sim/priv/game_logs/...` unless
-`--artifact-dir` is provided. Vending Bench bundles include `manifest.json`,
-`hashes.json`, `config.json`, `final_world.json`, event/action/command/fact
-JSONL files, transcript files, `scorecard.json`, `usage.json`, `replay.json`,
-`replay.html`, prompt snapshots, and `report.md`.
+`--artifact-dir` is provided. Vending Bench and TCG Shop write rich bundles with
+scenario-specific replay/transcript files. Poker, Stock Market, and Pandemic
+write verified scorecard bundles with `manifest.json`, `hashes.json`,
+`final_world.json`, `events.jsonl`, `actions.jsonl`, `scorecard.json`, and
+`usage.json`.
 
 Use:
 
@@ -98,8 +100,12 @@ mix lemon.sim.score path/to/run
 ```
 
 `verify` checks the manifest, hash schema, required benchmark files, manifest
-integrity hashes, and hashed file contents. `score` verifies first, then prints
-the scorecard.
+integrity hashes, and hashed file contents. For scenarios registered in
+`LemonSim.Bench.Scorecard.Registry`, it also recomputes `scorecard.json` from
+`final_world.json` and compares canonical JSON. Registered verified scenarios:
+`vending_bench`, `vending_bench_arena`, `tcg_shop`, `poker`, `stock_market`,
+and `pandemic`. Unregistered scenarios still get manifest/hash verification and
+skip scorecard recompute. `score` verifies first, then prints the scorecard.
 
 ## Write A Scenario
 

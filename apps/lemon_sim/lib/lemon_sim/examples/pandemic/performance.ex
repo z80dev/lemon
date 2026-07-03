@@ -9,7 +9,13 @@ defmodule LemonSim.Examples.Pandemic.Performance do
 
   import LemonSim.Examples.Helpers
 
-  alias LemonSim.Examples.Pandemic.DiseaseModel
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world), do: summarize(world)
+
+  @impl true
+  def primary_metric, do: %{key: ["team", "global_death_rate"], direction: :minimize}
 
   @spec summarize(map()) :: map()
   def summarize(world) do
@@ -21,24 +27,24 @@ defmodule LemonSim.Examples.Pandemic.Performance do
     hoarding_log = get(world, :hoarding_log, [])
     comm_history = get(world, :comm_history, [])
 
-    total_pop = DiseaseModel.total_population(regions)
-    total_dead = DiseaseModel.total_deaths(regions)
-    total_infected = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :infected, 0) end))
-    total_recovered = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :recovered, 0) end))
-    total_vaccinated = Enum.sum(Enum.map(regions, fn {_, r} -> Map.get(r, :vaccinated, 0) end))
+    total_pop = Enum.sum(Enum.map(regions, fn {_, r} -> get(r, :population, 0) end))
+    total_dead = Enum.sum(Enum.map(regions, fn {_, r} -> get(r, :dead, 0) end))
+    total_infected = Enum.sum(Enum.map(regions, fn {_, r} -> get(r, :infected, 0) end))
+    total_recovered = Enum.sum(Enum.map(regions, fn {_, r} -> get(r, :recovered, 0) end))
+    total_vaccinated = Enum.sum(Enum.map(regions, fn {_, r} -> get(r, :vaccinated, 0) end))
 
     global_death_rate =
       if total_pop > 0, do: Float.round(total_dead / total_pop * 100, 2), else: 0.0
 
     player_metrics =
       Enum.into(players, %{}, fn {governor_id, info} ->
-        region_id = Map.get(info, :region, governor_id)
+        region_id = get(info, :region, governor_id)
         region = Map.get(regions, region_id, %{})
-        pop = Map.get(region, :population, 1)
-        dead = Map.get(region, :dead, 0)
+        pop = get(region, :population, 1)
+        dead = get(region, :dead, 0)
         regional_death_rate = if pop > 0, do: Float.round(dead / pop * 100, 2), else: 0.0
-        vaccinated = Map.get(region, :vaccinated, 0)
-        hospitals = Map.get(region, :hospitals, 0)
+        vaccinated = get(region, :vaccinated, 0)
+        hospitals = get(region, :hospitals, 0)
 
         hoarding_count =
           Enum.count(hoarding_log, fn h ->
@@ -83,8 +89,8 @@ defmodule LemonSim.Examples.Pandemic.Performance do
         total_vaccinated: total_vaccinated,
         global_death_rate: global_death_rate,
         death_threshold: trunc(total_pop * 0.10),
-        final_spread_rate: Float.round(Map.get(disease, :spread_rate, 0.18), 4),
-        research_progress: Map.get(disease, :research_progress, 0),
+        final_spread_rate: Float.round(get(disease, :spread_rate, 0.18), 4),
+        research_progress: get(disease, :research_progress, 0),
         total_hoarding_incidents: length(hoarding_log)
       },
       players: player_metrics,
@@ -94,7 +100,7 @@ defmodule LemonSim.Examples.Pandemic.Performance do
 
   defp summarize_models(player_metrics) do
     player_metrics
-    |> Enum.group_by(fn {_governor_id, metrics} -> get(metrics, :model, "unknown") end)
+    |> Enum.group_by(fn {_governor_id, metrics} -> get(metrics, :model) || "unknown" end)
     |> Enum.into(%{}, fn {model, entries} ->
       metrics_list = Enum.map(entries, fn {_id, m} -> m end)
 

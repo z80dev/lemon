@@ -3,6 +3,12 @@ defmodule LemonSim.Examples.TcgShop.Performance do
 
   alias LemonCore.MapHelpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def primary_metric, do: %{key: "net_worth", direction: :maximize}
+
+  @impl true
   def scorecard(world) do
     balance = get(world, :bank_balance, 0.0)
     cash_drawer = get(world, :cash_drawer_balance, 0.0)
@@ -221,7 +227,11 @@ defmodule LemonSim.Examples.TcgShop.Performance do
       rejections: get(world, :invalid_action_count, 0)
     }
 
-    Map.merge(base, failure_summary(world, base))
+    base
+    |> Map.merge(failure_summary(world, base))
+    |> Map.put(:sim_id, get(world, :sim_id, nil))
+    |> Map.put(:status, get(world, :status, nil))
+    |> Map.put(:day_number, get(world, :day_number, nil))
   end
 
   def inventory_value(world) do

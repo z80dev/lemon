@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.TcgShop.Artifacts do
   @moduledoc false
 
-  alias LemonSim.Bench.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.Bundle
   alias LemonSim.Examples.TcgShop.{ActionSpace, Performance}
   alias LemonSim.LLM.Usage
 
@@ -66,14 +66,16 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
       paths.report => report(state, scorecard, usage, paths, opts)
     }
 
-    Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
-
-    hashes = hashes_artifact(artifact_dir, contents, prompt, tool_schemas)
-    AtomicFile.write!(paths.hashes, Jason.encode!(hashes, pretty: true))
-
-    AtomicFile.write!(
+    Bundle.write_bundle!(
+      artifact_dir,
+      contents,
+      paths.hashes,
       paths.manifest,
-      Jason.encode!(manifest_artifact(state, hashes, opts), pretty: true)
+      fn hashes -> manifest_artifact(state, hashes, opts) end,
+      %{
+        prompt_sha256: sha256(prompt),
+        tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
+      }
     )
 
     {:ok, paths}
@@ -399,22 +401,6 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     </body>
     </html>
     """
-  end
-
-  defp hashes_artifact(artifact_dir, contents, prompt, tool_schemas) do
-    files =
-      contents
-      |> Enum.map(fn {path, content} ->
-        {Path.relative_to(path, artifact_dir), sha256(content)}
-      end)
-      |> Map.new()
-
-    %{
-      schema_version: "lemon_sim.hashes.v1",
-      files: files,
-      prompt_sha256: sha256(prompt),
-      tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
-    }
   end
 
   defp manifest_artifact(state, hashes, opts) do

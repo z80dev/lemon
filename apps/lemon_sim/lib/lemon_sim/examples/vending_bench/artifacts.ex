@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.VendingBench.Artifacts do
   @moduledoc false
 
-  alias LemonSim.Bench.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.Bundle
   alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Performance, Replay}
   alias LemonSim.LLM.Usage
 
@@ -75,7 +75,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       paths.report => report
     }
 
-    Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
+    Bundle.write_contents!(contents)
 
     {:ok, _replay_paths} =
       Replay.write_browser(artifact_dir,
@@ -87,13 +87,16 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       |> Map.put(paths.replay_json, File.read!(paths.replay_json))
       |> Map.put(paths.replay_html, File.read!(paths.replay_html))
 
-    hashes = hashes_artifact(artifact_dir, all_contents, prompts, tool_schemas)
-
-    AtomicFile.write!(paths.hashes, Jason.encode!(hashes, pretty: true))
-
-    AtomicFile.write!(
+    Bundle.write_metadata!(
+      artifact_dir,
+      all_contents,
+      paths.hashes,
       paths.manifest,
-      Jason.encode!(manifest_artifact(state, hashes, opts), pretty: true)
+      fn hashes -> manifest_artifact(state, hashes, opts) end,
+      %{
+        prompt_sha256: sha256(prompts.operator_system <> prompts.operator_initial),
+        tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
+      }
     )
 
     {:ok, paths}
@@ -163,22 +166,6 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       |> get(:tool_calls, [])
       |> List.wrap()
     end)
-  end
-
-  defp hashes_artifact(artifact_dir, contents, prompts, tool_schemas) do
-    file_hashes =
-      contents
-      |> Enum.map(fn {path, content} ->
-        {Path.relative_to(path, artifact_dir), sha256(content)}
-      end)
-      |> Map.new()
-
-    %{
-      schema_version: "lemon_sim.hashes.v1",
-      files: file_hashes,
-      prompt_sha256: sha256(prompts.operator_system <> prompts.operator_initial),
-      tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
-    }
   end
 
   defp manifest_artifact(state, hashes, opts) do

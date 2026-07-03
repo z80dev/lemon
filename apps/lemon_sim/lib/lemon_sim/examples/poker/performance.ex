@@ -8,11 +8,19 @@ defmodule LemonSim.Examples.Poker.Performance do
 
   alias LemonCore.MapHelpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world), do: summarize(world)
+
+  @impl true
+  def primary_metric, do: %{key: "best_profit_loss", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     table = MapHelpers.get_key(world, :table)
     completed_hands = max(MapHelpers.get_key(world, :completed_hands) || 0, 0)
-    big_blind = (table && table.big_blind) || 1
+    big_blind = (table && MapHelpers.get_key(table, :big_blind)) || 1
     player_stats = MapHelpers.get_key(world, :player_stats) || %{}
 
     players =
@@ -44,8 +52,16 @@ defmodule LemonSim.Examples.Poker.Performance do
       benchmark_focus: "preflop selection, aggression timing, and stack preservation",
       hands_completed: completed_hands,
       big_blind: big_blind,
+      best_profit_loss: best_profit_loss(players),
       players: players
     }
+  end
+
+  defp best_profit_loss(players) do
+    players
+    |> Map.values()
+    |> Enum.map(&Map.get(&1, :profit_loss, 0))
+    |> Enum.max(fn -> 0 end)
   end
 
   defp final_stack(world, player_id) do
