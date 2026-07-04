@@ -6,7 +6,7 @@ defmodule LemonSim.Bench.Suite do
   alias LemonCore.Config.Modular
   alias LemonSim.Bench.Artifacts.{AtomicFile, Verifier}
   alias LemonSim.Bench.Scorecard.Registry
-  alias LemonSim.Examples.{TcgShop, VendingBench}
+  alias LemonSim.Bench.Suite.RunAdapter.Registry, as: RunAdapterRegistry
   alias LemonSim.LLM.GameHelpers.Config
   alias LemonSim.LLM.Projectors.Toolkit
 
@@ -16,6 +16,8 @@ defmodule LemonSim.Bench.Suite do
   def run(spec, opts \\ []) when is_map(spec) and is_list(opts) do
     with {:ok, suite_dir} <- suite_dir(opts),
          {:ok, spec} <- normalize_spec(spec),
+         {:ok, _adapter} <- RunAdapterRegistry.fetch(spec["scenario"]),
+         {:ok, _preset_opts} <- RunAdapterRegistry.preset_opts(spec["scenario"], spec["preset"]),
          {:ok, run_results} <- run_matrix(spec, suite_dir, opts),
          {:ok, suite} <- build_suite(spec, run_results) do
       write_suite!(suite_dir, suite)
@@ -346,71 +348,46 @@ defmodule LemonSim.Bench.Suite do
   end
 
   defp run_scenario(spec, competitor, opts) do
-    run_opts =
-      spec["scenario"]
-      |> preset_opts(spec["preset"])
-      |> Keyword.merge(opts)
+    with {:ok, adapter} <- RunAdapterRegistry.fetch(spec["scenario"]),
+         {:ok, preset_opts} <- RunAdapterRegistry.preset_opts(spec["scenario"], spec["preset"]) do
+      run_opts = Keyword.merge(preset_opts, opts)
 
-    cond do
-      offline = competitor["offline_strategy"] ->
-        run_offline(spec["scenario"], offline, run_opts)
+      cond do
+        offline = competitor["offline_strategy"] ->
+          run_adapter(adapter, :offline, offline, opts[:seed], run_opts)
 
-      model_id = competitor["model"] ->
-        run_live(spec["scenario"], model_id, run_opts)
-    end
-  end
-
-  defp run_offline("vending_bench", strategy, opts),
-    do: VendingBench.run_offline_strategy(strategy, opts)
-
-  defp run_offline("tcg_shop", strategy, opts), do: TcgShop.run_offline_strategy(strategy, opts)
-
-  defp run_offline("vending_bench_arena", strategy, opts) do
-    VendingBench.Arena.run_offline_strategy(strategy, opts)
-  end
-
-  defp run_offline(scenario, _strategy, _opts),
-    do: {:error, {:unsupported_suite_scenario, scenario}}
-
-  defp run_live("vending_bench", model_id, opts) do
-    with {:ok, model, api_key} <- resolve_model(model_id) do
-      opts
-      |> Keyword.put(:model, model)
-      |> Keyword.put(:stream_options, %{api_key: api_key})
-      |> VendingBench.run()
-    end
-  end
-
-  defp run_live("tcg_shop", model_id, opts) do
-    with {:ok, model, api_key} <- resolve_model(model_id) do
-      case TcgShop.run(Keyword.merge(opts, model: model, stream_options: %{api_key: api_key})) do
-        {:ok, state} ->
-          LemonSim.Examples.TcgShop.Artifacts.write_run_artifacts(state, [], [], opts)
-
-        error ->
-          error
+        model_id = competitor["model"] ->
+          run_live_adapter(adapter, model_id, opts[:seed], run_opts)
       end
     end
   end
 
-  defp run_live(scenario, _model_id, _opts),
-    do: {:error, {:unsupported_live_suite_scenario, scenario}}
+  defp run_live_adapter(adapter, model_id, seed, opts) do
+    # Check mode support before resolve_model: resolving raises when no
+    # provider key is configured, and an offline-only adapter must reject a
+    # live competitor cleanly in keyless/CI environments instead of crashing
+    # the whole suite run.
+    if RunAdapterRegistry.supports_mode?(adapter, :live) do
+      with {:ok, model, api_key} <- resolve_model(model_id) do
+        opts =
+          opts
+          |> Keyword.put(:model, model)
+          |> Keyword.put(:stream_options, %{api_key: api_key})
 
-  defp preset_opts("vending_bench", "ci"),
-    do: [max_days: 7, driver_max_turns: 25, persist?: false]
+        run_adapter(adapter, :live, model_id, seed, opts)
+      end
+    else
+      {:error, {:unsupported_suite_mode, :live}}
+    end
+  end
 
-  defp preset_opts("vending_bench", "paper"), do: [max_days: 365, driver_max_turns: 2_000]
-  defp preset_opts("vending_bench", "v2"), do: [max_days: 365, driver_max_turns: 4_000]
-  defp preset_opts("tcg_shop", "ci"), do: [max_days: 5, driver_max_turns: 20, persist?: false]
-  defp preset_opts("tcg_shop", "paper"), do: [max_days: 90, driver_max_turns: 200]
-
-  defp preset_opts("tcg_shop", "stress"),
-    do: [max_days: 14, driver_max_turns: 80, persist?: false]
-
-  defp preset_opts(_scenario, nil), do: []
-
-  defp preset_opts(scenario, preset),
-    do: raise(ArgumentError, "unknown preset #{preset} for #{scenario}")
+  defp run_adapter(adapter, mode, competitor, seed, opts) do
+    if RunAdapterRegistry.supports_mode?(adapter, mode) do
+      adapter.run(mode, competitor, seed, opts)
+    else
+      {:error, {:unsupported_suite_mode, mode}}
+    end
+  end
 
   defp primary_metric(scenario) do
     case Registry.fetch(scenario) do

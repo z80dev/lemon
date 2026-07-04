@@ -12,6 +12,17 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
 
   @tier_order ["retailer", "distributor", "factory", "raw_materials"]
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :total_chain_cost, get(summary.chain, :total_chain_cost, 0.0))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "total_chain_cost", direction: :minimize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     tiers = get(world, :tiers, %{})
@@ -76,10 +87,10 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     %{
       role: tier_id,
       won: winner == tier_id,
-      total_cost: Float.round(total_cost, 2),
-      holding_cost: Float.round(total_holding, 2),
-      stockout_cost: Float.round(total_stockout, 2),
-      ordering_cost: Float.round(total_ordering, 2),
+      total_cost: round_float(total_cost),
+      holding_cost: round_float(total_holding),
+      stockout_cost: round_float(total_stockout),
+      ordering_cost: round_float(total_ordering),
       fill_rate: fill_rate,
       bullwhip_ratio: bullwhip,
       inventory_efficiency: inv_efficiency,
@@ -111,7 +122,7 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     demand_variance = compute_variance(demand_history)
 
     %{
-      total_chain_cost: Float.round(computed_total, 2),
+      total_chain_cost: round_float(computed_total),
       team_bonus_earned: team_bonus,
       end_to_end_fill_rate: end_to_end_fill_rate,
       avg_consumer_demand: Float.round(avg_demand, 1),
@@ -130,4 +141,6 @@ defmodule LemonSim.Examples.SupplyChain.Performance do
     sum_sq = Enum.sum(Enum.map(list, fn x -> (x - mean) * (x - mean) end))
     Float.round(sum_sq / (n - 1), 2)
   end
+
+  defp round_float(value), do: Float.round(value / 1, 2)
 end

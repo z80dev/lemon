@@ -10,6 +10,17 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
 
   alias LemonSim.Examples.StartupIncubator.Market
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :final_valuation, max_value(summary.players, :final_valuation))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "final_valuation", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -114,15 +125,15 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
 
   defp apply_pitch_log(metrics, pitch_log) do
     Enum.reduce(pitch_log, metrics, fn record, acc ->
-      founder_id = get(record, :founder_id) || get(record, "founder_id")
+      founder_id = get(record, :founder_id)
       update_player(acc, founder_id, &Map.update!(&1, :pitches_made, fn c -> c + 1 end))
     end)
   end
 
   defp apply_question_log(metrics, question_log) do
     Enum.reduce(question_log, metrics, fn record, acc ->
-      investor_id = get(record, :investor_id) || get(record, "investor_id")
-      founder_id = get(record, :founder_id) || get(record, "founder_id")
+      investor_id = get(record, :investor_id)
+      founder_id = get(record, :founder_id)
 
       # If record has an "answer" key it's an answer entry, else a question entry
       if Map.has_key?(record, "answer") or Map.has_key?(record, :answer) do
@@ -135,8 +146,8 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
 
   defp apply_deal_history(metrics, deal_history) do
     Enum.reduce(deal_history, metrics, fn record, acc ->
-      founder_id = get(record, :founder_id) || get(record, "founder_id")
-      investor_id = get(record, :investor_id) || get(record, "investor_id")
+      founder_id = get(record, :founder_id)
+      investor_id = get(record, :investor_id)
 
       acc
       |> update_player(founder_id, &Map.update!(&1, :deals_closed, fn c -> c + 1 end))
@@ -160,6 +171,13 @@ defmodule LemonSim.Examples.StartupIncubator.Performance do
          questions_asked: Enum.sum(Enum.map(metrics, &get(&1, :questions_asked, 0)))
        }}
     end)
+  end
+
+  defp max_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.map(&get(&1, key, 0))
+    |> Enum.max(fn -> 0 end)
   end
 
   defp update_player(metrics, nil, _updater), do: metrics

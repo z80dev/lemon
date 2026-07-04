@@ -106,9 +106,12 @@ mix lemon.sim.score path/to/run
 integrity hashes, and hashed file contents. For scenarios registered in
 `LemonSim.Bench.Scorecard.Registry`, it also recomputes `scorecard.json` from
 `final_world.json` and compares canonical JSON. Registered verified scenarios:
-`vending_bench`, `vending_bench_arena`, `tcg_shop`, `poker`, `stock_market`,
-and `pandemic`. Unregistered scenarios still get manifest/hash verification and
-skip scorecard recompute. `score` verifies first, then prints the scorecard.
+`courtroom`, `diplomacy`, `intel_network`, `legislature`, `murder_mystery`,
+`pandemic`, `poker`, `space_station`, `startup_incubator`, `stock_market`,
+`supply_chain`, `survivor`, `tcg_shop`, `vending_bench`,
+`vending_bench_arena`, and `werewolf`. Unregistered scenarios still get
+manifest/hash verification and skip scorecard recompute. `score` verifies first,
+then prints the scorecard.
 
 ## Suites and Leaderboards
 
@@ -119,6 +122,10 @@ cost alongside score. Keyless deterministic suites use offline strategies:
 ```bash
 mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vending-suite
 ```
+
+Suite run adapters are currently available for `vending_bench`, `tcg_shop`, and
+`vending_bench_arena`. Other registered scorecards can be recompute-verified from
+artifact bundles but do not yet have suite runners.
 
 That writes `/tmp/vending-suite/suite.json`, one verified bundle per
 competitor/seed under `/tmp/vending-suite/runs/`, and

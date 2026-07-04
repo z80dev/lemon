@@ -8,6 +8,17 @@ defmodule LemonSim.Examples.Diplomacy.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :final_territories, winning_value(summary.players, :final_territories))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "final_territories", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -108,6 +119,25 @@ defmodule LemonSim.Examples.Diplomacy.Performance do
         acc
       end
     end)
+  end
+
+  defp winning_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.find_value(fn metrics ->
+      if get(metrics, :won, false), do: get(metrics, key, 0)
+    end)
+    |> case do
+      nil -> max_value(players, key)
+      value -> value
+    end
+  end
+
+  defp max_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.map(&get(&1, key, 0))
+    |> Enum.max(fn -> 0 end)
   end
 
   defp update_player(metrics, nil, _updater), do: metrics

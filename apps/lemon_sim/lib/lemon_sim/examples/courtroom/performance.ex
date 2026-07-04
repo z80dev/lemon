@@ -8,6 +8,14 @@ defmodule LemonSim.Examples.Courtroom.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world), do: summarize(world)
+
+  @impl true
+  def primary_metric, do: %{key: "evidence_utilization_pct", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -67,9 +75,9 @@ defmodule LemonSim.Examples.Courtroom.Performance do
 
   defp apply_testimony_log(metrics, testimony_log) do
     Enum.reduce(testimony_log, metrics, fn entry, acc ->
-      type = get(entry, :type, get(entry, "type", ""))
-      player_id = get(entry, :player_id, get(entry, "player_id", nil))
-      asker_id = get(entry, :asker_id, get(entry, "asker_id", nil))
+      type = fetch(entry, :type, "type", "")
+      player_id = fetch(entry, :player_id, "player_id")
+      asker_id = fetch(entry, :asker_id, "asker_id")
 
       acc =
         case type do
@@ -92,8 +100,8 @@ defmodule LemonSim.Examples.Courtroom.Performance do
 
   defp apply_objection_history(metrics, objections) do
     Enum.reduce(objections, metrics, fn objection, acc ->
-      player_id = get(objection, :player_id, get(objection, "player_id", nil))
-      ruling = get(objection, :ruling, get(objection, "ruling", "overruled"))
+      player_id = fetch(objection, :player_id, "player_id")
+      ruling = fetch(objection, :ruling, "ruling", "overruled")
 
       acc
       |> update_player(player_id, &Map.update!(&1, :objections_raised, fn n -> n + 1 end))

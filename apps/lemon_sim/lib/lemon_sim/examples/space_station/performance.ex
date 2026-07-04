@@ -5,6 +5,17 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :correct_votes, total_value(summary.players, :correct_votes))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "correct_votes", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -130,6 +141,12 @@ defmodule LemonSim.Examples.SpaceStation.Performance do
     Enum.map(metrics, fn player ->
       if get(player, :player_id) == player_id, do: fun.(player), else: player
     end)
+  end
+
+  defp total_value(players, key) do
+    players
+    |> Enum.map(&get(&1, key, 0))
+    |> Enum.sum()
   end
 
   defp increment(player, key) do

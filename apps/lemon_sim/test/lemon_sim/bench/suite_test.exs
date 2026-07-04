@@ -35,6 +35,37 @@ defmodule LemonSim.Bench.SuiteTest do
              File.read!(Path.join(dir_b, "suite.json"))
   end
 
+  test "suite run fails clearly when a scenario has no run adapter" do
+    spec = %{
+      scenario: "courtroom",
+      preset: nil,
+      seeds: [1],
+      competitors: [%{id: "fixture", offline_strategy: "fixture"}]
+    }
+
+    assert {:error, {:no_suite_adapter, "courtroom"}} =
+             Suite.run(spec, suite_dir: tmp_dir("suite_no_adapter"))
+  end
+
+  test "live competitor on an offline-only adapter reports a clean failure without resolving models" do
+    # vending_bench_arena's adapter is offline-only. A live competitor must be
+    # rejected before resolve_model runs — resolving raises in keyless
+    # environments, which would crash the whole suite run instead of
+    # reporting this one job as failed.
+    spec = %{
+      scenario: "vending_bench_arena",
+      preset: nil,
+      seeds: [7],
+      competitors: [%{id: "some-model", model: "anthropic:claude-sonnet-4"}]
+    }
+
+    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_live_on_offline"))
+    assert suite.rankings == []
+    assert [failure] = suite.failures
+    assert failure["competitor"] == "some-model"
+    assert failure["error"] =~ "unsupported_suite_mode"
+  end
+
   test "metric paths, directions, null cost aggregation, and failure exclusion aggregate correctly" do
     assert Suite.metric_value(%{"net_worth" => 12.5}, "net_worth") == {:ok, 12.5}
 

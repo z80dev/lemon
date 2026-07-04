@@ -8,6 +8,17 @@ defmodule LemonSim.Examples.Legislature.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :final_score, winning_value(summary.players, :final_score))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "final_score", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -114,5 +125,24 @@ defmodule LemonSim.Examples.Legislature.Performance do
          preferences_satisfied: Enum.sum(Enum.map(metrics, &get(&1, :preferences_satisfied, 0)))
        }}
     end)
+  end
+
+  defp winning_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.find_value(fn metrics ->
+      if get(metrics, :won, false), do: get(metrics, key, 0)
+    end)
+    |> case do
+      nil -> max_value(players, key)
+      value -> value
+    end
+  end
+
+  defp max_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.map(&get(&1, key, 0))
+    |> Enum.max(fn -> 0 end)
   end
 end

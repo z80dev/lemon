@@ -10,6 +10,17 @@ defmodule LemonSim.Examples.Werewolf.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :team_won, team_won_value(summary.players))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "team_won", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -133,6 +144,10 @@ defmodule LemonSim.Examples.Werewolf.Performance do
          doctor_saves: Enum.sum(Enum.map(metrics, &get(&1, :doctor_saves, 0)))
        }}
     end)
+  end
+
+  defp team_won_value(players) do
+    if Enum.any?(Map.values(players), &get(&1, :team_won, false)), do: 1, else: 0
   end
 
   defp update_player(metrics, player_id, updater) do

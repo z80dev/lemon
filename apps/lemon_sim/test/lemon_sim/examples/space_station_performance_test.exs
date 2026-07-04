@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.SpaceStationPerformanceTest do
   use ExUnit.Case, async: true
 
+  alias LemonSim.Bench.Suite
   alias LemonSim.Examples.SpaceStation.Performance
 
   test "summarizes action and vote quality for benchmark analysis" do
@@ -42,8 +43,14 @@ defmodule LemonSim.Examples.SpaceStationPerformanceTest do
     }
 
     summary = Performance.summarize(world)
+    scorecard = Performance.scorecard(world)
+    metric = Performance.primary_metric()
 
     assert summary.saboteur_id == "player_3"
+    assert scorecard.correct_votes == 2
+    assert {:ok, 2} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert Performance.scorecard(world) == scorecard
+
     assert summary.players |> Enum.find(&(&1.player_id == "player_1")) |> Map.get(:scans) == 1
     assert summary.players |> Enum.find(&(&1.player_id == "player_2")) |> Map.get(:locks) == 1
 
