@@ -348,6 +348,12 @@
     max_age_days: 30
   },
   %{
+    path: "docs/plans/lemon-sim-vendingbench-exemplary-2026-07-04.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 30
+  },
+  %{
     path: "docs/plans/lemon-stack-reshape-2026-07-02.md",
     owner: "@z80",
     last_reviewed: ~D[2026-07-02],
