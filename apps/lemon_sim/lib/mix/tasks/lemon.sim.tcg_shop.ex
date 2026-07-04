@@ -64,6 +64,7 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     case LemonSim.Examples.TcgShop.run_offline_strategy(strategy, run_opts) do
       {:ok, %{artifacts: artifacts}} ->
         Mix.shell().info("TCG Shop artifacts written to #{Path.dirname(artifacts.final_world)}")
+        print_usage_summary(artifacts)
         :ok
 
       {:error, reason} ->
@@ -101,6 +102,15 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp print_usage_summary(%{usage: usage_path}) do
+    with {:ok, body} <- File.read(usage_path),
+         {:ok, usage} <- Jason.decode(body) do
+      Mix.shell().info(LemonSim.LLM.Usage.summary_line(usage))
+    end
+  end
+
+  defp print_usage_summary(_artifacts), do: :ok
 
   defp ensure_runtime_started! do
     Application.ensure_all_started(:lemon_sim)

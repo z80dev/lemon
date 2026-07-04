@@ -752,8 +752,11 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
   defp event_priority(event) do
     case event_kind(event) do
       "physical_worker_started" -> 0
-      "physical_worker_finished" -> 2
-      _ -> 1
+      "expired_inventory_removed" -> 10
+      "machine_stocked" -> 20
+      "machine_fault_reported" -> 30
+      "physical_worker_finished" -> 100
+      _ -> 50
     end
   end
 

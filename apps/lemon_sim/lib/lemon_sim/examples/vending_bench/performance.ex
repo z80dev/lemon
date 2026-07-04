@@ -5,6 +5,20 @@ defmodule LemonSim.Examples.VendingBench.Performance do
 
   alias LemonCore.MapHelpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    world
+    |> summarize()
+    |> Map.put(:sim_id, get(world, :sim_id))
+    |> Map.put(:status, get(world, :status))
+    |> Map.put(:day_number, get(world, :day_number))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: ["score_modes", "v1_net_worth"], direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     bank_balance = get(world, :bank_balance, 0.0)

@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
 
   alias LemonCore.Config.Modular
   alias LemonSim.Examples.Helpers, as: GameHelpers
+  alias LemonSim.Examples.Poker.Artifacts
   alias LemonSim.LLM.GameHelpers.Config, as: GameConfig
 
   @shortdoc "Run the LemonSim poker self-play example"
@@ -23,6 +24,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
     starting_stack: :integer,
     max_hands: :integer,
     seed: :integer,
+    sim_id: :string,
+    artifact_dir: :string,
     model: :string,
     help: :boolean
   ]
@@ -50,11 +53,27 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
           |> GameHelpers.maybe_put(:starting_stack, opts[:starting_stack])
           |> GameHelpers.maybe_put(:max_hands, opts[:max_hands])
           |> GameHelpers.maybe_put(:seed, opts[:seed])
+          |> GameHelpers.maybe_put(:sim_id, opts[:sim_id])
           |> GameHelpers.maybe_put(:model, resolve_model(opts[:model], config))
 
         case LemonSim.Examples.Poker.run(run_opts) do
-          {:ok, _final_state} -> :ok
-          {:error, reason} -> Mix.raise("poker sim failed: #{inspect(reason)}")
+          {:ok, final_state} ->
+            artifact_opts =
+              run_opts
+              |> GameHelpers.maybe_put(:artifact_dir, opts[:artifact_dir])
+
+            {:ok, _artifacts} =
+              Artifacts.write_run_artifacts(
+                final_state,
+                final_state.recent_events,
+                [],
+                artifact_opts
+              )
+
+            :ok
+
+          {:error, reason} ->
+            Mix.raise("poker sim failed: #{inspect(reason)}")
         end
     end
   end
@@ -89,6 +108,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       --starting-stack N           Chips per player (default: 2000)
       --max-hands N                Stop after this many completed hands (default: 12)
       --seed N                     Base seed for deterministic shuffles
+      --sim-id ID                  Override generated simulation id
+      --artifact-dir DIR           Override benchmark artifact output directory
       --model PROVIDER:MODEL       Override the configured default model
       --help                       Show this help
     """)

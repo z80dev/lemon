@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Pandemic do
   use Mix.Task
 
+  alias LemonSim.Examples.Pandemic.Artifacts
+
   @shortdoc "Run the LemonSim Pandemic Response cooperative self-play example"
 
   @moduledoc """
@@ -20,6 +22,8 @@ defmodule Mix.Tasks.Lemon.Sim.Pandemic do
     model: :string,
     player_count: :integer,
     max_rounds: :integer,
+    sim_id: :string,
+    artifact_dir: :string,
     help: :boolean
   ]
 
@@ -44,10 +48,26 @@ defmodule Mix.Tasks.Lemon.Sim.Pandemic do
           |> maybe_put(:model, resolve_model(opts[:model]))
           |> maybe_put(:player_count, opts[:player_count])
           |> maybe_put(:max_rounds, opts[:max_rounds])
+          |> maybe_put(:sim_id, opts[:sim_id])
 
         case LemonSim.Examples.Pandemic.run(run_opts) do
-          {:ok, _final_state} -> :ok
-          {:error, reason} -> Mix.raise("pandemic sim failed: #{inspect(reason)}")
+          {:ok, final_state} ->
+            artifact_opts =
+              run_opts
+              |> maybe_put(:artifact_dir, opts[:artifact_dir])
+
+            {:ok, _artifacts} =
+              Artifacts.write_run_artifacts(
+                final_state,
+                final_state.recent_events,
+                [],
+                artifact_opts
+              )
+
+            :ok
+
+          {:error, reason} ->
+            Mix.raise("pandemic sim failed: #{inspect(reason)}")
         end
     end
   end
@@ -105,6 +125,8 @@ defmodule Mix.Tasks.Lemon.Sim.Pandemic do
       --model PROVIDER:MODEL       Override the configured default model
       --player-count N             Number of governors (4-6, default: 6)
       --max-rounds N               Number of rounds (default: 12)
+      --sim-id ID                  Override generated simulation id
+      --artifact-dir DIR           Override benchmark artifact output directory
       --help                       Show this help
 
     Phases per round:

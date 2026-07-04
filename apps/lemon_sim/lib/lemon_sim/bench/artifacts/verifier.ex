@@ -1,19 +1,45 @@
 defmodule LemonSim.Bench.Artifacts.Verifier do
   @moduledoc false
 
-  alias LemonSim.Examples.{TcgShop, VendingBench}
+  alias LemonSim.Bench.Scorecard.Registry
 
   def verify_run(artifact_dir) when is_binary(artifact_dir) do
-    with {:ok, manifest} <- read_json(Path.join(artifact_dir, "manifest.json")),
-         {:ok, hashes} <- read_json(Path.join(artifact_dir, "hashes.json")),
-         :ok <- verify_schema(manifest),
-         :ok <- verify_hashes_schema(hashes),
-         :ok <- verify_expected_files(manifest, hashes),
-         :ok <- verify_manifest_integrity(manifest, hashes),
-         :ok <- verify_hashes(artifact_dir, hashes),
-         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
-         :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
-      {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
+    case {read_json(Path.join(artifact_dir, "manifest.json")),
+          read_json(Path.join(artifact_dir, "hashes.json"))} do
+      {{:ok, manifest}, {:ok, hashes}} ->
+        with :ok <- verify_schema(manifest),
+             :ok <- verify_hashes_schema(hashes),
+             :ok <- verify_expected_files(manifest, hashes),
+             :ok <- verify_manifest_integrity(manifest, hashes),
+             :ok <- verify_hashes(artifact_dir, hashes),
+             {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
+             :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
+          {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
+        end
+
+      {{:error, {:read_json_failed, _path, :enoent}}, _} ->
+        verify_legacy_run(artifact_dir)
+
+      {_, {:error, {:read_json_failed, _path, :enoent}}} ->
+        verify_legacy_run(artifact_dir)
+
+      {{:error, reason}, _} ->
+        {:error, reason}
+
+      {_, {:error, reason}} ->
+        {:error, reason}
+    end
+  end
+
+  defp verify_legacy_run(artifact_dir) do
+    manifest = %{
+      "schema_version" => "lemon_sim.run.legacy",
+      "sim" => %{"id" => "vending_bench"}
+    }
+
+    with {:ok, _world} <- read_json(Path.join(artifact_dir, "final_world.json")),
+         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")) do
+      {:ok, %{manifest: manifest, hashes: %{"files" => %{}}, scorecard: scorecard, legacy: true}}
     end
   end
 
@@ -94,6 +120,17 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     ]
   end
 
+  defp required_files(%{"sim" => %{"id" => sim_id}})
+       when sim_id in ["pandemic", "poker", "stock_market"] do
+    [
+      "final_world.json",
+      "events.jsonl",
+      "actions.jsonl",
+      "scorecard.json",
+      "usage.json"
+    ]
+  end
+
   defp required_files(_manifest), do: []
 
   defp verify_manifest_integrity(%{"integrity" => integrity}, %{"files" => files}) do
@@ -111,7 +148,7 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
 
   defp verify_manifest_integrity(_manifest, _hashes), do: {:error, :missing_manifest_integrity}
 
-  defp integrity_checks(_integrity, files) do
+  defp integrity_checks(integrity, files) do
     event_file =
       cond do
         Map.has_key?(files, "events.jsonl") -> "events.jsonl"
@@ -119,10 +156,16 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
         true -> "events.jsonl"
       end
 
-    [
+    base_checks = [
       {"events_sha256", event_file},
       {"scorecard_sha256", "scorecard.json"}
     ]
+
+    if Map.has_key?(integrity || %{}, "usage_sha256") or Map.has_key?(files, "usage.json") do
+      base_checks ++ [{"usage_sha256", "usage.json"}]
+    else
+      base_checks
+    end
   end
 
   defp verify_hashes(artifact_dir, %{"files" => files}) when is_map(files) do
@@ -176,46 +219,34 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
   defp verify_scorecard(_artifact_dir, _manifest, _scorecard), do: :ok
 
   defp expected_scorecard("vending_bench", world, scorecard) do
-    scorecard =
-      world
-      |> VendingBench.Performance.summarize()
-      |> Map.put(:sim_id, get(scorecard, :sim_id))
-      |> Map.put(:status, get(world, :status))
-      |> Map.put(:day_number, get(world, :day_number))
-
-    {:ok, scorecard}
+    expected_registered_scorecard("vending_bench", world, scorecard)
   end
 
-  defp expected_scorecard("tcg_shop", world, scorecard) do
-    scorecard =
-      world
-      |> TcgShop.Performance.scorecard()
-      |> Map.put(:sim_id, get(scorecard, :sim_id))
-      |> Map.put(:status, get(world, :status))
-      |> Map.put(:day_number, get(world, :day_number))
-
-    {:ok, scorecard}
+  defp expected_scorecard(sim_id, world, scorecard) do
+    expected_registered_scorecard(sim_id, world, scorecard)
   end
 
-  defp expected_scorecard("vending_bench_arena", world, scorecard) do
-    {:ok,
-     %{
-       sim_id: get(scorecard, :sim_id),
-       mode: get(world, :mode),
-       status: get(world, :status),
-       day_number: get(world, :day_number),
-       leaderboard: get(world, :leaderboard),
-       agent_count: length(get(world, :arena_agents, [])),
-       trade_count: length(get(world, :arena_trades, [])),
-       message_count: length(get(world, :arena_messages, [])),
-       payment_count: length(get(world, :arena_payments, [])),
-       supplier_lead_count: length(get(world, :arena_supplier_leads, [])),
-       price_war_count: length(get(world, :arena_price_wars, [])),
-       collusion_signal_count: length(get(world, :arena_collusion_signals, []))
-     }}
+  defp expected_registered_scorecard(sim_id, world, scorecard) do
+    with {:ok, expected} <- Registry.scorecard(sim_id, world) do
+      {:ok, normalize_observed_fields(expected, scorecard)}
+    end
   end
 
-  defp expected_scorecard(_sim_id, _world, _scorecard), do: {:ok, :skip}
+  defp normalize_observed_fields(:skip, _scorecard), do: :skip
+
+  defp normalize_observed_fields(expected, scorecard) when is_map(expected) do
+    maybe_put_observed(expected, scorecard, :sim_id)
+  end
+
+  defp maybe_put_observed(expected, observed, key) do
+    observed_value = get(observed, key)
+
+    if is_nil(get(expected, key)) and not is_nil(observed_value) do
+      Map.put(expected, key, observed_value)
+    else
+      expected
+    end
+  end
 
   defp canonical_json(value) do
     value

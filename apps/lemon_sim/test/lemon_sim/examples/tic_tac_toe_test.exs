@@ -63,6 +63,34 @@ defmodule LemonSim.Examples.TicTacToeTest do
     assert output =~ "Final state:"
   end
 
+  test "offline random strategy is seeded and still records normal events" do
+    run = fn seed ->
+      capture_io(fn ->
+        assert {:ok, final_state} =
+                 TicTacToe.run_offline_strategy(:random,
+                   seed: seed,
+                   persist?: false,
+                   driver_max_turns: 10
+                 )
+
+        send(self(), {:offline_state, final_state})
+      end)
+
+      assert_received {:offline_state, final_state}
+      {normalize_events(final_state.recent_events), final_state.world}
+    end
+
+    {events_a, world_a} = run.(42)
+    {events_b, world_b} = run.(42)
+    {events_c, world_c} = run.(7)
+
+    assert events_a == events_b
+    assert world_a == world_b
+    assert events_a != events_c
+    assert world_a != world_c
+    assert Enum.any?(events_a, fn {kind, _payload, _meta} -> kind == "move_applied" end)
+  end
+
   test "action space and updater tolerate string-keyed world state" do
     state =
       State.new(
@@ -110,5 +138,11 @@ defmodule LemonSim.Examples.TicTacToeTest do
       headers: %{},
       compat: nil
     }
+  end
+
+  defp normalize_events(events) do
+    Enum.map(events, fn event ->
+      {event.kind, event.payload, event.meta}
+    end)
   end
 end

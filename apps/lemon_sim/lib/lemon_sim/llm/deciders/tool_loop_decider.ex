@@ -13,6 +13,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
+  alias LemonSim.LLM.Usage
 
   @default_max_turns 8
   @default_max_tool_calls_per_turn 16
@@ -64,6 +65,8 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
       with {:ok, %AssistantMessage{} = assistant} <-
              complete_fn.(model, state.context, stream_options),
            context_with_assistant <- append_message(state.context, assistant) do
+        record_usage_response(opts, model, assistant)
+
         with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
           case tool_calls do
             [] ->
@@ -95,6 +98,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
                 all_executed_calls = state.executed_calls ++ step.executed_calls
 
                 if Keyword.get(opts, :stop_on_decision_tool, true) and not is_nil(step.decision) do
+                  record_usage_decision(opts, model)
                   {:ok, put_executed_calls(step.decision, all_executed_calls)}
                 else
                   next_state = %{
@@ -222,6 +226,39 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
   defp append_message(%Context{} = context, message) do
     %{context | messages: context.messages ++ [message]}
+  end
+
+  defp record_usage_response(opts, model, %AssistantMessage{usage: usage}) do
+    Usage.record_response(
+      Keyword.get(opts, :usage_collector),
+      usage_actor_id(opts),
+      usage_model(opts, model),
+      usage
+    )
+  end
+
+  defp record_usage_decision(opts, model) do
+    Usage.record_decision(
+      Keyword.get(opts, :usage_collector),
+      usage_actor_id(opts),
+      usage_model(opts, model)
+    )
+  end
+
+  defp usage_actor_id(opts) do
+    case Keyword.get(opts, :usage_actor_id) do
+      fun when is_function(fun, 0) -> fun.()
+      nil -> "operator"
+      actor_id -> actor_id
+    end
+  end
+
+  defp usage_model(opts, fallback_model) do
+    case Keyword.get(opts, :usage_model) do
+      fun when is_function(fun, 0) -> fun.()
+      nil -> fallback_model
+      model -> model
+    end
   end
 
   defp fetch_policy(opts) do

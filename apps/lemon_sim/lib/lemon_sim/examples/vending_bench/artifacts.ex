@@ -1,8 +1,9 @@
 defmodule LemonSim.Examples.VendingBench.Artifacts do
   @moduledoc false
 
-  alias LemonSim.Bench.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.Bundle
   alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Performance, Replay}
+  alias LemonSim.LLM.Usage
 
   @default_artifact_root "apps/lemon_sim/priv/game_logs/vending_bench"
   @sim_version "2.0.0"
@@ -33,6 +34,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       operator_transcript: Path.join(artifact_dir, "operator_transcript.json"),
       reminders: Path.join(artifact_dir, "reminders.json"),
       scorecard: Path.join(artifact_dir, "scorecard.json"),
+      usage: Path.join(artifact_dir, "usage.json"),
       manifest: Path.join(artifact_dir, "manifest.json"),
       config: Path.join(artifact_dir, "config.json"),
       commands: Path.join(artifact_dir, "commands.jsonl"),
@@ -48,7 +50,8 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
 
     prompts = prompt_artifacts(state)
     tool_schemas = tool_schema_artifact(state, opts)
-    report = artifact_report(state, scorecard, paths, opts)
+    usage = usage_artifact(state, opts)
+    report = artifact_report(state, scorecard, usage, paths, opts)
 
     contents = %{
       paths.final_world => Jason.encode!(jsonable(state.world), pretty: true),
@@ -66,12 +69,13 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       paths.operator_transcript =>
         Jason.encode!(operator_transcript_artifact(actions, events), pretty: true),
       paths.reminders => Jason.encode!(jsonable(get(state.world, :reminders, [])), pretty: true),
+      paths.usage => Usage.encode_artifact(usage),
       paths.operator_system_prompt => prompts.operator_system,
       paths.operator_initial_prompt => prompts.operator_initial,
       paths.report => report
     }
 
-    Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
+    Bundle.write_contents!(contents)
 
     {:ok, _replay_paths} =
       Replay.write_browser(artifact_dir,
@@ -83,13 +87,16 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       |> Map.put(paths.replay_json, File.read!(paths.replay_json))
       |> Map.put(paths.replay_html, File.read!(paths.replay_html))
 
-    hashes = hashes_artifact(artifact_dir, all_contents, prompts, tool_schemas)
-
-    AtomicFile.write!(paths.hashes, Jason.encode!(hashes, pretty: true))
-
-    AtomicFile.write!(
+    Bundle.write_metadata!(
+      artifact_dir,
+      all_contents,
+      paths.hashes,
       paths.manifest,
-      Jason.encode!(manifest_artifact(state, hashes, opts), pretty: true)
+      fn hashes -> manifest_artifact(state, hashes, opts) end,
+      %{
+        prompt_sha256: sha256(prompts.operator_system <> prompts.operator_initial),
+        tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
+      }
     )
 
     {:ok, paths}
@@ -161,22 +168,6 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     end)
   end
 
-  defp hashes_artifact(artifact_dir, contents, prompts, tool_schemas) do
-    file_hashes =
-      contents
-      |> Enum.map(fn {path, content} ->
-        {Path.relative_to(path, artifact_dir), sha256(content)}
-      end)
-      |> Map.new()
-
-    %{
-      schema_version: "lemon_sim.hashes.v1",
-      files: file_hashes,
-      prompt_sha256: sha256(prompts.operator_system <> prompts.operator_initial),
-      tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
-    }
-  end
-
   defp manifest_artifact(state, hashes, opts) do
     now = artifact_timestamp(opts)
 
@@ -199,6 +190,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       integrity: %{
         events_sha256: get_in(hashes, [:files, "events.jsonl"]),
         scorecard_sha256: get_in(hashes, [:files, "scorecard.json"]),
+        usage_sha256: get_in(hashes, [:files, "usage.json"]),
         prompt_sha256: hashes.prompt_sha256,
         tool_schema_sha256: hashes.tool_schema_sha256
       }
@@ -250,8 +242,9 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
   end
 
-  defp artifact_report(state, scorecard, paths, opts) do
+  defp artifact_report(state, scorecard, usage, paths, opts) do
     title = Keyword.get(opts, :artifact_report_title, "VendingBench Run Report")
+    totals = usage.totals
 
     """
     # #{title}
@@ -265,6 +258,15 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     - V1 net worth: $#{format_price(scorecard.score_modes.v1_net_worth)}
     - Money balance: $#{format_price(scorecard.score_modes.money_balance)}
     - Lemon operational score: #{scorecard.score_modes.lemon_operational_score}
+
+    ## Usage
+
+    - Decisions: #{totals.decisions}
+    - Input tokens: #{totals.input_tokens}
+    - Output tokens: #{totals.output_tokens}
+    - Cache read tokens: #{totals.cache_read_tokens}
+    - Cache write tokens: #{totals.cache_write_tokens}
+    - Cost USD: #{format_cost(totals.cost_usd)}
 
     ## Metrics
 
@@ -300,6 +302,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     - Operator transcript: #{artifact_path(paths.operator_transcript, paths, opts)}
     - Reminders: #{artifact_path(paths.reminders, paths, opts)}
     - Scorecard: #{artifact_path(paths.scorecard, paths, opts)}
+    - Usage: #{artifact_path(paths.usage, paths, opts)}
     - Replay JSON: #{artifact_path(paths.replay_json, paths, opts)}
     - Replay browser: #{artifact_path(paths.replay_html, paths, opts)}
     """
@@ -310,6 +313,13 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       Path.relative_to(path, Path.dirname(paths.report))
     else
       path
+    end
+  end
+
+  defp usage_artifact(state, opts) do
+    case Keyword.get(opts, :usage) do
+      nil -> Usage.artifact(Keyword.get(opts, :usage_collector), state.sim_id)
+      usage -> usage
     end
   end
 
@@ -412,6 +422,10 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     do: :erlang.float_to_binary(price / 1, decimals: 2)
 
   defp format_price(price), do: to_string(price)
+
+  defp format_cost(nil), do: "unknown"
+  defp format_cost(cost) when is_float(cost), do: :erlang.float_to_binary(cost, decimals: 6)
+  defp format_cost(cost), do: to_string(cost)
 
   defp get(map, key) when is_map(map) and is_atom(key),
     do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

@@ -11,8 +11,9 @@ artifacts that can be replayed, scored, and verified.
   pubsub helpers.
 - `LemonSim.LLM` owns model-facing execution: `ToolLoopDecider`, tool policies,
   provider/model setup, throttling, live-run helpers, and transcripts.
-- `LemonSim.Bench` owns benchmark artifacts: manifests, scorecards, hash
-  verification, replay bundles, suite runners, and leaderboard export.
+- `LemonSim.Bench` owns benchmark artifacts: manifests, scorecard behaviours,
+  registry-driven scorecard recompute verification, hash verification, and
+  shared run-bundle helpers.
 - `LemonSim.Examples.*` owns the worlds. The examples are 92.3% of the current
   Elixir source under `apps/lemon_sim/lib`, because the interesting work is in
   scenario rules, tools, projections, and scoring.
@@ -42,10 +43,10 @@ There are 19 examples in this app:
 Small local smoke run:
 
 ```bash
-mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 ```
 
-Deterministic benchmark run with artifacts:
+Deterministic benchmark run with artifacts, also keyless:
 
 ```bash
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
@@ -61,14 +62,17 @@ mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure --sim-id tcg_ci_p
 mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended --sim-id tcg_stress_bad_operator
 ```
 
-Werewolf multi-model script, with providers and credentials configured:
+Live model runs require configured providers and credentials:
 
 ```bash
+mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
+mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
+mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-5.1-codex-mini,kimi:k2p5
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
-Werewolf has replay tooling but no `mix lemon.sim.werewolf` run task in this
-checkout:
+Werewolf replay tooling can render JSONL transcripts from `mix lemon.sim.werewolf
+--models ... --transcript-path path.jsonl` or the compatibility scripts:
 
 ```bash
 mix lemon.sim.werewolf_replay apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
@@ -85,10 +89,11 @@ Replay video tasks require `rsvg-convert` and `ffmpeg` on `PATH`.
 ## Artifacts
 
 Benchmark runs write bundles under `apps/lemon_sim/priv/game_logs/...` unless
-`--artifact-dir` is provided. Vending Bench bundles include `manifest.json`,
-`hashes.json`, `config.json`, `final_world.json`, event/action/command/fact
-JSONL files, transcript files, `scorecard.json`, `replay.json`, `replay.html`,
-prompt snapshots, and `report.md`.
+`--artifact-dir` is provided. Vending Bench and TCG Shop write rich bundles with
+scenario-specific replay/transcript files. Poker, Stock Market, and Pandemic
+write verified scorecard bundles with `manifest.json`, `hashes.json`,
+`final_world.json`, `events.jsonl`, `actions.jsonl`, `scorecard.json`, and
+`usage.json`.
 
 Use:
 
@@ -98,8 +103,55 @@ mix lemon.sim.score path/to/run
 ```
 
 `verify` checks the manifest, hash schema, required benchmark files, manifest
-integrity hashes, and hashed file contents. `score` verifies first, then prints
-the scorecard.
+integrity hashes, and hashed file contents. For scenarios registered in
+`LemonSim.Bench.Scorecard.Registry`, it also recomputes `scorecard.json` from
+`final_world.json` and compares canonical JSON. Registered verified scenarios:
+`vending_bench`, `vending_bench_arena`, `tcg_shop`, `poker`, `stock_market`,
+and `pandemic`. Unregistered scenarios still get manifest/hash verification and
+skip scorecard recompute. `score` verifies first, then prints the scorecard.
+
+## Suites and Leaderboards
+
+Suites run one scenario across competitors and seeds, verify each run bundle,
+aggregate the registered primary metric, and rank competitors with tokens and
+cost alongside score. Keyless deterministic suites use offline strategies:
+
+```bash
+mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vending-suite
+```
+
+That writes `/tmp/vending-suite/suite.json`, one verified bundle per
+competitor/seed under `/tmp/vending-suite/runs/`, and
+`/tmp/vending-suite/leaderboard.md`. The leaderboard shape is:
+
+```markdown
+# LemonSim Suite Leaderboard
+
+Scenario: `vending_bench`
+Preset: `ci`
+Seeds: 3
+Metric: `score_modes.v1_net_worth` (maximize)
+
+All included runs are manifest hash and scorecard verified.
+
+| Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |
+|---:|---|---:|---|---:|---:|
+| 1 | baseline | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+| 2 | pressure | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+```
+
+Live competitors can be added with repeatable `--model MODEL_ID` options when
+provider credentials are configured. Re-render an existing suite without
+rerunning scenarios:
+
+```bash
+mix lemon.sim.leaderboard /tmp/vending-suite
+mix lemon.sim.leaderboard /tmp/vending-suite --recompute
+```
+
+`--recompute` re-verifies the run bundles and rebuilds rankings. Any failed or
+tampered run stays visible in `suite.json` and the failure section of
+`leaderboard.md`, but it is excluded from rankings.
 
 ## Write A Scenario
 

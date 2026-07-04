@@ -1,8 +1,9 @@
 defmodule LemonSim.Examples.TcgShop.Artifacts do
   @moduledoc false
 
-  alias LemonSim.Bench.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.Bundle
   alias LemonSim.Examples.TcgShop.{ActionSpace, Performance}
+  alias LemonSim.LLM.Usage
 
   @default_artifact_root "apps/lemon_sim/priv/game_logs/tcg_shop"
   @sim_version "1.0.0"
@@ -26,6 +27,7 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
       events: Path.join(artifact_dir, "events.jsonl"),
       actions: Path.join(artifact_dir, "actions.jsonl"),
       scorecard: Path.join(artifact_dir, "scorecard.json"),
+      usage: Path.join(artifact_dir, "usage.json"),
       config: Path.join(artifact_dir, "config.json"),
       commands: Path.join(artifact_dir, "commands.jsonl"),
       facts: Path.join(artifact_dir, "facts.jsonl"),
@@ -43,6 +45,7 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     prompt = get(state.intent, :goal, "")
 
     replay = replay_artifact(state, events, actions, scorecard)
+    usage = usage_artifact(state, opts)
 
     contents = %{
       paths.final_world => Jason.encode!(jsonable(state.world), pretty: true),
@@ -51,6 +54,7 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
       paths.commands => jsonl(Enum.filter(events, &command_event?/1)),
       paths.facts => jsonl(Enum.reject(events, &command_event?/1)),
       paths.scorecard => Jason.encode!(jsonable(scorecard), pretty: true),
+      paths.usage => Usage.encode_artifact(usage),
       paths.config =>
         Jason.encode!(config_artifact(state, opts, tool_schemas, prompt), pretty: true),
       paths.market => Jason.encode!(market_artifact(state.world), pretty: true),
@@ -59,17 +63,19 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
         Jason.encode!(counterparty_transcript_artifact(state.world), pretty: true),
       paths.replay_json => Jason.encode!(jsonable(replay), pretty: true),
       paths.replay_html => replay_html(replay),
-      paths.report => report(state, scorecard, paths, opts)
+      paths.report => report(state, scorecard, usage, paths, opts)
     }
 
-    Enum.each(contents, fn {path, content} -> AtomicFile.write!(path, content) end)
-
-    hashes = hashes_artifact(artifact_dir, contents, prompt, tool_schemas)
-    AtomicFile.write!(paths.hashes, Jason.encode!(hashes, pretty: true))
-
-    AtomicFile.write!(
+    Bundle.write_bundle!(
+      artifact_dir,
+      contents,
+      paths.hashes,
       paths.manifest,
-      Jason.encode!(manifest_artifact(state, hashes, opts), pretty: true)
+      fn hashes -> manifest_artifact(state, hashes, opts) end,
+      %{
+        prompt_sha256: sha256(prompt),
+        tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
+      }
     )
 
     {:ok, paths}
@@ -397,22 +403,6 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     """
   end
 
-  defp hashes_artifact(artifact_dir, contents, prompt, tool_schemas) do
-    files =
-      contents
-      |> Enum.map(fn {path, content} ->
-        {Path.relative_to(path, artifact_dir), sha256(content)}
-      end)
-      |> Map.new()
-
-    %{
-      schema_version: "lemon_sim.hashes.v1",
-      files: files,
-      prompt_sha256: sha256(prompt),
-      tool_schema_sha256: tool_schemas |> Jason.encode!() |> sha256()
-    }
-  end
-
   defp manifest_artifact(state, hashes, opts) do
     now = artifact_timestamp(opts)
 
@@ -435,6 +425,7 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
       integrity: %{
         events_sha256: get_in(hashes, [:files, "events.jsonl"]),
         scorecard_sha256: get_in(hashes, [:files, "scorecard.json"]),
+        usage_sha256: get_in(hashes, [:files, "usage.json"]),
         prompt_sha256: hashes.prompt_sha256,
         tool_schema_sha256: hashes.tool_schema_sha256
       }
@@ -471,8 +462,9 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     _ -> nil
   end
 
-  defp report(state, scorecard, paths, opts) do
+  defp report(state, scorecard, usage, paths, opts) do
     title = Keyword.get(opts, :artifact_report_title, "TCG Shop Run Report")
+    totals = usage.totals
 
     """
     # #{title}
@@ -509,6 +501,15 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     - ROI: #{format_price(scorecard.roi_pct)}%
     - Reputation: #{scorecard.reputation}
     - Online rating: #{scorecard.online_rating}
+
+    ## Usage
+
+    - Decisions: #{totals.decisions}
+    - Input tokens: #{totals.input_tokens}
+    - Output tokens: #{totals.output_tokens}
+    - Cache read tokens: #{totals.cache_read_tokens}
+    - Cache write tokens: #{totals.cache_write_tokens}
+    - Cost USD: #{format_cost(totals.cost_usd)}
 
     ## Activity
 
@@ -662,6 +663,7 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     - Events: #{artifact_path(paths.events, paths, opts)}
     - Actions: #{artifact_path(paths.actions, paths, opts)}
     - Scorecard: #{artifact_path(paths.scorecard, paths, opts)}
+    - Usage: #{artifact_path(paths.usage, paths, opts)}
     - Market: #{artifact_path(paths.market, paths, opts)}
     - Inventory: #{artifact_path(paths.inventory, paths, opts)}
     - Counterparty transcript: #{artifact_path(paths.counterparty_transcript, paths, opts)}
@@ -675,6 +677,13 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
       Path.relative_to(path, Path.dirname(paths.report))
     else
       path
+    end
+  end
+
+  defp usage_artifact(state, opts) do
+    case Keyword.get(opts, :usage) do
+      nil -> Usage.artifact(Keyword.get(opts, :usage_collector), state.sim_id)
+      usage -> usage
     end
   end
 
@@ -753,6 +762,10 @@ defmodule LemonSim.Examples.TcgShop.Artifacts do
     do: :erlang.float_to_binary(price / 1, decimals: 2)
 
   defp format_price(price), do: to_string(price)
+
+  defp format_cost(nil), do: "unknown"
+  defp format_cost(cost) when is_float(cost), do: :erlang.float_to_binary(cost, decimals: 6)
+  defp format_cost(cost), do: to_string(cost)
 
   defp get(map, key, default \\ nil)
 

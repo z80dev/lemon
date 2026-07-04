@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.StockMarket do
   use Mix.Task
 
+  alias LemonSim.Examples.StockMarket.Artifacts
+
   @shortdoc "Run the LemonSim Stock Market self-play example"
 
   @moduledoc """
@@ -18,6 +20,8 @@ defmodule Mix.Tasks.Lemon.Sim.StockMarket do
     max_driver_turns: :integer,
     model: :string,
     player_count: :integer,
+    sim_id: :string,
+    artifact_dir: :string,
     help: :boolean
   ]
 
@@ -41,10 +45,26 @@ defmodule Mix.Tasks.Lemon.Sim.StockMarket do
           |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
           |> maybe_put(:model, resolve_model(opts[:model]))
           |> maybe_put(:player_count, opts[:player_count])
+          |> maybe_put(:sim_id, opts[:sim_id])
 
         case LemonSim.Examples.StockMarket.run(run_opts) do
-          {:ok, _final_state} -> :ok
-          {:error, reason} -> Mix.raise("stock market sim failed: #{inspect(reason)}")
+          {:ok, final_state} ->
+            artifact_opts =
+              run_opts
+              |> maybe_put(:artifact_dir, opts[:artifact_dir])
+
+            {:ok, _artifacts} =
+              Artifacts.write_run_artifacts(
+                final_state,
+                final_state.recent_events,
+                [],
+                artifact_opts
+              )
+
+            :ok
+
+          {:error, reason} ->
+            Mix.raise("stock market sim failed: #{inspect(reason)}")
         end
     end
   end
@@ -98,6 +118,8 @@ defmodule Mix.Tasks.Lemon.Sim.StockMarket do
       --max-driver-turns N         Deprecated alias for --max-turns
       --model PROVIDER:MODEL       Override the configured default model
       --player-count N             Number of players in the stock market sim
+      --sim-id ID                  Override generated simulation id
+      --artifact-dir DIR           Override benchmark artifact output directory
       --help                       Show this help
     """)
   end

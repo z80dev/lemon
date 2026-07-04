@@ -2120,8 +2120,14 @@ defmodule LemonSim.Examples.TcgShopTest do
     ])
 
     assert File.exists?(Path.join(artifact_dir, "manifest.json"))
+    assert File.exists?(Path.join(artifact_dir, "usage.json"))
     assert {:ok, verified} = Verifier.verify_run(artifact_dir)
     assert verified.manifest["sim"]["id"] == "tcg_shop"
+
+    usage = artifact_json(artifact_dir, "usage.json")
+    assert usage["schema"] == "lemon_sim.usage.v1"
+    assert usage["totals"]["decisions"] == 0
+    assert usage["actors"] == %{}
   end
 
   defp fake_model(id) do

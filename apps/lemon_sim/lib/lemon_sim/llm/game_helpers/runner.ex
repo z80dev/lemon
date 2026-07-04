@@ -11,6 +11,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
 
   alias LemonSim.Kernel.{Runner, Store}
   alias LemonSim.LLM.GameHelpers.{Config, ProviderThrottle, Transcript}
+  alias LemonSim.LLM.Usage
 
   @doc """
   Builds the standard opts keyword list for a game.
@@ -61,10 +62,14 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     * `:print_result` (required) - fn(world) -> :ok
   """
   def run(state, modules, default_opts_fn, opts, callbacks) do
+    {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, opts)
+
     {run_opts, throttle_agent} =
       opts
       |> default_opts_fn.()
       |> Keyword.merge(opts)
+      |> Keyword.put(:usage_collector, usage_collector)
+      |> Keyword.put_new(:usage_actor_id, "operator")
       |> ProviderThrottle.wrap_opts()
 
     try do
@@ -79,7 +84,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
             _ = Store.put_state(final_state)
           end
 
-          {:ok, final_state}
+          maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
         {:error, reason} = error ->
           IO.puts("Game failed:")
@@ -88,6 +93,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
       end
     after
       ProviderThrottle.stop(throttle_agent)
+      stop_usage_collector(usage_collector, owns_usage_collector?)
     end
   end
 
@@ -109,6 +115,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
   def run_multi_model(state, modules, default_opts_fn, opts, callbacks) do
     model_assignments = Keyword.fetch!(opts, :model_assignments)
     transcript_path = Keyword.get(opts, :transcript_path)
+    {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, opts)
 
     {default_model, default_key} = model_assignments |> Map.values() |> List.first()
 
@@ -118,6 +125,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
       end
 
     {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
+    {:ok, active_actor_agent} = Agent.start_link(fn -> nil end)
 
     complete_fn = fn _model, context, stream_options ->
       {actual_model, api_key} = Agent.get(model_agent, & &1)
@@ -142,6 +150,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     on_before_step = fn turn, step_state ->
       actor_id = get(step_state.world, :active_actor_id)
       step_meta = transcript_step_meta.(step_state.world)
+      Agent.update(active_actor_agent, fn _ -> actor_id end)
 
       case Map.get(model_assignments, actor_id) do
         {model, key} -> Agent.update(model_agent, fn _ -> {model, key} end)
@@ -201,6 +210,9 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
       |> Keyword.put(:complete_fn, complete_fn)
       |> Keyword.put(:on_before_step, on_before_step)
       |> Keyword.put(:on_after_step, on_after_step)
+      |> Keyword.put(:usage_collector, usage_collector)
+      |> Keyword.put(:usage_actor_id, fn -> Agent.get(active_actor_agent, & &1) end)
+      |> Keyword.put(:usage_model, fn -> Agent.get(model_agent, fn {model, _key} -> model end) end)
       |> ProviderThrottle.wrap_opts()
 
     try do
@@ -225,7 +237,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
             _ = Store.put_state(final_state)
           end
 
-          {:ok, final_state}
+          maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
         {:error, reason} = error ->
           IO.puts("Game failed:")
@@ -235,7 +247,9 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     after
       ProviderThrottle.stop(throttle_agent)
       stop_agent(model_agent)
+      stop_agent(active_actor_agent)
       stop_agent(step_meta_agent)
+      stop_usage_collector(usage_collector, owns_usage_collector?)
       if transcript, do: File.close(transcript)
     end
   end
@@ -261,4 +275,26 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     if Process.alive?(agent), do: Agent.stop(agent)
     :ok
   end
+
+  defp usage_collector(sim_id, opts) do
+    case Keyword.get(opts, :usage_collector) do
+      collector when is_pid(collector) ->
+        {collector, false}
+
+      _ ->
+        {:ok, collector} = Usage.start_link(sim_id)
+        {collector, true}
+    end
+  end
+
+  defp maybe_return_usage({:ok, state}, collector, opts) do
+    if Keyword.get(opts, :return_usage?, false) do
+      {:ok, %{state: state, usage: Usage.artifact(collector, state.sim_id)}}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp stop_usage_collector(collector, true), do: stop_agent(collector)
+  defp stop_usage_collector(_collector, false), do: :ok
 end
