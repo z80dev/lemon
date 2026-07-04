@@ -6,6 +6,7 @@ defmodule LemonSim.Bench.SuiteTest do
   alias LemonSim.Bench.Suite
   alias LemonSim.Examples.Poker
   alias LemonSim.Examples.Poker.Artifacts, as: PokerArtifacts
+  alias LemonSim.LLM.Projectors.Toolkit
 
   test "keyless vending bench suite writes verified stable leaderboard artifacts" do
     spec = %{
@@ -124,6 +125,50 @@ defmodule LemonSim.Bench.SuiteTest do
     assert length(minimize_suite.failures) == 1
   end
 
+  test "ranking stats use primary metric values across included seeds" do
+    spec = %{
+      "scenario" => "stock_market",
+      "preset" => nil,
+      "seeds" => [1, 2, 3],
+      "competitors" => [%{"id" => "steady"}, %{"id" => "single"}]
+    }
+
+    assert {:ok, suite} =
+             Suite.build_suite(spec, [
+               verified_run(0, "stock_market", "steady", 1, 10, %{}),
+               verified_run(1, "stock_market", "steady", 2, 20, %{}),
+               verified_run(2, "stock_market", "steady", 3, 30, %{}),
+               verified_run(3, "stock_market", "single", 1, 5, %{})
+             ])
+
+    assert [steady, single] = suite.rankings
+    assert steady["competitor"] == "steady"
+    assert steady["mean"] == 20.0
+    assert steady["stats"] == %{"n" => 3, "mean" => 20.0, "std" => 10.0, "min" => 10, "max" => 30}
+    assert single["stats"] == %{"n" => 1, "mean" => 5.0, "std" => nil, "min" => 5, "max" => 5}
+  end
+
+  test "suite serialization stays byte deterministic with stats" do
+    spec = %{
+      "scenario" => "stock_market",
+      "preset" => nil,
+      "seeds" => [1, 2],
+      "competitors" => [%{"id" => "alpha"}, %{"id" => "beta"}]
+    }
+
+    runs = [
+      verified_run(0, "stock_market", "alpha", 1, 10.5, %{}),
+      verified_run(1, "stock_market", "alpha", 2, 12.5, %{}),
+      verified_run(2, "stock_market", "beta", 1, 9.0, %{}),
+      verified_run(3, "stock_market", "beta", 2, 11.0, %{})
+    ]
+
+    assert {:ok, suite_a} = Suite.build_suite(spec, runs)
+    assert {:ok, suite_b} = Suite.build_suite(spec, Enum.reverse(runs))
+
+    assert Toolkit.stable_json(suite_a) == Toolkit.stable_json(suite_b)
+  end
+
   test "recompute excludes a tampered verified bundle from rankings" do
     suite_dir = tmp_dir("suite_tamper")
     good_dir = Path.join([suite_dir, "runs", "good", "1"])
@@ -185,6 +230,13 @@ defmodule LemonSim.Bench.SuiteTest do
           "rank" => 1,
           "competitor" => "baseline",
           "mean" => 766.525,
+          "stats" => %{
+            "n" => 2,
+            "mean" => 766.525,
+            "std" => 22.45064030290119,
+            "min" => 750.65,
+            "max" => 782.4
+          },
           "values_by_seed" => %{"7" => 782.4, "8" => 750.65},
           "usage_totals" => %{
             "input_tokens" => 1,
@@ -211,9 +263,42 @@ defmodule LemonSim.Bench.SuiteTest do
     assert leaderboard =~
              "| Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |"
 
-    assert leaderboard =~ "| 1 | baseline | 766.52 | 7: 782.4, 8: 750.65 | 10 | $0.1234 |"
+    assert leaderboard =~
+             "| 1 | baseline | 766.52 ± 22.45 (n=2) | 7: 782.4, 8: 750.65 | 10 | $0.1234 |"
+
     assert leaderboard =~ "## Failures"
     assert leaderboard =~ "| pressure | 8 | `{:hash_mismatch, \"scorecard.json\"}` |"
+  end
+
+  test "leaderboard writer tolerates legacy rankings without stats" do
+    suite_dir = tmp_dir("suite_legacy_leaderboard")
+    File.mkdir_p!(suite_dir)
+
+    suite_json = %{
+      "schema_version" => "lemon_sim.suite.v1",
+      "spec" => %{"scenario" => "stock_market", "preset" => nil, "seeds" => [1]},
+      "primary_metric" => %{"name" => "fixture", "direction" => "maximize"},
+      "runs" => [],
+      "rankings" => [
+        %{
+          "rank" => 1,
+          "competitor" => "legacy",
+          "mean" => 5.0,
+          "values_by_seed" => %{"1" => 5.0},
+          "usage_totals" => %{},
+          "included_runs" => 1,
+          "failed_runs" => 0
+        }
+      ],
+      "failures" => []
+    }
+
+    File.write!(Path.join(suite_dir, "suite.json"), Jason.encode!(suite_json, pretty: true))
+
+    assert {:ok, read_suite} = Suite.read_suite(suite_dir)
+    refute get_in(read_suite, ["rankings", Access.at(0), "stats"])
+    assert {:ok, leaderboard} = Suite.write_leaderboard(suite_dir)
+    assert leaderboard =~ "| 1 | legacy | 5.0 (n=1) | 1: 5.0 | 0 | unknown |"
   end
 
   test "mix lemon.sim.leaderboard round-trips a suite directory" do

@@ -154,9 +154,12 @@ All included runs are manifest hash and scorecard verified.
 
 | Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |
 |---:|---|---:|---|---:|---:|
-| 1 | baseline | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
-| 2 | pressure | ... | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+| 1 | baseline | ... ± ... (n=3) | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+| 2 | pressure | ... ± ... (n=3) | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
 ```
+
+Each ranking entry in `suite.json` includes additive `stats` with `n`, `mean`,
+sample `std`, `min`, and `max` for the primary metric across included seeds.
 
 Live competitors can be added with repeatable `--model MODEL_ID` options when
 provider credentials are configured. Re-render an existing suite without
