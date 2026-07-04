@@ -113,6 +113,18 @@ integrity hashes, and hashed file contents. For scenarios registered in
 manifest/hash verification and skip scorecard recompute. `score` verifies first,
 then prints the scorecard.
 
+Regenerate local demo bundles with:
+
+```bash
+scripts/generate_sim_demo_bundles.sh [out_dir]
+```
+
+The generator writes deterministic VendingBench baseline and pressure bundles,
+a CI-scale VendingBench Arena bundle, a small VendingBench suite, and ratings
+output. It runs `mix lemon.sim.verify` and `mix lemon.sim.score` over every
+bundle and prints a final metric summary. The default output directory is
+`tmp/sim_demo_bundles`.
+
 ## Suites and Leaderboards
 
 Suites run one scenario across competitors and seeds, verify each run bundle,
