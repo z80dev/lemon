@@ -1,6 +1,8 @@
 defmodule LemonSim.Examples.StockMarket.FrameRenderer do
   @moduledoc false
 
+  alias LemonSim.Examples.Rendering.FrameChrome
+
   # ---------------------------------------------------------------------------
   # Color palette (dark theme, financial trading floor)
   # ---------------------------------------------------------------------------
@@ -86,10 +88,7 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
   # SVG skeleton
   # ---------------------------------------------------------------------------
 
-  defp svg_header(%{w: w, h: h}) do
-    ~s[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{w} #{h}" ] <>
-      ~s[width="#{w}" height="#{h}">\n]
-  end
+  defp svg_header(ctx), do: FrameChrome.svg_header(ctx)
 
   defp svg_defs do
     ~s"""
@@ -121,9 +120,7 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
   # Background
   # ---------------------------------------------------------------------------
 
-  defp render_background(%{w: w, h: h}) do
-    ~s[<rect width="#{w}" height="#{h}" fill="#{@bg}"/>\n]
-  end
+  defp render_background(ctx), do: FrameChrome.render_background(ctx, @bg)
 
   # ---------------------------------------------------------------------------
   # Header bar
@@ -650,16 +647,14 @@ defmodule LemonSim.Examples.StockMarket.FrameRenderer do
   # Footer bar
   # ---------------------------------------------------------------------------
 
-  defp render_footer_bar(%{w: w, h: h} = ctx) do
-    bar_y = h - @footer_h
-    event_text = format_footer_text(ctx)
-
-    [
-      ~s[<rect x="0" y="#{bar_y}" width="#{w}" height="#{@footer_h}" fill="#{@panel_bg}"/>\n],
-      ~s[<line x1="0" y1="#{bar_y}" x2="#{w}" y2="#{bar_y}" stroke="#{@panel_border}" stroke-width="1"/>\n],
-      ~s[<text x="#{div(w, 2)}" y="#{bar_y + div(@footer_h, 2) + 5}" text-anchor="middle" ] <>
-        ~s[class="event-text" font-size="16" fill="#{@text_primary}">#{esc(event_text)}</text>\n]
-    ]
+  defp render_footer_bar(ctx) do
+    FrameChrome.render_footer_bar(ctx,
+      footer_h: @footer_h,
+      panel_bg: @panel_bg,
+      panel_border: @panel_border,
+      text_primary: @text_primary,
+      event_text: format_footer_text(ctx)
+    )
   end
 
   defp format_footer_text(ctx) do

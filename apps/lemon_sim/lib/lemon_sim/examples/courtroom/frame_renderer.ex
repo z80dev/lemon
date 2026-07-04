@@ -1,6 +1,8 @@
 defmodule LemonSim.Examples.Courtroom.FrameRenderer do
   @moduledoc false
 
+  alias LemonSim.Examples.Rendering.FrameChrome
+
   # ---------------------------------------------------------------------------
   # Color palette (legal/judicial theme)
   # ---------------------------------------------------------------------------
@@ -90,10 +92,7 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
   # SVG skeleton
   # ---------------------------------------------------------------------------
 
-  defp svg_header(%{w: w, h: h}) do
-    ~s[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{w} #{h}" ] <>
-      ~s[width="#{w}" height="#{h}">\n]
-  end
+  defp svg_header(ctx), do: FrameChrome.svg_header(ctx)
 
   defp svg_defs do
     ~s"""
@@ -125,9 +124,7 @@ defmodule LemonSim.Examples.Courtroom.FrameRenderer do
   # Background
   # ---------------------------------------------------------------------------
 
-  defp render_background(%{w: w, h: h}) do
-    ~s[<rect width="#{w}" height="#{h}" fill="#{@bg}"/>\n]
-  end
+  defp render_background(ctx), do: FrameChrome.render_background(ctx, @bg)
 
   # ---------------------------------------------------------------------------
   # Header bar
