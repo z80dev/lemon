@@ -1421,9 +1421,15 @@ defmodule AgentCore.ContextTest do
     } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
+      # char_count must exceed anything the concurrently-running property
+      # tests can emit (~5,200 chars max), because the telemetry handler
+      # receives events from every estimate_size call on the node.
+      first = String.duplicate("a", 4_000)
+      second = String.duplicate("b", 3_771)
+
       messages = [
-        Mocks.user_message("Hello"),
-        Mocks.assistant_message("World")
+        Mocks.user_message(first),
+        Mocks.assistant_message(second)
       ]
 
       Context.estimate_size(messages, "System")
@@ -1431,12 +1437,14 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(events) == 1
-      {event_name, measurements, metadata} = hd(events)
+      expected_chars = 4_000 + 3_771 + String.length("System")
+
+      assert {event_name, measurements, metadata} =
+               Enum.find(events, fn {_name, m, _meta} ->
+                 m.char_count == expected_chars
+               end)
 
       assert event_name == [:agent_core, :context, :size]
-      # 5 + 5 + 6
-      assert measurements.char_count == 16
       assert measurements.message_count == 2
       assert metadata.has_system_prompt == true
     end
@@ -1447,13 +1455,18 @@ defmodule AgentCore.ContextTest do
     } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
-      messages = [Mocks.user_message("Test")]
+      # Unique above-property-test-ceiling size; see note in the previous test.
+      messages = [Mocks.user_message(String.duplicate("c", 8_888))]
       Context.estimate_size(messages, nil)
 
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      {_event_name, _measurements, metadata} = hd(events)
+      assert {_event_name, _measurements, metadata} =
+               Enum.find(events, fn {_name, m, _meta} ->
+                 m.char_count == 8_888 and m.message_count == 1
+               end)
+
       assert metadata.has_system_prompt == false
     end
 
