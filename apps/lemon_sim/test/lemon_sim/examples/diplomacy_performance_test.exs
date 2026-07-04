@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.DiplomacyPerformanceTest do
   use ExUnit.Case, async: true
 
+  alias LemonSim.Bench.Suite
   alias LemonSim.Examples.Diplomacy.Performance
 
   test "summarizes negotiation, support, and capture metrics" do
@@ -44,9 +45,15 @@ defmodule LemonSim.Examples.DiplomacyPerformanceTest do
     }
 
     summary = Performance.summarize(world)
+    scorecard = Performance.scorecard(world)
+    metric = Performance.primary_metric()
 
     assert summary.benchmark_focus ==
              "negotiation throughput, support coordination, and territory conversion"
+
+    assert scorecard.final_territories == 2
+    assert {:ok, 2} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert Performance.scorecard(world) == scorecard
 
     assert summary.players["player_1"].messages_sent == 2
     assert summary.players["player_1"].support_orders == 1

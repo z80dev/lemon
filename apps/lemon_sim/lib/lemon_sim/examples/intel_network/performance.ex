@@ -11,6 +11,14 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world), do: summarize(world)
+
+  @impl true
+  def primary_metric, do: %{key: "detection_accuracy", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -74,7 +82,7 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
   defp apply_message_log(metrics, message_log) do
     Enum.reduce(message_log, metrics, fn {_edge_key, messages}, acc ->
       Enum.reduce(messages, acc, fn msg, inner_acc ->
-        sender = get(msg, :from, get(msg, "from"))
+        sender = fetch(msg, :from, "from")
         update_player(inner_acc, sender, &Map.update!(&1, :messages_sent, fn c -> c + 1 end))
       end)
     end)
@@ -82,8 +90,8 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
 
   defp apply_operations_log(metrics, operations_log) do
     Enum.reduce(operations_log, metrics, fn record, acc ->
-      player = get(record, :player_id)
-      op_type = get(record, :operation_type)
+      player = fetch(record, :player_id, "player_id")
+      op_type = fetch(record, :operation_type, "operation_type")
 
       acc
       |> update_player(player, &Map.update!(&1, :operations_performed, fn c -> c + 1 end))

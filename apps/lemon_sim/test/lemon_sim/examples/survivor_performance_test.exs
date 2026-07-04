@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.SurvivorPerformanceTest do
   use ExUnit.Case, async: true
 
+  alias LemonSim.Bench.Suite
   alias LemonSim.Examples.Survivor.Performance
 
   test "summarizes challenge, social, and vote-quality metrics" do
@@ -53,9 +54,15 @@ defmodule LemonSim.Examples.SurvivorPerformanceTest do
     }
 
     summary = Performance.summarize(world)
+    scorecard = Performance.scorecard(world)
+    metric = Performance.primary_metric()
 
     assert summary.benchmark_focus ==
              "social strategy, vote quality, alliance signaling, and endgame conversion"
+
+    assert scorecard.jury_votes_received == 1
+    assert {:ok, 1} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert Performance.scorecard(world) == scorecard
 
     refute summary.players["player_1"].won
     assert summary.players["player_1"].whispers_sent == 2

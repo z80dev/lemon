@@ -8,6 +8,17 @@ defmodule LemonSim.Examples.MurderMystery.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :correct_accusation_rate, correct_accusation_rate(summary.players))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "correct_accusation_rate", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -113,6 +124,14 @@ defmodule LemonSim.Examples.MurderMystery.Performance do
          correct_accusations: Enum.count(metrics, &get(&1, :correct_accusation, false))
        }}
     end)
+  end
+
+  defp correct_accusation_rate(players) do
+    metrics = Map.values(players)
+    attempts = Enum.sum(Enum.map(metrics, &get(&1, :accusations_made, 0)))
+    correct = Enum.count(metrics, &get(&1, :correct_accusation, false))
+
+    if attempts > 0, do: Float.round(correct / attempts, 3), else: 0.0
   end
 
   defp update_player(metrics, nil, _updater), do: metrics

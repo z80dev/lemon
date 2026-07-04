@@ -3,6 +3,10 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
   Run a LemonSim benchmark suite and write a leaderboard.
 
       mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vb-suite
+
+  Suite run adapters are currently available for `vending_bench`, `tcg_shop`,
+  and `vending_bench_arena`. Other registered scorecards can be verified from
+  artifact bundles, but do not yet have suite runners.
   """
 
   use Mix.Task

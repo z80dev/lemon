@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.StockMarketPerformanceTest do
   use ExUnit.Case, async: true
 
+  alias LemonSim.Bench.Suite
   alias LemonSim.Examples.StockMarket.Performance
 
   test "summarizes directional calls, whispers, and trade outcomes" do
@@ -69,9 +70,16 @@ defmodule LemonSim.Examples.StockMarketPerformanceTest do
     }
 
     summary = Performance.summarize(world)
+    scorecard = Performance.scorecard(world)
+    metric = Performance.primary_metric()
 
     assert summary.benchmark_focus ==
              "private-information trading, public signaling, and directional accuracy"
+
+    assert scorecard.best_final_value == summary.best_final_value
+    assert {:ok, value} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert is_number(value)
+    assert Performance.scorecard(world) == scorecard
 
     assert summary.players["player_1"].won
     assert summary.players["player_1"].market_calls_made == 1

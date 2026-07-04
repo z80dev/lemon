@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.WerewolfPerformanceTest do
   use ExUnit.Case, async: true
 
+  alias LemonSim.Bench.Suite
   alias LemonSim.Examples.Werewolf.Performance
 
   test "summarizes objective role metrics for benchmark analysis" do
@@ -66,9 +67,15 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
     }
 
     summary = Performance.summarize(world)
+    scorecard = Performance.scorecard(world)
+    metric = Performance.primary_metric()
 
     assert summary.benchmark_focus ==
              "hidden-information reasoning, persuasion, and role execution"
+
+    assert scorecard.team_won == 1
+    assert {:ok, 1} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert Performance.scorecard(world) == scorecard
 
     assert summary.players["Alice"].team_won
     assert summary.players["Alice"].votes_for_werewolf == 1

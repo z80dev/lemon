@@ -8,6 +8,17 @@ defmodule LemonSim.Examples.Survivor.Performance do
 
   import LemonSim.Examples.Helpers
 
+  @behaviour LemonSim.Bench.Scorecard
+
+  @impl true
+  def scorecard(world) do
+    summary = summarize(world)
+    Map.put(summary, :jury_votes_received, winning_value(summary.players, :jury_votes_received))
+  end
+
+  @impl true
+  def primary_metric, do: %{key: "jury_votes_received", direction: :maximize}
+
   @spec summarize(map()) :: map()
   def summarize(world) do
     players = get(world, :players, %{})
@@ -99,6 +110,25 @@ defmodule LemonSim.Examples.Survivor.Performance do
          jury_votes_received: Enum.sum(Enum.map(metrics, &get(&1, :jury_votes_received, 0)))
        }}
     end)
+  end
+
+  defp winning_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.find_value(fn metrics ->
+      if get(metrics, :won, false), do: get(metrics, key, 0)
+    end)
+    |> case do
+      nil -> max_value(players, key)
+      value -> value
+    end
+  end
+
+  defp max_value(players, key) do
+    players
+    |> Map.values()
+    |> Enum.map(&get(&1, key, 0))
+    |> Enum.max(fn -> 0 end)
   end
 
   defp update_player(metrics, nil, _updater), do: metrics
