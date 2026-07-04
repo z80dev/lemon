@@ -2,14 +2,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT_DIR="${1:-tmp/sim_demo_bundles}"
-
-if [ "$OUT_DIR" = "/" ] || [ "$OUT_DIR" = "." ] || [ "$OUT_DIR" = "$ROOT" ]; then
-  echo "refusing to replace unsafe output directory: $OUT_DIR" >&2
-  exit 64
-fi
-
 cd "$ROOT"
+
+# Relative OUT_DIR resolves against the repo root. The resolved path must be a
+# strict descendant of the repo (and not the repo itself) because it gets
+# rm -rf'd below — this blocks traversal like "../sibling" or an absolute "/".
+OUT_DIR="$(realpath -m "${1:-tmp/sim_demo_bundles}")"
+
+case "$OUT_DIR" in
+  "$ROOT"/*) ;;
+  *)
+    echo "refusing to replace output directory outside the repo: $OUT_DIR" >&2
+    exit 64
+    ;;
+esac
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
@@ -26,8 +32,10 @@ ARENA_DIR="$OUT_DIR/vending_bench_arena_baseline_ci_seed42"
 SUITE_DIR="$OUT_DIR/suite/vending_bench_ci"
 RATINGS_DIR="$OUT_DIR/ratings"
 
+# Trace goes to stderr so callers can redirect a run_mix invocation's stdout
+# into a file (e.g. score JSON) without the trace line corrupting it.
 run_mix() {
-  echo "+ mix $*"
+  echo "+ mix $*" >&2
   mix "$@"
 }
 
