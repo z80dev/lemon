@@ -1239,7 +1239,9 @@ defmodule LemonMCP.ClientTest do
       {:ok, client} =
         LemonMCP.Client.SSE.start_link(
           url: "http://127.0.0.1:#{port}/sse",
-          timeout_ms: 2_000
+          # Generous deadline: this only binds when something is wrong, and
+          # 2s flaked on loaded CI runners (full umbrella under --cover).
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.SSE.state(client) == :ready
