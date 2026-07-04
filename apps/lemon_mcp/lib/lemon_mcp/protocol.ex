@@ -597,7 +597,7 @@ defmodule LemonMCP.Protocol do
     }
   end
 
-  defp decode_response(%{"id" => id, "result" => result} = data) do
+  defp decode_response(%{"id" => id, "result" => result} = data) when is_map(result) do
     # Try to determine response type based on result structure
     response =
       cond do
@@ -668,6 +668,10 @@ defmodule LemonMCP.Protocol do
 
     {:ok, response}
   end
+
+  # Some servers ack requests with "result": null (or a scalar). Treat these
+  # like unknown response types instead of crashing on Map.has_key?/2.
+  defp decode_response(%{"id" => _id, "result" => _result} = data), do: {:ok, data}
 
   defp decode_error_response(%{"id" => id, "error" => error}) do
     err = %JSONRPCError{

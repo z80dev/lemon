@@ -241,6 +241,22 @@ defmodule LemonMCP.ProtocolTest do
       assert tool["name"] == "read_file"
     end
 
+    test "decodes a null-result response as a raw passthrough instead of crashing" do
+      # Some servers ack requests with "result": null; seen in CI as a
+      # BadMapError from Map.has_key?("serverInfo", nil).
+      json = ~s|{"jsonrpc": "2.0", "id": "ack-1", "result": null}|
+
+      assert {:ok, response} = Protocol.decode(json)
+      assert response == %{"jsonrpc" => "2.0", "id" => "ack-1", "result" => nil}
+    end
+
+    test "decodes a scalar-result response as a raw passthrough" do
+      json = ~s|{"jsonrpc": "2.0", "id": "ack-2", "result": 42}|
+
+      assert {:ok, response} = Protocol.decode(json)
+      assert response == %{"jsonrpc" => "2.0", "id" => "ack-2", "result" => 42}
+    end
+
     test "decodes tool call response" do
       json = ~s|{
         "jsonrpc": "2.0",
