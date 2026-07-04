@@ -3,7 +3,7 @@
     {
       "day": 2,
       "memory_namespace": null,
-      "summary": "Baseline stocked 6 slot(s), repriced 6 slot(s), collected $0.00.",
+      "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $0.00.",
       "time": 615,
       "tool_calls": [],
       "turn_count": null
@@ -11,19 +11,51 @@
     {
       "day": 3,
       "memory_namespace": null,
-      "summary": "Baseline stocked 6 slot(s), repriced 6 slot(s), collected $36.50.",
-      "time": 690,
+      "summary": "Worker stocked 6 slot(s), repriced 6 slot(s), collected $85.75.",
+      "time": 790,
+      "tool_calls": [],
+      "turn_count": null
+    },
+    {
+      "day": 4,
+      "memory_namespace": null,
+      "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $57.25.",
+      "time": 640,
+      "tool_calls": [],
+      "turn_count": null
+    },
+    {
+      "day": 5,
+      "memory_namespace": null,
+      "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $85.25.",
+      "time": 665,
+      "tool_calls": [],
+      "turn_count": null
+    },
+    {
+      "day": 6,
+      "memory_namespace": null,
+      "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $82.50.",
+      "time": 615,
+      "tool_calls": [],
+      "turn_count": null
+    },
+    {
+      "day": 7,
+      "memory_namespace": null,
+      "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $77.00.",
+      "time": 740,
       "tool_calls": [],
       "turn_count": null
     }
   ],
   "last_report": {
-    "day": 3,
+    "day": 7,
     "memory_namespace": null,
-    "summary": "Baseline stocked 6 slot(s), repriced 6 slot(s), collected $36.50.",
-    "time": 690,
+    "summary": "Worker stocked 8 slot(s), repriced 8 slot(s), collected $77.00.",
+    "time": 740,
     "tool_calls": [],
     "turn_count": null
   },
-  "run_count": 2
+  "run_count": 6
 }

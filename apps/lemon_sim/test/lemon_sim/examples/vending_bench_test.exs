@@ -830,6 +830,41 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert summary.spoilage_loss == 9.0
   end
 
+  test "day rollover accumulates historical stockout days across restocks" do
+    state =
+      VendingBench.initial_state(sim_id: "vb_stockout_days", max_days: 5, seed: 1)
+      |> put_in([Access.key(:world), :machine, :slots, "A1"], %{
+        slot_type: "small",
+        item_id: "water",
+        inventory: 1,
+        price: 1.25
+      })
+
+    assert {:ok, empty_state, {:decide, "Day 2 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert empty_state.world.machine.slots["A1"].inventory == 0
+    assert empty_state.world.stockout_days == 1
+
+    restocked_state =
+      empty_state
+      |> put_in([Access.key(:world), :machine, :slots, "A1", :inventory], 20)
+
+    assert {:ok, restocked_next_state, {:decide, "Day 3 begins. Weather: " <> _}} =
+             Runner.ingest_events(
+               restocked_state,
+               [VendingBench.Events.next_day_waited()],
+               VendingBench.modules().updater
+             )
+
+    assert restocked_next_state.world.machine.slots["A1"].inventory > 0
+    assert restocked_next_state.world.stockout_days == 1
+  end
+
   test "demand responds to machine variety and weekday effects" do
     catalog = VendingBench.DemandModel.catalog()
     weather = %{kind: "mild", demand_multiplier: 1.0}
@@ -862,6 +897,43 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert VendingBench.DemandModel.weekday_multiplier(5) >
              VendingBench.DemandModel.weekday_multiplier(7)
+  end
+
+  test "arena price posture changes deterministic demand independently of shared pressure" do
+    catalog = VendingBench.DemandModel.catalog()
+    weather = %{kind: "mild", demand_multiplier: 2.0}
+
+    low_price_posture = %{
+      "B2" => %{
+        item_id: "candy_bar",
+        inventory: 50,
+        price: 1.5,
+        arena_price_multiplier: 0.5,
+        arena_demand_multiplier: 1.0
+      }
+    }
+
+    high_price_posture = %{
+      "B2" => %{
+        item_id: "candy_bar",
+        inventory: 50,
+        price: 1.5,
+        arena_price_multiplier: 1.5,
+        arena_demand_multiplier: 1.0
+      }
+    }
+
+    low_units =
+      low_price_posture
+      |> VendingBench.DemandModel.daily_sales(catalog, weather, 2, 1)
+      |> Enum.reduce(0, fn {_slot, units, _revenue}, acc -> acc + units end)
+
+    high_units =
+      high_price_posture
+      |> VendingBench.DemandModel.daily_sales(catalog, weather, 2, 1)
+      |> Enum.reduce(0, fn {_slot, units, _revenue}, acc -> acc + units end)
+
+    assert low_units > high_units
   end
 
   test "performance summary preserves catalog metadata from JSON-decoded worlds" do
@@ -1982,14 +2054,14 @@ defmodule LemonSim.Examples.VendingBenchTest do
   test "checked-in replay fixture loads as a VendingBench replay" do
     fixture_dir = Path.expand("../../../priv/fixtures/vending_bench/ci_replay", __DIR__)
 
-    assert {:ok, %{legacy: true, manifest: %{"schema_version" => "lemon_sim.run.legacy"}}} =
+    assert {:ok, %{manifest: %{"schema_version" => "lemon_sim.run.v1"}}} =
              LemonSim.Bench.Artifacts.Verifier.verify_run(fixture_dir)
 
     assert {:ok, replay} = VendingBench.Replay.build(fixture_dir)
 
     assert replay.sim_id == "vb_ci_fixture"
     assert replay.status == "complete"
-    assert replay.day_number == 3
+    assert replay.day_number == 7
     assert replay.event_count > 0
     assert is_map(replay.supplier_messages)
     assert is_map(replay.worker_history)
