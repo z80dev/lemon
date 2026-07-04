@@ -1,0 +1,56 @@
+name: Simulation Bench
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  sim-bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-sim-bench-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-sim-bench-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run simulation bench lane
+        run: scripts/ci_sim_bench.sh
+
+      - name: Upload simulation bench artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-bench
+          path: |
+            ${{ runner.temp }}/sim-bench-ci/suites
+            ${{ runner.temp }}/sim-bench-ci/scores
+            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.md
+            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.json
