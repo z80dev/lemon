@@ -1,7 +1,42 @@
 # VendingBench as an exemplary agent benchmark — 2026-07-04
 
-Status: in_progress
+Status: wave 1 complete (merged to main 2026-07-04); wave 2 pending
 Owner: claude (orchestrator) + codex workers
+
+## Wave 1 execution log (2026-07-04)
+
+All six workstreams landed on main the same day. Each worker diff got a
+dedicated code-review agent; every worker "green" was independently re-run.
+
+- W-INTEG merged first (fixture regenerated post-merge for the new ruleset
+  fingerprint). Review: no blocking bugs.
+- W-REPRO merged; review caught two real items fixed by the orchestrator:
+  arena.ex was fingerprinted into the PLAIN run ruleset_hash (now split:
+  plain fingerprint excludes arena.ex; arena manifests carry
+  arena_ruleset_hash), and arena bundles were not byte-reproducible
+  (wall-clock ts_ms — now index-normalized in jsonl and pinned in embedded
+  world copies under --deterministic-artifacts; CI gained an arena
+  determinism gate; verified byte-identical).
+- W-STATS merged; review clean except duplicated formatting between Suite and
+  LeaderboardLive — Suite.format_metric_summary/1 is now public and shared.
+- W-DOCS merged; review verified every command/number byte-for-byte; fixes:
+  four docs/catalog.exs entries (+ this plan doc's), openai-codex credential
+  wording corrected.
+- W-DEMO merged; review fixes: realpath+descendant guard before rm -rf,
+  run_mix trace to stderr (score JSON was being corrupted), orphaned legacy
+  README dropped (the old "showcase" paper bundle turned out to be gitignored
+  local state, never checked in — the generator replaces that story).
+- W-EXT needed a second codex round for review findings (2 critical: unguarded
+  Port.command crash path, {:noeol} fragmentation bricking runs; 2 high: no
+  turn correlation → stale-reply desync, orphaned OS processes) — all fixed:
+  guarded writes, line reassembly (70KB-line regression test), turn-echo
+  correlation in protocol v0, SIGTERM/SIGKILL reaping. Merged after
+  independent re-verification.
+
+Post-merge on main: demo generator end-to-end green (90-day pressure
+net_worth 3840.51 / baseline 4620.25; suite + BT ratings emitted), full
+ci_sim_bench.sh green including both determinism gates, mix lemon.quality
+green.
 Predecessors: `lemon-sim-vendingbench-equivalent-goal-2026-05-16.md`, `lemon-sim-vendingbench-2-arena-goal-2026-05-27.md`, `lemon-exemplary-2026-07-04.md`
 
 ## Goal
