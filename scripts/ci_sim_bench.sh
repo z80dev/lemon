@@ -161,6 +161,33 @@ run_determinism_gate() {
   log "Byte-determinism gate passed"
 }
 
+run_arena_determinism_gate() {
+  local dir_a="$REPRO_ROOT/arena_baseline_a"
+  local dir_b="$REPRO_ROOT/arena_baseline_b"
+
+  log "Running VendingBench arena byte-determinism gate"
+  mix lemon.sim.vending_bench \
+    --preset ci \
+    --arena \
+    --offline-strategy baseline \
+    --seed 1 \
+    --sim-id vb_arena_ci_repro \
+    --deterministic-artifacts \
+    --artifact-dir "$dir_a"
+
+  mix lemon.sim.vending_bench \
+    --preset ci \
+    --arena \
+    --offline-strategy baseline \
+    --seed 1 \
+    --sim-id vb_arena_ci_repro \
+    --deterministic-artifacts \
+    --artifact-dir "$dir_b"
+
+  diff -r "$dir_a" "$dir_b"
+  log "Arena byte-determinism gate passed"
+}
+
 clean_work_dir
 scrub_model_credentials
 
@@ -173,5 +200,6 @@ run_suite "vending_bench_arena" "ci" "1,2" "baseline" "$ARENA_SUITE"
 run_suite "tcg_shop" "ci" "1,2" "baseline,pressure,overextended" "$TCG_SUITE"
 run_ratings "$VB_SUITE,$ARENA_SUITE,$TCG_SUITE"
 run_determinism_gate
+run_arena_determinism_gate
 
 log "Simulation benchmark artifacts written to $WORK_DIR"

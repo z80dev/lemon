@@ -211,16 +211,25 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     end
   end
 
-  defp ruleset_hash do
-    files = [
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/world.ex",
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/updater.ex",
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/action_space.ex",
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/suppliers.ex",
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/arena.ex",
-      "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/demand_model.ex"
-    ]
+  @shared_ruleset_files [
+    "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/world.ex",
+    "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/updater.ex",
+    "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/action_space.ex",
+    "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/suppliers.ex",
+    "apps/lemon_sim/lib/lemon_sim/examples/vending_bench/demand_model.ex"
+  ]
 
+  # Plain single-run bundles must not churn when arena-only code changes.
+  defp ruleset_hash, do: ruleset_hash(@shared_ruleset_files)
+
+  @doc false
+  def arena_ruleset_hash do
+    ruleset_hash(
+      @shared_ruleset_files ++ ["apps/lemon_sim/lib/lemon_sim/examples/vending_bench/arena.ex"]
+    )
+  end
+
+  defp ruleset_hash(files) do
     files
     |> Enum.map(fn path -> File.read(path) |> elem(1) end)
     |> Enum.join("\n")

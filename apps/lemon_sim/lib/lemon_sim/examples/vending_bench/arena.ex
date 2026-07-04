@@ -12,7 +12,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
   alias LemonSim.Bench.Artifacts.AtomicFile
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.ArenaScorecard
-  alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Events}
+  alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Artifacts, Events}
   alias LemonSim.Kernel.{Runner, State}
   alias LemonSim.LLM.Usage
 
@@ -554,7 +554,12 @@ defmodule LemonSim.Examples.VendingBench.Arena do
           arena_report: Path.join(artifact_dir, "arena_report.md")
         }
 
-        encoded_world = Jason.encode!(jsonable(world), pretty: true)
+        encoded_world =
+          world
+          |> jsonable()
+          |> maybe_normalize_world_timestamps(opts)
+          |> Jason.encode!(pretty: true)
+
         scorecard_body = Jason.encode!(jsonable(scorecard(world)), pretty: true)
 
         contents = %{
@@ -656,7 +661,8 @@ defmodule LemonSim.Examples.VendingBench.Arena do
       sim: %{
         id: "vending_bench_arena",
         version: "2.0.0",
-        seed: arena_seed(world)
+        seed: arena_seed(world),
+        ruleset_hash: Artifacts.arena_ruleset_hash()
       },
       agent: nil,
       runtime: %{
@@ -735,10 +741,44 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
   defp jsonl(entries) do
     entries
-    |> Enum.map(&Jason.encode!(jsonable(&1)))
+    |> Enum.with_index()
+    |> Enum.map(fn {entry, index} -> Jason.encode!(jsonable_artifact_entry(entry, index)) end)
     |> Enum.join("\n")
     |> then(&(&1 <> "\n"))
   end
+
+  # Arena worlds embed tagged per-agent event copies whose wall-clock ts_ms
+  # would break byte-reproducibility; ordering is carried by list position, so
+  # deterministic bundles pin every embedded ts_ms to 0.
+  defp maybe_normalize_world_timestamps(world_json, opts) do
+    if Keyword.get(opts, :deterministic_artifacts?, false) do
+      normalize_ts_ms(world_json)
+    else
+      world_json
+    end
+  end
+
+  defp normalize_ts_ms(map) when is_map(map) do
+    Map.new(map, fn
+      {key, value} when key in [:ts_ms, "ts_ms"] and is_integer(value) -> {key, 0}
+      {key, value} -> {key, normalize_ts_ms(value)}
+    end)
+  end
+
+  defp normalize_ts_ms(list) when is_list(list), do: Enum.map(list, &normalize_ts_ms/1)
+  defp normalize_ts_ms(value), do: value
+
+  # Mirror the plain-run bundle contract: ts_ms in artifacts is an ordering
+  # index, so bundles stay byte-reproducible across runs.
+  defp jsonable_artifact_entry(%{ts_ms: _} = entry, index) do
+    entry |> jsonable() |> Map.put("ts_ms", index)
+  end
+
+  defp jsonable_artifact_entry(%{"ts_ms" => _} = entry, index) do
+    entry |> jsonable() |> Map.put("ts_ms", index)
+  end
+
+  defp jsonable_artifact_entry(entry, _index), do: jsonable(entry)
 
   defp jsonable(%_{} = struct), do: struct |> Map.from_struct() |> jsonable()
 

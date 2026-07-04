@@ -10,14 +10,14 @@
   "runtime": {
     "elixir": "1.19.5",
     "finished_at": "1970-01-01T00:00:00Z",
-    "lemon_commit": "6f9f027e8599a04dbed5f436d455eaf9f0102c7f",
+    "lemon_commit": "406584c8ef0f610b54f0e7878c23c9f282f22108",
     "otp": "28",
     "started_at": "1970-01-01T00:00:00Z"
   },
   "schema_version": "lemon_sim.run.v1",
   "sim": {
     "id": "vending_bench",
-    "ruleset_hash": "b8fab0ea0386101130e87cfb72bdfab1fbc416b7369d3dda0b519736d195ec24",
+    "ruleset_hash": "4d1640b0c1071f16dcae050141649dd6b4e1afbadfa19d1985e431dd7377a7d6",
     "seed": 1,
     "version": "2.0.0"
   }
