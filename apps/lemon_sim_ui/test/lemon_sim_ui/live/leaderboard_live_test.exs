@@ -37,6 +37,8 @@ defmodule LemonSimUi.LeaderboardLiveTest do
     assert html =~ "Leaderboards"
     assert html =~ "vending_bench"
     assert html =~ "baseline"
+    assert html =~ "782.4 (n=1)"
+    assert html =~ "740.0 ± 3.5 (n=2)"
     assert html =~ "1,500"
     assert html =~ "$0.12"
     assert html =~ "Reported Not Ranked"
@@ -73,6 +75,25 @@ defmodule LemonSimUi.LeaderboardLiveTest do
     {:ok, _view, html} = live(conn, "/leaderboards")
     assert html =~ "vending_bench"
     assert html =~ "baseline"
+  end
+
+  test "renders legacy suite rankings without stats", %{conn: conn, tmp_dir: tmp_dir} do
+    original_roots = Application.get_env(:lemon_sim_ui, :suite_roots)
+    Application.put_env(:lemon_sim_ui, :suite_roots, [tmp_dir])
+
+    on_exit(fn ->
+      restore_suite_roots(original_roots)
+    end)
+
+    File.write!(
+      Path.join(tmp_dir, "suite.json"),
+      Jason.encode!(legacy_suite_json(), pretty: true)
+    )
+
+    {:ok, _view, html} = live(conn, "/leaderboards")
+    assert html =~ "vending_bench"
+    assert html =~ "baseline"
+    assert html =~ "782.4 (n=1)"
   end
 
   defp suite_json do
@@ -141,6 +162,7 @@ defmodule LemonSimUi.LeaderboardLiveTest do
           "mean" => 782.4,
           "min" => 782.4,
           "max" => 782.4,
+          "stats" => %{"n" => 1, "mean" => 782.4, "std" => nil, "min" => 782.4, "max" => 782.4},
           "values_by_seed" => %{"7" => 782.4},
           "usage_totals" => %{
             "input_tokens" => 1_000,
@@ -159,6 +181,7 @@ defmodule LemonSimUi.LeaderboardLiveTest do
           "mean" => 740.0,
           "min" => 740.0,
           "max" => 740.0,
+          "stats" => %{"n" => 2, "mean" => 740.0, "std" => 3.5, "min" => 736.5, "max" => 743.5},
           "values_by_seed" => %{"7" => 740.0},
           "usage_totals" => %{
             "input_tokens" => 20,
@@ -181,6 +204,12 @@ defmodule LemonSimUi.LeaderboardLiveTest do
         }
       ]
     }
+  end
+
+  defp legacy_suite_json do
+    update_in(suite_json(), ["rankings"], fn rankings ->
+      Enum.map(rankings, &Map.delete(&1, "stats"))
+    end)
   end
 
   defp restore_suite_roots(nil), do: Application.delete_env(:lemon_sim_ui, :suite_roots)

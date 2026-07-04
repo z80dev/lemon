@@ -121,7 +121,7 @@ defmodule LemonSim.Bench.Suite do
         [
           ranking["rank"] || ranking[:rank],
           ranking["competitor"] || ranking[:competitor],
-          format_number(ranking["mean"] || ranking[:mean]),
+          format_metric_summary(ranking),
           format_values(ranking["values_by_seed"] || ranking[:values_by_seed] || %{}),
           format_integer(total_tokens(ranking["usage_totals"] || ranking[:usage_totals] || %{})),
           format_cost(
@@ -416,13 +416,15 @@ defmodule LemonSim.Bench.Suite do
           []
         else
           values = Enum.map(verified, & &1["metric"])
+          stats = stats_for(values)
 
           [
             %{
               "competitor" => competitor_id,
-              "mean" => Enum.sum(values) / length(values),
-              "min" => Enum.min(values),
-              "max" => Enum.max(values),
+              "mean" => stats["mean"],
+              "min" => stats["min"],
+              "max" => stats["max"],
+              "stats" => stats,
               "values_by_seed" =>
                 verified
                 |> Enum.sort_by(& &1["seed"])
@@ -447,6 +449,31 @@ defmodule LemonSim.Bench.Suite do
       |> Enum.map(fn {ranking, rank} -> Map.put(ranking, "rank", rank) end)
 
     {:ok, rankings}
+  end
+
+  defp stats_for(values) do
+    n = length(values)
+    mean = Enum.sum(values) / n
+
+    std =
+      if n < 2 do
+        nil
+      else
+        variance =
+          values
+          |> Enum.reduce(0.0, fn value, acc -> acc + :math.pow(value - mean, 2) end)
+          |> Kernel./(n - 1)
+
+        :math.sqrt(variance)
+      end
+
+    %{
+      "n" => n,
+      "mean" => mean,
+      "std" => std,
+      "min" => Enum.min(values),
+      "max" => Enum.max(values)
+    }
   end
 
   defp aggregate_usage(results) do
@@ -572,6 +599,31 @@ defmodule LemonSim.Bench.Suite do
     |> Enum.sort_by(fn {seed, _value} -> seed end)
     |> Enum.map(fn {seed, value} -> "#{seed}: #{format_number(value)}" end)
     |> Enum.join(", ")
+  end
+
+  defp format_metric_summary(ranking) do
+    stats = ranking_stats(ranking)
+    mean = format_number(get_key(stats, "mean"))
+    n = get_key(stats, "n") || 0
+
+    case get_key(stats, "std") do
+      nil -> "#{mean} (n=#{n})"
+      std -> "#{mean} ± #{format_number(std)} (n=#{n})"
+    end
+  end
+
+  defp ranking_stats(ranking) do
+    values_by_seed = ranking["values_by_seed"] || ranking[:values_by_seed] || %{}
+
+    ranking["stats"] ||
+      ranking[:stats] ||
+      %{
+        "n" => ranking["included_runs"] || ranking[:included_runs] || map_size(values_by_seed),
+        "mean" => ranking["mean"] || ranking[:mean],
+        "std" => nil,
+        "min" => ranking["min"] || ranking[:min],
+        "max" => ranking["max"] || ranking[:max]
+      }
   end
 
   defp format_number(value) when is_integer(value), do: Integer.to_string(value)

@@ -15,7 +15,11 @@ defmodule LemonSimUi.LeaderboardLive do
     suites = if connected?, do: ArtifactReader.list_suites(), else: []
 
     {:ok,
-     assign(socket, suites: suites, loading: not connected?, page_title: "LemonSim — Leaderboards")}
+     assign(socket,
+       suites: suites,
+       loading: not connected?,
+       page_title: "LemonSim — Leaderboards"
+     )}
   end
 
   @impl true
@@ -189,7 +193,7 @@ defmodule LemonSimUi.LeaderboardLive do
               <tr>
                 <td class="px-4 py-3 text-right text-slate-400 font-mono">{ranking["rank"]}</td>
                 <td class="px-4 py-3 font-bold text-white">{ranking["competitor"]}</td>
-                <td class="px-4 py-3 text-right font-mono text-cyan-300">{ArtifactReader.format_number(ranking["mean"])}</td>
+                <td class="px-4 py-3 text-right font-mono text-cyan-300">{format_metric_summary(ranking)}</td>
                 <td class="px-4 py-3 text-xs font-mono text-slate-400">{format_seed_values(ranking["values_by_seed"] || %{})}</td>
                 <td class="px-4 py-3 text-xs font-mono text-slate-400">
                   {verification_label(ranking)}
@@ -247,6 +251,28 @@ defmodule LemonSimUi.LeaderboardLive do
     end
   end
 
+  defp format_metric_summary(ranking) do
+    stats = ranking_stats(ranking)
+    mean = ArtifactReader.format_number(get_key(stats, "mean"))
+    n = get_key(stats, "n") || 0
+
+    case get_key(stats, "std") do
+      nil -> "#{mean} (n=#{n})"
+      std -> "#{mean} ± #{ArtifactReader.format_number(std)} (n=#{n})"
+    end
+  end
+
+  defp ranking_stats(ranking) do
+    values_by_seed = ranking["values_by_seed"] || %{}
+
+    ranking["stats"] ||
+      %{
+        "n" => ranking["included_runs"] || map_size(values_by_seed),
+        "mean" => ranking["mean"],
+        "std" => nil
+      }
+  end
+
   defp format_seed_values(values) do
     values
     |> Enum.sort_by(fn {seed, _value} -> parse_seed(seed) end)
@@ -264,4 +290,9 @@ defmodule LemonSimUi.LeaderboardLive do
   end
 
   defp parse_seed(seed), do: seed
+
+  defp get_key(map, key) when is_map(map),
+    do: Map.get(map, key, Map.get(map, String.to_atom(key)))
+
+  defp get_key(_map, _key), do: nil
 end
