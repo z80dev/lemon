@@ -6,7 +6,7 @@ defmodule LemonSim.Bench.Suite.RunAdapter.Adapters.VendingBench do
   alias LemonSim.Examples.VendingBench
 
   @impl true
-  def supported_modes, do: [:offline, :live]
+  def supported_modes, do: [:offline, :live, :external]
 
   @impl true
   def supported_presets, do: ["ci", "paper", "v2"]
@@ -25,6 +25,13 @@ defmodule LemonSim.Bench.Suite.RunAdapter.Adapters.VendingBench do
 
   def run(:live, _model_id, _seed, opts) do
     opts
+    |> VendingBench.run()
+    |> normalize_result(opts)
+  end
+
+  def run(:external, cmd, _seed, opts) do
+    opts
+    |> Keyword.put(:external_cmd, cmd)
     |> VendingBench.run()
     |> normalize_result(opts)
   end

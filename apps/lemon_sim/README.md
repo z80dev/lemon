@@ -135,6 +135,14 @@ cost alongside score. Keyless deterministic suites use offline strategies:
 mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vending-suite
 ```
 
+Competitor specs accept exactly one execution mode:
+
+| Shape | Scenario support | Cost behavior |
+| --- | --- | --- |
+| `{"id":"baseline","offline_strategy":"baseline"}` | Deterministic adapters | `$0.0000` |
+| `{"id":"model","model":"provider:model-id"}` | Live adapters | Provider pricing or unknown |
+| `{"id":"my-agent","external_cmd":"python3 my_agent.py"}` | `vending_bench` | Unknown |
+
 Suite run adapters are currently available for `vending_bench`, `tcg_shop`, and
 `vending_bench_arena`. Other registered scorecards can be recompute-verified from
 artifact bundles but do not yet have suite runners.
@@ -167,15 +175,16 @@ All included runs are manifest hash and scorecard verified.
 | Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |
 |---:|---|---:|---|---:|---:|
 | 1 | baseline | ... ± ... (n=3) | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
-| 2 | pressure | ... ± ... (n=3) | 11: ..., 22: ..., 33: ... | 0 | $0.0000 |
+| 2 | my-agent | ... ± ... (n=3) | 11: ..., 22: ..., 33: ... | 0 | unknown |
 ```
 
 Each ranking entry in `suite.json` includes additive `stats` with `n`, `mean`,
 sample `std`, `min`, and `max` for the primary metric across included seeds.
 
 Live competitors can be added with repeatable `--model MODEL_ID` options when
-provider credentials are configured. Re-render an existing suite without
-rerunning scenarios:
+provider credentials are configured. VendingBench external agents can be added
+with repeatable `--external-cmd COMMAND` options. Re-render an existing suite
+without rerunning scenarios:
 
 ```bash
 mix lemon.sim.leaderboard /tmp/vending-suite

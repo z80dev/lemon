@@ -16,8 +16,11 @@ Messages are UTF-8 JSON Lines over stdio. Each line is one JSON object.
 On process start, the sim sends:
 
 ```json
-{"type":"hello","protocol":"lemon_sim.external.v0","sim_id":"vb_1","scenario":"vending_bench","preset":"ci","max_days":7,"max_turns":25}
+{"type":"hello","protocol":"lemon_sim.external.v0","sim_id":"vb_1","scenario":"vending_bench","preset":"ci","seed":7,"max_days":7,"max_turns":25}
 ```
+
+Suite runs start one fresh external process per competitor/seed run. Use
+`seed` from the hello message to initialize any agent-side deterministic state.
 
 For each operator decision, the sim sends:
 
@@ -57,6 +60,25 @@ At run end, the sim sends:
 ```
 
 Then stdin is closed.
+
+## Compete In A Suite
+
+External competitors use `external_cmd` in the suite competitor spec:
+
+```json
+{"id":"my-agent","external_cmd":"python3 my_agent.py"}
+```
+
+From the Mix task, pass one or more external commands alongside offline or live
+competitors:
+
+```bash
+mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 7,8 --offline baseline --external-cmd "python3 examples/external_agents/baseline_agent.py" --out /tmp/vb-suite
+```
+
+External suite runs are ranked by the same verified scenario metric as every
+other competitor. Token usage is reported as zero and cost is shown as unknown,
+not `$0.00`, because LemonSim cannot know an external agent's upstream spend.
 
 ## Failure Semantics
 

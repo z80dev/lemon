@@ -70,12 +70,14 @@ checkpoint source and resolves model credentials the same way as a fresh run.
 ## Rank Live Competitors
 
 Suites accept repeated `--model provider:model-id` competitors alongside
-offline competitors such as `--offline baseline`.
+offline competitors such as `--offline baseline`. VendingBench also accepts
+external agent competitors with `--external-cmd "python3 agent.py"` or a suite
+spec entry shaped like `{"id":"my-agent","external_cmd":"python3 agent.py"}`.
 
 Each run is verified before it is ranked. The suite leaderboard reports the
 primary metric, per-seed values, token totals, and cost totals. If a provider's
-price metadata is unknown, the cost column stays unknown rather than being
-reported as zero.
+price metadata is unknown, or the competitor is an external agent, the cost
+column stays unknown rather than being reported as zero.
 
 After multiple suites, aggregate them with the ratings task. Ratings compare
 competitors on common seeds inside each suite and fit a Bradley-Terry

@@ -220,6 +220,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
       "sim_id" => Keyword.get(opts, :sim_id),
       "scenario" => "vending_bench",
       "preset" => Keyword.get(opts, :preset),
+      "seed" => Keyword.get(opts, :seed),
       "max_days" => Keyword.get(opts, :max_days),
       "max_turns" => Keyword.get(opts, :driver_max_turns, Keyword.get(opts, :max_turns))
     }

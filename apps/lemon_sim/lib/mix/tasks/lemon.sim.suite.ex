@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
   @moduledoc """
   Run a LemonSim benchmark suite and write a leaderboard.
 
-      mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --out /tmp/vb-suite
+      mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --external-cmd "python3 agent.py" --out /tmp/vb-suite
 
   Suite run adapters are currently available for `vending_bench`, `tcg_shop`,
   and `vending_bench_arena`. Other registered scorecards can be verified from
@@ -17,6 +17,7 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
     seeds: :string,
     offline: :string,
     model: :string,
+    external_cmd: :string,
     out: :string,
     max_concurrency: :integer,
     help: :boolean
@@ -83,7 +84,14 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
       |> Enum.flat_map(&split_csv/1)
       |> Enum.map(&%{id: &1, model: &1})
 
-    offline ++ models
+    external =
+      opts
+      |> Keyword.get_values(:external_cmd)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&%{id: &1, external_cmd: &1})
+
+    offline ++ models ++ external
   end
 
   defp split_csv(nil), do: []
