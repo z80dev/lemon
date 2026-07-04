@@ -33,6 +33,10 @@ env:
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
+  # Release endpoints only start their HTTP servers when PHX_SERVER is set
+  # (config/runtime.exs configure_endpoint); without it the web healthz
+  # check gets ECONNREFUSED. Broken by the endpoint refactor in 260bc965.
+  PHX_SERVER: "1"
 
 jobs:
   product-smoke:
