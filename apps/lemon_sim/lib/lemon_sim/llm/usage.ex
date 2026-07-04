@@ -40,6 +40,14 @@ defmodule LemonSim.LLM.Usage do
 
   def record_decision(_collector, _actor_id, _model), do: :ok
 
+  def record_external_decision(nil, _actor_id, _model_id), do: :ok
+
+  def record_external_decision(collector, actor_id, model_id) when is_pid(collector) do
+    Agent.update(collector, &add_external_decision(&1, actor_id, model_id))
+  end
+
+  def record_external_decision(_collector, _actor_id, _model_id), do: :ok
+
   def artifact(nil, sim_id) when is_binary(sim_id), do: to_artifact(new(sim_id))
 
   def artifact(collector, _sim_id) when is_pid(collector),
@@ -101,6 +109,23 @@ defmodule LemonSim.LLM.Usage do
     end)
   end
 
+  defp add_external_decision(state, actor_id, model_id) do
+    actor_id = normalize_actor_id(actor_id)
+    model_id = to_string(model_id || "external")
+
+    state
+    |> update_in([:totals, :decisions], &(&1 + 1))
+    |> update_in([:actors], fn actors ->
+      Map.update(
+        actors,
+        actor_id,
+        %{external_actor(model_id) | decisions: 1},
+        &%{&1 | decisions: &1.decisions + 1, model_id: model_id, cost_usd: nil}
+      )
+    end)
+    |> update_cost_known(false)
+  end
+
   defp add_usage(acc, %Usage{} = usage, cost, pricing_known?) do
     acc
     |> Map.update!(:input_tokens, &(&1 + usage.input))
@@ -131,6 +156,18 @@ defmodule LemonSim.LLM.Usage do
       cache_read_tokens: 0,
       cache_write_tokens: 0,
       cost_usd: if(pricing_known?(model), do: 0.0, else: nil)
+    }
+  end
+
+  defp external_actor(model_id) do
+    %{
+      model_id: model_id,
+      decisions: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      cost_usd: nil
     }
   end
 

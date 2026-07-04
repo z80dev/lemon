@@ -9,6 +9,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
   ## Options
 
     * `--model` - Model to use (e.g. google_gemini_cli:gemini-2.5-flash)
+    * `--external-cmd` - Shell command for an external stdio JSONL agent
     * `--max-days` - Maximum number of simulated days (default: 30)
     * `--max-turns` - Maximum decision turns (default: 300)
     * `--seed` - Random seed for deterministic runs
@@ -32,6 +33,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     persist: :boolean,
     max_turns: :integer,
     model: :string,
+    external_cmd: :string,
     max_days: :integer,
     seed: :integer,
     sim_id: :string,
@@ -60,9 +62,12 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
   end
 
   defp run_simulation(opts) do
+    validate_external_opts!(opts)
+
     run_opts =
       []
       |> apply_preset(opts[:preset])
+      |> maybe_put(:preset, opts[:preset])
       |> maybe_put(:max_days, opts[:max_days])
       |> maybe_put(:seed, opts[:seed])
       |> maybe_put(:sim_id, opts[:sim_id])
@@ -71,6 +76,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       |> maybe_put(:artifact_dir, opts[:artifact_dir])
       |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
       |> maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
+      |> maybe_put(:external_cmd, opts[:external_cmd])
 
     result = run_mode(opts, run_opts)
 
@@ -124,18 +130,25 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
       opts[:resume_artifact_dir] ->
         run_opts
-        |> maybe_put_model(opts[:model])
-        |> maybe_put_worker_model(opts[:worker_model])
+        |> maybe_put_live_models(opts)
         |> then(
           &LemonSim.Examples.VendingBench.resume_from_artifacts(opts[:resume_artifact_dir], &1)
         )
 
       true ->
         run_opts
-        |> maybe_put_model(opts[:model])
-        |> maybe_put_worker_model(opts[:worker_model])
+        |> maybe_put_live_models(opts)
         |> LemonSim.Examples.VendingBench.run()
     end
+  end
+
+  defp validate_external_opts!(opts) do
+    if opts[:external_cmd] && (opts[:model] || opts[:worker_model]) do
+      Mix.shell().error("--external-cmd cannot be combined with --model or --worker-model")
+      exit({:shutdown, 1})
+    end
+
+    :ok
   end
 
   defp apply_preset(opts, nil), do: opts
@@ -191,6 +204,16 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       {:error, reason} ->
         Mix.shell().error("Could not resolve worker model #{model_str}: #{inspect(reason)}")
         exit({:shutdown, 1})
+    end
+  end
+
+  defp maybe_put_live_models(run_opts, opts) do
+    if opts[:external_cmd] do
+      run_opts
+    else
+      run_opts
+      |> maybe_put_model(opts[:model])
+      |> maybe_put_worker_model(opts[:worker_model])
     end
   end
 

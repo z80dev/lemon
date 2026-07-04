@@ -28,6 +28,7 @@ defmodule LemonSim.Examples.VendingBench do
   }
 
   alias LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents
+  alias LemonSim.LLM.Deciders.ExternalDecider
   alias LemonSim.LLM.Deciders.ToolLoopDecider
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.LLM.Projectors.SectionedProjector
@@ -65,12 +66,12 @@ defmodule LemonSim.Examples.VendingBench do
     )
   end
 
-  @spec modules() :: map()
-  def modules do
+  @spec modules(keyword()) :: map()
+  def modules(opts \\ []) do
     %{
       action_space: ActionSpace,
       projector: SectionedProjector,
-      decider: ToolLoopDecider,
+      decider: Keyword.get(opts, :decider, ToolLoopDecider),
       updater: Updater,
       decision_adapter: ExecutedCallEvents
     }
@@ -83,32 +84,48 @@ defmodule LemonSim.Examples.VendingBench do
   def default_opts(overrides \\ []) when is_list(overrides) do
     config = Modular.load(project_dir: File.cwd!())
 
-    model =
-      Keyword.get_lazy(overrides, :model, fn ->
-        Config.resolve_configured_model!(config, "Vending Bench")
-      end)
+    external? = external_run?(overrides)
 
-    stream_options =
-      Keyword.get_lazy(overrides, :stream_options, fn ->
-        %{api_key: Config.resolve_provider_api_key!(model.provider, config, "vending bench")}
-      end)
+    base_opts =
+      projector_opts()
+      |> Kernel.++(
+        driver_max_turns: @default_max_turns,
+        decision_max_turns: 4,
+        persist?: true,
+        terminal?: &terminal?/1,
+        tool_policy: SingleTerminal,
+        support_tool_matcher: &support_tool?/1,
+        require_executed_call_events?: true,
+        provider_min_interval_ms: %{zai: 10_000, google_gemini_cli: 5_000},
+        on_before_step: &announce_turn/2,
+        on_after_step: &print_step/2
+      )
 
-    projector_opts()
-    |> Kernel.++(
-      model: model,
-      stream_options: stream_options,
-      driver_max_turns: @default_max_turns,
-      decision_max_turns: 4,
-      persist?: true,
-      terminal?: &terminal?/1,
-      tool_policy: SingleTerminal,
-      support_tool_matcher: &support_tool?/1,
-      require_executed_call_events?: true,
-      provider_min_interval_ms: %{zai: 10_000, google_gemini_cli: 5_000},
-      on_before_step: &announce_turn/2,
-      on_after_step: &print_step/2
-    )
-    |> maybe_put(:complete_fn, Keyword.get(overrides, :complete_fn))
+    if external? do
+      base_opts
+      |> Keyword.put(:decider, ExternalDecider)
+      |> Keyword.put(:stream_options, %{})
+      |> Keyword.put(
+        :physical_worker_runner,
+        &LemonSim.Examples.VendingBench.DeterministicPhysicalWorker.run/2
+      )
+      |> maybe_put(:complete_fn, Keyword.get(overrides, :complete_fn))
+    else
+      model =
+        Keyword.get_lazy(overrides, :model, fn ->
+          Config.resolve_configured_model!(config, "Vending Bench")
+        end)
+
+      stream_options =
+        Keyword.get_lazy(overrides, :stream_options, fn ->
+          %{api_key: Config.resolve_provider_api_key!(model.provider, config, "vending bench")}
+        end)
+
+      base_opts
+      |> Keyword.put(:model, model)
+      |> Keyword.put(:stream_options, stream_options)
+      |> maybe_put(:complete_fn, Keyword.get(overrides, :complete_fn))
+    end
   end
 
   @spec support_tool?(map()) :: boolean()
@@ -149,7 +166,9 @@ defmodule LemonSim.Examples.VendingBench do
       IO.puts("Machine: 4x3 grid (12 slots)")
 
       try do
-        run_live_state(state, run_opts, [], [], 0)
+        with_external_decider(state, run_opts, fn run_opts ->
+          run_live_state(state, run_opts, [], [], 0)
+        end)
       after
         stop_usage_collector(usage_collector, owns_usage_collector?)
       end
@@ -184,7 +203,9 @@ defmodule LemonSim.Examples.VendingBench do
         IO.puts("Completed turns: #{length(actions)}")
 
         try do
-          run_live_state(state, run_opts, events, actions, length(actions))
+          with_external_decider(state, run_opts, fn run_opts ->
+            run_live_state(state, run_opts, events, actions, length(actions))
+          end)
         after
           stop_usage_collector(usage_collector, owns_usage_collector?)
         end
@@ -228,6 +249,37 @@ defmodule LemonSim.Examples.VendingBench do
         IO.puts("Simulation failed: #{inspect(reason)}")
         error
     end
+  end
+
+  defp with_external_decider(state, run_opts, fun) do
+    case Keyword.get(run_opts, :external_cmd) do
+      cmd when is_binary(cmd) and cmd != "" ->
+        world = state.world
+
+        session_opts =
+          run_opts
+          |> Keyword.put(:cmd, cmd)
+          |> Keyword.put(:sim_id, state.sim_id)
+          |> Keyword.put(:max_days, get(world, :max_days, @default_max_days))
+          |> Keyword.put_new(:max_turns, Keyword.get(run_opts, :driver_max_turns))
+
+        {:ok, external_decider} = ExternalDecider.start_link(session_opts)
+
+        try do
+          run_opts
+          |> Keyword.put(:external_decider, external_decider)
+          |> fun.()
+        after
+          ExternalDecider.stop(external_decider, "run_complete")
+        end
+
+      _ ->
+        fun.(run_opts)
+    end
+  end
+
+  defp external_run?(opts) do
+    Keyword.has_key?(opts, :external_cmd) or Keyword.get(opts, :decider) == ExternalDecider
   end
 
   defp load_live_checkpoint(artifact_dir, opts) do
@@ -321,22 +373,42 @@ defmodule LemonSim.Examples.VendingBench do
   end
 
   defp stamp_runtime_models(%State{} = state, run_opts) do
-    operator_model = Keyword.get(run_opts, :model, get(state.world, :operator_model))
+    external? = external_run?(run_opts)
+
+    operator_model =
+      if external? do
+        "external-agent"
+      else
+        Keyword.get(run_opts, :model, get(state.world, :operator_model))
+      end
 
     physical_worker_model =
-      Keyword.get(
-        run_opts,
-        :physical_worker_model,
-        get(state.world, :physical_worker_model, operator_model)
-      )
+      if external? do
+        Keyword.get(run_opts, :physical_worker_model, "deterministic-physical-worker")
+      else
+        Keyword.get(
+          run_opts,
+          :physical_worker_model,
+          get(state.world, :physical_worker_model, operator_model)
+        )
+      end
 
     world =
       state.world
-      |> Map.put(:operator_model, operator_model)
-      |> Map.put(:physical_worker_model, physical_worker_model)
-      |> Map.put(:runtime_models, World.runtime_models(operator_model, physical_worker_model))
+      |> put_runtime_model_field(:operator_model, operator_model)
+      |> put_runtime_model_field(:physical_worker_model, physical_worker_model)
+      |> put_runtime_model_field(
+        :runtime_models,
+        World.runtime_models(operator_model, physical_worker_model)
+      )
 
     %{state | world: world}
+  end
+
+  defp put_runtime_model_field(world, key, value) when is_atom(key) do
+    world
+    |> Map.delete(Atom.to_string(key))
+    |> Map.put(key, value)
   end
 
   defp run_live_collecting_artifacts(state, run_opts, events, actions, turn) do
@@ -424,14 +496,14 @@ defmodule LemonSim.Examples.VendingBench do
     timeout_ms = Keyword.get(run_opts, :live_step_timeout_ms, @live_step_timeout_ms)
 
     if is_integer(timeout_ms) and timeout_ms > 0 do
-      task = Task.async(fn -> Runner.step(state, modules(), run_opts) end)
+      task = Task.async(fn -> Runner.step(state, modules(run_opts), run_opts) end)
 
       case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
         {:ok, result} -> result
         nil -> {:error, {:live_step_timeout, timeout_ms}}
       end
     else
-      Runner.step(state, modules(), run_opts)
+      Runner.step(state, modules(run_opts), run_opts)
     end
   end
 
@@ -450,9 +522,9 @@ defmodule LemonSim.Examples.VendingBench do
     case recoverable_live_step_failure(reason) do
       {:ok, reason_text} ->
         if live_missed_turn_autowait?(reason_text, actions, run_opts) do
-          recover_live_missed_turn_autowait(state, reason_text)
+          recover_live_missed_turn_autowait(state, reason_text, run_opts)
         else
-          recover_live_rejected_action(state, reason_text)
+          recover_live_rejected_action(state, reason_text, run_opts)
         end
 
       :error ->
@@ -460,11 +532,11 @@ defmodule LemonSim.Examples.VendingBench do
     end
   end
 
-  defp recover_live_rejected_action(state, reason_text) do
+  defp recover_live_rejected_action(state, reason_text, run_opts) do
     event = Events.action_rejected("operator", reason_text)
     before_recent = state.recent_events
 
-    case Runner.ingest_events(state, [event], modules().updater) do
+    case Runner.ingest_events(state, [event], modules(run_opts).updater) do
       {:ok, next_state, signal} ->
         appended = appended_recent_events(before_recent, next_state.recent_events)
 
@@ -484,10 +556,10 @@ defmodule LemonSim.Examples.VendingBench do
     end
   end
 
-  defp recover_live_missed_turn_autowait(state, reason_text) do
+  defp recover_live_missed_turn_autowait(state, reason_text, run_opts) do
     before_recent = state.recent_events
 
-    case Runner.ingest_events(state, [Events.next_day_waited()], modules().updater) do
+    case Runner.ingest_events(state, [Events.next_day_waited()], modules(run_opts).updater) do
       {:ok, next_state, signal} ->
         appended = appended_recent_events(before_recent, next_state.recent_events)
 
@@ -578,6 +650,12 @@ defmodule LemonSim.Examples.VendingBench do
 
     {:ok,
      "Model used too many support-tool rounds before choosing a terminal action: #{max_turns}"}
+  end
+
+  defp recoverable_live_step_failure({:malformed_turn, details}) when is_map(details) do
+    reason = Map.get(details, :reason) || Map.get(details, "reason") || inspect(details)
+
+    {:ok, "Model emitted a malformed tool turn: #{reason}"}
   end
 
   defp recoverable_live_step_failure(_reason), do: :error
