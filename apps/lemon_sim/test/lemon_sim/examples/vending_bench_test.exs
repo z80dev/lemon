@@ -1999,12 +1999,23 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.read!(Path.join(fixture_dir, "replay.html")) =~ "VendingBench Replay"
   end
 
-  test "legacy paper live bundle verifies without usage artifact" do
-    artifact_dir =
-      Path.expand(
-        "../../../priv/game_logs/vending_bench/vb_paper_live_20260527_161814",
-        __DIR__
-      )
+  @tag :tmp_dir
+  test "legacy pre-manifest bundle verifies without usage artifact", %{tmp_dir: tmp_dir} do
+    # Legacy bundles (pre lemon_sim.run.v1) have final_world.json + scorecard.json
+    # but no manifest.json/hashes.json — the verifier must accept them via the
+    # explicit legacy path instead of hash verification.
+    artifact_dir = Path.join(tmp_dir, "vb_legacy_bundle")
+    File.mkdir_p!(artifact_dir)
+
+    File.write!(
+      Path.join(artifact_dir, "final_world.json"),
+      Jason.encode!(%{"day_number" => 3, "status" => "complete"})
+    )
+
+    File.write!(
+      Path.join(artifact_dir, "scorecard.json"),
+      Jason.encode!(%{"status" => "complete", "v1_net_worth_score" => 500.0})
+    )
 
     assert {:ok, %{legacy: true, manifest: %{"schema_version" => "lemon_sim.run.legacy"}}} =
              LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
